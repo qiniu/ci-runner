@@ -61,4 +61,25 @@ describe("public site documentation catalog", () => {
       expect(markdown).toContain("required labels")
     }
   })
+
+  test("documents managed runner labels and resource sizes", () => {
+    for (const language of ["en", "zh"]) {
+      const markdown = siteDocumentForPath("/docs/reference/runner-labels", language)?.markdown
+
+      for (const label of [
+        "ubuntu-slim-large",
+        "ubuntu-22.04-large",
+        "ubuntu-24.04-large",
+        "ubuntu-26.04-large",
+        "ubuntu-latest-large",
+      ]) {
+        expect(markdown).toContain(`[qiniu, ${label}]`)
+      }
+      expect(markdown).toContain("8 vCPU")
+      expect(markdown).toContain("8 GiB")
+      expect(markdown).toContain("20 GiB")
+      expect(markdown).toContain("80 GiB")
+      expect(markdown).toContain("Sandbox provider")
+    }
+  })
 })
