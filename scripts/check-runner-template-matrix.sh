@@ -229,7 +229,12 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   fi
 
   if [[ "$image_key" == *-large ]]; then
-    for shared_entry in Dockerfile README.md software-diff.md scripts; do
+    large_build_target="$(expected_build_target "$image_key")"
+    test -f "$directory/README.md" || fail "$image_key must provide README.md"
+    test ! -L "$directory/README.md" || fail "$image_key README.md must document its large build target"
+    grep -Fq "task $large_build_target" "$directory/README.md" ||
+      fail "$image_key README must use the exact task $large_build_target build command"
+    for shared_entry in Dockerfile software-diff.md scripts; do
       test -L "$directory/$shared_entry" || fail "$image_key must symlink $shared_entry"
       test "$(readlink "$directory/$shared_entry")" = "../$base_dir_name/$shared_entry" ||
         fail "$image_key $shared_entry must point to $base_dir_name/$shared_entry"
