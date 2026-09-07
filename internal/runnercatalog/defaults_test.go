@@ -114,10 +114,10 @@ func TestDefaultProfilesHaveUniqueRoutingKeys(t *testing.T) {
 
 func TestDefaultProfilesReferenceTrackedPublicTemplates(t *testing.T) {
 	templateDirectories := map[string]string{
-		"ubuntu-slim":        "github-runner-ubuntu-slim",
-		"ubuntu-22.04":       "github-runner-ubuntu-22.04",
-		"ubuntu-24.04":       "github-runner-ubuntu-24.04",
-		"ubuntu-26.04":       "github-runner-ubuntu-26.04",
+		"ubuntu-slim":  "github-runner-ubuntu-slim",
+		"ubuntu-22.04": "github-runner-ubuntu-22.04",
+		"ubuntu-24.04": "github-runner-ubuntu-24.04",
+		"ubuntu-26.04": "github-runner-ubuntu-26.04",
 	}
 	profilesByLabel := make(map[string]state.RunnerProfile)
 	for _, profile := range DefaultProfiles() {
