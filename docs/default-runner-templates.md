@@ -2,12 +2,13 @@
 
 [中文](zh/default-runner-templates.md)
 
-Qiniu maintains four physical Linux x64 Sandbox templates for GitHub Actions:
-Ubuntu Slim, Ubuntu 22.04, Ubuntu 24.04, and preview Ubuntu 26.04.
+Qiniu maintains eight physical Linux x64 Sandbox templates for GitHub Actions:
+four standard images (Ubuntu Slim, Ubuntu 22.04, Ubuntu 24.04, and preview
+Ubuntu 26.04) plus four `-large` variants with an 80-GiB provider disk.
 `ubuntu-latest` is a logical runner catalog mapping to Ubuntu 24.04, not a
-fifth image.
+ninth image.
 
-The four physical templates were published, catalog-checked, and release-smoke
+The four standard physical templates were published, catalog-checked, and release-smoke
 verified in both supported Sandbox regions on 2026-08-03. The regional IDs and
 evidence are retained in [Issue #38](https://github.com/qiniu/ci-runner/issues/38#issuecomment-5164811404).
 The managed Runner Spec rollout was end-to-end verified on 2026-08-04 CST by
@@ -18,11 +19,18 @@ registration remained. See
 [`templates/README.md`](../templates/README.md) for pinned upstream provenance,
 the compatibility contract, and per-image differences.
 
+The four `-large` variants reuse the standard Dockerfiles and scripts through
+repository links and use distinct public template names. Their 80-GiB root
+disk is supplied by the Sandbox provider's team/tier build allocation, not a
+field in `qshell.sandbox.toml` or a qshell CLI flag. Configure that allocation
+to 81,920 MiB before building the large variants and verify the resulting
+catalog `disk_size_mb` before publication.
+
 ## Public catalog API
 
 `GET /api/public/runner-templates` is available to signed-out and signed-in
 clients and returns the same cacheable, runnerd-owned catalog. The response is
-sorted and contains four objects with only these stable fields:
+sorted and contains eight objects with only these stable fields:
 
 ```json
 [
@@ -37,7 +45,7 @@ sorted and contains four objects with only these stable fields:
 ]
 ```
 
-The example shows one entry; the full response contains all four physical
+The example shows one entry; the full response contains all eight physical
 public templates. The API intentionally excludes provider template IDs,
 regions, credentials, endpoints, and private/custom templates. Provider-visible
 templates remain behind the credential-bound, account or organization scoped
@@ -159,7 +167,16 @@ task template-build-ubuntu-slim
 task template-build-ubuntu-22-04
 task template-build-ubuntu-24-04
 task template-build-ubuntu-26-04
+task template-build-ubuntu-slim-large
+task template-build-ubuntu-22-04-large
+task template-build-ubuntu-24-04-large
+task template-build-ubuntu-26-04-large
 ```
+
+Before running a large build target, configure the Sandbox provider's build
+allocation to 81,920 MiB. Qshell does not carry a per-template disk parameter,
+so the operator must verify the resulting template's catalog `disk_size_mb`
+before publication and smoke testing.
 
 The Dockerfiles keep `bootstrap`, `platform`, `node`, `toolchain`, and
 `runtime` work in separate qshell-compatible cache layers where applicable.
@@ -188,19 +205,23 @@ time limit after completing an earlier layer, rerun the same command with the
 normal cache enabled. Do not force `--no-cache`; the release gate remains a
 single build reaching terminal `Status: ready`.
 
-Publish only after all four builds are ready:
+Publish only after all eight builds are ready:
 
 ```bash
 task template-publish-ubuntu-slim
 task template-publish-ubuntu-22-04
 task template-publish-ubuntu-24-04
 task template-publish-ubuntu-26-04
+task template-publish-ubuntu-slim-large
+task template-publish-ubuntu-22-04-large
+task template-publish-ubuntu-24-04-large
+task template-publish-ubuntu-26-04-large
 task template-defaults-check
 ```
 
 `template-defaults-check` requires exactly one public `ready` or `uploaded`
-template with a nonempty ID for every stable physical name. It rejects missing
-and duplicate catalog entries.
+template with a nonempty ID for every physical name, including the four large
+variants. It rejects missing and duplicate catalog entries.
 
 Retain each ID printed by the catalog check, then run actual Sandbox smoke:
 
@@ -209,6 +230,10 @@ task template-smoke IMAGE_KEY=ubuntu-slim TEMPLATE_ID=<slim-template-id>
 task template-smoke IMAGE_KEY=ubuntu-22.04 TEMPLATE_ID=<22.04-template-id>
 task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<24.04-template-id>
 task template-smoke IMAGE_KEY=ubuntu-26.04 TEMPLATE_ID=<26.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-slim-large TEMPLATE_ID=<slim-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-22.04-large TEMPLATE_ID=<22.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04-large TEMPLATE_ID=<24.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-template-id>
 ```
 
 Smoke creates a temporary Sandbox with qshell and checks the OS release,
@@ -232,19 +257,20 @@ Complete the whole build, publish, catalog, and smoke sequence in this order:
 1. Export
    `QINIU_SANDBOX_API_URL=https://cn-yangzhou-1-sandbox.qiniuapi.com` and the
    Yangzhou `QINIU_API_KEY`.
-2. Build all four templates with qshell, publish them, run
-   `task template-defaults-check`, and smoke all four returned IDs.
+2. Build and publish the four standard templates. After the provider
+   disk-allocation gate is available, build and publish the four large variants,
+   then run `task template-defaults-check` and smoke all eight returned IDs.
 3. Retain the build output, catalog IDs, smoke JSON, and relevant workflow URL.
 4. Export
    `QINIU_SANDBOX_API_URL=https://us-south-1-sandbox.qiniuapi.com` and the
    US South `QINIU_API_KEY`.
-5. Repeat the same four builds, publication, catalog check, and smoke checks.
+5. Repeat the eight builds, publication, catalog check, and smoke checks.
 6. Confirm both catalog results contain one runnable public entry for every
    physical stable name.
 7. Attach both-region evidence to Issue #38 before marking the template rows
    verified or enabling the separate managed-runner rollout.
 
-Qiniu owns the four physical images. `ubuntu-latest` changes only through a
+Qiniu owns the eight physical images. `ubuntu-latest` changes only through a
 reviewed runner catalog revision with new regional smoke evidence.
 `ubuntu-26.04` remains preview until upstream promotes it.
 
@@ -258,6 +284,10 @@ task template-unpublish-ubuntu-slim
 task template-unpublish-ubuntu-22-04
 task template-unpublish-ubuntu-24-04
 task template-unpublish-ubuntu-26-04
+task template-unpublish-ubuntu-slim-large
+task template-unpublish-ubuntu-22-04-large
+task template-unpublish-ubuntu-24-04-large
+task template-unpublish-ubuntu-26-04-large
 ```
 
 Do not delete template objects during an ordinary rollback. Keeping them

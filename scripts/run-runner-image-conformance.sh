@@ -53,6 +53,13 @@ case "$executor" in
   docker | sandbox) ;;
   *) usage ;;
 esac
+case "$image_key" in
+  ubuntu-slim-large) manifest_image_key=ubuntu-slim ;;
+  ubuntu-22.04-large) manifest_image_key=ubuntu-22.04 ;;
+  ubuntu-24.04-large) manifest_image_key=ubuntu-24.04 ;;
+  ubuntu-26.04-large) manifest_image_key=ubuntu-26.04 ;;
+  *) manifest_image_key="$image_key" ;;
+esac
 if ! [[ "$sandbox_exec_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNNER_CONFORMANCE_COMMAND_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 64
@@ -61,14 +68,14 @@ test -f "$manifest_file" || {
   echo "missing compatibility manifest $manifest_file" >&2
   exit 66
 }
-jq -e --arg image "$image_key" '.images[$image].entries | type == "array"' "$manifest_file" >/dev/null ||
+jq -e --arg image "$manifest_image_key" '.images[$image].entries | type == "array"' "$manifest_file" >/dev/null ||
   {
     echo "unknown image key $image_key" >&2
     exit 65
   }
 
 invalid_exclusion="$(
-  jq -r --arg image "$image_key" '
+  jq -r --arg image "$manifest_image_key" '
     .images[$image].entries[] |
     select(.status == "excluded") |
     select(
@@ -219,7 +226,7 @@ if [ "$executor" = sandbox ]; then
   }
 fi
 
-jq -r --arg image "$image_key" '
+jq -r --arg image "$manifest_image_key" '
   .images[$image].entries[] |
   select(.status == "provided") |
   [

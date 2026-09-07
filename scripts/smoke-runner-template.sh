@@ -53,24 +53,56 @@ case "$image_key" in
     support_channel=stable
     template_name=github-runner-ubuntu-slim
     template_directory=github-runner-ubuntu-slim
+    manifest_image_key=ubuntu-slim
+    ;;
+  ubuntu-slim-large)
+    expected_release=24.04
+    support_channel=development
+    template_name=github-runner-ubuntu-slim
+    template_directory=github-runner-ubuntu-slim-large
+    manifest_image_key=ubuntu-slim
     ;;
   ubuntu-24.04)
     expected_release=24.04
     support_channel=stable
     template_name=github-runner-ubuntu-24-04
     template_directory=github-runner-ubuntu-24.04
+    manifest_image_key=ubuntu-24.04
+    ;;
+  ubuntu-24.04-large)
+    expected_release=24.04
+    support_channel=development
+    template_name=github-runner-ubuntu-24-04
+    template_directory=github-runner-ubuntu-24.04-large
+    manifest_image_key=ubuntu-24.04
     ;;
   ubuntu-22.04)
     expected_release=22.04
     support_channel=stable
     template_name=github-runner-ubuntu-22-04
     template_directory=github-runner-ubuntu-22.04
+    manifest_image_key=ubuntu-22.04
+    ;;
+  ubuntu-22.04-large)
+    expected_release=22.04
+    support_channel=development
+    template_name=github-runner-ubuntu-22-04
+    template_directory=github-runner-ubuntu-22.04-large
+    manifest_image_key=ubuntu-22.04
     ;;
   ubuntu-26.04)
     expected_release=26.04
     support_channel=preview
     template_name=github-runner-ubuntu-26-04
     template_directory=github-runner-ubuntu-26.04
+    manifest_image_key=ubuntu-26.04
+    ;;
+  ubuntu-26.04-large)
+    expected_release=26.04
+    support_channel=development
+    template_name=github-runner-ubuntu-26-04
+    template_directory=github-runner-ubuntu-26.04-large
+    manifest_image_key=ubuntu-26.04
     ;;
   *)
     echo "unknown image key $image_key" >&2
@@ -127,6 +159,7 @@ NVM_SMOKE
 
 jq \
   --arg image "$image_key" \
+  --arg manifest_image "$manifest_image_key" \
   --arg expected_release "$expected_release" \
   --arg expected_runner_version "$expected_runner_version" \
   --arg expected_template_version "$expected_template_version" \
@@ -134,6 +167,7 @@ jq \
   --arg nvm_smoke_command "$nvm_smoke_command" \
   --arg docker_smoke_command "$docker_smoke_command" \
   '
+    .images[$image] = (.images[$manifest_image] // {}) |
     .images[$image].entries = [
       {
         category: "Release smoke",
