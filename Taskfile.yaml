@@ -271,10 +271,11 @@ tasks:
     cmds:
       - bash scripts/check-runner-template-matrix.sh
       - bash scripts/check-runner-image-compatibility.sh
-      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04]
+      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04, github-runner-ubuntu-slim-large, github-runner-ubuntu-22.04-large, github-runner-ubuntu-24.04-large, github-runner-ubuntu-26.04-large]
         cmd: |
           template_dir="{{.ITEM}}"
-          docker build --check --platform=linux/amd64 -f "templates/${template_dir}/Dockerfile" "templates/${template_dir}"
+          base_dir="${template_dir%-large}"
+          docker build --check --platform=linux/amd64 -f "templates/${base_dir}/Dockerfile" "templates/${base_dir}"
 
   _template-build:
     internal: true
