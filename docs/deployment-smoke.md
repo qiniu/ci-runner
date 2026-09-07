@@ -130,7 +130,7 @@ Before creating runner specs, verify Sandbox credential precedence:
 - Removing an audience entry blocks new fallback resolution without changing an already-snapshotted runner request.
 - Disabling the admin default makes an otherwise unconfigured account fail with `sandbox service not configured`.
 
-On startup, confirm runnerd reconciles exactly nine managed specs without a
+On startup, confirm runnerd reconciles exactly five managed specs without a
 custom-name conflict:
 
 ```bash
@@ -140,12 +140,14 @@ curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
 ```
 
 Expected names are `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`,
-`qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, the four `-large` variants, and
-`qiniu-ubuntu-latest`.
+`qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`.
 Confirm startup logs contain no managed-profile name collision. In each
 configured Sandbox region, run `task template-defaults-check` and retain the
 eight physical-template IDs; runnerd must resolve the same stable name through that scoped
 endpoint rather than persist one region's ID.
+Separately verify each of the five enabled `-large` public default specs in
+Admin; those labels are operator-configured and must not appear as managed
+entries.
 
 Run positive and negative match tests:
 
@@ -304,7 +306,8 @@ Expected result depends on the scenario:
 - concurrency pressure leaves later requests queued rather than dropped;
 - retryable placement or rate-limit failures populate `next_retry_at` and remain eligible for later processing.
 
-If routing or template health regresses, disable all nine managed specs first.
-Do not delete public templates or custom specs during rollback.
+If routing or template health regresses, disable all managed specs and any
+enabled `-large` custom specs first. Do not delete public templates or custom
+specs during rollback.
 
 Record any deployment-specific notes outside the repository if they include private hosts, account names, channel URLs, secrets, or cookie data.

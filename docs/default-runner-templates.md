@@ -20,7 +20,11 @@ registration remained. See
 the compatibility contract, and per-image differences.
 
 The four `-large` variants reuse the standard Dockerfiles and scripts through
-repository links and use distinct public template names. Their 80-GiB root
+repository links and use distinct physical template names. They are public
+operator-configured default Runner Specs: operators enable them through the
+custom-spec path with explicit template IDs. They are not runnerd-managed
+defaults, but all allowed workflows may use their documented labels when the
+corresponding specs are enabled. Their 80-GiB root
 disk is supplied by the Sandbox provider's team/tier build allocation, not a
 field in `qshell.sandbox.toml` or a qshell CLI flag. Configure that allocation
 to 81,920 MiB before building the large variants and verify the resulting
@@ -30,7 +34,8 @@ catalog `disk_size_mb` before publication.
 
 `GET /api/public/runner-templates` is available to signed-out and signed-in
 clients and returns the same cacheable, runnerd-owned catalog. The response is
-sorted and contains eight objects with only these stable fields:
+sorted and contains four objects for the standard managed templates with only
+these stable fields:
 
 ```json
 [
@@ -45,9 +50,10 @@ sorted and contains eight objects with only these stable fields:
 ]
 ```
 
-The example shows one entry; the full response contains all eight physical
-public templates. The API intentionally excludes provider template IDs,
-regions, credentials, endpoints, and private/custom templates. Provider-visible
+The example shows one entry; the full response contains the four standard
+managed templates. The API intentionally excludes provider template IDs,
+regions, credentials, endpoints, and private/custom templates, including the
+four large physical templates. Provider-visible
 templates remain behind the credential-bound, account or organization scoped
 `GET /user/sandbox/templates?region=<id>` API. The ordinary-user Sandbox
 Templates page renders these catalogs as independent sections, so a provider
@@ -90,13 +96,34 @@ jobs:
       - run: uname -a
 ```
 
+The public large defaults use the same contract and resources with an 80-GiB
+system disk:
+
+| Workflow label | Physical template | System disk |
+| --- | --- | --- |
+| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
+| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
+| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
+| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+
+`ubuntu-latest-large` is a logical public label mapped to the Ubuntu 24.04
+large physical template; it does not add a fifth physical large image. These
+large specs are publicly documented and usable once the operator-managed Admin
+entries are enabled, even though they are not returned by the runnerd-owned
+managed-template API.
+
 The `qiniu` label is mandatory. Managed matching enforces
 `required_labels ⊆ job_labels ⊆ labels`, so `[ubuntu-24.04]`, `[qiniu]`, and a
 request with unsupported extra labels do not match a managed default.
 Operators can disable one managed spec in Admin; removing `qiniu` from a
 workflow disables managed-default selection from the workflow side. Custom
 specs remain available with operator-defined required labels and explicit
-template IDs.
+template IDs. The large workflow labels use the public operator-configured
+default specs after an operator creates and enables the corresponding entries
+in Admin. The physical large templates can still be built, published,
+catalog-checked, and smoke-tested by the same task targets; they simply do not
+appear in this public managed catalog.
 
 At runner bootstrap, managed specs fail closed if their template cannot make
 the Docker daemon available because Docker is part of the managed compatibility
@@ -276,7 +303,8 @@ reviewed runner catalog revision with new regional smoke evidence.
 
 ## Rollback
 
-Disable the managed Runner Specs before removing public availability. Then
+Disable the managed Runner Specs and any enabled large custom specs before
+removing public availability. Then
 run the matching reversible publication rollback:
 
 ```bash

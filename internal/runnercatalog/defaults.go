@@ -16,10 +16,6 @@ func DefaultProfiles() []state.RunnerProfile {
 		defaultProfile("qiniu-ubuntu-22.04", "ubuntu-22.04", "github-runner-ubuntu-22-04"),
 		defaultProfile("qiniu-ubuntu-24.04", "ubuntu-24.04", "github-runner-ubuntu-24-04"),
 		defaultProfile("qiniu-ubuntu-26.04", "ubuntu-26.04", "github-runner-ubuntu-26-04"),
-		defaultProfile("qiniu-ubuntu-slim-large", "ubuntu-slim-large", "github-runner-ubuntu-slim-large"),
-		defaultProfile("qiniu-ubuntu-22.04-large", "ubuntu-22.04-large", "github-runner-ubuntu-22-04-large"),
-		defaultProfile("qiniu-ubuntu-24.04-large", "ubuntu-24.04-large", "github-runner-ubuntu-24-04-large"),
-		defaultProfile("qiniu-ubuntu-26.04-large", "ubuntu-26.04-large", "github-runner-ubuntu-26-04-large"),
 		defaultProfile("qiniu-ubuntu-latest", "ubuntu-latest", "github-runner-ubuntu-24-04"),
 	}
 }

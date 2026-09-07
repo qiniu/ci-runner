@@ -95,8 +95,8 @@ func TestPublicTemplateCatalogIsAvailableWithoutAuthenticationOrSandboxCredentia
 	if err := json.Unmarshal(signedOut.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode public templates: %v", err)
 	}
-	if len(got) != 8 {
-		t.Fatalf("public template count = %d, want 8: %#v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("public template count = %d, want 4: %#v", len(got), got)
 	}
 	if !reflect.DeepEqual(got, runnercatalog.PublicTemplates()) {
 		t.Fatalf("public endpoint payload = %#v, want %#v", got, runnercatalog.PublicTemplates())

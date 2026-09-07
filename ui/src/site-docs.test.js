@@ -62,7 +62,7 @@ describe("public site documentation catalog", () => {
     }
   })
 
-  test("documents managed runner labels and resource sizes", () => {
+  test("documents managed and operator-configured runner labels and resource sizes", () => {
     for (const language of ["en", "zh"]) {
       const markdown = siteDocumentForPath("/docs/reference/runner-labels", language)?.markdown
 
@@ -71,6 +71,7 @@ describe("public site documentation catalog", () => {
         "ubuntu-22.04-large",
         "ubuntu-24.04-large",
         "ubuntu-26.04-large",
+        "ubuntu-latest-large",
       ]) {
         expect(markdown).toContain(`[qiniu, ${label}]`)
       }
@@ -79,6 +80,8 @@ describe("public site documentation catalog", () => {
       expect(markdown).toContain("20 GiB")
       expect(markdown).toContain("80 GiB")
       expect(markdown).toContain("Sandbox provider")
+      expect(markdown).toContain(language === "en" ? "Operator-configured" : "Operator 配置")
+      expect(markdown).toContain(language === "en" ? "custom Runner Spec" : "自定义 Runner Spec")
     }
   })
 })

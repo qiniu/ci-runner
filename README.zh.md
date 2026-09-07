@@ -75,7 +75,7 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. 打开 `http://<host>:25500/`，使用 GitHub OAuth 登录。公开产品首页提供同域 `/docs` 指南，以及指向 `/jobs` 受保护的 Jobs 控制台入口。用户首次登录访问 `/jobs` 时，会看到介绍 Jobs、Repositories、Settings 和 Sandbox 设置的六步引导；之后可从账户菜单重播。
 6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户和用户属于 active member 的组织；outside collaborator 只能看到 readiness 只读提示，不能浏览该组织的 Sandbox 资源目录。管理员可以在 `/admin/sandbox_service` 配置兜底。
-7. 在**管理控制台**中确认 9 个 Qiniu managed Runner Specs。4 个标准公共模板已通过双区域 release gate；large 变体使用 provider 的 80 GiB 配额构建并通过相同门禁前保持 development。operator 仍可禁用单个 managed spec，或调整并发与 idle capacity。
+7. 在**管理控制台**中确认 5 个内置 Qiniu managed Runner Specs。4 个标准公共模板已通过双区域 release gate。4 个 `-large` 模板是对外可用的 operator 配置默认 Runner Spec，使用 80 GiB 物理模板；其记录通过自定义 spec 路径保存，但已启用供普通 workflow 使用。operator 仍可禁用 managed 或 large 默认 spec，或调整并发与 idle capacity。
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
 9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用 managed default，或配置自定义 spec 要求的 labels。
 
@@ -176,13 +176,14 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中配置。所有已启用 spec 都可供 `github.allowed_repositories` 放行的仓库按标签匹配。
 
 - **Managed Runner Spec**：runnerd 会协调 `ubuntu-slim`、`ubuntu-22.04`、
-  `ubuntu-24.04`、预览版 `ubuntu-26.04`、4 个 `-large` 变体和
-  `ubuntu-latest` 这 9 个内置
+  `ubuntu-24.04`、预览版 `ubuntu-26.04` 和 `ubuntu-latest` 这 5 个内置
   specs。catalog labels、required labels、公共模板名称和 priority
   由 runnerd 管理；operator 仍可控制 `enabled`、
   `max_concurrency` 和 `min_idle`。
 - **自定义 Runner Spec**：由 operator 管理，保存显式 `template_id`、
-  advertised labels、可选 required labels 和 `runner_group`。新建或更换模板时，
+  advertised labels、可选 required labels 和 5 个 `-large`
+  workflow labels 是对外可用的 operator 配置默认 spec，使用这条路径；它们不属于
+  runnerd 内置 managed catalog 或公共 managed-template API。新建或更换模板时，
   使用 `/admin/sandbox_service` 配置的 endpoint 和凭据检查访问权限与可用默认构建，
   即使运行时默认服务已禁用也可检查。未配置凭据时，只能管理内置默认 spec 或修改
   现有 spec 的非模板参数。校验失败不会修改 spec 或审计记录；模板未变更时不访问 Sandbox。
@@ -208,10 +209,11 @@ catalog 更新并取得新的区域 smoke 证据。
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
-`GET /api/public/runner-templates` 无需登录即可返回 runnerd 管理的 8 个公共
+`GET /api/public/runner-templates` 无需登录即可返回 runnerd 管理的 4 个标准公共
 模板。稳定响应只包含公共模板名称、对应的逻辑 Runner Spec 名称和支持的 workflow
-label 组合，不包含 provider template ID、credential、endpoint，也不会暴露私有或
-自定义模板。依赖 credential 的
+label 组合，不包含 provider template ID、credential、endpoint，也不会暴露 operator
+配置的 large 或其他自定义模板。对外 runner-labels 指南仍会列出 large 默认规格及其
+资源契约。依赖 credential 的
 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scoped resource。
 
 对于自定义 spec，`template_id` 应指向包含 GitHub runner 镜像的 Qiniu Sandbox 模板。创建沙箱时会使用 **Repositories → Runner readiness** 中显示的仓库 owner 有效 Sandbox service 检查模板访问权限。
@@ -282,6 +284,9 @@ task release-check # 验证发布构建
 | `templates/github-runner-ubuntu-22.04-large` | 使用 80 GiB provider 磁盘的 Ubuntu 22.04 x64 Runner 模板 |
 | `templates/github-runner-ubuntu-24.04-large` | 使用 80 GiB provider 磁盘的 Ubuntu 24.04 x64 Runner 模板 |
 | `templates/github-runner-ubuntu-26.04-large` | 使用 80 GiB provider 磁盘的 Ubuntu 26.04 x64 Runner 模板 |
+
+对外的 `ubuntu-latest-large` Runner Spec 是映射到
+`github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增模板目录或构建目标。
 
 先运行 `task template-check-all`，再通过 8 个
 `task template-build-ubuntu-*` targets 执行真实 qshell Sandbox 构建。发布与

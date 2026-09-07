@@ -128,7 +128,7 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" https://<runner
 - 移除 audience entry 会阻止新的 fallback resolution，但不会改变已 snapshot 的 runner request。
 - 禁用 admin default 后，原本未配置的 account 会得到 `sandbox service not configured`。
 
-启动后确认 runnerd 协调了且仅协调了 9 个 managed specs，并且没有自定义名称
+启动后确认 runnerd 协调了且仅协调了 5 个 managed specs，并且没有自定义名称
 冲突：
 
 ```bash
@@ -138,11 +138,12 @@ curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
 ```
 
 预期名称为 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
-`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04`、4 个 `-large` 变体和
-`qiniu-ubuntu-latest`。
+`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
 确认启动日志中不存在 managed-profile name collision。在每个已配置的 Sandbox
 区域运行 `task template-defaults-check` 并保存 8 个物理模板 ID；runnerd 必须通过该
 scoped endpoint 解析相同稳定名称，不能保存某一区域的 ID。
+另外在 Admin 中分别验证已启用的 5 个 `-large` 对外默认 spec；这些 label 由
+operator 配置，不应出现在 managed 条目中。
 
 运行正向和负向 match tests：
 
@@ -294,7 +295,7 @@ Workflow 完成后确认：
 - concurrency pressure 会让后续 requests 保持 queued，而不是被丢弃；
 - retryable placement 或 rate-limit failures 会填充 `next_retry_at`，并保持后续可处理。
 
-如果路由或模板健康状态回退，先禁用全部 9 个 managed specs。回滚时不要删除
-公共模板或自定义 specs。
+如果路由或模板健康状态回退，先禁用全部 managed specs 以及已启用的 `-large`
+自定义 specs。回滚时不要删除公共模板或自定义 specs。
 
 如果部署说明包含 private hosts、account names、channel URLs、secrets 或 cookie data，请记录在仓库外部。

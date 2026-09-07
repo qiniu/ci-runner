@@ -75,7 +75,7 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. Open `http://<host>:25500/` and sign in with GitHub OAuth. The public product landing page links to the same-origin `/docs` guides and the protected Jobs console at `/jobs`. On the first authenticated visit to `/jobs`, a six-step product tour introduces Jobs, Repositories, Settings, and Sandbox setup; it can be replayed from the account menu.
 6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where you are an active member; outside collaborators receive a read-only readiness prompt and cannot browse that organization's Sandbox catalogs. Administrators can provide a fallback at `/admin/sandbox_service`.
-7. Confirm the nine managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate; large variants remain development until they are built with the provider's 80-GiB allocation and pass the same gate. Operators can still disable individual managed specs or adjust their concurrency and idle capacity.
+7. Confirm the five built-in managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate. The four `-large` templates are public operator-configured default Runner Specs backed by the 80-GiB physical templates; their records use the custom-spec path but are enabled for ordinary workflow use. Operators can disable managed or large default specs and adjust their concurrency and idle capacity.
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
 
@@ -175,15 +175,18 @@ New runner requests, including admission rejections, store the parsed GitHub con
 
 Runner specs are managed through the admin API and console — not through `runnerd.yaml`. Every enabled spec is eligible for repositories admitted by `github.allowed_repositories`; labels select the spec.
 
-- **Managed Runner Spec**: runnerd reconciles nine built-in specs for
-  `ubuntu-slim`, `ubuntu-22.04`, `ubuntu-24.04`, preview `ubuntu-26.04`, the
-  four `-large` variants, and `ubuntu-latest`. Their catalog labels, required labels, public template name,
+- **Managed Runner Spec**: runnerd reconciles five built-in specs for
+  `ubuntu-slim`, `ubuntu-22.04`, `ubuntu-24.04`, preview `ubuntu-26.04`, and
+  `ubuntu-latest`. Their catalog labels, required labels, public template name,
   and priority are managed by runnerd. Operators retain
   `enabled`, `max_concurrency`, and `min_idle`.
 - **Custom Runner Spec**: an operator-owned spec with an explicit
   `template_id`, advertised labels, and optional required labels and
-  `runner_group`. Creating it or changing its template validates access and a
-  usable default build with the endpoint/key configured at
+  `runner_group`. The five `-large` workflow labels are public
+  operator-configured default specs using this path; they are not part of
+  runnerd's built-in managed catalog or public managed-template API.
+  Creating a custom spec or changing its template validates access and a usable
+  default build with the endpoint/key configured at
   `/admin/sandbox_service` (also when runtime fallback is disabled). Without
   those credentials, only managed defaults and unchanged-template edits are
   available. Validation failure rejects the save without a profile/audit change.
@@ -213,11 +216,12 @@ evidence.
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes the eight runnerd-managed public
-templates without authentication. Its stable response contains only each
+`GET /api/public/runner-templates` exposes the four standard runnerd-managed
+public templates without authentication. Its stable response contains only each
 public template name, logical Runner Spec names, and supported workflow label
 sets; it never includes provider template IDs, credentials, endpoints, or
-private/custom templates. The credential-bound
+operator-configured large/custom templates. The public runner-labels guide still
+documents those large defaults and their resource contract. The credential-bound
 `GET /user/sandbox/templates?region=<id>` catalog remains a separate scoped
 resource.
 
@@ -290,6 +294,10 @@ loading.
 | `templates/github-runner-ubuntu-22.04-large` | Ubuntu 22.04 x64 runner template with an 80-GiB provider disk |
 | `templates/github-runner-ubuntu-24.04-large` | Ubuntu 24.04 x64 runner template with an 80-GiB provider disk |
 | `templates/github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 runner template with an 80-GiB provider disk |
+
+The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
+`github-runner-ubuntu-24-04-large` physical template; it does not add another
+template directory or build target.
 
 Run `task template-check-all`, then use the eight
 `task template-build-ubuntu-*` targets for real qshell Sandbox builds. See

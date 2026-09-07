@@ -17,15 +17,18 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 上游版本来源、兼容性契约和各镜像差异见
 [`templates/README.md`](../../templates/README.md)。
 
-4 个 `-large` 变体通过仓库软链复用标准 Dockerfile 和脚本，并使用不同的公共
-模板名称。其 80 GiB 根磁盘来自 Sandbox provider 的 team/tier 构建配额，不是
+4 个 `-large` 变体通过仓库软链复用标准 Dockerfile 和脚本，并使用不同的物理
+模板名称。它们是对外可用的 operator 配置默认 Runner Spec：operator 通过自定义
+spec 路径在 Admin 中创建并启用带显式 template ID 的条目。它们不属于 runnerd
+managed defaults，但对应 spec 启用后，所有允许的 workflow 都可以使用文档中的
+labels。其 80 GiB 根磁盘来自 Sandbox provider 的 team/tier 构建配额，不是
 `qshell.sandbox.toml` 字段或 qshell CLI 参数。构建 large 变体前应把该配额配置为
 81,920 MiB，并在发布前验证 catalog 返回的 `disk_size_mb`。
 
 ## 公共 Catalog API
 
 未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`，并取得相同的、
-可缓存的 runnerd-owned catalog。响应按稳定顺序返回 8 个对象，且只包含以下字段：
+可缓存的 runnerd-owned catalog。响应按稳定顺序返回 4 个标准托管模板对象，且只包含以下字段：
 
 ```json
 [
@@ -40,8 +43,9 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 ]
 ```
 
-示例只展示其中一项；完整响应包含全部 8 个物理公共模板。该 API 不包含 provider
-template ID、region、credential、endpoint，也不会暴露私有或自定义模板。Provider
+示例只展示其中一项；完整响应包含 4 个标准托管模板。该 API 不包含 provider
+template ID、region、credential、endpoint，也不会暴露私有、自定义或 4 个 large
+物理模板。Provider
 可见模板仍通过依赖 credential、按账户或组织 scope 隔离的
 `GET /user/sandbox/templates?region=<id>` API 获取。普通用户的 Sandbox Templates
 页面把两个 catalog 作为独立 section 渲染，因此 provider catalog 失败不会隐藏
@@ -84,12 +88,28 @@ jobs:
       - run: uname -a
 ```
 
+对外的 large 默认规格使用相同的标签契约和资源配置，但系统盘为 80 GiB：
+
+| Workflow label | 物理模板 | 系统盘 |
+| --- | --- | --- |
+| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
+| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
+| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
+| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+
+`ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。这些 large spec 已在公共文档中列出；只要 operator 在 Admin 中启用对应条目，所有允许的 workflow 都可以使用，虽然它们不会出现在 runnerd-owned managed-template API 中。
+
 `qiniu` label 是必需项。Managed 匹配遵守
 `required_labels ⊆ job_labels ⊆ labels`，因此 `[ubuntu-24.04]`、`[qiniu]`
 和带有不受支持额外 labels 的请求都不会匹配 managed default。Operator 可以在
 Admin 中禁用单个 managed spec；从 workflow 中移除 `qiniu` 则会从 workflow
 侧阻止 managed-default selection。自定义 spec 仍可使用 operator 定义的
 required labels 和显式 template ID。
+
+large workflow labels 使用 operator 配置的对外默认 spec；需要先在 Admin 中创建并
+启用对应条目。4 个 large 物理模板仍可通过相同的 task targets 构建、发布、catalog
+检查和 smoke 验证，但不会出现在这个公共 managed catalog 中。
 
 Runner 启动时，如果模板无法使 Docker daemon 可用，managed spec 会直接失败，
 因为 Docker 属于 managed 兼容性契约。自定义 spec 保留原有的 best-effort 行为：
@@ -251,7 +271,7 @@ Qiniu 负责维护 8 个物理镜像。只有经过评审的 Runner catalog revi
 
 ## 回滚
 
-移除公共可用性前，应先禁用 managed Runner Specs，然后运行对应的可逆发布
+移除公共可用性前，应先禁用 managed Runner Specs 和已启用的 large 自定义 specs，然后运行对应的可逆发布
 回滚命令：
 
 ```bash

@@ -62,7 +62,7 @@ Sandbox service API URL 和 API Key 不在 `runnerd.yaml` 中配置。登录后�
 首次使用产品引导只会在现有账户级 `account_preferences` 表的 `onboarding/product-tour` 下保存版本号、状态和 `tour_seen` 标记，不会保存 Sandbox API Key。记录缺失或版本过旧时返回 `pending` 且 `tour_seen=false`。走完引导浮层后写入 `pending` 且 `tour_seen=true`，因此不会再次自动弹出，但必需的设置仍会保留。当前登录账户能解析到 custom、inherited 或符合条件的 admin default 任一有效 Sandbox 来源后即写入 `completed`。首次引导中显式跳过会写入 `skipped` 并关闭浮层，但不会隐藏必需设置。从账户菜单重播引导不会重置或覆盖已保存状态。
 
 Runner spec、runner group 和 repository policy 不在 `runnerd.yaml` 中配置。
-runnerd 启动时会协调 9 个 Qiniu Ubuntu managed specs。其 labels、required
+runnerd 启动时会协调 5 个 Qiniu Ubuntu managed specs。其 labels、required
 labels、稳定公共模板名称、priority 和 default availability 由 runnerd 管理，
 operator 控制的 `enabled`、`max_concurrency` 和 `min_idle` 会被保留。自定义
 spec 仍通过 Admin API/UI 管理，需要显式 `template_id`、advertised labels 和
@@ -75,6 +75,11 @@ spec 仍通过 Admin API/UI 管理，需要显式 `template_id`、advertised lab
 构建历史不能直接代表可用状态：它有分页、包含其他 tag，且对非所有者隐藏。
 不在公共默认目录中的第三方公共模板无法通过该 API 确认构建状态，会返回
 `template_state_unavailable`。
+
+5 个 `-large` workflow labels 有意作为 operator 配置的对外默认 spec，而不是
+managed catalog 条目。需要在 Admin 中单独创建并启用对应 spec，然后在自定义 spec 检查中验证显式
+template ID 和标签契约；它们不应出现在 managed spec reconciliation 列表或公共
+managed-template API 中。
 
 整个远程检查限时 5 秒。未配置后台服务返回 `409 sandbox_service_not_configured`；
 模板不存在或没有可用默认构建分别返回 `400 template_not_found`、
@@ -401,10 +406,9 @@ curl -fsS -b "$COOKIE_JAR" \
 ```
 
 结果应恰好包含 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
-`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04`、`qiniu-ubuntu-slim-large`、
-`qiniu-ubuntu-22.04-large`、`qiniu-ubuntu-24.04-large`、
-`qiniu-ubuntu-26.04-large` 和 `qiniu-ubuntu-latest`。验证向后
-兼容的显式模板路径时，请另外创建自定义 spec：
+`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
+验证 5 个 `-large` labels 时，应通过分别配置的自定义 spec 验证向后兼容的
+显式模板路径：
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:25500/runner_specs \
