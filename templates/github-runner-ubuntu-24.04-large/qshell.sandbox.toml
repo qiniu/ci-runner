@@ -1,8 +1,8 @@
-# GitHub runner Ubuntu 24.04 Qiniu sandbox template.
+# Development large Ubuntu 24.04 runner template.
 #
-# This tracked file is the stable build input. Use Taskfile build targets so
+# This tracked file is the large-template build input. Use Taskfile build targets so
 # qshell writes any generated template_id only to a temporary copy:
-#   task template-build-ubuntu-24-04
+#   task template-build-ubuntu-24-04-large
 #
 # Prefer a stable name over a committed environment-specific template_id.
 

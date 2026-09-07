@@ -269,7 +269,7 @@ readme_catalog="$(
 )"
 expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large\tUbuntu Slim x64 (80 GiB)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large\tUbuntu 22.04 x64 (80 GiB)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large\tUbuntu 24.04 x64 (80 GiB)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large\tUbuntu 26.04 x64 (80 GiB)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
 test "$readme_catalog" = "$expected_catalog" ||
-  fail "templates/README.md support matrix does not match the five public logical rows"
+  fail "templates/README.md support matrix does not match the nine public logical rows"
 
 publication_states="$(
   awk -F'|' '

@@ -15,7 +15,6 @@
 | `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 大系统盘 | 使用更大系统盘的 Ubuntu 22.04 x64 |
 | `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 大系统盘 | 推荐用于磁盘密集型任务 |
 | `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 预览 | 使用更大系统盘的 Ubuntu 26.04 预览镜像 |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定映射 | 当前映射到 Ubuntu 24.04 large |
 
 ## 资源规格说明
 

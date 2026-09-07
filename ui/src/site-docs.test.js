@@ -71,7 +71,6 @@ describe("public site documentation catalog", () => {
         "ubuntu-22.04-large",
         "ubuntu-24.04-large",
         "ubuntu-26.04-large",
-        "ubuntu-latest-large",
       ]) {
         expect(markdown).toContain(`[qiniu, ${label}]`)
       }

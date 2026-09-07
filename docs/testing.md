@@ -64,7 +64,7 @@ Sandbox service API URL and API Key are not configured in `runnerd.yaml`. After 
 The first-use product tour stores only a version, status, and `tour_seen` marker in the existing account-scoped `account_preferences` table under `onboarding/product-tour`; it never stores the Sandbox API Key. A missing or outdated version is returned as `pending` with `tour_seen=false`. Finishing the overlay writes `pending` with `tour_seen=true`, so it does not auto-start again while required setup remains visible. `completed` is written when the signed-in account resolves any effective Sandbox source: custom, inherited, or an eligible admin default. An explicit first-run skip writes `skipped` to dismiss the overlay without hiding required setup. Replaying the tour from the account menu does not reset or replace the persisted state.
 
 Runner spec, runner group, and repository policy are not `runnerd.yaml` fields.
-At startup, runnerd reconciles five managed Qiniu Ubuntu specs. It owns their
+At startup, runnerd reconciles nine managed Qiniu Ubuntu specs. It owns their
 labels, required labels, stable public template names, priority, and default
 availability while preserving operator-controlled `enabled`,
 `max_concurrency`, and `min_idle`. Custom specs remain admin API/UI data: give
@@ -416,9 +416,10 @@ curl -fsS -b "$COOKIE_JAR" \
       {name, required_labels, default_template_name, enabled}'
 ```
 
-The result should contain exactly `qiniu-ubuntu-slim`,
-`qiniu-ubuntu-22.04`, `qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and
-`qiniu-ubuntu-latest`. Create a custom spec separately when testing the
+The result should contain exactly `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`,
+`qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, `qiniu-ubuntu-slim-large`,
+`qiniu-ubuntu-22.04-large`, `qiniu-ubuntu-24.04-large`,
+`qiniu-ubuntu-26.04-large`, and `qiniu-ubuntu-latest`. Create a custom spec separately when testing the
 backward-compatible explicit-template path:
 
 ```bash

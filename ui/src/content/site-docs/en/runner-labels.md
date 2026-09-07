@@ -15,7 +15,6 @@ Use a supported Qiniu label pair to select a maintained public Sandbox template 
 | `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Large | Ubuntu 22.04 x64 with a larger system disk |
 | `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Large | Recommended for disk-intensive jobs |
 | `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Preview | Ubuntu 26.04 preview with a larger system disk |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable mapping | Currently maps to Ubuntu 24.04 large |
 
 ## Resource contract
 
