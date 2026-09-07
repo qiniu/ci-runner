@@ -535,19 +535,19 @@ func TestDefaultTemplateCatalogCheckRequiresUniqueRunnablePublicTemplates(t *tes
 		},
 		{
 			"templateID":  "tmpl-22-large",
-			"names":       []string{"github-runner-ubuntu-22.04-large"},
+			"names":       []string{"github-runner-ubuntu-22-04-large"},
 			"public":      true,
 			"buildStatus": "ready",
 		},
 		{
 			"templateID":  "tmpl-24-large",
-			"names":       []string{"github-runner-ubuntu-24.04-large"},
+			"names":       []string{"github-runner-ubuntu-24-04-large"},
 			"public":      true,
 			"buildStatus": "ready",
 		},
 		{
 			"templateID":  "tmpl-26-large",
-			"names":       []string{"github-runner-ubuntu-26.04-large"},
+			"names":       []string{"github-runner-ubuntu-26-04-large"},
 			"public":      true,
 			"buildStatus": "ready",
 		},
@@ -591,9 +591,9 @@ func TestDefaultTemplateCatalogCheckRequiresUniqueRunnablePublicTemplates(t *tes
 		"github-runner-ubuntu-24-04\ttmpl-24\tready",
 		"github-runner-ubuntu-26-04\ttmpl-26\tready",
 		"github-runner-ubuntu-slim-large\ttmpl-slim-large\tready",
-		"github-runner-ubuntu-22.04-large\ttmpl-22-large\tready",
-		"github-runner-ubuntu-24.04-large\ttmpl-24-large\tready",
-		"github-runner-ubuntu-26.04-large\ttmpl-26-large\tready",
+		"github-runner-ubuntu-22-04-large\ttmpl-22-large\tready",
+		"github-runner-ubuntu-24-04-large\ttmpl-24-large\tready",
+		"github-runner-ubuntu-26-04-large\ttmpl-26-large\tready",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("catalog output missing %q:\n%s", want, output)

@@ -6,7 +6,7 @@
 #
 # Prefer a stable name over a committed environment-specific template_id.
 
-name = "github-runner-ubuntu-24.04-large"
+name = "github-runner-ubuntu-24-04-large"
 dockerfile = "../github-runner-ubuntu-24.04/Dockerfile"
 path = "../github-runner-ubuntu-24.04"
 cpu_count = 8

@@ -9,9 +9,9 @@
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
 | `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB) | large | development |
-| `ubuntu-22.04-large` | `github-runner-ubuntu-22.04-large` | Ubuntu 22.04 x64 (80 GiB) | follows upstream deprecation | development |
-| `ubuntu-24.04-large` | `github-runner-ubuntu-24.04-large` | Ubuntu 24.04 x64 (80 GiB) | large | development |
-| `ubuntu-26.04-large` | `github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 (80 GiB) | preview | development |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB) | follows upstream deprecation | development |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB) | large | development |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB) | preview | development |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
