@@ -65,7 +65,7 @@ describe("public site documentation catalog", () => {
     }
   })
 
-  test("documents managed and operator-configured runner labels and resource sizes", () => {
+  test("documents available runner labels and resource sizes", () => {
     for (const language of ["en", "zh"]) {
       const markdown = siteDocumentForPath("/docs/reference/runner-labels", language)?.markdown
 
@@ -83,8 +83,23 @@ describe("public site documentation catalog", () => {
       expect(markdown).toContain("20 GiB")
       expect(markdown).toContain("80 GiB")
       expect(markdown).toContain("Sandbox provider")
-      expect(markdown).toContain(language === "en" ? "Operator-configured" : "Operator 配置")
-      expect(markdown).toContain(language === "en" ? "custom Runner Spec" : "自定义 Runner Spec")
+      expect(markdown).toContain(language === "en" ? "Both standard and large labels" : "标准标签和 large 标签均可用于")
+      expect(markdown).toContain(language === "en" ? "custom large spec" : "自定义 large spec")
+      expect(markdown.split(language === "en" ? "| Workflow request | CPU" : "| Workflow 请求 | CPU").length - 1).toBe(1)
+      expect(markdown).not.toContain(language === "en" ? "Operator-configured large labels" : "Operator 配置的 large 标签")
+      const tableSection = markdown.slice(0, markdown.indexOf(language === "en" ? "## Resource contract" : "## 资源规格说明"))
+      expect([...tableSection.matchAll(/\[qiniu, ([^\]]+)\]/g)].map(([, label]) => label)).toEqual([
+        "ubuntu-slim",
+        "ubuntu-slim-large",
+        "ubuntu-22.04",
+        "ubuntu-22.04-large",
+        "ubuntu-24.04",
+        "ubuntu-24.04-large",
+        "ubuntu-latest",
+        "ubuntu-latest-large",
+        "ubuntu-26.04",
+        "ubuntu-26.04-large",
+      ])
     }
   })
 })

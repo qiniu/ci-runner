@@ -1,32 +1,25 @@
 # Runner 标签
 
-使用受支持的七牛标签组合选择已维护的公共 Sandbox 模板。标准标签是 runnerd 内置的托管标签；large 标签是由 operator 在 Admin 中配置的对外默认值。
+使用下方表格中的受支持七牛标签组合选择可用的公共 Sandbox 模板。标准标签和 large 标签均可用于 GitHub Actions workflow。
 
-## 托管标签与资源规格
+## 支持的标签与资源规格
 
 | Workflow 请求 | CPU | 内存 | 系统盘 | 模板状态 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | 更小的通用镜像 |
+| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 使用更大系统盘的 Ubuntu Slim |
 | `[qiniu, ubuntu-22.04]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | Ubuntu 22.04 x64 |
+| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 使用更大系统盘的 Ubuntu 22.04 x64 |
 | `[qiniu, ubuntu-24.04]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | 推荐默认值 |
-| `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | 预览 | 预览镜像，请明确选择 |
+| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 推荐用于磁盘密集型任务 |
 | `[qiniu, ubuntu-latest]` | 8 vCPU | 8 GiB | 20 GiB | 稳定映射 | 当前映射到 Ubuntu 24.04 |
-
-## Operator 配置的 large 标签
-
-以下标签是对外可用的 operator 配置默认值：只要在 Admin 中创建并启用对应的自定义 Runner Spec，所有允许的 workflow 都可以使用。它们不属于 runnerd 内置 managed catalog 或公共 managed-template API；每个 spec 都使用显式 template ID。
-
-| Workflow 请求 | CPU | 内存 | 系统盘 | 配置方式 | 说明 |
-| --- | --- | --- | --- | --- | --- |
-| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator 配置的公开默认值 | 使用更大系统盘的 Ubuntu Slim |
-| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator 配置的公开默认值 | 使用更大系统盘的 Ubuntu 22.04 x64 |
-| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator 配置的公开默认值 | 推荐用于磁盘密集型任务 |
-| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator 配置的公开默认值 | 使用更大系统盘的 Ubuntu 26.04 预览镜像 |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator 配置的公开默认值 | 映射到 Ubuntu 24.04 large 物理模板 |
+| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定映射 | 映射到 Ubuntu 24.04 large 物理模板 |
+| `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | 预览 | 预览镜像，请明确选择 |
+| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 预览 | 使用更大系统盘的 Ubuntu 26.04 预览镜像 |
 
 ## 资源规格说明
 
-标准托管模板当前均提供 8 vCPU 和 8 GiB 内存。operator 配置的 `-large` 变体复用对应标准规格的操作系统镜像和预装软件，只将系统盘从 20 GiB 扩大到 80 GiB。磁盘容量由 Sandbox provider 分配，不是 workflow 中可调整的参数；格式化和预留空间可能使文件系统显示的可用容量略低于标称值。
+标准模板当前均提供 8 vCPU 和 8 GiB 内存。`-large` 变体复用对应标准规格的操作系统镜像和预装软件，只将系统盘从 20 GiB 扩大到 80 GiB。磁盘容量由 Sandbox provider 分配，不是 workflow 中可调整的参数；格式化和预留空间可能使文件系统显示的可用容量略低于标称值。
 
 `ubuntu-latest-large` 是指向同一个 Ubuntu 24.04 large 物理模板的逻辑标签，不会新增物理镜像。
 

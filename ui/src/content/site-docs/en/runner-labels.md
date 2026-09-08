@@ -1,39 +1,30 @@
 # Runner labels
 
-Use a supported Qiniu label pair to select a maintained Sandbox template. Standard labels are built-in managed labels; large labels are public operator-configured defaults backed by Runner Specs created in Admin.
+Use a supported Qiniu label pair from the table below to select an available Sandbox template. Both standard and large labels can be used in GitHub Actions workflows.
 
-## Managed labels and resources
+## Supported labels and resources
 
 | Workflow request | CPU | Memory | System disk | Template status | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Smaller general-purpose image |
+| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Ubuntu Slim with a larger system disk |
 | `[qiniu, ubuntu-22.04]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Ubuntu 22.04 x64 |
+| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Ubuntu 22.04 x64 with a larger system disk |
 | `[qiniu, ubuntu-24.04]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Recommended default |
-| `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | Preview | Preview image, use deliberately |
+| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Recommended for disk-intensive jobs |
 | `[qiniu, ubuntu-latest]` | 8 vCPU | 8 GiB | 20 GiB | Stable mapping | Currently maps to Ubuntu 24.04 |
-## Operator-configured large labels
-
-These labels are public operator-configured defaults: they are available to all
-allowed workflows when the corresponding custom Runner Spec has been created and
-enabled in Admin. They are not part of runnerd's built-in managed catalog or
-public managed-template API. Each spec uses an explicit template ID.
-
-| Workflow request | CPU | Memory | System disk | Configuration | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator-configured public default | Ubuntu Slim with a larger system disk |
-| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator-configured public default | Ubuntu 22.04 x64 with a larger system disk |
-| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator-configured public default | Recommended for disk-intensive jobs |
-| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator-configured public default | Ubuntu 26.04 preview with a larger system disk |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Operator-configured public default | Logical mapping to the Ubuntu 24.04 large template |
+| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable mapping | Logical mapping to the Ubuntu 24.04 large template |
+| `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | Preview | Preview image, use deliberately |
+| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Preview | Ubuntu 26.04 preview with a larger system disk |
 
 ## Resource contract
 
-The standard managed templates provide 8 vCPU and 8 GiB of memory. The
-operator-configured `-large` variants reuse the same operating system image and
-installed software as their standard counterparts; only the system disk
-allocation changes from 20 GiB to 80 GiB. Disk capacity is supplied by the
-Sandbox provider rather than a workflow setting, and the usable filesystem
-capacity may be slightly lower after formatting and reserved space.
+The standard templates provide 8 vCPU and 8 GiB of memory. The `-large` variants
+reuse the same operating system image and installed software as their standard
+counterparts; only the system disk allocation changes from 20 GiB to 80 GiB.
+Disk capacity is supplied by the Sandbox provider rather than a workflow setting,
+and the usable filesystem capacity may be slightly lower after formatting and
+reserved space.
 
 `ubuntu-latest-large` is a logical label for the same physical template as
 `ubuntu-24.04-large`; it does not create another physical image.
