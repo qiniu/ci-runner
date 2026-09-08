@@ -1,21 +1,21 @@
 # Runner labels
 
-Use a supported Qiniu label pair from the table below to select an available Sandbox template. Both standard and large labels can be used in GitHub Actions workflows.
+Use a supported Qiniu label pair from the table below to select a Sandbox template. Standard labels are available by default; large labels are available after an operator creates and enables the corresponding custom Runner Spec.
 
 ## Supported labels and resources
 
 | Workflow request | CPU | Memory | System disk | Template status | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Smaller general-purpose image |
-| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Ubuntu Slim with a larger system disk |
+| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable after setup | Requires an enabled custom Runner Spec; larger system disk |
 | `[qiniu, ubuntu-22.04]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Ubuntu 22.04 x64 |
-| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Ubuntu 22.04 x64 with a larger system disk |
+| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable after setup | Requires an enabled custom Runner Spec; Ubuntu 22.04 x64 with a larger system disk |
 | `[qiniu, ubuntu-24.04]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Recommended default |
-| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable | Recommended for disk-intensive jobs |
+| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable after setup | Requires an enabled custom Runner Spec; recommended for disk-intensive jobs |
 | `[qiniu, ubuntu-latest]` | 8 vCPU | 8 GiB | 20 GiB | Stable mapping | Currently maps to Ubuntu 24.04 |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable mapping | Logical mapping to the Ubuntu 24.04 large template |
+| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable mapping after setup | Requires an enabled custom Runner Spec; logical mapping to the Ubuntu 24.04 large template |
 | `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | Preview | Preview image, use deliberately |
-| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Preview | Ubuntu 26.04 preview with a larger system disk |
+| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Preview after setup | Requires an enabled custom Runner Spec; Ubuntu 26.04 preview with a larger system disk |
 
 ## Resource contract
 

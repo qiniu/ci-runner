@@ -1,21 +1,21 @@
 # Runner 标签
 
-使用下方表格中的受支持七牛标签组合选择可用的公共 Sandbox 模板。标准标签和 large 标签均可用于 GitHub Actions workflow。
+使用下方表格中的受支持七牛标签组合选择 Sandbox 模板。标准标签默认可用；large 标签需要 operator 创建并启用对应的自定义 Runner Spec 后才可用。
 
 ## 支持的标签与资源规格
 
 | Workflow 请求 | CPU | 内存 | 系统盘 | 模板状态 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | 更小的通用镜像 |
-| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 使用更大系统盘的 Ubuntu Slim |
+| `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定 | 需要启用自定义 Runner Spec；使用更大系统盘的 Ubuntu Slim |
 | `[qiniu, ubuntu-22.04]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | Ubuntu 22.04 x64 |
-| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 使用更大系统盘的 Ubuntu 22.04 x64 |
+| `[qiniu, ubuntu-22.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定 | 需要启用自定义 Runner Spec；使用更大系统盘的 Ubuntu 22.04 x64 |
 | `[qiniu, ubuntu-24.04]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | 推荐默认值 |
-| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定 | 推荐用于磁盘密集型任务 |
+| `[qiniu, ubuntu-24.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定 | 需要启用自定义 Runner Spec；推荐用于磁盘密集型任务 |
 | `[qiniu, ubuntu-latest]` | 8 vCPU | 8 GiB | 20 GiB | 稳定映射 | 当前映射到 Ubuntu 24.04 |
-| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | 稳定映射 | 映射到 Ubuntu 24.04 large 物理模板 |
+| `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定映射 | 需要启用自定义 Runner Spec；映射到 Ubuntu 24.04 large 物理模板 |
 | `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | 预览 | 预览镜像，请明确选择 |
-| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 预览 | 使用更大系统盘的 Ubuntu 26.04 预览镜像 |
+| `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后预览 | 需要启用自定义 Runner Spec；使用更大系统盘的 Ubuntu 26.04 预览镜像 |
 
 ## 资源规格说明
 
