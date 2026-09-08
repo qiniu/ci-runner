@@ -8098,7 +8098,7 @@ func TestUserRunnerSpecsListRequiresSessionAndReturnsScopedCatalog(t *testing.T)
 		t.Fatalf("list status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"scope_type":"account"`) || !strings.Contains(rec.Body.String(), `"name":"managed"`) {
-		t.Fatalf("unexpected runner type list response: %s", rec.Body.String())
+		t.Fatalf("unexpected runner spec list response: %s", rec.Body.String())
 	}
 }
 
@@ -8132,7 +8132,7 @@ func TestUserRunnerSpecsCanonicalizesPersonalInstallationToAccountScope(t *testi
 		t.Fatalf("list status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"scope_type":"account"`) || !strings.Contains(rec.Body.String(), `"name":"personal"`) {
-		t.Fatalf("personal installation did not use account Runner Type scope: %s", rec.Body.String())
+		t.Fatalf("personal installation did not use account Runner Spec scope: %s", rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"name":"invalid-group","workflow_labels":["qiniu","group"],"template_id":"template","runner_group":"organization-group","enabled":true}`))
@@ -8174,21 +8174,23 @@ func TestUserRunnerSpecsListHidesPlatformTemplateIDsAndReturnsScopedFields(t *te
 	}
 }
 
-func TestUserPutRunnerSpecControlRejectsPlatformCustomProfile(t *testing.T) {
+func TestUserRunnerSpecControlMethodsAreNotExposed(t *testing.T) {
 	store := state.New(t.TempDir())
-	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "platform-custom", Labels: []string{"qiniu", "platform"}, RequiredLabels: []string{"qiniu"}, TemplateID: "platform-template", Enabled: true})
+	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu", "managed"}, RequiredLabels: []string{"qiniu"}, TemplateID: "platform-template", ManagedBy: "runnerd", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	body := fmt.Sprintf(`{"enabled":false,"max_concurrency":1,"expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
-	req := httptest.NewRequest(http.MethodPut, "/user/runner-specs/platform-custom/control", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"runner_spec_read_only"`) {
-		t.Fatalf("status=%d body=%s, want runner_spec_read_only", rec.Code, rec.Body.String())
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/user/runner-specs/managed/control", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s status=%d body=%s, want 405", method, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -8256,54 +8258,23 @@ func TestUserPatchRunnerSpecMapsDuplicateLabelsToConflict(t *testing.T) {
 	}
 }
 
-func TestUserRunnerSpecsListUsesMostRestrictiveConcurrencyLimit(t *testing.T) {
+func TestUserRunnerSpecsListReportsPlatformPolicyWithoutScopeControls(t *testing.T) {
 	store := state.New(t.TempDir())
 	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true, MaxConcurrency: 3}); err != nil {
 		t.Fatal(err)
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
-	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	control := state.RunnerProfileControl{ScopeType: state.AccountScopeTypeAccount, ScopeID: account.ID, ProfileName: "managed", Enabled: true, MaxConcurrency: 7}
-	if _, err := store.UpsertProfileControlIfUnchanged(control, nil); err != nil {
-		t.Fatal(err)
-	}
 	req := httptest.NewRequest(http.MethodGet, "/user/runner-specs", nil)
 	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"effective_max_concurrency":3`) {
-		t.Fatalf("list response = %d %s, want effective limit 3", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"max_concurrency":3`) {
+		t.Fatalf("list response = %d %s, want platform limit 3", rec.Code, rec.Body.String())
 	}
-}
-
-func TestUserRunnerSpecsListSeparatesScopeEnabledFromEffectiveEnabled(t *testing.T) {
-	store := state.New(t.TempDir())
-	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed-disabled", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: false}); err != nil {
-		t.Fatal(err)
-	}
-	srv := newTestServer(t, store, "", &fakeSandbox{})
-	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpsertProfileControlIfUnchanged(state.RunnerProfileControl{
-		ScopeType: state.RunnerProfileScopeAccount, ScopeID: account.ID,
-		ProfileName: "managed-disabled", Enabled: true, MaxConcurrency: 2,
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/user/runner-specs", nil)
-	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"name":"managed-disabled"`) || !strings.Contains(rec.Body.String(), `"enabled":false,"scope_enabled":true`) {
-		t.Fatalf("list did not preserve raw scope enabled state: %s", rec.Body.String())
+	for _, field := range []string{"scope_enabled", "scope_max_concurrency", "scope_control_configured", "effective_max_concurrency"} {
+		if strings.Contains(rec.Body.String(), `"`+field+`"`) {
+			t.Fatalf("list exposed removed field %q: %s", field, rec.Body.String())
+		}
 	}
 }
 
@@ -8392,7 +8363,7 @@ func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
 	select {
 	case <-store.started:
 	case <-time.After(time.Second):
-		t.Fatal("runner type mutation did not reach audited transaction")
+		t.Fatal("runner spec mutation did not reach audited transaction")
 	}
 
 	type admissionResult struct {
@@ -8410,7 +8381,7 @@ func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
 	case result := <-admissionDone:
 		close(store.proceed)
 		<-patchDone
-		t.Fatalf("workflow admission completed during Runner Type mutation: %#v", result)
+		t.Fatalf("workflow admission completed during Runner Spec mutation: %#v", result)
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(store.proceed)
@@ -8424,7 +8395,7 @@ func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
 			t.Fatalf("post-mutation admission = %#v, want rejected old labels", result)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("workflow admission did not resume after Runner Type mutation")
+		t.Fatal("workflow admission did not resume after Runner Spec mutation")
 	}
 }
 
@@ -8474,7 +8445,7 @@ func TestUserDeleteRunnerSpecRechecksActiveRequestsInsideMutation(t *testing.T) 
 		t.Fatalf("delete status=%d body=%s, want runner_spec_in_use", rec.Code, rec.Body.String())
 	}
 	if _, err := baseStore.GetScopedProfile(scope, profile.Name); err != nil {
-		t.Fatalf("active Runner Type was deleted: %v", err)
+		t.Fatalf("active Runner Spec was deleted: %v", err)
 	}
 }
 

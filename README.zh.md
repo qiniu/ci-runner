@@ -27,7 +27,7 @@ Qiniu CI Runner 控制面是开源方案；Workflow Job 实际运行所依赖的
 - **GitHub App 鉴权** — 推荐的生产鉴权方式，内置 Web 控制台支持 OAuth 登录
 - **多数据库支持** — SQLite（默认）、PostgreSQL 或 MySQL 存储运行时状态
 - **并发控制** — 全局 `max_concurrent_runners` 和 per-spec `max_concurrency`，基于队列的背压机制
-- **内置 Web UI** — 管理控制台（Runner Request、全局 Runner Spec、账户、平台 Sandbox 兜底、审计、匹配和诊断）；普通用户控制台（Job 分组、日志、仓库就绪状态、作用域 Sandbox 管理和账户／Organization Runner 类型）
+- **内置 Web UI** — 管理控制台（Runner Request、全局 Runner Spec、账户、平台 Sandbox 兜底、审计、匹配和诊断）；普通用户控制台（Job 分组、日志、仓库就绪状态、平台 Runner 规格目录、作用域 Sandbox 管理和账户／Organization 自定义 Runner 规格）
 - **配置混淆** — 敏感值可避免在配置文件中直接暴露明文
 - **重试与恢复** — 瞬时故障自动退避重试；服务重启后恢复排队任务和仍在运行的远端 runner
 
@@ -271,17 +271,23 @@ label 组合，不包含 provider template ID、credential、endpoint，也不�
 自定义模板。依赖 credential 的
 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scoped resource。
 
-普通用户在 `/account/runner-types` 或
-`/organizations/{login}/runner-types` 管理当前作用域的有效目录。需要登录的
-`/user/runner-specs` API 会组合 runnerd 管理的类型、只读的平台自定义类型，以及
-当前账户或可管理 Organization 自有的自定义类型。作用域控制只能停用 managed
-类型或增加并发上限，不能修改其 labels、priority 或稳定公共模板名。作用域自定义
-类型使用精确规范化后的 workflow labels，可以覆盖相同标签集合的全局类型；新建或
+普通用户在 `/runner-specs` 只读浏览平台 Runner 规格及其工作流标签；该页面不提供
+个人账号／Organization 选择，也不能修改平台规格的启用状态或并发策略。在
+`/account/runner-specs` 或 `/organizations/{login}/runner-specs` 只管理对应作用域自有的
+自定义规格。需要登录的 `/user/runner-specs` API 会组合 runnerd 管理的规格、只读的
+平台自定义规格，以及当前账户或可管理 Organization 自有的自定义规格。平台规格的
+可用性和并发仍由 Admin 全局管理。作用域自定义
+规格使用精确规范化后的 workflow labels，可以覆盖相同标签集合的全局规格；新建或
 更换 template ID 时，只使用当前作用域显式配置或合法继承的 Sandbox credential
-验证。`runner_group` 仅供 Organization 自定义类型使用。响应只会为调用者自己的
-作用域自定义类型返回 template ID，绝不会暴露平台自定义类型的 template ID。
+验证。`runner_group` 仅供 Organization 自定义规格使用。响应只会为调用者自己的
+作用域自定义规格返回 template ID，绝不会暴露平台自定义规格的 template ID。
 排队请求在启动前会重新加载并校验原先持久化的 source 与 scope，因此等待期间被
-停用的类型不会启动 Runner。
+停用的规格不会启动 Runner。
+
+Admin 创建的自定义 Runner Spec 是平台共享规格，会以只读形式出现在每个可管理的
+账户和 Organization 目录中。因此 Admin 创建界面会明确提示平台范围，并且只使用
+Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用的环境应创建为
+作用域自定义规格。
 
 对于自定义 spec，`template_id` 应指向包含 GitHub runner 镜像的 Qiniu Sandbox 模板。创建沙箱时会使用 **Repositories → Runner readiness** 中显示的仓库 owner 有效 Sandbox service 检查模板访问权限。
 
@@ -295,7 +301,8 @@ label 组合，不包含 provider template ID、credential、endpoint，也不�
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/runner_requests` | Runner Request 历史、重试／停止操作和持久化日志 |
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
-| `/account/runner-types`、`/organizations/{login}/runner-types` | 管理个人或可管理 Organization 作用域内的 Runner 类型 |
+| `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
+| `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |
 | `/admin/sandbox_service` | Sandbox 服务配置               |
 | `/admin/match`           | 针对当前已启用 Runner Spec 的标签匹配预览 |
 | `/admin/audit`           | 审计事件历史 |

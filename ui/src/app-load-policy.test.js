@@ -44,11 +44,13 @@ describe("app load policy", () => {
     ["/github/branches/octo/repo/deadbeef/jobs", ["github_app", "runner_requests", "onboarding"]],
     ["/jobs/manual/octo/repo/manual-1", ["github_app", "runner_requests", "onboarding"]],
     ["/repositories", ["github_app", "preferences", "onboarding"]],
+    ["/runner-specs", []],
     ["/account/repositories", ["github_app", "preferences", "onboarding"]],
     ["/organizations/octo/repositories", ["github_app", "preferences", "onboarding"]],
     ["/account/preferences", ["github_app", "preferences", "onboarding"]],
     ["/organizations/octo/sandbox-templates", ["github_app", "preferences", "onboarding"]],
-    ["/account/runner-types", ["github_app", "preferences", "onboarding", "runner_specs"]],
+    ["/account/runner-specs", ["github_app", "preferences", "onboarding"]],
+    ["/organizations/octo/runner-specs", ["github_app", "preferences", "onboarding"]],
     ["/jobs/job-1", []],
     ["/admin/", []],
   ])("loads only data used by user route %s", (path, expected) => {
@@ -95,7 +97,12 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/jobs")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/jobs/job-1")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/github/pulls/octo/repo/12/jobs")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/runner-specs")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/account/preferences")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/account/runner-specs")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-specs")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/account/runner-types")).toBe("not-found")
+    expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/admin/runner_specs")).toBe("admin")
     expect(appPolicy.appRouteAccess?.("/admin/not-a-section")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/docs/not-a-guide")).toBe("not-found")

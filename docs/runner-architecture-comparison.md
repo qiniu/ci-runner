@@ -87,7 +87,7 @@ flowchart TB
 
 ### Runner Request Lifecycle
 
-Admission and capacity are separate steps. Webhooks admit a request only after the repository allowlist and the effective account/Organization Runner Type label checks pass. Exact scoped custom labels are evaluated before the scope-controlled global catalog, and the selected source, scope, and name are persisted with the request. Capacity is checked later by the worker when it claims a queued request, so over-capacity work remains queued instead of being rejected. Before registration or Sandbox creation, the worker reloads that persisted identity and revalidates the latest enabled state and requested labels.
+Admission and capacity are separate steps. Webhooks admit a request only after the repository allowlist and the effective account/Organization Runner Spec label checks pass. Exact scoped custom labels are evaluated before the scope-controlled global catalog, and the selected source, scope, and name are persisted with the request. Capacity is checked later by the worker when it claims a queued request, so over-capacity work remains queued instead of being rejected. Before registration or Sandbox creation, the worker reloads that persisted identity and revalidates the latest enabled state and requested labels.
 
 ```mermaid
 sequenceDiagram
@@ -242,9 +242,9 @@ Admission uses the GitHub webhook payload repository and labels. A runner reques
 - an enabled Runner Spec satisfies `required_labels ⊆ job_labels ⊆ labels`;
 - the matched spec is enabled.
 
-After the repository allowlist check, a resolved account or Organization scope first checks an exact scoped custom label set. A disabled exact custom match explicitly shadows the global catalog with `profile_scope_disabled`; otherwise the matcher applies the scope's managed controls before global matching. If no scope can be resolved, the existing global catalog remains the compatibility path. Internal Runner Groups and Repository Policies no longer exist or participate in matching. When a spec includes a GitHub runner group, runnerd creates an organization runner for the job repository owner and passes that group as `--runnergroup`.
+After the repository allowlist check, a resolved account or Organization scope first checks an exact scoped custom label set. A disabled exact custom match explicitly shadows the global catalog with `profile_scope_disabled`; if no exact custom match exists, matching falls back to the unchanged global catalog. If no scope can be resolved, the same global catalog remains the compatibility path. Internal Runner Groups and Repository Policies no longer exist or participate in matching. When a spec includes a GitHub runner group, runnerd creates an organization runner for the job repository owner and passes that group as `--runnergroup`.
 
-Capacity is checked later when the worker starts a queued request. Managed global specs enforce both their global limit and any additional scope limit; scoped custom specs enforce their scope limit, and all requests remain subject to `worker.max_concurrent_runners`. Requests above a limit remain `queued` and are retried later. A queued request whose persisted type is now disabled or no longer satisfies its requested labels fails at `profile_validation` instead of launching from stale admission state. Transient placement/rate-limit signals are treated as queue deferrals instead of hard failures.
+Capacity is checked later when the worker starts a queued request. Global specs enforce their global limit; scoped custom specs enforce their own scope limit, and all requests remain subject to `worker.max_concurrent_runners`. Requests above a limit remain `queued` and are retried later. A queued request whose persisted spec is now disabled or no longer satisfies its requested labels fails at `profile_validation` instead of launching from stale admission state. Transient placement/rate-limit signals are treated as queue deferrals instead of hard failures.
 
 ## State And Recovery
 

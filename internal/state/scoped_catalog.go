@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -53,114 +52,6 @@ func NormalizeWorkflowLabels(labels []string) ([]string, string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return normalized, hex.EncodeToString(sum[:]), nil
-}
-
-func (s *DBStore) GetProfileControl(scope RunnerProfileScope, name string) (RunnerProfileControl, error) {
-	if err := ValidateRunnerProfileScope(scope); err != nil {
-		return RunnerProfileControl{}, err
-	}
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return RunnerProfileControl{}, err
-	}
-	var record runnerProfileScopeControlRecord
-	if err := db.Where("scope_type = ? AND scope_id = ? AND profile_name = ?", scope.Type, scope.ID, strings.TrimSpace(name)).First(&record).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return RunnerProfileControl{}, ErrNotFound
-		}
-		return RunnerProfileControl{}, err
-	}
-	return controlFromRecord(record), nil
-}
-
-func (s *DBStore) UpsertProfileControlIfUnchanged(control RunnerProfileControl, expectedUpdatedAt *time.Time) (RunnerProfileControl, error) {
-	scope := RunnerProfileScope{Type: control.ScopeType, ID: control.ScopeID}
-	if err := ValidateRunnerProfileScope(scope); err != nil {
-		return RunnerProfileControl{}, err
-	}
-	control.ProfileName = strings.TrimSpace(control.ProfileName)
-	if control.ProfileName == "" || control.MaxConcurrency < 0 {
-		return RunnerProfileControl{}, fmt.Errorf("invalid runner profile control")
-	}
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return RunnerProfileControl{}, err
-	}
-	global, err := s.GetProfile(control.ProfileName)
-	if err != nil {
-		return RunnerProfileControl{}, err
-	}
-	if strings.TrimSpace(global.ManagedBy) == "" {
-		return RunnerProfileControl{}, fmt.Errorf("runner profile is not managed")
-	}
-	now := time.Now().UTC()
-	if expectedUpdatedAt != nil && now.Before(expectedUpdatedAt.Add(time.Millisecond)) {
-		now = expectedUpdatedAt.Add(time.Millisecond)
-	}
-	record := runnerProfileScopeControlRecord{ScopeType: scope.Type, ScopeID: scope.ID, ProfileName: control.ProfileName, Enabled: control.Enabled, MaxConcurrency: control.MaxConcurrency, CreatedAt: control.CreatedAt, UpdatedAt: now}
-	if record.CreatedAt.IsZero() {
-		record.CreatedAt = now
-	}
-	updates := map[string]any{"enabled": record.Enabled, "max_concurrency": record.MaxConcurrency, "updated_at": record.UpdatedAt}
-	var result *gorm.DB
-	if expectedUpdatedAt != nil {
-		result = db.Model(&runnerProfileScopeControlRecord{}).Where("scope_type = ? AND scope_id = ? AND profile_name = ? AND updated_at = ?", scope.Type, scope.ID, control.ProfileName, *expectedUpdatedAt).Updates(updates)
-		if result.Error == nil && result.RowsAffected == 0 {
-			var existing runnerProfileScopeControlRecord
-			existingErr := db.Where("scope_type = ? AND scope_id = ? AND profile_name = ?", scope.Type, scope.ID, control.ProfileName).First(&existing).Error
-			switch {
-			case existingErr == nil:
-				return RunnerProfileControl{}, ErrConflict
-			case !errors.Is(existingErr, gorm.ErrRecordNotFound):
-				return RunnerProfileControl{}, existingErr
-			}
-			var currentGlobal runnerProfileRecord
-			if err := db.Where("name = ? AND updated_at = ?", control.ProfileName, *expectedUpdatedAt).First(&currentGlobal).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return RunnerProfileControl{}, ErrConflict
-				}
-				return RunnerProfileControl{}, err
-			}
-			result = db.Create(&record)
-			if result.Error != nil {
-				if translator, ok := db.Dialector.(gorm.ErrorTranslator); ok && errors.Is(translator.Translate(result.Error), gorm.ErrDuplicatedKey) {
-					return RunnerProfileControl{}, ErrConflict
-				}
-				return RunnerProfileControl{}, result.Error
-			}
-		}
-	} else {
-		result = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "scope_type"}, {Name: "scope_id"}, {Name: "profile_name"}}, DoUpdates: clause.Assignments(updates)}).Create(&record)
-	}
-	if result.Error != nil {
-		return RunnerProfileControl{}, result.Error
-	}
-	if expectedUpdatedAt != nil && result.RowsAffected == 0 {
-		return RunnerProfileControl{}, ErrConflict
-	}
-	return s.GetProfileControl(scope, control.ProfileName)
-}
-
-func (s *DBStore) DeleteProfileControlIfUnchanged(scope RunnerProfileScope, name string, expectedUpdatedAt *time.Time) error {
-	if err := ValidateRunnerProfileScope(scope); err != nil {
-		return err
-	}
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return err
-	}
-	query := db.Where("scope_type = ? AND scope_id = ? AND profile_name = ?", scope.Type, scope.ID, strings.TrimSpace(name))
-	if expectedUpdatedAt != nil {
-		query = query.Where("updated_at = ?", *expectedUpdatedAt)
-	}
-	result := query.Delete(&runnerProfileScopeControlRecord{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrConflict
-	}
-	return nil
 }
 
 func (s *DBStore) ListScopedProfiles(scope RunnerProfileScope) ([]ScopedRunnerProfile, error) {
@@ -301,36 +192,17 @@ func (s *DBStore) ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRu
 	if err != nil {
 		return nil, err
 	}
-	controls, err := s.GetProfileControls(scope)
-	if err != nil {
-		return nil, err
-	}
-	controlMap := make(map[string]RunnerProfileControl, len(controls))
-	for _, control := range controls {
-		controlMap[control.ProfileName] = control
-	}
 	items := make([]EffectiveRunnerProfile, 0, len(globals))
 	globalLabelKeys := make(map[string]struct{}, len(globals))
 	for _, profile := range globals {
 		if _, labelKey, normalizeErr := NormalizeWorkflowLabels(profile.Labels); normalizeErr == nil {
 			globalLabelKeys[labelKey] = struct{}{}
 		}
-		control := controlMap[profile.Name]
-		scopeLimit := 0
-		scopeEnabled := true
-		enabled := profile.Enabled
-		updatedAt := profile.UpdatedAt
-		if control.ProfileName != "" {
-			scopeLimit, scopeEnabled = control.MaxConcurrency, control.Enabled
-			enabled = enabled && scopeEnabled
-			updatedAt = control.UpdatedAt
-		}
 		source := "platform_custom"
 		if profile.ManagedBy != "" {
 			source = "managed"
 		}
-		profile.UpdatedAt = updatedAt
-		items = append(items, EffectiveRunnerProfile{Source: source, ScopeType: scope.Type, ScopeID: scope.ID, Profile: profile, WorkflowLabels: append([]string(nil), profile.Labels...), GlobalMaxConcurrency: profile.MaxConcurrency, ScopeMaxConcurrency: scopeLimit, EffectiveEnabled: enabled, ScopeEnabled: scopeEnabled, Editable: profile.ManagedBy != "", ScopeControlConfigured: control.ProfileName != ""})
+		items = append(items, EffectiveRunnerProfile{Source: source, ScopeType: scope.Type, ScopeID: scope.ID, Profile: profile, WorkflowLabels: append([]string(nil), profile.Labels...)})
 	}
 	scoped, err := s.ListScopedProfiles(scope)
 	if err != nil {
@@ -338,7 +210,7 @@ func (s *DBStore) ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRu
 	}
 	for _, profile := range scoped {
 		_, overridesGlobal := globalLabelKeys[profile.LabelKey]
-		items = append(items, EffectiveRunnerProfile{Source: "scoped_custom", ScopeType: scope.Type, ScopeID: scope.ID, Profile: RunnerProfile{Name: profile.Name, Labels: append([]string(nil), profile.WorkflowLabels...), RequiredLabels: append([]string(nil), profile.WorkflowLabels...), TemplateID: profile.TemplateID, RunnerGroup: profile.RunnerGroup, MaxConcurrency: profile.MaxConcurrency, Enabled: profile.Enabled, CreatedAt: profile.CreatedAt, UpdatedAt: profile.UpdatedAt}, WorkflowLabels: append([]string(nil), profile.WorkflowLabels...), ScopeMaxConcurrency: profile.MaxConcurrency, EffectiveEnabled: profile.Enabled, ScopeEnabled: profile.Enabled, OverridesGlobal: overridesGlobal, Editable: true})
+		items = append(items, EffectiveRunnerProfile{Source: "scoped_custom", ScopeType: scope.Type, ScopeID: scope.ID, Profile: RunnerProfile{Name: profile.Name, Labels: append([]string(nil), profile.WorkflowLabels...), RequiredLabels: append([]string(nil), profile.WorkflowLabels...), TemplateID: profile.TemplateID, RunnerGroup: profile.RunnerGroup, MaxConcurrency: profile.MaxConcurrency, Enabled: profile.Enabled, CreatedAt: profile.CreatedAt, UpdatedAt: profile.UpdatedAt}, WorkflowLabels: append([]string(nil), profile.WorkflowLabels...), OverridesGlobal: overridesGlobal})
 	}
 	return items, nil
 }
@@ -396,48 +268,9 @@ func (s *DBStore) MatchProfileForScope(scope RunnerProfileScope, repositoryFullN
 	if err != nil {
 		return ProfileMatch{}, err
 	}
-	controls, err := s.GetProfileControls(scope)
-	if err != nil {
-		return ProfileMatch{}, err
-	}
-	controlMap := make(map[string]RunnerProfileControl, len(controls))
-	for _, control := range controls {
-		controlMap[control.ProfileName] = control
-	}
-	for i := range globals {
-		if globals[i].ManagedBy == "" {
-			continue
-		}
-		if control, ok := controlMap[globals[i].Name]; ok {
-			globals[i].Enabled = globals[i].Enabled && control.Enabled
-		}
-	}
 	match = profileMatchFromCandidates(repositoryFullName, labels, globals)
 	match.Source, match.ScopeType, match.ScopeID = "global", scope.Type, scope.ID
 	return match, nil
-}
-
-func (s *DBStore) GetProfileControls(scope RunnerProfileScope) ([]RunnerProfileControl, error) {
-	if err := ValidateRunnerProfileScope(scope); err != nil {
-		return nil, err
-	}
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return nil, err
-	}
-	var records []runnerProfileScopeControlRecord
-	if err := db.Where("scope_type = ? AND scope_id = ?", scope.Type, scope.ID).Order("profile_name ASC").Find(&records).Error; err != nil {
-		return nil, err
-	}
-	controls := make([]RunnerProfileControl, 0, len(records))
-	for _, record := range records {
-		controls = append(controls, controlFromRecord(record))
-	}
-	return controls, nil
-}
-
-func controlFromRecord(record runnerProfileScopeControlRecord) RunnerProfileControl {
-	return RunnerProfileControl(record)
 }
 
 func scopedProfileFromRecord(record scopedRunnerProfileRecord) (ScopedRunnerProfile, error) {

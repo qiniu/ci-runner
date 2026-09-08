@@ -3444,16 +3444,18 @@ func TestFreshSchemaIncludesScopedRunnerCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"runner_profile_scope_controls", "scoped_runner_profiles"} {
+	for _, table := range []string{"scoped_runner_profiles"} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("expected fresh schema table %s", table)
 		}
+	}
+	if db.Migrator().HasTable("runner_profile_scope_controls") {
+		t.Fatal("fresh schema must not create removed runner_profile_scope_controls")
 	}
 	for _, index := range []struct {
 		model any
 		name  string
 	}{
-		{model: "runner_profile_scope_controls", name: "idx_runner_profile_scope_controls_scope"},
 		{model: "scoped_runner_profiles", name: "idx_scoped_runner_profiles_scope_labels"},
 		{model: "scoped_runner_profiles", name: "idx_scoped_runner_profiles_scope"},
 	} {
@@ -3537,17 +3539,17 @@ func TestMigrateSQLiteScopedRunnerCatalogIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var before []string
-	if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('runner_profile_scope_controls', 'scoped_runner_profiles') ORDER BY name`).Scan(&before).Error; err != nil {
+	if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scoped_runner_profiles' ORDER BY name`).Scan(&before).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(before) != 2 {
+	if len(before) != 1 {
 		t.Fatalf("expected scoped catalog tables before repeat migration, got %v", before)
 	}
 	if err := store.migrate(db); err != nil {
 		t.Fatal(err)
 	}
 	var after []string
-	if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('runner_profile_scope_controls', 'scoped_runner_profiles') ORDER BY name`).Scan(&after).Error; err != nil {
+	if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scoped_runner_profiles' ORDER BY name`).Scan(&after).Error; err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, after) {
@@ -3577,13 +3579,15 @@ func TestScopedRunnerCatalogFreshSchemaSQLBackends(t *testing.T) {
 			}
 			defer func() {
 				_ = db.Exec("DROP TABLE scoped_runner_profiles").Error
-				_ = db.Exec("DROP TABLE runner_profile_scope_controls").Error
 				closeTestDB(t, db)
 			}()
-			for _, table := range []string{"runner_profile_scope_controls", "scoped_runner_profiles"} {
+			for _, table := range []string{"scoped_runner_profiles"} {
 				if !db.Migrator().HasTable(table) {
 					t.Fatalf("expected %s table", table)
 				}
+			}
+			if db.Migrator().HasTable("runner_profile_scope_controls") {
+				t.Fatal("fresh schema must not create removed runner_profile_scope_controls")
 			}
 		})
 	}
@@ -3704,41 +3708,35 @@ func TestScopedRunnerProfileConditionalWritesRejectStaleRevision(t *testing.T) {
 	}
 }
 
-func TestManagedProfileControlCannotEnableGloballyDisabledProfile(t *testing.T) {
+func TestMatchProfileForScopeIgnoresLegacyManagedScopeControls(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
-	if _, err := store.UpsertProfile(RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: false}); err != nil {
+	if _, err := store.UpsertProfile(RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	scope := RunnerProfileScope{Type: RunnerProfileScopeAccount, ID: 1}
-	if _, err := store.UpsertProfileControlIfUnchanged(RunnerProfileControl{ScopeType: scope.Type, ScopeID: scope.ID, ProfileName: "managed", Enabled: true}, nil); err != nil {
-		t.Fatal(err)
-	}
-	item, err := store.GetEffectiveProfile(scope, "managed", "managed")
+	db, err := store.dbOrEnsure()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.EffectiveEnabled {
-		t.Fatal("scope control must not re-enable globally disabled profile")
-	}
-	if !item.ScopeControlConfigured {
-		t.Fatal("effective profile should report configured scope control")
-	}
-}
-
-func TestProfileControlConditionalCreateUsesGlobalRevisionWhenScopeRowIsMissing(t *testing.T) {
-	store := New(t.TempDir()).(*DBStore)
-	global, err := store.UpsertProfile(RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true})
-	if err != nil {
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS runner_profile_scope_controls (
+		scope_type TEXT NOT NULL,
+		scope_id INTEGER NOT NULL,
+		profile_name TEXT NOT NULL,
+		enabled BOOLEAN NOT NULL,
+		max_concurrency INTEGER NOT NULL DEFAULT 0,
+		created_at TIMESTAMP NOT NULL,
+		updated_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (scope_type, scope_id, profile_name)
+	)`).Error; err != nil {
 		t.Fatal(err)
 	}
-	scope := RunnerProfileScope{Type: RunnerProfileScopeAccount, ID: 1}
-	control := RunnerProfileControl{ScopeType: scope.Type, ScopeID: scope.ID, ProfileName: global.Name, Enabled: false, MaxConcurrency: 2}
-	if _, err := store.UpsertProfileControlIfUnchanged(control, &global.UpdatedAt); err != nil {
-		t.Fatalf("first conditional scope control save = %v", err)
+	now := time.Now().UTC()
+	if err := db.Exec(`INSERT INTO runner_profile_scope_controls (scope_type, scope_id, profile_name, enabled, max_concurrency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, scope.Type, scope.ID, "managed", false, 1, now, now).Error; err != nil {
+		t.Fatal(err)
 	}
-	saved, err := store.GetProfileControl(scope, global.Name)
-	if err != nil || saved.Enabled || saved.MaxConcurrency != 2 {
-		t.Fatalf("saved scope control = %#v, err=%v", saved, err)
+	match, err := store.MatchProfileForScope(scope, "owner/repo", []string{"qiniu"})
+	if err != nil || match.Profile == nil || match.Profile.Name != "managed" {
+		t.Fatalf("legacy control changed global match: %#v, err=%v", match, err)
 	}
 }
 

@@ -112,7 +112,7 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" https://<runner
 - 已退役的 Runner Group、Policy 及临时 catalog migration readiness API 返回 `404`；`/admin/runner_groups` 与 `/admin/runner_policies` 仍会安全重定向到 Runner Specs。
 - 持久化为 `failed` 且 `failure_stage=admission`、`failure_reason=profile_labels_not_matched` 的 Runner 请求显示为**未匹配**，不计入失败指标，可单独筛选，也不显示重试操作；真正的失败请求仍显示为**失败**，并在适用时允许重试。
 - 现有 workflow `runs-on` labels 和已启用 Runner Spec 的匹配行为保持不变。Release C 部署不得同时修改 Catalog 或 Sandbox 配置。
-- 验证 `/account/runner-types` 与一个可管理的 `/organizations/{login}/runner-types` 路由；确认 `/user/runner-specs` 拒绝 repository-only 作用域，只为当前作用域自己的 `scoped_custom` 条目返回 `template_id`，并且即使在可管理 Settings 内也省略平台自定义类型的 template ID。
+- 验证 `/runner-specs`、`/account/runner-specs` 与一个可管理的 `/organizations/{login}/runner-specs` 路由。确认顶层页面是不带作用域选择的只读平台目录，可复制工作流标签且没有启用／并发控制，而 Settings 只显示自有自定义规格；确认 `/user/runner-specs` 拒绝 repository-only 作用域，只为当前作用域自己的 `scoped_custom` 条目返回 `template_id`，并省略平台自定义规格的 template ID。
 
 ## 3. Runner Catalog
 

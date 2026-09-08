@@ -9,7 +9,7 @@ export type AdminDataResource =
   | "runner_specs"
   | "audit_events"
 
-export type UserDataResource = "github_app" | "runner_requests" | "preferences" | "onboarding" | "runner_specs"
+export type UserDataResource = "github_app" | "runner_requests" | "preferences" | "onboarding"
 export type AppRouteAccess = "public" | "user" | "admin" | "not-found"
 export type AuthSessionCheckStatus = "checking" | "ready" | "error"
 export type AuthRouteViewState = "loading" | "authenticated" | "sign-in" | "error"
@@ -57,7 +57,8 @@ export function adminPollingResources(section: AdminSection): AdminDataResource[
 export function userDataResources(path: string): UserDataResource[] {
   if (isUserJobsRoute(path)) return ["github_app", "runner_requests", "onboarding"]
   if (path === "/repositories") return ["github_app", "preferences", "onboarding"]
-  if (isAccountSettingsRoute(path)) return path.endsWith("/runner-types") ? ["github_app", "preferences", "onboarding", "runner_specs"] : ["github_app", "preferences", "onboarding"]
+  if (path === "/runner-specs") return []
+  if (isAccountSettingsRoute(path)) return ["github_app", "preferences", "onboarding"]
   return []
 }
 
@@ -129,8 +130,8 @@ export function isAccountSettingsRoute(path: string): boolean {
   return (
     path === "/settings" ||
     path === "/accounts" ||
-    /^\/account\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/.test(path) ||
-    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/.test(path)
+    /^\/account\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path) ||
+    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
   )
 }
 
@@ -138,8 +139,8 @@ function isSandboxSettingsRoute(path: string): boolean {
   return (
     path === "/settings" ||
     path === "/accounts" ||
-    /^\/account\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/.test(path) ||
-    /^\/organizations\/[^/]+\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/.test(path)
+    /^\/account\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path) ||
+    /^\/organizations\/[^/]+\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
   )
 }
 
@@ -154,6 +155,7 @@ function isUserRoute(path: string): boolean {
     isUserJobsRoute(path) ||
     /^\/jobs\/[^/]+$/.test(path) ||
     path === "/repositories" ||
+    path === "/runner-specs" ||
     isAccountSettingsRoute(path)
   )
 }

@@ -76,7 +76,17 @@ export function RunnerSpecDialogForm({
               {t("admin.managedSpecDescription")}
             </p>
           </div>
-        ) : null}
+        ) : (
+          <div
+            id="platform-shared-runner-spec-note"
+            className="flex items-start gap-3 rounded-md border border-primary/20 bg-primary/[0.04] px-3 py-2.5"
+          >
+            <Badge variant="outline" className="mt-0.5 border-primary/30 text-primary">{t("admin.platformShared")}</Badge>
+            <p className="text-sm leading-5 text-muted-foreground">
+              {t("admin.platformSharedSpecDescription")}
+            </p>
+          </div>
+        )}
 
         <div className="grid gap-2">
           <Label htmlFor="runner-spec-name">{t("common.name")}</Label>

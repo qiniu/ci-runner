@@ -1680,15 +1680,6 @@ func appendError(current, extra string) string {
 func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerProfile, error) {
 	source := req.ProfileSource
 	if source == "" || source == "global" {
-		if req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
-			item, err := s.store.GetEffectiveProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, "global", req.ProfileName)
-			if err != nil {
-				return state.RunnerProfile{}, err
-			}
-			profile := item.Profile
-			profile.Enabled = item.EffectiveEnabled
-			return profile, nil
-		}
 		return s.store.GetProfile(req.ProfileName)
 	}
 	if source == "scoped_custom" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
@@ -1696,15 +1687,13 @@ func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerP
 		if err != nil {
 			return state.RunnerProfile{}, err
 		}
-		profile := item.Profile
-		profile.Enabled = item.EffectiveEnabled
-		return profile, nil
+		return item.Profile, nil
 	}
 	return state.RunnerProfile{}, state.ErrNotFound
 }
 
 func (s *Server) profileAtCapacityFor(req state.RunnerRequest, profile state.RunnerProfile) (bool, error) {
-	if profile.MaxConcurrency <= 0 && (req.ProfileSource != "global" || req.ProfileScopeType == "") {
+	if profile.MaxConcurrency <= 0 {
 		return false, nil
 	}
 	source := req.ProfileSource
@@ -1717,20 +1706,6 @@ func (s *Server) profileAtCapacityFor(req state.RunnerRequest, profile state.Run
 			return false, err
 		}
 		if profile.MaxConcurrency > 0 && inFlight >= profile.MaxConcurrency {
-			return true, nil
-		}
-		if req.ProfileScopeType == "" || req.ProfileScopeID <= 0 {
-			return false, nil
-		}
-		item, err := s.store.GetEffectiveProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, "global", req.ProfileName)
-		if err != nil {
-			return false, err
-		}
-		scopeInFlight, err := s.store.InFlightCountForProfileScope(source, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, req.ProfileName)
-		if err != nil {
-			return false, err
-		}
-		if item.ScopeMaxConcurrency > 0 && scopeInFlight >= item.ScopeMaxConcurrency {
 			return true, nil
 		}
 		return false, nil

@@ -15,21 +15,16 @@ import (
 )
 
 type userRunnerSpecResponse struct {
-	Name                    string   `json:"name"`
-	Source                  string   `json:"source"`
-	WorkflowLabels          []string `json:"workflow_labels"`
-	TemplateID              string   `json:"template_id,omitempty"`
-	DefaultTemplateName     string   `json:"default_template_name,omitempty"`
-	RunnerGroup             string   `json:"runner_group,omitempty"`
-	Enabled                 bool     `json:"enabled"`
-	ScopeEnabled            bool     `json:"scope_enabled"`
-	GlobalMaxConcurrency    int      `json:"global_max_concurrency"`
-	ScopeMaxConcurrency     int      `json:"scope_max_concurrency"`
-	EffectiveMaxConcurrency int      `json:"effective_max_concurrency"`
-	OverridesGlobal         bool     `json:"overrides_global"`
-	Editable                bool     `json:"editable"`
-	ScopeControlConfigured  bool     `json:"scope_control_configured"`
-	UpdatedAt               string   `json:"updated_at"`
+	Name                string   `json:"name"`
+	Source              string   `json:"source"`
+	WorkflowLabels      []string `json:"workflow_labels"`
+	TemplateID          string   `json:"template_id,omitempty"`
+	DefaultTemplateName string   `json:"default_template_name,omitempty"`
+	RunnerGroup         string   `json:"runner_group,omitempty"`
+	Enabled             bool     `json:"enabled"`
+	MaxConcurrency      int      `json:"max_concurrency"`
+	OverridesGlobal     bool     `json:"overrides_global"`
+	UpdatedAt           string   `json:"updated_at"`
 }
 
 type userRunnerSpecListResponse struct {
@@ -59,12 +54,6 @@ type userRunnerSpecPatchRequest struct {
 	ExpectedUpdatedAt string    `json:"expected_updated_at"`
 }
 
-type userRunnerSpecControlRequest struct {
-	Enabled           bool   `json:"enabled"`
-	MaxConcurrency    int    `json:"max_concurrency"`
-	ExpectedUpdatedAt string `json:"expected_updated_at"`
-}
-
 var errRunnerSpecInUse = errors.New("runner spec is in use")
 
 func (s *Server) userRunnerScope(w http.ResponseWriter, r *http.Request, accountID int64) (state.RunnerProfileScope, accountPreferenceScope, bool) {
@@ -79,7 +68,7 @@ func (s *Server) userRunnerScope(w http.ResponseWriter, r *http.Request, account
 		return state.RunnerProfileScope{}, accountPreferenceScope{}, false
 	}
 	if !manageable {
-		writeErrorCode(w, http.StatusForbidden, "runner_spec_scope_forbidden", "Runner types for this scope are managed by its owner")
+		writeErrorCode(w, http.StatusForbidden, "runner_spec_scope_forbidden", "Runner specs for this scope are managed by its owner")
 		return state.RunnerProfileScope{}, accountPreferenceScope{}, false
 	}
 	profileScope := state.RunnerProfileScope{Type: prefScope.Type, ID: prefScope.ID}
@@ -110,7 +99,7 @@ func (s *Server) handleUserListRunnerSpecs(w http.ResponseWriter, r *http.Reques
 	}
 	items, err := s.store.ListEffectiveProfiles(scope)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list runner types")
+		writeError(w, http.StatusInternalServerError, "failed to list runner specs")
 		return
 	}
 	sandboxSource := "none"
@@ -121,8 +110,7 @@ func (s *Server) handleUserListRunnerSpecs(w http.ResponseWriter, r *http.Reques
 	}
 	response := userRunnerSpecListResponse{ScopeType: scope.Type, ScopeID: scope.ID, SandboxSource: sandboxSource, SandboxRegion: sandboxRegion, Items: make([]userRunnerSpecResponse, 0, len(items))}
 	for _, item := range items {
-		max := effectiveRunnerConcurrencyLimit(item.GlobalMaxConcurrency, item.ScopeMaxConcurrency)
-		responseItem := userRunnerSpecResponse{Name: item.Profile.Name, Source: item.Source, WorkflowLabels: append([]string(nil), item.WorkflowLabels...), DefaultTemplateName: item.Profile.DefaultTemplateName, Enabled: item.EffectiveEnabled, ScopeEnabled: item.ScopeEnabled, GlobalMaxConcurrency: item.GlobalMaxConcurrency, ScopeMaxConcurrency: item.ScopeMaxConcurrency, EffectiveMaxConcurrency: max, OverridesGlobal: item.OverridesGlobal, Editable: item.Editable, ScopeControlConfigured: item.ScopeControlConfigured, UpdatedAt: item.Profile.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+		responseItem := userRunnerSpecResponse{Name: item.Profile.Name, Source: item.Source, WorkflowLabels: append([]string(nil), item.WorkflowLabels...), DefaultTemplateName: item.Profile.DefaultTemplateName, Enabled: item.Profile.Enabled, MaxConcurrency: item.Profile.MaxConcurrency, OverridesGlobal: item.OverridesGlobal, UpdatedAt: item.Profile.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 		if item.Source == "scoped_custom" {
 			responseItem.TemplateID = item.Profile.TemplateID
 			responseItem.RunnerGroup = item.Profile.RunnerGroup
@@ -130,82 +118,6 @@ func (s *Server) handleUserListRunnerSpecs(w http.ResponseWriter, r *http.Reques
 		response.Items = append(response.Items, responseItem)
 	}
 	writeJSON(w, http.StatusOK, response)
-}
-
-func (s *Server) handleUserPutRunnerSpecControl(w http.ResponseWriter, r *http.Request) {
-	session, account, ok := s.requireUserSession(w, r)
-	if !ok {
-		return
-	}
-	scope, _, ok := s.userRunnerScope(w, r, account.ID)
-	if !ok {
-		return
-	}
-	var input userRunnerSpecControlRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.MaxConcurrency < 0 {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner type control")
-		return
-	}
-	expected, ok := parseRunnerSpecRevision(w, input.ExpectedUpdatedAt, true)
-	if !ok {
-		return
-	}
-	name := strings.TrimSpace(r.PathValue("name"))
-	profile, err := s.store.GetProfile(name)
-	if err != nil {
-		if errors.Is(err, state.ErrNotFound) {
-			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner type not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if strings.TrimSpace(profile.ManagedBy) == "" {
-		writeErrorCode(w, http.StatusForbidden, "runner_spec_read_only", "runner type is read-only")
-		return
-	}
-	control := state.RunnerProfileControl{ScopeType: scope.Type, ScopeID: scope.ID, ProfileName: name, Enabled: input.Enabled, MaxConcurrency: input.MaxConcurrency}
-	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec_control.upsert", "runner_profile_scope_control", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), map[string]any{"enabled": input.Enabled, "max_concurrency": input.MaxConcurrency}, func(tx state.Store) error {
-		_, err := tx.UpsertProfileControlIfUnchanged(control, &expected)
-		return err
-	})
-	if err != nil {
-		if errors.Is(err, state.ErrConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner type changed while saving; refresh and try again")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.handleUserListRunnerSpecs(w, r)
-}
-
-func (s *Server) handleUserDeleteRunnerSpecControl(w http.ResponseWriter, r *http.Request) {
-	session, account, ok := s.requireUserSession(w, r)
-	if !ok {
-		return
-	}
-	scope, _, ok := s.userRunnerScope(w, r, account.ID)
-	if !ok {
-		return
-	}
-	expected, ok := parseRunnerSpecRevision(w, r.URL.Query().Get("expected_updated_at"), true)
-	if !ok {
-		return
-	}
-	name := strings.TrimSpace(r.PathValue("name"))
-	err := s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec_control.delete", "runner_profile_scope_control", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), nil, func(tx state.Store) error {
-		return tx.DeleteProfileControlIfUnchanged(scope, name, &expected)
-	})
-	if err != nil {
-		if errors.Is(err, state.ErrConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner type control changed while saving; refresh and try again")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.handleUserListRunnerSpecs(w, r)
 }
 
 func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +131,7 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 	}
 	var input userRunnerSpecMutationRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner type payload")
+		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner spec payload")
 		return
 	}
 	if scope.Type == state.AccountScopeTypeAccount && strings.TrimSpace(input.RunnerGroup) != "" {
@@ -229,7 +141,7 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 	labels, _, err := state.NormalizeWorkflowLabels(input.WorkflowLabels)
 	name := strings.TrimSpace(input.Name)
 	if err != nil || !validUserRunnerSpecName(name) || strings.TrimSpace(input.TemplateID) == "" || input.MaxConcurrency < 0 {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner type payload")
+		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner spec payload")
 		return
 	}
 	if err := s.validateScopedProfileTemplate(r.Context(), prefScope, input.TemplateID); err != nil {
@@ -243,15 +155,15 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		if errors.Is(err, state.ErrRunnerProfileNameConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "runner type name conflicts with an enabled platform type")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "runner spec name conflicts with an enabled platform spec")
 			return
 		}
 		if errors.Is(err, state.ErrRunnerProfileLabelsConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_labels_conflict", "a runner type with these labels already exists")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_labels_conflict", "a runner spec with these labels already exists")
 			return
 		}
 		if errors.Is(err, state.ErrConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "a runner type with this name already exists")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "a runner spec with this name already exists")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -271,7 +183,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 	}
 	var input userRunnerSpecPatchRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner type payload")
+		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner spec payload")
 		return
 	}
 	expected, ok := parseRunnerSpecRevision(w, input.ExpectedUpdatedAt, true)
@@ -282,7 +194,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 	current, err := s.store.GetScopedProfile(scope, name)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {
-			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner type not found")
+			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -306,7 +218,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if count > 0 {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner type cannot change while active requests use it")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec cannot change while active requests use it")
 			return
 		}
 	}
@@ -351,15 +263,15 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errRunnerSpecInUse) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner type cannot change while active requests use it")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec cannot change while active requests use it")
 			return
 		}
 		if errors.Is(err, state.ErrRunnerProfileLabelsConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_labels_conflict", "a runner type with these labels already exists")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_labels_conflict", "a runner spec with these labels already exists")
 			return
 		}
 		if errors.Is(err, state.ErrConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner type changed while saving; refresh and try again")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while saving; refresh and try again")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -384,19 +296,6 @@ func sameStringSlice(a, b []string) bool {
 	return true
 }
 
-func effectiveRunnerConcurrencyLimit(global, scope int) int {
-	if global <= 0 {
-		if scope <= 0 {
-			return 0
-		}
-		return scope
-	}
-	if scope <= 0 || global < scope {
-		return global
-	}
-	return scope
-}
-
 func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Request) {
 	session, account, ok := s.requireUserSession(w, r)
 	if !ok {
@@ -415,7 +314,7 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if count > 0 {
-		writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner type is in use by active requests")
+		writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec is in use by active requests")
 		return
 	}
 	s.admissionMu.Lock()
@@ -432,11 +331,11 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errRunnerSpecInUse) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner type is in use by active requests")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec is in use by active requests")
 			return
 		}
 		if errors.Is(err, state.ErrConflict) {
-			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner type changed while deleting; refresh and try again")
+			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while deleting; refresh and try again")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -483,7 +382,7 @@ func (s *Server) validateScopedProfileTemplate(ctx context.Context, scope accoun
 func (s *Server) writeScopedTemplateValidationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errSandboxServiceNotConfigured):
-		writeErrorCode(w, http.StatusConflict, "sandbox_service_not_configured", "configure Sandbox credentials for this scope before creating a custom runner type")
+		writeErrorCode(w, http.StatusConflict, "sandbox_service_not_configured", "configure Sandbox credentials for this scope before creating a custom runner spec")
 	case errors.Is(err, sandboxrunner.ErrTemplateNotFound):
 		writeErrorCode(w, http.StatusBadRequest, "template_not_found", "template was not found in the scope Sandbox service")
 	case errors.Is(err, sandboxrunner.ErrTemplateNotReady):

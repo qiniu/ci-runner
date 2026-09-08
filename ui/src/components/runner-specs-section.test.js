@@ -119,6 +119,40 @@ describe("RunnerSpecsSection", () => {
     }
   })
 
+  test("discloses the platform-wide audience for admin custom specs", () => {
+    const customSpec = {
+      ...managedSpec,
+      name: "large-custom",
+      managed_by: "",
+      default_template_name: "",
+      template_id: "custom-template-id",
+    }
+    const commonProps = {
+      runnerSpecForm: { ...managedForm, name: customSpec.name, template_id: customSpec.template_id },
+      onRunnerSpecFormChange: () => {},
+      onRunnerSpecOpenChange: () => {},
+      onSubmitRunnerSpec: () => {},
+    }
+    const createHTML = renderToStaticMarkup(createElement(RunnerSpecsModule.RunnerSpecDialogForm, {
+      ...commonProps,
+      editingRunnerSpec: null,
+    }))
+    const editHTML = renderToStaticMarkup(createElement(RunnerSpecsModule.RunnerSpecDialogForm, {
+      ...commonProps,
+      editingRunnerSpec: customSpec,
+    }))
+    const managedHTML = renderToStaticMarkup(createElement(RunnerSpecsModule.RunnerSpecDialogForm, {
+      ...commonProps,
+      editingRunnerSpec: managedSpec,
+    }))
+
+    for (const html of [createHTML, editHTML]) {
+      expect(html).toContain("Platform shared")
+      expect(html).toContain("available to every account and organization")
+    }
+    expect(managedHTML).not.toContain("available to every account and organization")
+  })
+
   test("derives the dialog title from editing identity instead of a populated create name", () => {
     const createSection = RunnerSpecsModule.RunnerSpecsSection(
       sectionProps({
@@ -133,7 +167,7 @@ describe("RunnerSpecsSection", () => {
       }),
     )
 
-    expect(collectText(createSection)).toContain("Create runner spec")
+    expect(collectText(createSection)).toContain("Create platform runner spec")
     expect(collectText(createSection)).not.toContain("Edit runner spec")
     expect(collectText(editSection)).toContain("Edit runner spec")
   })

@@ -138,16 +138,6 @@ type RunnerProfileScope struct {
 	ID   int64  `json:"scope_id"`
 }
 
-type RunnerProfileControl struct {
-	ScopeType      string    `json:"scope_type"`
-	ScopeID        int64     `json:"scope_id"`
-	ProfileName    string    `json:"name"`
-	Enabled        bool      `json:"enabled"`
-	MaxConcurrency int       `json:"max_concurrency"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
 type ScopedRunnerProfile struct {
 	ScopeType      string    `json:"scope_type"`
 	ScopeID        int64     `json:"scope_id"`
@@ -163,18 +153,12 @@ type ScopedRunnerProfile struct {
 }
 
 type EffectiveRunnerProfile struct {
-	Source                 string        `json:"source"`
-	ScopeType              string        `json:"scope_type,omitempty"`
-	ScopeID                int64         `json:"scope_id,omitempty"`
-	Profile                RunnerProfile `json:"-"`
-	WorkflowLabels         []string      `json:"workflow_labels"`
-	GlobalMaxConcurrency   int           `json:"global_max_concurrency"`
-	ScopeMaxConcurrency    int           `json:"scope_max_concurrency"`
-	EffectiveEnabled       bool          `json:"enabled"`
-	ScopeEnabled           bool          `json:"scope_enabled"`
-	OverridesGlobal        bool          `json:"overrides_global"`
-	Editable               bool          `json:"editable"`
-	ScopeControlConfigured bool          `json:"scope_control_configured"`
+	Source          string        `json:"source"`
+	ScopeType       string        `json:"scope_type,omitempty"`
+	ScopeID         int64         `json:"scope_id,omitempty"`
+	Profile         RunnerProfile `json:"-"`
+	WorkflowLabels  []string      `json:"workflow_labels"`
+	OverridesGlobal bool          `json:"overrides_global"`
 }
 
 type AuditEvent struct {
@@ -366,9 +350,6 @@ type RunnerCatalogStore interface {
 	ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRunnerProfile, error)
 	GetEffectiveProfile(scope RunnerProfileScope, source, name string) (EffectiveRunnerProfile, error)
 	MatchProfileForScope(scope RunnerProfileScope, repositoryFullName string, labels []string) (ProfileMatch, error)
-	GetProfileControl(scope RunnerProfileScope, name string) (RunnerProfileControl, error)
-	UpsertProfileControlIfUnchanged(control RunnerProfileControl, expectedUpdatedAt *time.Time) (RunnerProfileControl, error)
-	DeleteProfileControlIfUnchanged(scope RunnerProfileScope, name string, expectedUpdatedAt *time.Time) error
 	ListScopedProfiles(scope RunnerProfileScope) ([]ScopedRunnerProfile, error)
 	GetScopedProfile(scope RunnerProfileScope, name string) (ScopedRunnerProfile, error)
 	UpsertScopedProfileIfUnchanged(profile ScopedRunnerProfile, expectedUpdatedAt *time.Time) (ScopedRunnerProfile, error)

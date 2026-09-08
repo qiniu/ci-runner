@@ -27,7 +27,7 @@ The Qiniu CI Runner control plane is open source. Qiniu Sandbox, where workflow 
 - **GitHub App auth** — recommended production path with OAuth sign-in for the built-in web console
 - **Multi-database** — SQLite (default), PostgreSQL, or MySQL for runtime state
 - **Concurrency control** — global `max_concurrent_runners` and per-spec `max_concurrency` with queue-based backpressure
-- **Built-in web UI** — admin console for runner requests, global runner specs, accounts, the platform Sandbox fallback, audit, matching, and diagnostics; ordinary-user console for job groups, logs, repository readiness, scoped Sandbox management, and account/Organization Runner Types
+- **Built-in web UI** — admin console for runner requests, global runner specs, accounts, the platform Sandbox fallback, audit, matching, and diagnostics; ordinary-user console for job groups, logs, repository readiness, a platform Runner Spec catalog, scoped Sandbox management, and account/Organization custom Runner Specs
 - **Config obfuscation** — sensitive values can be hidden from casual config inspection
 - **Retry & recovery** — transient failures are retried with backoff; queued work and active remote runners are recovered after a service restart
 
@@ -279,19 +279,27 @@ private/custom templates. The credential-bound
 `GET /user/sandbox/templates?region=<id>` catalog remains a separate scoped
 resource.
 
-Ordinary users manage their effective catalog under `/account/runner-types` or
-`/organizations/{login}/runner-types`. The authenticated `/user/runner-specs`
-API combines runnerd-managed types, read-only platform custom types, and custom
-types owned by that account or manageable Organization. Scope controls can
-only disable a managed type or add a concurrency limit; they cannot change its
-labels, priority, or stable public template name. Scoped custom types use exact
-normalized workflow labels, may override a global type with the same label set,
+Ordinary users browse the read-only platform Runner Spec catalog at
+`/runner-specs`. That page has no account/Organization selector or user-editable
+availability and concurrency policy. Users manage only owned custom Specs under
+`/account/runner-specs` or
+`/organizations/{login}/runner-specs`. The authenticated `/user/runner-specs`
+API combines runnerd-managed specs, read-only platform custom specs, and custom
+specs owned by that account or manageable Organization. Platform availability
+and concurrency remain global Admin policy. Scoped custom specs use exact
+normalized workflow labels, may override a global spec with the same label set,
 and validate new or changed template IDs only with that scope's explicit or
 legally inherited Sandbox credentials. `runner_group` is available only for
-Organization custom types. The response exposes a template ID only for the
-caller's own scoped custom type, never for a platform custom type. A queued
+Organization custom specs. The response exposes a template ID only for the
+caller's own scoped custom spec, never for a platform custom spec. A queued
 request reloads and validates the same persisted source and scope immediately
-before startup, so a type disabled while waiting cannot launch a runner.
+before startup, so a spec disabled while waiting cannot launch a runner.
+
+An Admin-created custom Runner Spec is a platform-shared spec: it is available
+read-only in every manageable account and Organization catalog. Admin creation
+therefore uses explicit platform-wide copy and validates the template only with
+the Admin Sandbox service. Use a scoped custom spec instead when an environment
+must remain private to one account or Organization.
 
 For custom specs, `template_id` should point to a Qiniu Sandbox template containing the GitHub runner image. Template access is checked against the repository owner's effective Sandbox service shown under **Repositories → Runner readiness** at sandbox creation time.
 
@@ -305,7 +313,8 @@ The built-in web UI provides:
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/runner_requests` | Runner request history, retry/stop controls, and persisted logs |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
-| `/account/runner-types` and `/organizations/{login}/runner-types` | Account or manageable Organization Runner Type management |
+| `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
+| `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or manageable Organization |
 | `/admin/sandbox_service` | Sandbox service configuration |
 | `/admin/match` | Label-match preview against the current enabled Runner Specs |
 | `/admin/audit` | Audit event history |

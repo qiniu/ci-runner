@@ -114,7 +114,7 @@ Check:
 - The retired Runner Group, Policy, and temporary catalog migration readiness APIs return `404`; `/admin/runner_groups` and `/admin/runner_policies` still redirect harmlessly to Runner Specs.
 - A Runner Request persisted as `failed` with `failure_stage=admission` and `failure_reason=profile_labels_not_matched` is shown as **Not matched**, is excluded from the failed metric, can be filtered independently, and has no retry action. Genuine failed requests remain **Failed** and retryable where applicable.
 - Existing workflow `runs-on` labels and enabled Runner Spec matching remain unchanged. Do not edit Catalog or Sandbox configuration as part of the Release C deployment.
-- Verify `/account/runner-types` and one manageable `/organizations/{login}/runner-types` route; confirm `/user/runner-specs` rejects repository-only scopes, exposes `template_id` only for that scope's own `scoped_custom` entries, and omits platform custom template IDs even inside manageable Settings.
+- Verify `/runner-specs`, `/account/runner-specs`, and one manageable `/organizations/{login}/runner-specs` route. Confirm the top-level page is a scope-free, read-only platform catalog with copyable workflow labels and no enabled/concurrency controls, while Settings shows only owned custom Specs; confirm `/user/runner-specs` rejects repository-only scopes, exposes `template_id` only for that scope's own `scoped_custom` entries, and omits platform custom template IDs.
 
 ## 3. Runner Catalog
 
@@ -176,7 +176,7 @@ existing jobs:
 - A missing template returns `400 template_not_found` with no spec/audit change.
 - A template without a usable default build returns `400 template_not_ready`.
 - Missing admin credentials return `409 sandbox_service_not_configured`;
-  managed control edits and unchanged-template custom edits remain available.
+  unchanged-template custom edits remain available.
 - Provider auth/errors/timeouts reject the save with an actionable error, not a
   false success. Retrying after correcting the template/configuration succeeds.
 - An existing usable default is accepted while a newer rebuild is in progress.

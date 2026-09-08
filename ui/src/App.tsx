@@ -82,7 +82,7 @@ const DocsPage = lazy(() =>
   import("@/components/docs-page").then(({ DocsPage: Component }) => ({ default: Component }))
 )
 
-type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-types"
+type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs"
 type AccountSettingsRoute = {
   accountLogin?: string
   tab: AccountSettingsTab
@@ -185,8 +185,8 @@ function App() {
     }
   }, [])
 
-  const setUserPage = useCallback((next: "home" | "repositories" | "settings") => {
-    const nextPath = next === "settings" ? "/account/preferences" : next === "repositories" ? "/repositories" : userJobsPath(userSelectedKey)
+  const setUserPage = useCallback((next: "home" | "repositories" | "runner-specs" | "settings") => {
+    const nextPath = next === "settings" ? "/account/preferences" : next === "repositories" ? "/repositories" : next === "runner-specs" ? "/runner-specs" : userJobsPath(userSelectedKey)
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
     }
@@ -290,11 +290,13 @@ function App() {
     selectedRepositoryInstallation,
     authSession.login,
   )
-  const userPage = selectedRepositoryAccountLogin
-    ? "repositories"
-    : accountSettingsRoute
-      ? "settings"
-      : "home"
+  const userPage = locationPath === "/runner-specs"
+    ? "runner-specs"
+    : selectedRepositoryAccountLogin
+      ? "repositories"
+      : accountSettingsRoute
+        ? "settings"
+        : "home"
 
   const metrics = useMemo(
     () => runnerMetrics(runners, runnerSpecs.length, t),
@@ -1240,8 +1242,8 @@ function isAccountSettingsPath(path: string): boolean {
     path === "/account/sandbox" ||
     path === "/account/sandbox-templates" ||
     path === "/account/sandbox-instances" ||
-    path === "/account/runner-types" ||
-    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/.test(path)
+    path === "/account/runner-specs" ||
+    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
   )
 }
 
@@ -1251,9 +1253,9 @@ function parseAccountSettingsRoute(path: string, currentLogin?: string): Account
   if (path === "/account/preferences") return { accountLogin: currentLogin, tab: "preferences" }
   if (path === "/account/sandbox" || path === "/account/sandbox-templates") return { accountLogin: currentLogin, tab: "sandbox-templates" }
   if (path === "/account/sandbox-instances") return { accountLogin: currentLogin, tab: "sandbox-instances" }
-  if (path === "/account/runner-types") return { accountLogin: currentLogin, tab: "runner-types" }
+  if (path === "/account/runner-specs") return { accountLogin: currentLogin, tab: "runner-specs" }
 
-  const organizationMatch = path.match(/^\/organizations\/([^/]+)\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-types)$/)
+  const organizationMatch = path.match(/^\/organizations\/([^/]+)\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/)
   if (!organizationMatch) return null
   const accountLogin = safeDecodePathSegment(organizationMatch[1])
   if (!accountLogin) return null
@@ -1430,7 +1432,7 @@ function accountSettingsPath(
   currentLogin: string | undefined,
   tab: AccountSettingsTab
 ): string {
-  const segment = tab === "preferences" ? "preferences" : tab === "sandbox-templates" ? "sandbox-templates" : tab === "sandbox-instances" ? "sandbox-instances" : tab === "runner-types" ? "runner-types" : "repositories"
+  const segment = tab === "preferences" ? "preferences" : tab === "sandbox-templates" ? "sandbox-templates" : tab === "sandbox-instances" ? "sandbox-instances" : tab === "runner-specs" ? "runner-specs" : "repositories"
   const login = accountLogin?.trim()
   if (!login || login === currentLogin) return `/account/${segment}`
   return `/organizations/${encodeURIComponent(login)}/${segment}`

@@ -420,8 +420,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /user/runner-specs", s.handleUserCreateRunnerSpec)
 	s.mux.HandleFunc("PATCH /user/runner-specs/{name}", s.handleUserPatchRunnerSpec)
 	s.mux.HandleFunc("DELETE /user/runner-specs/{name}", s.handleUserDeleteRunnerSpec)
-	s.mux.HandleFunc("PUT /user/runner-specs/{name}/control", s.handleUserPutRunnerSpecControl)
-	s.mux.HandleFunc("DELETE /user/runner-specs/{name}/control", s.handleUserDeleteRunnerSpecControl)
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)

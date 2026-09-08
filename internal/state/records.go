@@ -88,18 +88,6 @@ type runnerProfileRecord struct {
 
 func (runnerProfileRecord) TableName() string { return "runner_profiles" }
 
-type runnerProfileScopeControlRecord struct {
-	ScopeType      string    `gorm:"column:scope_type;primaryKey;index:idx_runner_profile_scope_controls_scope,priority:1"`
-	ScopeID        int64     `gorm:"column:scope_id;primaryKey;index:idx_runner_profile_scope_controls_scope,priority:2"`
-	ProfileName    string    `gorm:"column:profile_name;primaryKey"`
-	Enabled        bool      `gorm:"column:enabled;not null"`
-	MaxConcurrency int       `gorm:"column:max_concurrency;not null;default:0"`
-	CreatedAt      time.Time `gorm:"column:created_at;not null"`
-	UpdatedAt      time.Time `gorm:"column:updated_at;not null"`
-}
-
-func (runnerProfileScopeControlRecord) TableName() string { return "runner_profile_scope_controls" }
-
 type scopedRunnerProfileRecord struct {
 	ScopeType          string    `gorm:"column:scope_type;primaryKey;index:idx_scoped_runner_profiles_scope,priority:1;uniqueIndex:idx_scoped_runner_profiles_scope_labels,priority:1"`
 	ScopeID            int64     `gorm:"column:scope_id;primaryKey;index:idx_scoped_runner_profiles_scope,priority:2;uniqueIndex:idx_scoped_runner_profiles_scope_labels,priority:2"`

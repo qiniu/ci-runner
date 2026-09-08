@@ -68,19 +68,19 @@ RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
 - For ordinary-user Jobs authorization, cover shared installations with different repository access, exact installation/repository pair matching, filtering before the database limit, list/detail/group/log/terminal consistency, missing or rejected GitHub user tokens, inaccessible linked installations, and short-lived access-cache behavior.
 - Keep regression coverage proving retired Runner Group/Policy models and APIs stay absent, fresh schemas omit their tables, and Runner Spec JSON omits `default_available`. No current behavior or recovery test may depend on legacy physical tables. Runner Spec/Sandbox mutations plus managed reconciliation must commit their data change and audit evidence atomically; rejected mutations leave no audit event, while audit failures roll back the mutation.
 
-## Scoped Runner Types
+## Scoped Runner Specs
 
-- Run `go test ./internal/state -count=1` after changing scoped catalog uniqueness, effective controls, matching, or concurrency. Preserve old SQLite upgrade tests and run the dedicated PostgreSQL/MySQL matrix when schema or transaction behavior changes.
+- Run `go test ./internal/state -count=1` after changing scoped catalog uniqueness, matching, or concurrency. Preserve old SQLite upgrade tests and run the dedicated PostgreSQL/MySQL matrix when schema or transaction behavior changes.
 - API tests must cover manageable account/Organization scope, repository-only rejection, local validation before provider I/O, duplicate-label and stale-revision `409` mapping, atomic audit behavior, and response-field isolation. Only `scoped_custom` entries may expose the selected scope's `template_id` and Organization `runner_group`; `platform_custom` template IDs stay private.
-- Lifecycle tests must mutate both a scoped custom type and a managed scope control after admission but before startup, then prove current disabled state or incompatible labels fail at `profile_validation` before GitHub registration or Sandbox creation.
+- Lifecycle tests must mutate both a scoped custom spec and a global spec after admission but before startup, then prove current disabled state or incompatible labels fail at `profile_validation` before GitHub registration or Sandbox creation.
 - UI tests must cover Organization-only Runner Group input, exact global-label override confirmation, pending-save suppression, and stale manual-refresh or mutation completion after switching scope. An old response must not replace current items, close the current dialog, or trigger a refresh for the new scope.
-- Local `task ui-production-smoke` currently covers the public pages and fixture-backed Jobs layout, not the Runner Types routes. Do not treat its four passing checks as Account/Organization Runner Types browser acceptance; keep that fixture extension and real-browser scope acceptance explicit until they are implemented.
+- Local `task ui-production-smoke` currently covers the public pages and fixture-backed Jobs layout, not `/runner-specs` or the account/Organization custom Spec routes. Do not treat its four passing checks as Runner Specs browser acceptance; keep that fixture extension and real-browser scope acceptance explicit until they are implemented.
 
 ## Admin Template Validation
 
 - Extend existing provider/server/UI tests for custom create and changed-template PATCH; use httptest with real SDK decoding, never a production validation bypass.
 - Cover configured-but-disabled/selected admin defaults, missing credentials, 404, provider 401/403/429/5xx, cancellation/deadlines, no usable default build, public hidden history, and an older uploaded default during rebuild. Do not infer readiness from arbitrary tagged build history.
-- Assert rejected writes preserve profile and audit state, including concurrent changes/deletes during provider validation and conflicts on insert-only creation, and managed/unchanged-template control edits still work without provider access. Assert UI pending state suppresses duplicate saves and failed validation retains the form for retry.
+- Assert rejected writes preserve profile and audit state, including concurrent changes/deletes during provider validation and conflicts on insert-only creation, and unchanged-template edits still work without provider access. Assert UI pending state suppresses duplicate saves and failed validation retains the form for retry.
 - For conditional profile persistence, run the audited mutation/fresh schema matrix on dedicated PostgreSQL/MySQL databases, including MySQL `clientFoundRows=true`. Cover duplicate inserts, unchanged values, and revision advancement at millisecond precision even when the clock moves backwards.
 - Run `go test ./internal/state -count=1` when changing shared local profile validation, then server/provider tests, Bun tests, i18n, and production smoke for the paired public guide changes. No schema migration is needed for this flow.
 

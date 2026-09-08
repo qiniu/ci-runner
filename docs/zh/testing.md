@@ -355,17 +355,17 @@ curl -fsS -X DELETE -b "$COOKIE_JAR" \
 
 页面源码在 `ui/`，使用 React、Vite、Tailwind CSS、shadcn 风格组件和仓库内主题 CSS。`task build` 会先执行 `task ui-build`，把前端产物写入 `internal/server/ui/` 后再编译 `runnerd`。`/` 始终显示公开产品首页，提供文档和 Jobs 入口，并且不会加载受保护的用户资源；受保护的普通用户 Jobs 首页位于 `/jobs`。未登录访问 `/jobs`、Job 分组深链、账户设置或 Admin 路由时，会显示独立登录页，其 OAuth 链接通过 `return_to` 保留完整的同源目标地址。未知路由显示 404；已登录但没有管理员角色的用户访问 Admin 路由时，会看到明确的无权限页面。`/repositories` 是普通用户统一的 readiness 页面，负责 GitHub App 安装/同步、用户与 App 的授权仓库交集、本地 job activity，以及有效 Sandbox service 状态。`/account/repositories` 和 `/organizations/{login}/repositories` 作为兼容的 scoped deep links，仍由同一页面渲染。账户与组织 Preferences 是普通用户唯一的 Sandbox credential 编辑器；readiness 只在可管理 scope 缺少配置时链接过去。Settings 只为当前账户和可管理组织保留 Sandbox Service、Sandbox Templates 和 Sandbox Instances 资源管理。首次进入页面时只加载当前路由实际使用的资源。已登录的用户路由会读取一次 `GET /user/onboarding/product-tour` 获取账户级引导状态；该增强请求失败时会被忽略，不会阻断核心 workspace 数据，也不会参与轮询。只有状态为 `pending`、尚未看过引导且精确进入 `/jobs` 首页的账户会自动开始六步引导，深链不会被打断。最后几步会导航到 `/repositories`；有效来源无需操作，缺少且可管理的来源会引导用户进入 Settings。已看过、已完成或跳过的账户都可从账户菜单重播，且不修改已保存状态。Jobs 首页加载第一页 `GET /user/runner_requests?limit=100&offset=0` 并每 5 秒轮询该页，同时保留已经加载的历史；稳定 job-group 路由和 Load older jobs 操作可以加载受限的 500 行历史窗口。API 会拒绝 `limit + offset` 超过 500 的请求，也不会返回不可用的 next link。GitHub App metadata、Preferences 和 onboarding state 都不进入轮询。Admin 路由只加载当前 section 所需的 request/spec/audit 依赖，且只有 Overview 和 Runner Requests 会轮询 runner requests。公共 managed catalog 使用无需登录的 `GET /api/public/runner-templates`，并且只能暴露 runnerd-owned 稳定名称和 workflow labels。Provider catalog 使用 `GET /user/sandbox/templates?region=<id>` 和 `GET /user/sandbox/instances?region=<id>&template_id=<id>`；实例接口只列出 runner 创建的 sandboxes，并使用统一的 scoped/default credential resolver。Installation scope 的目录读取必须属于可管理组织。测试必须证明未登录与已登录的公共响应完全相同、不包含 provider/scoped metadata，并保证公共与 provider catalog 的加载、重试、失败恢复和 stale response 处理彼此独立。管理面包含 Overview、`/admin/accounts` 的账户列表与角色控制、Runner Requests、Runner Specs、`/admin/sandbox_service` 的平台回退、retry/stop/log access、audit、label match test 和 diagnostics，不包含已退役的内部 Runner Group/Policy 管理或 provider resource catalogs。
 
-普通用户 Settings 还提供 `/account/runner-types` 和 `/organizations/{login}/runner-types`。`/user/runner-specs` API 只接受当前账户或可管理 Organization 作用域；作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
+受保护的 `/runner-specs` 是不带作用域选择的普通用户只读平台目录，只显示已启用的平台规格及可复制的工作流标签；来源／状态 Badge、停用规格、账户／Organization 选择以及启用或并发控制都不在该页面展示。Settings 下的 `/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只显示该作用域自有的自定义规格。三个页面都使用 `/user/runner-specs`；该 API 只接受当前账户或可管理 Organization 作用域，作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
 
-Runner Type 回归必须区分三种目录来源：`managed` 条目返回稳定公共模板名和可编辑的
-作用域控制，`platform_custom` 条目只读且省略其私有 `template_id`，
+Runner Spec 回归必须区分三种目录来源：`managed` 条目返回稳定公共模板名，并以只读
+方式返回全局策略；`platform_custom` 条目只读且省略其私有 `template_id`，
 `scoped_custom` 条目只返回当前作用域自己的 `template_id`，并可包含仅供
 Organization 使用的 `runner_group`。精确规范化后的作用域标签会屏蔽同标签集合的
-全局类型，即使作用域类型已停用也不能回退。新建和更换模板的验证发生在带审计事务
+全局规格，即使作用域规格已停用也不能回退。新建和更换模板的验证发生在带审计事务
 之前；不安全名称和其他无效本地字段必须在任何 provider 调用前拒绝。重复规范化
 标签、过期 revision 和使用中的修改返回稳定 `409`，且不留下部分审计状态。
-Lifecycle 测试还必须在准入后、启动前分别停用一个作用域自定义类型和 managed
-作用域控制，并证明两者都不会启动 Sandbox。UI 测试必须让旧的手动刷新或 mutation
+Lifecycle 测试还必须在准入后、启动前分别停用一个作用域自定义规格和全局规格，
+并证明两者都不会启动 Sandbox。UI 测试必须让旧的手动刷新或 mutation
 在切换 Organization 后才返回，并证明它不能覆盖新作用域数据或向新作用域提交。
 
 只运行 UI unit tests 时使用：

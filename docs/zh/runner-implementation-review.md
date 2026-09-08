@@ -6,12 +6,12 @@
 
 范围：
 
-- 评审目标：file-based config、GORM-backed DB schema migration、retry/lease/audit handling、ordinary-user Sandbox catalogs 与作用域 Runner Types、admin account-role controls、embedded UI assets 和 local development workflow 更新后的实现状态。
+- 评审目标：file-based config、GORM-backed DB schema migration、retry/lease/audit handling、ordinary-user Sandbox catalogs 与作用域 Runner Specs、admin account-role controls、embedded UI assets 和 local development workflow 更新后的实现状态。
 - 仍可用于后续对比的参考：actions-runner-controller 风格 reconciliation，以及 fireactions 风格 pool/config modeling。
 
 ## 摘要
 
-Runnerd 已经越过最初 2026-05-19 的差距清单。Runtime configuration 现在是 file-first，runner state 已 DB-backed，schema creation 主要由 GORM model tags 驱动，retry/lease/audit 字段已经存在，GitHub App auth 可以动态解析 installations，ordinary-user UI 覆盖 job/repository/account setup flows 以及个人账户／Organization Runner Types，admin console 覆盖包括带审计 account-role 修改在内的核心管理流程，diagnostics 暴露 pprof/expvar state，文档化的本地 workflow 包含 `task dev`。
+Runnerd 已经越过最初 2026-05-19 的差距清单。Runtime configuration 现在是 file-first，runner state 已 DB-backed，schema creation 主要由 GORM model tags 驱动，retry/lease/audit 字段已经存在，GitHub App auth 可以动态解析 installations，ordinary-user UI 覆盖 job/repository/account setup flows 以及个人账户／Organization Runner Specs，admin console 覆盖包括带审计 account-role 修改在内的核心管理流程，diagnostics 暴露 pprof/expvar state，文档化的本地 workflow 包含 `task dev`。
 
 剩余工作不再是基础架构补课，而是产品和运维 hardening：是否保留 token/basic auth 作为本地兼容模式，多少 config management 应进入 admin console，以及在把服务视为 production-ready 前持续执行并维护 canonical deployment smoke checklist。
 
@@ -28,7 +28,7 @@ Runnerd 已经越过最初 2026-05-19 的差距清单。Runtime configuration �
 - `/` 是公开首页，`/jobs` 是受保护的 ordinary-user Jobs dashboard。Stable GitHub-context job-group routes 包括 `/github/pulls/{owner}/{repo}/{number}/jobs`；统一 repository/Sandbox readiness 位于 `/repositories`。`/account/repositories` 和 `/organizations/{login}/repositories` 保留为指向同一页面的 scoped compatibility links；Sandbox Service、Templates 和 Instances 继续位于账户或可管理组织的设置路由。
 - Admin console 通过 `/admin/sandbox_service` 和 role-gated `/admin/api/sandbox-service-default` endpoints 管理全局 fallback，包括 all/selected repository-owner audience controls；provider catalogs 仍属于 ordinary-user resources。
 - 登录用户目录 API 通过 `/user/sandbox/templates` 提供区域过滤模板，并通过 `/user/sandbox/instances` 提供区域和模板过滤的 runner instances。接口从选中的 account 或 installation scope 解析加密凭据，不会暴露 provider secrets。
-- 普通用户通过 `/account/runner-types` 或 `/organizations/{login}/runner-types` 页面及 `/user/runner-specs` 管理有效 Runner Types。托管目录的身份仍由 runnerd 管理，作用域控制只能调整启用状态和附加并发上限；作用域自定义模板只用选定作用域的 Sandbox 凭据验证。repository-only 协作者仅能在 `/repositories` 查看就绪状态。用户响应只为当前作用域自己的自定义条目返回物理 template ID；排队请求启动前会重新校验最新的作用域启用状态和 labels。Admin 全局 Runner Specs API 仍是独立的 role-gated surface。
+- 普通用户在 `/runner-specs` 浏览不带作用域选择的只读平台目录；`/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只管理对应作用域自有的自定义规格，三个页面都使用 `/user/runner-specs`。托管目录的身份、启用状态和并发由 Admin 全局管理；作用域自定义模板只用选定作用域的 Sandbox 凭据验证。repository-only 协作者仅能在 `/repositories` 查看就绪状态。用户响应只为当前作用域自己的自定义条目返回物理 template ID；排队请求启动前会重新校验最新的全局或作用域自定义启用状态和 labels。Admin 全局 Runner Specs API 仍是独立的 role-gated surface。
 - `ui/` 中的 React UI 会从 `internal/server/ui/*` 嵌入生产构建；development builds 通过 `internal/server/ui_assets_development.go` 代理到 Vite。
 - `task dev` 会一起启动 Vite 和 Go service development mode。`task build` 先构建 UI，再用 embedded production assets 编译 `bin/runnerd`。
 - Diagnostics 可通过 admin UI 和 `/diagnostics/pprof` / `/diagnostics/vars` 访问，底层是 `github.com/jimmicro/pprof` 和 expvar。
@@ -43,9 +43,9 @@ Token 和 basic auth 仍与 GitHub App auth 并存。它们对本地验证或 le
 
 Ordinary-user UI 现在已经路由到 `/admin/*` 之外。`/repositories` 会列出用户与 GitHub App 授权交集内的全部 repositories，用本地 job activity 标注运行记录但不会隐藏尚未运行的 repositories，并显示所选账户或组织的有效 Sandbox service 来源。不存在有效来源时，可管理的 scope 会链接到对应账户或组织 Preferences 页面；credentials 只在 Settings 中编辑。
 
-### 3. 作用域 Runner Types 验证
+### 3. 作用域 Runner Specs 验证
 
-个人账户和可管理 Organization 的 Runner Types 已通过 `/account/runner-types`、`/organizations/{login}/runner-types` 和 `/user/runner-specs` 实现。本地 State、API、UI、i18n、Go 全量测试和现有四项 fixture-backed production smoke 检查已通过，但这些浏览器检查覆盖公开页面和 Jobs 布局，不包含 Runner Types 路由。Runner Types 专项 browser fixtures、专用 PostgreSQL/MySQL 事务测试、生产 SQLite snapshot 与降级门禁、真实 Sandbox 模板校验、个人／Organization GitHub workflow 执行和部署 canary 仍是发布门禁；这些事项已记录在 `TODO.md`，不能当作已完成证据。
+平台与作用域自定义 Runner Specs 已通过 `/runner-specs`、`/account/runner-specs`、`/organizations/{login}/runner-specs` 和 `/user/runner-specs` 实现。本地 State、API、UI、i18n、Go 全量测试和现有四项 fixture-backed production smoke 检查已通过，但这些浏览器检查覆盖公开页面和 Jobs 布局，不包含 Runner Specs 路由。Runner Specs 专项 browser fixtures、专用 PostgreSQL/MySQL 事务测试、生产 SQLite snapshot 与降级门禁、真实 Sandbox 模板校验、个人／Organization GitHub workflow 执行和部署 canary 仍是发布门禁；这些事项已记录在 `TODO.md`，不能当作已完成证据。
 
 ### 4. Config Management
 

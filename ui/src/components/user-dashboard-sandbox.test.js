@@ -78,6 +78,64 @@ function renderDashboard(overrides = {}) {
 }
 
 describe("Sandbox service Settings", () => {
+  test("keeps platform Runner Specs at the top level and account specs in Settings", () => {
+    const platformHTML = renderDashboard({
+      locationPath: "/runner-specs",
+      page: "runner-specs",
+      githubApp: {
+        settings_manageability: true,
+        setup_url: "/github-app/setup",
+        installations: [
+          {
+            id: 1,
+            account_id: 1,
+            installation_id: 987,
+            account_type: "user",
+            account_login: "miclle",
+            manageable: true,
+            repositories: [],
+            created_at: "2026-07-29T00:00:00Z",
+            updated_at: "2026-07-29T00:00:00Z",
+          },
+          {
+            id: 3,
+            account_id: 1,
+            installation_id: 989,
+            account_type: "organization",
+            account_login: "qiniu",
+            manageable: true,
+            repositories: [],
+            created_at: "2026-07-29T00:00:00Z",
+            updated_at: "2026-07-29T00:00:00Z",
+          },
+        ],
+      },
+    })
+
+    expect(platformHTML).toContain('href="/runner-specs"')
+    expect(platformHTML).toContain("Platform Runner Specs")
+    expect(platformHTML).toContain("Browse platform-managed Runner Specs and copy their workflow labels.")
+    expect(platformHTML).not.toContain("Choose which account or organization should receive availability and concurrency overrides.")
+    expect(platformHTML).not.toContain('id="platform-runner-spec-scope"')
+
+    const settingsHTML = renderDashboard({
+      locationPath: "/account/runner-specs",
+      accountSettingsRoute: { accountLogin: "miclle", tab: "runner-specs" },
+    })
+    expect(settingsHTML).toContain("Custom Runner Specs")
+    expect(settingsHTML).not.toContain("Choose which account or organization should receive availability and concurrency overrides.")
+  })
+
+  test("distinguishes custom Runner Specs in account Settings from the platform catalog", () => {
+    const html = renderDashboard({
+      accountSettingsRoute: { accountLogin: "miclle", tab: "preferences" },
+    })
+
+    expect(html).toContain(">Custom Runner Specs</button>")
+    expect(html).not.toContain(">Runner Specs</button>")
+    expect(html).not.toContain("Runner Types")
+  })
+
   test("keeps the supported region selector in Settings without a custom endpoint control", () => {
     const html = renderDashboard()
 
