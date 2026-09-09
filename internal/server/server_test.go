@@ -3520,6 +3520,34 @@ func TestSandboxServiceUsesAdminDefault(t *testing.T) {
 	}
 }
 
+func TestScopedCustomRunnerDoesNotUseAdminSandboxDefault(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := New(config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}, store, github.NewClient("", http.DefaultClient), nil, nil)
+	encrypted, err := encryptSecret("admin-sandbox-key", srv.cfg.AuthEncryptionKey.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{
+		Enabled:         true,
+		AudienceMode:    state.SandboxServiceDefaultAudienceModeAll,
+		APIURL:          "https://admin-sandbox.example.test",
+		APIKeyEncrypted: encrypted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, snapshot, err := srv.sandboxServiceAndConfigForRunnerRequest(state.RunnerRequest{
+		ID:                   "scoped-custom-request",
+		GitHubInstallationID: 987,
+		ProfileSource:        "scoped_custom",
+		ProfileScopeType:     state.AccountScopeTypeGitHubInstall,
+		ProfileScopeID:       987,
+	})
+	if !errors.Is(err, errSandboxServiceNotConfigured) || svc != nil || snapshot != (sandboxServiceConfigSnapshot{}) {
+		t.Fatalf("scoped custom request used admin default: service=%T snapshot=%#v err=%v", svc, snapshot, err)
+	}
+}
+
 func TestSandboxServiceAllAdminDefaultDoesNotRequireInstallationScope(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := New(config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}, store, github.NewClient("", http.DefaultClient), nil, nil)
@@ -8337,6 +8365,82 @@ func TestUserPatchRunnerSpecRejectsLabelChangeWhileActive(t *testing.T) {
 	}
 }
 
+func TestUserPatchRunnerSpecRejectsRunnerGroupChangeWhileActive(t *testing.T) {
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/user/memberships/orgs" {
+			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`))
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+	installation, err := store.UpsertGitHubInstallation(state.GitHubInstallation{
+		AccountID:       account.ID,
+		InstallationID:  987,
+		GitHubAccountID: 9001,
+		AccountType:     "organization",
+		AccountLogin:    "octo-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := state.RunnerProfileScope{Type: state.AccountScopeTypeGitHubInstall, ID: installation.InstallationID}
+	profile, err := store.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{
+		ScopeType:      scope.Type,
+		ScopeID:        scope.ID,
+		Name:           "custom",
+		WorkflowLabels: []string{"qiniu", "linux"},
+		TemplateID:     "template",
+		RunnerGroup:    "old-group",
+		Enabled:        true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:               "active-custom-group",
+		ProfileName:      profile.Name,
+		ProfileSource:    "scoped_custom",
+		ProfileScopeType: scope.Type,
+		ProfileScopeID:   scope.ID,
+		RunnerGroup:      profile.RunnerGroup,
+		Labels:           profile.WorkflowLabels,
+		RunnerName:       "active-custom-group",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	auditBefore, err := store.ListAuditEvents(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"runner_group":"new-group","expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	target := fmt.Sprintf("/user/runner-specs/custom?installation_id=%d", installation.ID)
+	req := httptest.NewRequest(http.MethodPatch, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"runner_spec_in_use"`) {
+		t.Fatalf("status=%d body=%s, want runner_spec_in_use", rec.Code, rec.Body.String())
+	}
+	got, err := store.GetScopedProfile(scope, "custom")
+	if err != nil || got.RunnerGroup != profile.RunnerGroup {
+		t.Fatalf("runner group changed after rejected patch: %#v err=%v", got, err)
+	}
+	auditAfter, err := store.ListAuditEvents(100)
+	if err != nil || !reflect.DeepEqual(auditBefore, auditAfter) {
+		t.Fatalf("rejected patch changed audit events: before=%d after=%d err=%v", len(auditBefore), len(auditAfter), err)
+	}
+}
+
 type blockingRunnerSpecMutationStore struct {
 	state.Store
 	started chan struct{}
@@ -8387,22 +8491,22 @@ func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
 		t.Fatal("runner spec mutation did not reach audited transaction")
 	}
 
-	type admissionResult struct {
-		state   state.RunnerState
-		created bool
-		err     error
-	}
-	admissionDone := make(chan admissionResult, 1)
+	admissionDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		got, created, admissionErr := srv.enqueueWorkflowJob("owner/repo", 987, "CI", github.WorkflowJob{ID: 98765, Name: "job", Labels: []string{"qiniu", "old-label"}}, nil)
-		admissionDone <- admissionResult{state: got, created: created, err: admissionErr}
+		payload := []byte(`{"action":"queued","installation":{"id":987},"repository":{"full_name":"owner/repo"},"workflow_run":{"name":"CI"},"workflow_job":{"id":98765,"name":"job","labels":["qiniu","old-label"]}}`)
+		req := httptest.NewRequest(http.MethodPost, "/webhooks/github", bytes.NewReader(payload))
+		req.Header.Set("X-GitHub-Event", "workflow_job")
+		req.Header.Set("X-Hub-Signature-256", sign("secret", payload))
+		recorder := httptest.NewRecorder()
+		srv.ServeHTTP(recorder, req)
+		admissionDone <- recorder
 	}()
 
 	select {
 	case result := <-admissionDone:
 		close(store.proceed)
 		<-patchDone
-		t.Fatalf("workflow admission completed during Runner Spec mutation: %#v", result)
+		t.Fatalf("workflow admission completed during Runner Spec mutation: status=%d body=%s", result.Code, result.Body.String())
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(store.proceed)
@@ -8412,8 +8516,19 @@ func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
 	}
 	select {
 	case result := <-admissionDone:
-		if result.err != nil || result.created || result.state.Status != state.StatusFailed || result.state.FailureReason != "profile_labels_not_matched" {
-			t.Fatalf("post-mutation admission = %#v, want rejected old labels", result)
+		if result.Code != http.StatusAccepted {
+			t.Fatalf("post-mutation admission status=%d body=%s, want accepted rejection", result.Code, result.Body.String())
+		}
+		request, err := baseStore.ReadRequest("98765")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stateAfter, err := baseStore.ReadState("98765")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.ProfileName != "" || stateAfter.Status != state.StatusFailed || stateAfter.FailureReason != "profile_labels_not_matched" {
+			t.Fatalf("post-mutation admission request=%#v state=%#v, want rejected old labels without a stale profile snapshot", request, stateAfter)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("workflow admission did not resume after Runner Spec mutation")

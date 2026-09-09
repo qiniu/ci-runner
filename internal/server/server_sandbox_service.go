@@ -38,6 +38,7 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequest(req state.RunnerRequest
 }
 
 func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Context, req state.RunnerRequest) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
+	scopedCustom := strings.TrimSpace(req.ProfileSource) == "scoped_custom"
 	if s.sandbox != nil {
 		return s.sandbox, sandboxServiceConfigSnapshot{}, nil
 	}
@@ -68,6 +69,9 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 	}
 	scope, err := sandboxScopeForRunnerRequest(req)
 	if err != nil {
+		if scopedCustom {
+			return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("scoped custom runner request %s has no configured Sandbox service: %w", req.ID, errSandboxServiceNotConfigured)
+		}
 		svc, snapshot, defaultErr := s.sandboxServiceForAdminDefault(func() (state.GitHubInstallationAccount, error) {
 			return state.GitHubInstallationAccount{}, state.ErrNotFound
 		})
@@ -99,6 +103,9 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 		if !errors.Is(accountErr, errSandboxServiceNotConfigured) {
 			return nil, sandboxServiceConfigSnapshot{}, accountErr
 		}
+	}
+	if scopedCustom {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("Sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
 	}
 	return s.sandboxServiceForAdminDefault(func() (state.GitHubInstallationAccount, error) {
 		return s.githubInstallationOwner(ctx, req.GitHubInstallationID)

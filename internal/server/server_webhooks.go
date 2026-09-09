@@ -55,55 +55,18 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("workflow_job webhook parsed", "action", event.Action, "job_id", id, "job_name", event.WorkflowJob.Name, "repository", event.Repository.FullName, "runner_name", event.WorkflowJob.RunnerName, "labels", []string(event.WorkflowJob.Labels))
 	switch event.Action {
 	case "queued":
-		req := state.RunnerRequest{
-			ID:                   id,
-			Source:               "github_webhook",
-			JobID:                event.WorkflowJob.ID,
-			PullRequestNumber:    workflowJobPullRequestNumber(event.WorkflowJob.PullRequests),
-			GitHubInstallationID: event.Installation.ID,
-			RepositoryFullName:   event.Repository.FullName,
-			RequestedLabels:      append([]string(nil), event.WorkflowJob.Labels...),
-			Labels:               []string(event.WorkflowJob.Labels),
-			RunnerName:           "e2b-" + id,
-		}
-		if !s.cfg.RepositoryAllowed(event.Repository.FullName) {
-			s.logger.Info("workflow_job repository rejected by allowlist", "job_id", id, "repository", event.Repository.FullName)
-			st, err := s.rejectAdmission(req, body, "repository_not_allowed")
-			if err != nil {
-				s.logger.Error("write workflow_job repository rejection", "job_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			writeJSON(w, http.StatusAccepted, st)
-			return
-		}
-		match, err := s.matchProfileForAdmission(event.Repository.FullName, event.Installation.ID, event.WorkflowJob.Labels)
+		workflowName := workflowNameFor(event.WorkflowJob.WorkflowName, event.WorkflowRun.Name)
+		st, created, err := s.enqueueWorkflowJob(event.Repository.FullName, event.Installation.ID, workflowName, event.WorkflowJob, body)
 		if err != nil {
-			s.logger.Error("match workflow job profile", "job_id", id, "repository", event.Repository.FullName, "labels", []string(event.WorkflowJob.Labels), "error", err)
+			s.logger.Error("enqueue workflow_job", "job_id", id, "repository", event.Repository.FullName, "labels", []string(event.WorkflowJob.Labels), "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		req.ProfileSource = match.Source
-		req.ProfileScopeType = match.ScopeType
-		req.ProfileScopeID = match.ScopeID
-		if match.Profile == nil {
-			s.logger.Info("workflow_job admission rejected", "job_id", id, "repository", event.Repository.FullName, "labels", []string(event.WorkflowJob.Labels), "reason", match.Reason)
-			st, err := s.rejectAdmission(req, body, match.Reason)
-			if err != nil {
-				s.logger.Error("write workflow_job admission rejection", "job_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
+		if created || (st.Status == state.StatusFailed && st.FailureStage == "admission") {
 			writeJSON(w, http.StatusAccepted, st)
 			return
 		}
-		req.ProfileName = match.Profile.Name
-		req.RunnerGroup = match.Profile.RunnerGroup
-		req.Labels = append([]string(nil), match.Profile.Labels...)
-		s.logger.Info("workflow_job matched profile", "job_id", id, "repository", event.Repository.FullName, "profile", match.Profile.Name, "runner_group", match.Profile.RunnerGroup, "labels", req.Labels)
-		workflowName := workflowNameFor(event.WorkflowJob.WorkflowName, event.WorkflowRun.Name)
-		metrics.RecordWorkflowQueued(event.Repository.FullName, workflowName, event.WorkflowJob.Name, match.Profile.Name)
-		s.createAndStart(w, r, req, body)
+		writeJSON(w, http.StatusOK, st)
 	case "in_progress":
 		startID, reason := s.completedWorkflowJobStopID(event.WorkflowJob)
 		if startID == "" {

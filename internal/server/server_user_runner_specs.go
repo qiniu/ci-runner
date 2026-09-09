@@ -214,7 +214,17 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 		labelsChanged = !sameStringSlice(labels, current.WorkflowLabels)
 		current.WorkflowLabels = labels
 	}
-	if labelsChanged || templateChanged {
+	runnerGroupChanged := false
+	if input.RunnerGroup != nil {
+		if scope.Type == state.AccountScopeTypeAccount && strings.TrimSpace(*input.RunnerGroup) != "" {
+			writeErrorCode(w, http.StatusBadRequest, "runner_group_not_supported", "runner group is only supported for organization scopes")
+			return
+		}
+		nextRunnerGroup := strings.TrimSpace(*input.RunnerGroup)
+		runnerGroupChanged = nextRunnerGroup != current.RunnerGroup
+		current.RunnerGroup = nextRunnerGroup
+	}
+	if labelsChanged || templateChanged || runnerGroupChanged {
 		count, countErr := s.store.ActiveCountForProfileScope("scoped_custom", scope, name)
 		if countErr != nil {
 			writeError(w, http.StatusInternalServerError, countErr.Error())
@@ -232,13 +242,6 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 		}
 		current.TemplateID = strings.TrimSpace(*input.TemplateID)
 	}
-	if input.RunnerGroup != nil {
-		if scope.Type == state.AccountScopeTypeAccount && strings.TrimSpace(*input.RunnerGroup) != "" {
-			writeErrorCode(w, http.StatusBadRequest, "runner_group_not_supported", "runner group is only supported for organization scopes")
-			return
-		}
-		current.RunnerGroup = strings.TrimSpace(*input.RunnerGroup)
-	}
 	if input.MaxConcurrency != nil && *input.MaxConcurrency < 0 {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "max concurrency must not be negative")
 		return
@@ -250,8 +253,8 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 		current.Enabled = *input.Enabled
 	}
 	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.update", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), map[string]any{"template_id_changed": templateChanged, "workflow_labels_changed": labelsChanged}, func(tx state.Store) error {
-		if labelsChanged || templateChanged {
+	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.update", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), map[string]any{"template_id_changed": templateChanged, "workflow_labels_changed": labelsChanged, "runner_group_changed": runnerGroupChanged}, func(tx state.Store) error {
+		if labelsChanged || templateChanged || runnerGroupChanged {
 			count, countErr := tx.ActiveCountForProfileScope("scoped_custom", scope, name)
 			if countErr != nil {
 				return countErr
