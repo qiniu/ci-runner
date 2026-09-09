@@ -244,6 +244,9 @@ func (s *Server) enqueueWorkflowJob(repositoryFullName string, githubInstallatio
 		st, err := s.rejectAdmission(req, payload, "repository_not_allowed")
 		return st, false, err
 	}
+	// Keep profile matching and request creation in one critical section with
+	// scoped spec updates/deletes. Moving the reads before this lock allows a
+	// mutation to commit between the match and persisted request snapshot.
 	s.admissionMu.Lock()
 	defer s.admissionMu.Unlock()
 	match, err := s.matchProfileForAdmission(repositoryFullName, githubInstallationID, job.Labels)
@@ -1683,11 +1686,21 @@ func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerP
 		return s.store.GetProfile(req.ProfileName)
 	}
 	if source == "scoped_custom" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
-		item, err := s.store.GetEffectiveProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, source, req.ProfileName)
+		profile, err := s.store.GetScopedProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, req.ProfileName)
 		if err != nil {
 			return state.RunnerProfile{}, err
 		}
-		return item.Profile, nil
+		return state.RunnerProfile{
+			Name:           profile.Name,
+			Labels:         append([]string(nil), profile.WorkflowLabels...),
+			RequiredLabels: append([]string(nil), profile.WorkflowLabels...),
+			TemplateID:     profile.TemplateID,
+			RunnerGroup:    profile.RunnerGroup,
+			MaxConcurrency: profile.MaxConcurrency,
+			Enabled:        profile.Enabled,
+			CreatedAt:      profile.CreatedAt,
+			UpdatedAt:      profile.UpdatedAt,
+		}, nil
 	}
 	return state.RunnerProfile{}, state.ErrNotFound
 }

@@ -225,20 +225,6 @@ func isDuplicatedKeyError(db *gorm.DB, err error) bool {
 	return errors.Is(err, gorm.ErrDuplicatedKey)
 }
 
-func (s *DBStore) GetEffectiveProfile(scope RunnerProfileScope, source, name string) (EffectiveRunnerProfile, error) {
-	items, err := s.ListEffectiveProfiles(scope)
-	if err != nil {
-		return EffectiveRunnerProfile{}, err
-	}
-	for _, item := range items {
-		globalMatch := source == "global" && item.Source != "scoped_custom"
-		if (item.Source == source || globalMatch) && item.Profile.Name == strings.TrimSpace(name) {
-			return item, nil
-		}
-	}
-	return EffectiveRunnerProfile{}, ErrNotFound
-}
-
 func (s *DBStore) MatchProfileForScope(scope RunnerProfileScope, repositoryFullName string, labels []string) (ProfileMatch, error) {
 	if err := ValidateRunnerProfileScope(scope); err != nil {
 		return ProfileMatch{}, err

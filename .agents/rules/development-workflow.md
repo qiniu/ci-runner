@@ -36,7 +36,7 @@ task release-check
 - `docs/deployment-smoke.md` and `docs/zh/deployment-smoke.md` are the paired production-style smoke checklists.
 - `docs/runner-architecture-comparison.md` and `docs/runner-implementation-review.md`, plus their `docs/zh/` counterparts, are architecture/status documents, not agent rulebooks.
 - `TODO.md` tracks unresolved product and operations decisions.
-- `docs/superpowers/plans/README.md` classifies retained historical plans. Unchecked boxes in a plan marked historical are execution records, not active roadmap items; keep active work linked from `TODO.md`.
+- Keep active work linked from `TODO.md`; removed implementation plans are not an active roadmap.
 - `.agents/rules/` stores durable agent-only rules; `.agents/skills/` stores repeatable project-local workflows.
 
 When changing config, build, development, deployment, public APIs, authentication/authorization, state semantics, or UI asset workflows, keep the English/Chinese README and `docs/` pairs, `TODO.md`, `AGENTS.md`, and relevant `.agents/` files aligned.

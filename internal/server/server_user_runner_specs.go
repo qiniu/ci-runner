@@ -149,6 +149,9 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	profile := state.ScopedRunnerProfile{ScopeType: scope.Type, ScopeID: scope.ID, Name: name, WorkflowLabels: labels, TemplateID: strings.TrimSpace(input.TemplateID), RunnerGroup: strings.TrimSpace(input.RunnerGroup), MaxConcurrency: input.MaxConcurrency, Enabled: input.Enabled}
+	// The insert is the publication point for a new spec. An admission racing
+	// creation may be ordered before or after it, and cannot reference stale
+	// state for a spec that did not previously exist.
 	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.create", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, profile.Name), map[string]any{"template_id": profile.TemplateID, "workflow_labels": labels}, func(tx state.Store) error {
 		_, err := tx.UpsertScopedProfileIfUnchanged(profile, nil)
 		return err
@@ -310,6 +313,14 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	name := strings.TrimSpace(r.PathValue("name"))
+	if _, err := s.store.GetScopedProfile(scope, name); err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if count, err := s.store.ActiveCountForProfileScope("scoped_custom", scope, name); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

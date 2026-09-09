@@ -314,6 +314,38 @@ func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
 	}
 }
 
+type effectiveProfileLookupRejectingStore struct {
+	state.Store
+}
+
+func (s *effectiveProfileLookupRejectingStore) GetEffectiveProfile(state.RunnerProfileScope, string, string) (state.EffectiveRunnerProfile, error) {
+	return state.EffectiveRunnerProfile{}, errors.New("full effective catalog lookup is unavailable")
+}
+
+func TestProfileForRunnerRequestUsesDirectScopedLookup(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	scope := state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: 1}
+	want, err := baseStore.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{
+		ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom",
+		WorkflowLabels: []string{"self-hosted", "custom"}, TemplateID: "custom-template-id", Enabled: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{store: &effectiveProfileLookupRejectingStore{Store: baseStore}}
+
+	got, err := srv.profileForRunnerRequest(state.RunnerRequest{
+		ProfileName: want.Name, ProfileSource: "scoped_custom",
+		ProfileScopeType: scope.Type, ProfileScopeID: scope.ID,
+	})
+	if err != nil {
+		t.Fatalf("profileForRunnerRequest: %v", err)
+	}
+	if got.Name != want.Name || got.TemplateID != want.TemplateID || !got.Enabled {
+		t.Fatalf("profile = %#v, want direct scoped profile %#v", got, want)
+	}
+}
+
 func TestRunnerLifecycleRetryUsesPersistedSpecWithoutPolicyOrGroupReads(t *testing.T) {
 	// Characterization test: a retry starts from its admitted Runner Spec. It
 	// catches a migration that rematches a stored request through retired policy

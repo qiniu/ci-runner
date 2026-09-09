@@ -8232,6 +8232,27 @@ func TestUserPatchRunnerSpecReturnsInternalErrorWhenProfileLookupFails(t *testin
 	}
 }
 
+func TestUserDeleteRunnerSpecReturnsNotFoundForMissingSpec(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "", &fakeSandbox{})
+	auditBefore, err := store.ListAuditEvents(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := "/user/runner-specs/missing?expected_updated_at=2026-08-28T00%3A00%3A00Z"
+	req := httptest.NewRequest(http.MethodDelete, target, nil)
+	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"code":"runner_spec_not_found"`) {
+		t.Fatalf("status=%d body=%s, want runner_spec_not_found", rec.Code, rec.Body.String())
+	}
+	auditAfter, err := store.ListAuditEvents(100)
+	if err != nil || !reflect.DeepEqual(auditBefore, auditAfter) {
+		t.Fatalf("missing delete changed audit events: before=%d after=%d err=%v", len(auditBefore), len(auditAfter), err)
+	}
+}
+
 func TestUserPatchRunnerSpecMapsDuplicateLabelsToConflict(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "", &fakeSandbox{})

@@ -348,7 +348,6 @@ type RunnerCatalogStore interface {
 	DeleteProfile(name string) error
 	MatchProfile(repositoryFullName string, labels []string) (ProfileMatch, error)
 	ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRunnerProfile, error)
-	GetEffectiveProfile(scope RunnerProfileScope, source, name string) (EffectiveRunnerProfile, error)
 	MatchProfileForScope(scope RunnerProfileScope, repositoryFullName string, labels []string) (ProfileMatch, error)
 	ListScopedProfiles(scope RunnerProfileScope) ([]ScopedRunnerProfile, error)
 	GetScopedProfile(scope RunnerProfileScope, name string) (ScopedRunnerProfile, error)

@@ -96,6 +96,7 @@ export type UserRunnerSpecList = {
   scope_type: string
   scope_id: number
   sandbox_source: string
+  sandbox_region?: string
   items: UserRunnerSpec[]
 }
 
