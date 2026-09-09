@@ -21,6 +21,10 @@ export function runnerSpecOverridesGlobal(labels: string[], items: UserRunnerSpe
   return key !== "" && items.some((item) => item.source !== "scoped_custom" && [...new Set(item.workflow_labels)].sort().join("\u0000") === key)
 }
 
-export function runnerSpecDialogDescriptionKey(_mode: "create" | "edit") {
-  return "user.customRunnerSpecDialogDescription" as const
+export function runnerSpecDialogDescriptionKey(mode: "create" | "edit") {
+  const descriptions = {
+    create: "user.customRunnerSpecDialogDescription",
+    edit: "user.customRunnerSpecDialogDescription",
+  } as const
+  return descriptions[mode]
 }
