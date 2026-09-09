@@ -172,7 +172,7 @@ jobs:
           go-version: stable
           cache-dependency-path: go.sum
       - name: Verify fresh schema, catalog matching, and audited mutations on PostgreSQL and MySQL
-        run: go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema)SQLBackends' -count=1 -v
+        run: go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema)SQLBackends' -count=1 -v
 
   ui-production-smoke:
     runs-on: ubuntu-latest

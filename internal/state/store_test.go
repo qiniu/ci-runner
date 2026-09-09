@@ -3586,6 +3586,14 @@ func TestScopedRunnerCatalogFreshSchemaSQLBackends(t *testing.T) {
 					t.Fatalf("expected %s table", table)
 				}
 			}
+			for _, index := range []string{
+				"idx_scoped_runner_profiles_scope",
+				"idx_scoped_runner_profiles_scope_labels",
+			} {
+				if !db.Migrator().HasIndex("scoped_runner_profiles", index) {
+					t.Fatalf("expected %s index", index)
+				}
+			}
 			if db.Migrator().HasTable("runner_profile_scope_controls") {
 				t.Fatal("fresh schema must not create removed runner_profile_scope_controls")
 			}
@@ -3836,6 +3844,7 @@ func sqlBackendTestTables() []string {
 	return []string{
 		"runner_events",
 		"runner_requests",
+		"scoped_runner_profiles",
 		"runner_group_specs",
 		"repository_policies",
 		"runner_groups",

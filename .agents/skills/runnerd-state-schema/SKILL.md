@@ -69,7 +69,7 @@ databases whose names end in `_test`:
 RUNNERD_CATALOG_BACKEND_TESTS=1 \
 RUNNERD_POSTGRES_TEST_DSN='<dedicated postgres test DSN>' \
 RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
-  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema)SQLBackends' -count=1 -v
+  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema)SQLBackends' -count=1 -v
 ```
 
 6. If callers or server behavior changed, also run:
