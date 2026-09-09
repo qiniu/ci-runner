@@ -105,7 +105,7 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 		}
 	}
 	if scopedCustom {
-		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("Sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
 	}
 	return s.sandboxServiceForAdminDefault(func() (state.GitHubInstallationAccount, error) {
 		return s.githubInstallationOwner(ctx, req.GitHubInstallationID)
