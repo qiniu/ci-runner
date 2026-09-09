@@ -551,6 +551,30 @@ func TestDefaultTemplateCatalogCheckRequiresUniqueRunnablePublicTemplates(t *tes
 			"public":      true,
 			"buildStatus": "ready",
 		},
+		{
+			"templateID":  "tmpl-slim-large",
+			"names":       []string{"github-runner-ubuntu-slim-large"},
+			"public":      true,
+			"buildStatus": "ready",
+		},
+		{
+			"templateID":  "tmpl-22-large",
+			"names":       []string{"github-runner-ubuntu-22-04-large"},
+			"public":      true,
+			"buildStatus": "ready",
+		},
+		{
+			"templateID":  "tmpl-24-large",
+			"names":       []string{"github-runner-ubuntu-24-04-large"},
+			"public":      true,
+			"buildStatus": "ready",
+		},
+		{
+			"templateID":  "tmpl-26-large",
+			"names":       []string{"github-runner-ubuntu-26-04-large"},
+			"public":      true,
+			"buildStatus": "ready",
+		},
 	}
 	initialResponseBody, err := json.Marshal(templates)
 	if err != nil {
@@ -590,6 +614,10 @@ func TestDefaultTemplateCatalogCheckRequiresUniqueRunnablePublicTemplates(t *tes
 		"github-runner-ubuntu-22-04\ttmpl-22\tuploaded",
 		"github-runner-ubuntu-24-04\ttmpl-24\tready",
 		"github-runner-ubuntu-26-04\ttmpl-26\tready",
+		"github-runner-ubuntu-slim-large\ttmpl-slim-large\tready",
+		"github-runner-ubuntu-22-04-large\ttmpl-22-large\tready",
+		"github-runner-ubuntu-24-04-large\ttmpl-24-large\tready",
+		"github-runner-ubuntu-26-04-large\ttmpl-26-large\tready",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("catalog output missing %q:\n%s", want, output)
@@ -3983,7 +4011,7 @@ func TestRunnerTemplatesCacheLargeAWSSAMArchiveInCheckedRanges(t *testing.T) {
 	}
 }
 
-func TestRunnerTemplatesPreferTsinghuaUbuntuMirror(t *testing.T) {
+func TestRunnerTemplatesPreferOverseasUbuntuMirrors(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, imageKey := range []string{"ubuntu-slim", "ubuntu-22.04", "ubuntu-24.04", "ubuntu-26.04"} {
 		t.Run(imageKey, func(t *testing.T) {
@@ -4007,10 +4035,11 @@ func TestRunnerTemplatesPreferTsinghuaUbuntuMirror(t *testing.T) {
 				t.Fatal("setup script is missing configure_reliable_apt_sources")
 			}
 			functionBody := script[functionStart : functionStart+functionEnd]
-			tsinghua := strings.Index(functionBody, "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/")
+			archive := strings.Index(functionBody, "https://archive.ubuntu.com/ubuntu/\tpriority:1")
 			kernel := strings.Index(functionBody, "https://mirrors.edge.kernel.org/ubuntu/")
-			if tsinghua < 0 || kernel < 0 || tsinghua > kernel {
-				t.Fatal("Tsinghua must be the first Ubuntu mirror for the Sandbox build network")
+			tsinghua := strings.Index(functionBody, "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/")
+			if archive < 0 || kernel < 0 || tsinghua < 0 || archive > kernel || kernel > tsinghua {
+				t.Fatal("the official archive and overseas kernel mirror must precede Tsinghua")
 			}
 		})
 	}
@@ -4243,13 +4272,15 @@ func TestRunnerTemplateBuildUsesBoundedHTTPSAptSources(t *testing.T) {
 				}
 			}
 			if image == "ubuntu-26.04" {
-				tunaMirror := strings.Index(script, "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/\tpriority:1")
+				archiveMirror := strings.Index(script, "https://archive.ubuntu.com/ubuntu/\tpriority:1")
 				kernelFallback := strings.Index(script, "https://mirrors.edge.kernel.org/ubuntu/\tpriority:2")
-				if tunaMirror < 0 || kernelFallback < 0 || tunaMirror > kernelFallback {
+				tunaFallback := strings.Index(script, "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/\tpriority:3")
+				if archiveMirror < 0 || kernelFallback < 0 || tunaFallback < 0 || archiveMirror > kernelFallback || kernelFallback > tunaFallback {
 					t.Fatalf(
-						"Ubuntu 26.04 must prefer TUNA on the Sandbox build network and retain kernel.org as a fallback: tuna=%d kernel=%d",
-						tunaMirror,
+						"Ubuntu 26.04 must prefer the official archive and kernel.org before TUNA: archive=%d kernel=%d tuna=%d",
+						archiveMirror,
 						kernelFallback,
+						tunaFallback,
 					)
 				}
 				for _, directMirrorRewrite := range []string{

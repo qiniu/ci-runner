@@ -33,12 +33,26 @@ expected_name() {
     ubuntu-22.04) echo github-runner-ubuntu-22-04 ;;
     ubuntu-24.04) echo github-runner-ubuntu-24-04 ;;
     ubuntu-26.04) echo github-runner-ubuntu-26-04 ;;
+    ubuntu-slim-large) echo github-runner-ubuntu-slim-large ;;
+    ubuntu-22.04-large) echo github-runner-ubuntu-22-04-large ;;
+    ubuntu-24.04-large) echo github-runner-ubuntu-24-04-large ;;
+    ubuntu-26.04-large) echo github-runner-ubuntu-26-04-large ;;
     *) return 1 ;;
   esac
 }
 
-expected_base_reference() {
+base_image_key() {
   case "$1" in
+    ubuntu-slim-large) echo ubuntu-slim ;;
+    ubuntu-22.04-large) echo ubuntu-22.04 ;;
+    ubuntu-24.04-large) echo ubuntu-24.04 ;;
+    ubuntu-26.04-large) echo ubuntu-26.04 ;;
+    *) echo "$1" ;;
+  esac
+}
+
+expected_base_reference() {
+  case "$(base_image_key "$1")" in
     ubuntu-slim | ubuntu-24.04)
       echo public.ecr.aws/ubuntu/ubuntu:24.04@sha256:be20a0347f238b7d373edddc55923443b21dd9a60277bf8a93e43458cd0bf2fc
       ;;
@@ -58,6 +72,10 @@ expected_build_target() {
     ubuntu-22.04) echo template-build-ubuntu-22-04 ;;
     ubuntu-24.04) echo template-build-ubuntu-24-04 ;;
     ubuntu-26.04) echo template-build-ubuntu-26-04 ;;
+    ubuntu-slim-large) echo template-build-ubuntu-slim-large ;;
+    ubuntu-22.04-large) echo template-build-ubuntu-22-04-large ;;
+    ubuntu-24.04-large) echo template-build-ubuntu-24-04-large ;;
+    ubuntu-26.04-large) echo template-build-ubuntu-26-04-large ;;
     *) return 1 ;;
   esac
 }
@@ -67,8 +85,11 @@ cleanup() {
   find "$seen_names_file" -type f -delete 2>/dev/null || true
 }
 trap cleanup EXIT
-for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
+for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-large ubuntu-22.04-large ubuntu-24.04-large ubuntu-26.04-large; do
   directory="templates/github-runner-${image_key}"
+  base_key="$(base_image_key "$image_key")"
+  base_directory="templates/github-runner-${base_key}"
+  base_dir_name="github-runner-${base_key}"
   test -d "$directory" || fail "missing directory $directory"
   for required_file in Dockerfile qshell.sandbox.toml README.md software-diff.md scripts/setup-template.sh scripts/ensure-docker scripts/download-checked-range; do
     test -f "$directory/$required_file" || fail "missing $directory/$required_file"
@@ -121,11 +142,11 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
   grep -Eq '^[[:space:]]*RUN[[:space:]]+TEMPLATE_FLAVOR=' "$directory/Dockerfile" ||
     fail "$image_key setup must use a plain qshell-compatible RUN instruction"
   template_flavor=versioned
-  if [ "$image_key" = ubuntu-slim ]; then
+  if [ "$base_key" = ubuntu-slim ]; then
     template_flavor=slim
   fi
   phases="bootstrap platform toolchain runtime"
-  if [ "$image_key" != ubuntu-slim ]; then
+  if [ "$base_key" != ubuntu-slim ]; then
     phases="bootstrap platform node toolchain runtime"
   fi
   phase_count=0
@@ -157,7 +178,7 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
   if grep -Fq 'Acquire::https::Verify-Peer=false' "$directory/scripts/setup-template.sh"; then
     fail "$image_key setup must not disable apt HTTPS peer verification"
   fi
-  if [ "$image_key" != ubuntu-22.04 ]; then
+  if [ "$base_key" != ubuntu-22.04 ]; then
     grep -Fq 'ensure_upstream_apt_source_layout' \
       "$directory/scripts/setup-template.sh" ||
       fail "$image_key must adapt the Canonical ECR apt layout before upstream setup"
@@ -165,7 +186,7 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
       "$directory/scripts/setup-template.sh" ||
       fail "$image_key must provide the deb822 path expected by upstream setup"
   fi
-  if [ "$image_key" != ubuntu-slim ]; then
+  if [ "$base_key" != ubuntu-slim ]; then
     grep -Fq 'install-nvm.sh | install-nodejs.sh)' \
       "$directory/scripts/setup-template.sh" ||
       fail "$image_key must isolate Node installation in its cacheable node phase"
@@ -201,9 +222,30 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
       "$directory/scripts/setup-template.sh" ||
       fail "$image_key must confirm detached Apache startup before Pester continues"
   fi
-  build_target="$(expected_build_target "$image_key")"
-  grep -Fq "task $build_target" "$directory/README.md" ||
-    fail "$image_key README must use the exact task $build_target build command"
+  if [[ "$image_key" != *-large ]]; then
+    build_target="$(expected_build_target "$image_key")"
+    grep -Fq "task $build_target" "$directory/README.md" ||
+      fail "$image_key README must use the exact task $build_target build command"
+  fi
+
+  if [[ "$image_key" == *-large ]]; then
+    large_build_target="$(expected_build_target "$image_key")"
+    test -f "$directory/README.md" || fail "$image_key must provide README.md"
+    test ! -L "$directory/README.md" || fail "$image_key README.md must document its large build target"
+    grep -Fq "task $large_build_target" "$directory/README.md" ||
+      fail "$image_key README must use the exact task $large_build_target build command"
+    for shared_entry in Dockerfile software-diff.md scripts; do
+      test -L "$directory/$shared_entry" || fail "$image_key must symlink $shared_entry"
+      test "$(readlink "$directory/$shared_entry")" = "../$base_dir_name/$shared_entry" ||
+        fail "$image_key $shared_entry must point to $base_dir_name/$shared_entry"
+    done
+    expected_dockerfile="../$base_dir_name/Dockerfile"
+    expected_path="../$base_dir_name"
+    grep -Fq "dockerfile = \"$expected_dockerfile\"" "$directory/qshell.sandbox.toml" ||
+      fail "$image_key qshell config must use the in-context Dockerfile $expected_dockerfile"
+    grep -Fq "path = \"$expected_path\"" "$directory/qshell.sandbox.toml" ||
+      fail "$image_key qshell config must use the in-context path $expected_path"
+  fi
 done
 
 if grep -En 'runner-template-build-all|qshell sandbox template (publish|unpublish).*--config' \
@@ -225,9 +267,9 @@ readme_catalog="$(
       print $2 "\t" $3 "\t" $4 "\t" $5
     }' "$templates_readme"
 )"
-expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
+expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large\tUbuntu Slim x64 (80 GiB)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large\tUbuntu 22.04 x64 (80 GiB)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large\tUbuntu 24.04 x64 (80 GiB)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large\tUbuntu 26.04 x64 (80 GiB)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
 test "$readme_catalog" = "$expected_catalog" ||
-  fail "templates/README.md support matrix does not match the five public logical rows"
+  fail "templates/README.md support matrix does not match the nine public logical rows"
 
 publication_states="$(
   awk -F'|' '
@@ -255,4 +297,4 @@ if find templates -mindepth 1 -maxdepth 1 -type d -name '*ubuntu-latest*' | grep
   fail "ubuntu-latest must not have a fifth physical template directory"
 fi
 
-echo "runner template matrix: 4 physical templates and 5 logical mappings verified"
+echo "runner template matrix: 8 physical templates and 9 logical mappings verified"

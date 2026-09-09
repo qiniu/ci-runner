@@ -4,6 +4,7 @@ import enHosted from "@/content/site-docs/en/getting-started-hosted.md?raw"
 import enIndex from "@/content/site-docs/en/index.md?raw"
 import enLabels from "@/content/site-docs/en/runner-labels.md?raw"
 import enTroubleshooting from "@/content/site-docs/en/troubleshooting.md?raw"
+import enCache from "@/content/site-docs/en/cache.md?raw"
 import enWorkflow from "@/content/site-docs/en/workflow.md?raw"
 import zhDeploy from "@/content/site-docs/zh/getting-started-deploy.md?raw"
 import zhCustomTemplates from "@/content/site-docs/zh/custom-templates.md?raw"
@@ -11,6 +12,7 @@ import zhHosted from "@/content/site-docs/zh/getting-started-hosted.md?raw"
 import zhIndex from "@/content/site-docs/zh/index.md?raw"
 import zhLabels from "@/content/site-docs/zh/runner-labels.md?raw"
 import zhTroubleshooting from "@/content/site-docs/zh/troubleshooting.md?raw"
+import zhCache from "@/content/site-docs/zh/cache.md?raw"
 import zhWorkflow from "@/content/site-docs/zh/workflow.md?raw"
 import { siteDocumentRoutes } from "@/site-doc-routes"
 
@@ -46,18 +48,19 @@ const definitions: SiteDocumentDefinition[] = [
     markdown: { en: enDeploy, zh: zhDeploy },
   },
   { path: siteDocumentRoutes[3], group: "guides", markdown: { en: enWorkflow, zh: zhWorkflow } },
+  { path: siteDocumentRoutes[4], group: "guides", markdown: { en: enCache, zh: zhCache } },
   {
-    path: siteDocumentRoutes[4],
+    path: siteDocumentRoutes[5],
     group: "guides",
     markdown: { en: enCustomTemplates, zh: zhCustomTemplates },
   },
   {
-    path: siteDocumentRoutes[5],
+    path: siteDocumentRoutes[6],
     group: "guides",
     markdown: { en: enTroubleshooting, zh: zhTroubleshooting },
   },
   {
-    path: siteDocumentRoutes[6],
+    path: siteDocumentRoutes[7],
     group: "reference",
     markdown: { en: enLabels, zh: zhLabels },
   },

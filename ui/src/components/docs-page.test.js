@@ -35,6 +35,7 @@ describe("DocsPage", () => {
     expect(html).toContain('id="job-stays-queued"')
     expect(html).toContain('href="/docs/reference/runner-labels"')
     expect(html).toContain('href="/docs/guides/custom-templates"')
+    expect(html).toContain('href="/docs/guides/cache"')
   })
 
   test("keeps source links external while guide links stay on the site", () => {

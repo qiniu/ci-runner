@@ -63,6 +63,8 @@ Bootstrap 命令只更新账号角色并退出，不会启动服务。
 
 不要把普通用户的 Sandbox 凭据写入 `runnerd.yaml`。应用会加密保存 scoped API Key，并且不会向浏览器返回完整值。
 
+Cache S3 也由用户或组织在 Preferences 中配置。管理员需要在 `runnerd.yaml` 的 `sandbox.regions` 中为每个支持缓存的区域同时提供 `s3_region` 和 `s3_endpoint`，并设置 `cache.sts_endpoint`。完整说明见[配置并使用 Cache S3](/docs/guides/cache)。
+
 ## 5. 验证托管 Runner Spec
 
 runnerd 会协调 `ubuntu-slim`、`ubuntu-22.04`、`ubuntu-24.04`、预览版 `ubuntu-26.04` 和 `ubuntu-latest` 的托管 spec。Operator 可以控制每个托管 spec 是否启用，以及并发和 idle capacity；catalog 标签和公共模板名称仍由 runnerd 管理。

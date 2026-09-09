@@ -271,8 +271,11 @@ tasks:
     cmds:
       - bash scripts/check-runner-template-matrix.sh
       - bash scripts/check-runner-image-compatibility.sh
-      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04]
-        cmd: docker build --check --platform=linux/amd64 -f templates/{{.ITEM}}/Dockerfile templates/{{.ITEM}}
+      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04, github-runner-ubuntu-slim-large, github-runner-ubuntu-22.04-large, github-runner-ubuntu-24.04-large, github-runner-ubuntu-26.04-large]
+        cmd: |
+          template_dir="{{.ITEM}}"
+          base_dir="${template_dir%-large}"
+          docker build --check --platform=linux/amd64 -f "templates/${base_dir}/Dockerfile" "templates/${base_dir}"
 
   _template-build:
     internal: true
@@ -319,6 +322,30 @@ tasks:
       - task: _template-build
         vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
 
+  template-build-ubuntu-slim-large:
+    desc: Build the large Ubuntu Slim template with qshell and wait until ready
+    cmds:
+      - task: _template-build
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+
+  template-build-ubuntu-22-04-large:
+    desc: Build the large Ubuntu 22.04 template with qshell and wait until ready
+    cmds:
+      - task: _template-build
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+
+  template-build-ubuntu-24-04-large:
+    desc: Build the large Ubuntu 24.04 template with qshell and wait until ready
+    cmds:
+      - task: _template-build
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+
+  template-build-ubuntu-26-04-large:
+    desc: Build the large Ubuntu 26.04 template with qshell and wait until ready
+    cmds:
+      - task: _template-build
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
+
   template-publish-ubuntu-slim:
     desc: Publish the Ubuntu Slim template
     cmds:
@@ -342,6 +369,30 @@ tasks:
     cmds:
       - task: _template-publish
         vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
+
+  template-publish-ubuntu-slim-large:
+    desc: Publish the large Ubuntu Slim template
+    cmds:
+      - task: _template-publish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+
+  template-publish-ubuntu-22-04-large:
+    desc: Publish the large Ubuntu 22.04 template
+    cmds:
+      - task: _template-publish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+
+  template-publish-ubuntu-24-04-large:
+    desc: Publish the large Ubuntu 24.04 template
+    cmds:
+      - task: _template-publish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+
+  template-publish-ubuntu-26-04-large:
+    desc: Publish the large Ubuntu 26.04 template
+    cmds:
+      - task: _template-publish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
 
   template-unpublish-ubuntu-slim:
     desc: Roll back publication of the Ubuntu Slim template
@@ -367,18 +418,42 @@ tasks:
       - task: _template-unpublish
         vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
 
+  template-unpublish-ubuntu-slim-large:
+    desc: Roll back publication of the large Ubuntu Slim template
+    cmds:
+      - task: _template-unpublish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+
+  template-unpublish-ubuntu-22-04-large:
+    desc: Roll back publication of the large Ubuntu 22.04 template
+    cmds:
+      - task: _template-unpublish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+
+  template-unpublish-ubuntu-24-04-large:
+    desc: Roll back publication of the large Ubuntu 24.04 template
+    cmds:
+      - task: _template-unpublish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+
+  template-unpublish-ubuntu-26-04-large:
+    desc: Roll back publication of the large Ubuntu 26.04 template
+    cmds:
+      - task: _template-unpublish
+        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
+
   template-defaults-check:
-    desc: Verify the four public templates in the current Sandbox region catalog
+    desc: Verify the eight public templates in the current Sandbox region catalog
     cmds:
       - bash scripts/check-default-template-catalog.sh
 
   template-conformance-local:
-    desc: Run Docker conformance against four already-built local runner images
+    desc: Run Docker conformance against eight already-built local runner images
     cmds:
       - mkdir -p .build/runner-conformance
       - for:
           matrix:
-            IMAGE_KEY: [ubuntu-slim, ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
+            IMAGE_KEY: [ubuntu-slim, ubuntu-22.04, ubuntu-24.04, ubuntu-26.04, ubuntu-slim-large, ubuntu-22.04-large, ubuntu-24.04-large, ubuntu-26.04-large]
         cmd: scripts/run-runner-image-conformance.sh --image "{{.ITEM.IMAGE_KEY}}" --executor docker --target "{{.RUNNER_TEMPLATE_IMAGE_PREFIX}}/github-runner-{{.ITEM.IMAGE_KEY}}:local" --output ".build/runner-conformance/{{.ITEM.IMAGE_KEY}}-docker.json"
 
   template-smoke:

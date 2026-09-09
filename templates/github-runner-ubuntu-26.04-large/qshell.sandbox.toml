@@ -1,0 +1,7 @@
+# Development large Ubuntu 26.04 runner template.
+name = "github-runner-ubuntu-26-04-large"
+dockerfile = "../github-runner-ubuntu-26.04/Dockerfile"
+path = "../github-runner-ubuntu-26.04"
+cpu_count = 8
+memory_mb = 8192
+no_cache = false

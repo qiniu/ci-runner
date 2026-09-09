@@ -32,6 +32,10 @@ template_names=(
   github-runner-ubuntu-22-04
   github-runner-ubuntu-24-04
   github-runner-ubuntu-26-04
+  github-runner-ubuntu-slim-large
+  github-runner-ubuntu-22-04-large
+  github-runner-ubuntu-24-04-large
+  github-runner-ubuntu-26-04-large
 )
 
 for template_name in "${template_names[@]}"; do

@@ -1,0 +1,7 @@
+# Development large Ubuntu Slim runner template.
+name = "github-runner-ubuntu-slim-large"
+dockerfile = "../github-runner-ubuntu-slim/Dockerfile"
+path = "../github-runner-ubuntu-slim"
+cpu_count = 8
+memory_mb = 8192
+no_cache = false

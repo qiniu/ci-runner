@@ -13,9 +13,10 @@
 - GitHub App OAuth callback URL 指向 runnerd origin 下的 `/auth/github/callback`。
 - GitHub App webhook 或 repository webhook 将 `workflow_job` events 发送到 `POST /webhooks/github`。
 - 目标 account/organization Preferences 已配置 Sandbox service API URL 和 API key，或 `/admin/sandbox_service` 已启用 admin fallback。
-- 已按[公共 Runner 模板](default-runner-templates.md)完成 4 个公共 Qiniu 模板的
-  双区域构建、发布、catalog 检查和 smoke 验证。该门禁通过前，不要部署默认
-  启用的 managed specs。
+- 已按[公共 Runner 模板](default-runner-templates.md)完成 4 个标准公共 Qiniu 模板的
+  双区域构建、发布、catalog 检查和 smoke 验证。4 个 large 模板也必须通过相同门禁
+  后才能使用其 development specs；适用的模板门禁通过前，不要部署默认启用的
+  managed specs。
 - 已通过 `runnerd --bootstrap-admin github:<github-user-id>` 引导 admin account（该命令设置 admin 后直接退出，需在启动服务前执行）。
 
 不要在本文档中写入真实 secret，也不要提交部署本地文件，例如 `runnerd.local.yaml`、`.smee-url`、sqlite databases、private keys 或 cookie jars。
@@ -139,8 +140,10 @@ curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
 预期名称为 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
 `qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
 确认启动日志中不存在 managed-profile name collision。在每个已配置的 Sandbox
-区域运行 `task template-defaults-check` 并保存 4 个 ID；runnerd 必须通过该
+区域运行 `task template-defaults-check` 并保存 8 个物理模板 ID；runnerd 必须通过该
 scoped endpoint 解析相同稳定名称，不能保存某一区域的 ID。
+另外在 Admin 中分别验证已启用的 5 个 `-large` 对外默认 spec；这些 label 由
+operator 配置，不应出现在 managed 条目中。
 
 运行正向和负向 match tests：
 
@@ -292,7 +295,7 @@ Workflow 完成后确认：
 - concurrency pressure 会让后续 requests 保持 queued，而不是被丢弃；
 - retryable placement 或 rate-limit failures 会填充 `next_retry_at`，并保持后续可处理。
 
-如果路由或模板健康状态回退，先禁用全部 5 个 managed specs。回滚时不要删除
-公共模板或自定义 specs。
+如果路由或模板健康状态回退，先禁用全部 managed specs 以及已启用的 `-large`
+自定义 specs。回滚时不要删除公共模板或自定义 specs。
 
 如果部署说明包含 private hosts、account names、channel URLs、secrets 或 cookie data，请记录在仓库外部。

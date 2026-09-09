@@ -32,7 +32,7 @@ export function DocsPage({ path }: { path: string }) {
       </a>
 
       <header className="sticky top-0 z-50 border-b border-[#d9e7ed] bg-[#f7fbfd]/95 backdrop-blur-xl dark:border-white/10 dark:bg-[#061119]/95">
-        <div className="mx-auto flex h-17 max-w-[1480px] items-center justify-between gap-4 px-5 sm:px-8 lg:px-10">
+        <div className="mx-auto flex h-17 max-w-[1680px] items-center justify-between gap-4 px-5 sm:px-8 lg:px-10">
           <div className="flex min-w-0 items-center gap-4">
             <a href="/" aria-label={t("common.productHome")} className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#00aae7]">
               <QiniuRunnerLogo />
@@ -65,7 +65,7 @@ export function DocsPage({ path }: { path: string }) {
         <DocsNavigation documents={documents} currentPath={article.path} compact />
       </div>
 
-      <div className="mx-auto grid max-w-[1480px] lg:grid-cols-[16.5rem_minmax(0,1fr)] xl:grid-cols-[16.5rem_minmax(0,1fr)_13.5rem]">
+      <div className="mx-auto grid max-w-[1680px] lg:grid-cols-[16.5rem_minmax(0,1fr)] xl:grid-cols-[16.5rem_minmax(0,1fr)_13.5rem]">
         <aside className="hidden border-r border-[#d9e7ed] lg:block dark:border-white/10">
           <div className="sticky top-17 max-h-[calc(100vh-4.25rem)] overflow-y-auto px-6 py-10">
             <p className="mb-6 font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#006b91] dark:text-[#7ddcff]">
@@ -76,7 +76,7 @@ export function DocsPage({ path }: { path: string }) {
         </aside>
 
         <main id="docs-content" tabIndex={-1} className="min-w-0 px-5 py-10 sm:px-8 sm:py-14 lg:px-12 xl:px-16">
-          <div className="mx-auto max-w-[790px]">
+          <div className="mx-auto max-w-[1080px]">
             <div className="mb-9 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[#006b91] dark:text-[#7ddcff]">
               <span>{t(groupTranslationKey(article.group))}</span>
               <ChevronRight className="h-3 w-3" />
@@ -308,8 +308,9 @@ const markdownComponents: Components = {
     </div>
   ),
   thead: ({ children }) => <thead className="bg-[#eaf6fa] text-[#173642] dark:bg-white/8 dark:text-[#dcecf3]">{children}</thead>,
+  tbody: ({ children }) => <tbody className="[&>tr:last-child>td]:border-b-0">{children}</tbody>,
   th: ({ children }) => <th className="border-b border-[#d2e2e9] px-4 py-3 font-semibold dark:border-white/10">{children}</th>,
-  td: ({ children }) => <td className="border-b border-[#e2edf1] px-4 py-3.5 align-top leading-6 text-[#4d6875] last:border-b-0 dark:border-white/8 dark:text-[#a9bfcb]">{children}</td>,
+  td: ({ children }) => <td className="border-b border-[#e2edf1] px-4 py-3.5 align-top leading-6 text-[#4d6875] dark:border-white/8 dark:text-[#a9bfcb]">{children}</td>,
   hr: () => <hr className="my-10 border-[#d2e2e9] dark:border-white/10" />,
 }
 

@@ -85,6 +85,11 @@ spec 仍通过 Admin API/UI 管理，需要显式 `template_id`、advertised lab
 不在公共默认目录中的第三方公共模板无法通过该 API 确认构建状态，会返回
 `template_state_unavailable`。
 
+5 个 `-large` workflow labels 有意作为 operator 配置的对外默认 spec，而不是
+managed catalog 条目。需要在 Admin 中单独创建并启用对应 spec，然后在自定义 spec 检查中验证显式
+template ID 和标签契约；它们不应出现在 managed spec reconciliation 列表或公共
+managed-template API 中。
+
 整个远程检查限时 5 秒。未配置后台服务返回 `409 sandbox_service_not_configured`；
 模板不存在或没有可用默认构建分别返回 `400 template_not_found`、
 `400 template_not_ready`。上游 401/403 返回 `502 sandbox_template_access_denied`，
@@ -423,8 +428,9 @@ curl -fsS -b "$COOKIE_JAR" \
 ```
 
 结果应恰好包含 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
-`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。验证向后
-兼容的显式模板路径时，请另外创建自定义 spec：
+`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
+验证 5 个 `-large` labels 时，应通过分别配置的自定义 spec 验证向后兼容的
+显式模板路径：
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:25500/runner_specs \

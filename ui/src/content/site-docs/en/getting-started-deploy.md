@@ -63,6 +63,8 @@ Ordinary users manage personal or organization Sandbox credentials under Prefere
 
 Do not put ordinary-user Sandbox credentials in `runnerd.yaml`. The application stores scoped API Keys encrypted and never returns their full value to the browser.
 
+Cache S3 is also user- or organization-owned in Preferences. Operators must set both `s3_region` and `s3_endpoint` on each cache-capable entry in `sandbox.regions`, plus `cache.sts_endpoint`. See [Configure and use Cache S3](/docs/guides/cache).
+
 ## 5. Verify managed runner specs
 
 runnerd reconciles managed specs for `ubuntu-slim`, `ubuntu-22.04`, `ubuntu-24.04`, preview `ubuntu-26.04`, and `ubuntu-latest`. Operators control whether each managed spec is enabled plus its concurrency and idle capacity. The catalog labels and public template names remain runnerd-owned.

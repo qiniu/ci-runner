@@ -20,6 +20,12 @@
 
 [运行第一个工作流](/docs/guides/workflow)
 
+## 配置缓存
+
+在 Preferences 中保存 Cache S3，然后在 workflow 中使用 `qiniu/actions-cache@v5`。
+
+[配置并使用 Cache S3](/docs/guides/cache)
+
 ## 构建自定义 Runner 模板
 
 把自己的工具链加入私有 Sandbox 模板，关联到自定义 Runner Spec，并验证完整 workflow 链路。

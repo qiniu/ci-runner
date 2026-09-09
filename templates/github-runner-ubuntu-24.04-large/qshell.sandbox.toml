@@ -1,0 +1,14 @@
+# Development large Ubuntu 24.04 runner template.
+#
+# This tracked file is the large-template build input. Use Taskfile build targets so
+# qshell writes any generated template_id only to a temporary copy:
+#   task template-build-ubuntu-24-04-large
+#
+# Prefer a stable name over a committed environment-specific template_id.
+
+name = "github-runner-ubuntu-24-04-large"
+dockerfile = "../github-runner-ubuntu-24.04/Dockerfile"
+path = "../github-runner-ubuntu-24.04"
+cpu_count = 8
+memory_mb = 8192
+no_cache = false

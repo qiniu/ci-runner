@@ -8,6 +8,10 @@
 | `ubuntu-22.04` | `github-runner-ubuntu-22-04` | Ubuntu 22.04 x64 | follows upstream deprecation | verified |
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
+| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB) | large | development |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB) | follows upstream deprecation | development |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB) | large | development |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB) | preview | development |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
@@ -17,7 +21,7 @@ The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-
 `ubuntu-latest` is a logical mapping to the 24.04 physical template and has no
 fifth physical template directory.
 
-The four physical templates were published, catalog-checked, and release-smoke
+The four standard physical templates were published, catalog-checked, and release-smoke
 verified in `cn-yangzhou-1` and `us-south-1` on 2026-08-03. The regional IDs
 and smoke evidence are retained in [Issue #38](https://github.com/qiniu/ci-runner/issues/38#issuecomment-5164811404).
 The `ubuntu-latest` row inherits the verified publication state of its 24.04
@@ -25,6 +29,13 @@ physical template. The managed Runner Spec rollout and all five workflow
 labels were end-to-end verified by
 [GitHub Actions run 30858489153](https://github.com/miclle/qiniu-ci-runner-test/actions/runs/30858489153)
 on 2026-08-04 CST; every request completed and its Sandbox was cleaned.
+
+The four `-large` variants reuse the standard Dockerfiles and scripts through
+in-repository links, but use distinct provider template names and an 80-GiB
+provider allocation. Disk size is controlled by the Sandbox provider's
+team/tier build allocation rather than qshell configuration. Set it to 81,920
+MiB before building, verify catalog `disk_size_mb`, and keep these variants in
+`development` until they reach the same regional smoke gate.
 
 Publication state is restricted to `development`, `published`, or `verified`.
 `published` means the physical template is public in both supported regions.
@@ -167,6 +178,10 @@ task template-build-ubuntu-slim
 task template-build-ubuntu-22-04
 task template-build-ubuntu-24-04
 task template-build-ubuntu-26-04
+task template-build-ubuntu-slim-large
+task template-build-ubuntu-22-04-large
+task template-build-ubuntu-24-04-large
+task template-build-ubuntu-26-04-large
 task template-conformance-local
 task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<published-template-id>
 ```
@@ -249,7 +264,7 @@ the JSON evidence to Issue #38 before moving a row to `verified`. Rollback
 restores the previous public template ID/name mapping and the previous reviewed
 lock/manifest together, then repeats both-region smoke.
 Task 8 exposes matching `task template-publish-*` and
-`task template-unpublish-*` commands for the four physical templates; use
+`task template-unpublish-*` commands for the eight physical templates; use
 `task template-defaults-check` before promotion and the matching unpublish
 target for rollback. Qshell publish and unpublish do not support the build-only
 `--config` option. Their Task targets run from the matching template directory,

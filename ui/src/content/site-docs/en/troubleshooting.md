@@ -58,6 +58,18 @@ Check the protocol, hostname, path, client ID, and client secret. A protected de
 
 The GitHub App webhook secret and `github.webhook_secret` must be identical. Copy the complete value without quotes or surrounding whitespace, save it, and redeliver a recent event.
 
+## Cache restore misses or save is skipped
+
+Check:
+
+1. The repository owner saved Cache S3 in Preferences, and the selected Sandbox region has an S3 endpoint.
+2. The workflow uses `qiniu/actions-cache@v5`, and `actions/setup-go` sets `cache: false`.
+3. The log contains `The cache action detected a local S3 bucket cache.` Missing that line means the job fell back to GitHub's cache.
+4. Fork PRs write only their own `pr-N` scope. `Cache save skipped` means trusted PR metadata was unavailable, so the job stayed default-branch read-only.
+5. Parallel jobs do not share one write key.
+
+See [Configure and use Cache S3](/docs/guides/cache).
+
 ## Collect useful evidence
 
 When asking for help, include:

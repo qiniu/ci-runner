@@ -13,10 +13,11 @@ Use this checklist before treating a runnerd deployment as ready for real GitHub
 - A GitHub App OAuth callback URL pointing at `/auth/github/callback` on the runnerd origin.
 - A GitHub App webhook or repository webhook delivering `workflow_job` events to `POST /webhooks/github`.
 - Sandbox service API URL and API key configured in the target account/organization Preferences page, or an enabled admin fallback at `/admin/sandbox_service`.
-- All four public Qiniu templates built, published, catalog-checked, and
-  smoke-tested in both supported regions according to
-  [Public Runner Templates](default-runner-templates.md). Do not deploy the
-  enabled managed defaults before this gate passes.
+- All four standard public Qiniu templates built, published, catalog-checked,
+  and smoke-tested in both supported regions according to
+  [Public Runner Templates](default-runner-templates.md). The four large
+  templates must pass the same gate before their development specs are used;
+  do not deploy enabled managed defaults before the applicable gate passes.
 - An admin account bootstrapped by running `runnerd --bootstrap-admin github:<github-user-id>` (sets the admin and exits; run before starting the service).
 
 Do not use real secrets in this document or commit deployment-local files such as `runnerd.local.yaml`, `.smee-url`, sqlite databases, private keys, or cookie jars.
@@ -142,8 +143,11 @@ Expected names are `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`,
 `qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`.
 Confirm startup logs contain no managed-profile name collision. In each
 configured Sandbox region, run `task template-defaults-check` and retain the
-four IDs; runnerd must resolve the same stable name through that scoped
+eight physical-template IDs; runnerd must resolve the same stable name through that scoped
 endpoint rather than persist one region's ID.
+Separately verify each of the five enabled `-large` public default specs in
+Admin; those labels are operator-configured and must not appear as managed
+entries.
 
 Run positive and negative match tests:
 
@@ -302,7 +306,8 @@ Expected result depends on the scenario:
 - concurrency pressure leaves later requests queued rather than dropped;
 - retryable placement or rate-limit failures populate `next_retry_at` and remain eligible for later processing.
 
-If routing or template health regresses, disable all five managed specs first.
-Do not delete public templates or custom specs during rollback.
+If routing or template health regresses, disable all managed specs and any
+enabled `-large` custom specs first. Do not delete public templates or custom
+specs during rollback.
 
 Record any deployment-specific notes outside the repository if they include private hosts, account names, channel URLs, secrets, or cookie data.

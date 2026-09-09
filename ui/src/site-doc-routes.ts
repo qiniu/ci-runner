@@ -3,6 +3,7 @@ export const siteDocumentRoutes = [
   "/docs/getting-started/hosted",
   "/docs/getting-started/deploy",
   "/docs/guides/workflow",
+  "/docs/guides/cache",
   "/docs/guides/custom-templates",
   "/docs/troubleshooting",
   "/docs/reference/runner-labels",

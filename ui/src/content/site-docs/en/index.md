@@ -20,6 +20,12 @@ Copy a complete workflow using the current managed labels and learn what a succe
 
 [Run your first workflow](/docs/guides/workflow)
 
+## Configure cache
+
+Save Cache S3 in Preferences, then use `qiniu/actions-cache@v5` in the workflow.
+
+[Configure and use Cache S3](/docs/guides/cache)
+
 ## Build a custom runner template
 
 Add your own toolchain to a private Sandbox template, connect it to a custom Runner Spec, and verify the complete workflow path.

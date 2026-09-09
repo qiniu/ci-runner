@@ -50,6 +50,8 @@ runs-on: [qiniu, ubuntu-24.04]
 
 [复制完整 workflow](/docs/guides/workflow)
 
+需要跨运行缓存时，先在 Preferences 保存 Cache S3，再使用 `qiniu/actions-cache@v5`。见[配置并使用 Cache S3](/docs/guides/cache)。
+
 ## 5. 运行并验证任务
 
 从 GitHub Actions 触发 workflow。任务运行过程中：

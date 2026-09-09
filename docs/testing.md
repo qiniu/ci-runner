@@ -89,6 +89,13 @@ a readiness signal: it is paginated, includes other tags, and is hidden from
 non-owners. Public templates outside the default catalog cannot have their build
 state confirmed by this API and are rejected with `template_state_unavailable`.
 
+The five `-large` workflow labels are intentionally operator-configured public
+default specs rather than managed catalog entries. Configure and enable their
+specs in Admin separately,
+then verify their explicit template IDs and label contract in the custom-spec
+checks; they are not expected in the managed-spec reconciliation list or the
+public managed-template API.
+
 The total provider check is limited to five seconds. Missing admin configuration
 returns `409 sandbox_service_not_configured`; a missing template or no usable
 default build returns `400 template_not_found` or `400 template_not_ready`.
@@ -443,10 +450,10 @@ curl -fsS -b "$COOKIE_JAR" \
       {name, required_labels, default_template_name, enabled}'
 ```
 
-The result should contain exactly `qiniu-ubuntu-slim`,
-`qiniu-ubuntu-22.04`, `qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and
-`qiniu-ubuntu-latest`. Create a custom spec separately when testing the
-backward-compatible explicit-template path:
+The result should contain exactly `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`,
+`qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`. Verify
+the five `-large` labels through separately configured custom specs when testing
+the backward-compatible explicit-template path:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:25500/runner_specs \

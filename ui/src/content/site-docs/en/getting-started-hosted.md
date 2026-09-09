@@ -50,6 +50,8 @@ The `qiniu` label selects Qiniu-managed routing. The exact OS label selects the 
 
 [Copy a complete workflow](/docs/guides/workflow)
 
+To cache across runs, save Cache S3 in Preferences and use `qiniu/actions-cache@v5`. See [Configure and use Cache S3](/docs/guides/cache).
+
 ## 5. Run and verify the job
 
 Trigger the workflow from GitHub Actions. While the job runs:

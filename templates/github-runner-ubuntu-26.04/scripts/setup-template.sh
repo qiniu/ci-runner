@@ -481,9 +481,9 @@ APT_PREFERENCE
 
 configure_reliable_apt_sources() {
   cat >/etc/apt/apt-mirrors.txt <<'APT_MIRRORS'
-https://mirrors.tuna.tsinghua.edu.cn/ubuntu/	priority:1
+https://archive.ubuntu.com/ubuntu/	priority:1
 https://mirrors.edge.kernel.org/ubuntu/	priority:2
-https://archive.ubuntu.com/ubuntu/	priority:3
+https://mirrors.tuna.tsinghua.edu.cn/ubuntu/	priority:3
 APT_MIRRORS
   local source_file
   for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
