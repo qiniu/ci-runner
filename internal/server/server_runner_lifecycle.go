@@ -345,18 +345,20 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.store.AppendLog(id, "control.log", []byte("runner start skipped because request is stopped\n"))
 		return
 	}
+	s.admissionMu.Lock()
 	profile, err := s.profileForRunnerRequest(req)
 	if err != nil {
+		s.admissionMu.Unlock()
 		unlock()
 		s.failStart(id, st, "profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
 		return
 	}
 	if err := validateRequestedProfile(profile, req.RequestedLabels); err != nil {
+		s.admissionMu.Unlock()
 		unlock()
 		s.failStart(id, st, "profile_validation", err)
 		return
 	}
-	s.admissionMu.Lock()
 	inFlight, err := s.store.InFlightCount()
 	if err != nil {
 		s.admissionMu.Unlock()
@@ -1747,8 +1749,10 @@ func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []str
 	if !profile.Enabled {
 		return fmt.Errorf("profile %q is disabled", profile.Name)
 	}
-	if len(requestedLabels) > 0 && !github.LabelsMatch(requestedLabels, profile.Labels) {
-		return fmt.Errorf("requested labels do not satisfy profile %q", profile.Name)
+	if len(requestedLabels) > 0 {
+		if !github.LabelsMatch(profile.RequiredLabels, requestedLabels) || !github.LabelsMatch(requestedLabels, profile.Labels) {
+			return fmt.Errorf("requested labels do not satisfy profile %q", profile.Name)
+		}
 	}
 	return nil
 }

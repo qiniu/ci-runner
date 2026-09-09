@@ -295,10 +295,12 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile state.RunnerProfile
+	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.create", "runner_profile", strings.TrimSpace(requestedProfile.Name), requestedProfile, func(tx state.Store) error {
 		profile, err = tx.UpsertProfileIfUnchanged(requestedProfile, expectedUpdatedAt)
 		return err
 	})
+	s.admissionMu.Unlock()
 	if err != nil {
 		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
@@ -389,10 +391,12 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile state.RunnerProfile
+	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
 		profile, err = tx.UpsertProfileIfUnchanged(current, &current.UpdatedAt)
 		return err
 	})
+	s.admissionMu.Unlock()
 	if err != nil {
 		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
@@ -440,11 +444,13 @@ func (s *Server) handlePatchManagedProfile(w http.ResponseWriter, current state.
 		current.Enabled = *input.Enabled
 	}
 	var profile state.RunnerProfile
+	s.admissionMu.Lock()
 	err := s.applyMutationWithAudit("admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
 		var mutationErr error
 		profile, mutationErr = tx.UpsertProfileIfUnchanged(current, &current.UpdatedAt)
 		return mutationErr
 	})
+	s.admissionMu.Unlock()
 	if err != nil {
 		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
@@ -510,9 +516,11 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.delete", "runner_profile", name, map[string]any{"status": "deleted"}, func(tx state.Store) error {
 		return tx.DeleteProfile(name)
 	})
+	s.admissionMu.Unlock()
 	if err != nil {
 		if writeMutationAuditError(w, err) {
 			return

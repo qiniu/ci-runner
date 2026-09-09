@@ -3769,6 +3769,22 @@ func TestMatchProfileForScopePrefersExactScopedProfileAndShadowsWhenDisabled(t *
 	}
 }
 
+func TestMatchProfileForScopeMatchesScopedLabelsCaseInsensitively(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	if _, err := store.UpsertProfile(RunnerProfile{Name: "global", Labels: []string{"qiniu", "gpu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "global-template", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	scope := RunnerProfileScope{Type: RunnerProfileScopeAccount, ID: 1}
+	if _, err := store.UpsertScopedProfileIfUnchanged(ScopedRunnerProfile{ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom", WorkflowLabels: []string{"QINIU", "GPU"}, TemplateID: "custom-template", Enabled: false}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	match, err := store.MatchProfileForScope(scope, "owner/repo", []string{"qiniu", "gpu"})
+	if err != nil || match.Profile != nil || match.Source != "scoped_custom" || match.Reason != "profile_scope_disabled" {
+		t.Fatalf("case-insensitive disabled custom match = %#v, err=%v", match, err)
+	}
+}
+
 func TestMatchProfileForScopeFallsBackToGlobalAndCountsStayScoped(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	if _, err := store.UpsertProfile(RunnerProfile{Name: "global", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", Enabled: true}); err != nil {

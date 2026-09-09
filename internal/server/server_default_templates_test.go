@@ -282,6 +282,68 @@ func TestRunnerLifecycleRevalidatesGlobalProfileBeforeStarting(t *testing.T) {
 	}
 }
 
+func TestRunnerLifecycleRejectsNewRequiredLabelsBeforeStarting(t *testing.T) {
+	store := state.New(t.TempDir())
+	profile := state.RunnerProfile{
+		Name:           "platform-custom",
+		Labels:         []string{"self-hosted", "base", "new-required"},
+		RequiredLabels: []string{"base"},
+		TemplateID:     "custom-template-id",
+		MaxConcurrency: 10,
+		Enabled:        true,
+	}
+	upsertLifecycleProfile(t, store, profile)
+	created, _, err := store.CreateRequest(state.RunnerRequest{ID: "changed-required-labels", Source: "test", RepositoryFullName: "o/r", RequestedLabels: []string{"self-hosted", "base"}, Labels: append([]string(nil), profile.Labels...), ProfileName: profile.Name, ProfileSource: "global", RunnerName: "e2b-changed-required-labels"}, nil)
+	if err != nil || !created {
+		t.Fatalf("CreateRequest created=%v err=%v", created, err)
+	}
+	profile.RequiredLabels = []string{"base", "new-required"}
+	upsertLifecycleProfile(t, store, profile)
+	sandbox := &lifecycleSandboxService{}
+	srv := newRunnerLifecycleTestServer(t, store, "http://127.0.0.1:1", sandbox)
+
+	srv.startRunner(context.Background(), "changed-required-labels", "worker-test")
+
+	got, err := store.ReadState("changed-required-labels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FailureStage != "profile_validation" || got.Status == state.StatusRunning {
+		t.Fatalf("state = %#v, want profile_validation failure", got)
+	}
+	if inputs := sandbox.startInputs(); len(inputs) != 0 {
+		t.Fatalf("changed global profile started sandbox with inputs %#v", inputs)
+	}
+}
+
+func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	profile := state.RunnerProfile{Name: "platform-custom", Labels: []string{"self-hosted", "custom"}, RequiredLabels: []string{"custom"}, TemplateID: "custom-template-id", MaxConcurrency: 10, Enabled: true}
+	upsertLifecycleProfile(t, baseStore, profile)
+	created, _, err := baseStore.CreateRequest(state.RunnerRequest{ID: "serialized-profile-reload", Source: "test", RepositoryFullName: "o/r", RequestedLabels: append([]string(nil), profile.Labels...), Labels: append([]string(nil), profile.Labels...), ProfileName: profile.Name, ProfileSource: "global", RunnerName: "e2b-serialized-profile-reload"}, nil)
+	if err != nil || !created {
+		t.Fatalf("CreateRequest created=%v err=%v", created, err)
+	}
+	store := &blockingProfileLookupStore{Store: baseStore, entered: make(chan struct{}), release: make(chan struct{})}
+	srv := newRunnerLifecycleTestServer(t, store, "http://127.0.0.1:1", &lifecycleSandboxService{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.startRunner(context.Background(), "serialized-profile-reload", "worker-test")
+	}()
+
+	<-store.entered
+	mutationCouldInterleave := srv.admissionMu.TryLock()
+	if mutationCouldInterleave {
+		srv.admissionMu.Unlock()
+	}
+	close(store.release)
+	<-done
+	if mutationCouldInterleave {
+		t.Fatal("runner profile reload did not hold the mutation serialization lock")
+	}
+}
+
 func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
 	store := state.New(t.TempDir())
 	scope := state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: 1}
@@ -312,6 +374,22 @@ func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
 	if inputs := sandbox.startInputs(); len(inputs) != 0 {
 		t.Fatalf("disabled scoped profile started sandbox with inputs %#v", inputs)
 	}
+}
+
+type blockingProfileLookupStore struct {
+	state.Store
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingProfileLookupStore) GetProfile(name string) (state.RunnerProfile, error) {
+	profile, err := s.Store.GetProfile(name)
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return profile, err
 }
 
 type effectiveProfileLookupRejectingStore struct {
@@ -923,7 +1001,7 @@ func createLifecycleRequest(t *testing.T, store state.Store, id, profileName str
 		Source:               "test",
 		GitHubInstallationID: installationID,
 		RepositoryFullName:   "o/r",
-		Labels:               []string{"self-hosted"},
+		Labels:               []string{"self-hosted", profileName},
 		ProfileName:          profileName,
 		RunnerName:           "e2b-" + id,
 	}, nil)

@@ -8441,6 +8441,57 @@ func TestUserPatchRunnerSpecRejectsRunnerGroupChangeWhileActive(t *testing.T) {
 	}
 }
 
+func TestOrganizationRunnerSpecMutationDoesNotReauthorizeAfterCommit(t *testing.T) {
+	var membershipCalls atomic.Int32
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/user/memberships/orgs" {
+			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
+		}
+		if membershipCalls.Add(1) > 1 {
+			http.Error(w, "temporary membership failure", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`))
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+	installation, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987, GitHubAccountID: 9001, AccountType: "organization", AccountLogin: "octo-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := state.RunnerProfileScope{Type: state.AccountScopeTypeGitHubInstall, ID: installation.InstallationID}
+	profile, err := store.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom", WorkflowLabels: []string{"qiniu", "custom"}, TemplateID: "template", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"enabled":false,"expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/user/runner-specs/custom?installation_id=%d", installation.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	recorder := httptest.NewRecorder()
+
+	srv.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("patch status=%d body=%s, want committed mutation response", recorder.Code, recorder.Body.String())
+	}
+	if got := membershipCalls.Load(); got != 1 {
+		t.Fatalf("membership authorization calls=%d, want 1", got)
+	}
+	saved, err := store.GetScopedProfile(scope, profile.Name)
+	if err != nil || saved.Enabled {
+		t.Fatalf("saved profile=%#v err=%v, want disabled", saved, err)
+	}
+}
+
 type blockingRunnerSpecMutationStore struct {
 	state.Store
 	started chan struct{}
@@ -8452,6 +8503,34 @@ func (s *blockingRunnerSpecMutationStore) ApplyMutationWithAudit(event state.Aud
 	s.once.Do(func() { close(s.started) })
 	<-s.proceed
 	return s.Store.ApplyMutationWithAudit(event, mutation)
+}
+
+func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	store := &blockingRunnerSpecMutationStore{Store: baseStore, started: make(chan struct{}), proceed: make(chan struct{})}
+	srv := newTestServer(t, store, "", &fakeSandbox{})
+	req := adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(`{"enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		srv.ServeHTTP(recorder, req)
+		done <- recorder
+	}()
+
+	<-store.started
+	mutationCouldInterleave := srv.admissionMu.TryLock()
+	if mutationCouldInterleave {
+		srv.admissionMu.Unlock()
+	}
+	close(store.proceed)
+	recorder := <-done
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("patch status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if mutationCouldInterleave {
+		t.Fatal("admin Runner Spec mutation did not hold the admission serialization lock")
+	}
 }
 
 func TestUserRunnerSpecMutationSerializesWithWorkflowAdmission(t *testing.T) {
@@ -8593,7 +8672,8 @@ func TestUserDeleteCacheConfigRollsBackWhenAuditFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	preference := state.AccountPreference{ScopeType: state.AccountScopeTypeAccount, ScopeID: account.ID, Namespace: accountPreferenceNamespaceCache, Key: accountPreferenceKeyCacheS3, ValueJSON: `{"bucket":"cache-bucket"}`}
-	if _, err := baseStore.UpsertAccountPreferenceAndSecrets(preference,
+	if _, err := baseStore.UpsertAccountPreferenceAndSecrets(
+		preference,
 		state.AccountSecret{ScopeType: preference.ScopeType, ScopeID: preference.ScopeID, KeyType: state.AccountSecretTypeCacheAccessKeyID, EncryptedValue: "access-key"},
 		state.AccountSecret{ScopeType: preference.ScopeType, ScopeID: preference.ScopeID, KeyType: state.AccountSecretTypeCacheSecretAccessKey, EncryptedValue: "secret-key"},
 	); err != nil {

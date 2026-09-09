@@ -293,6 +293,7 @@ describe("UserRunnerSpecsSection", () => {
   test("detects only exact platform label overrides", () => {
     expect(runnerSpecOverridesGlobal(["linux", "qiniu"], [managed])).toBe(false)
     expect(runnerSpecOverridesGlobal(["ubuntu-24.04", "qiniu"], [managed])).toBe(true)
+    expect(runnerSpecOverridesGlobal(["Ubuntu-24.04", "QINIU"], [managed])).toBe(true)
   })
 
   test("hides the previous scope while the next scope is loading", async () => {

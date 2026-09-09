@@ -17,8 +17,9 @@ export function runnerSpecWorkflowYAML(labels: string[]) {
 }
 
 export function runnerSpecOverridesGlobal(labels: string[], items: UserRunnerSpec[]) {
-  const key = [...new Set(labels.map((label) => label.trim()).filter(Boolean))].sort().join("\u0000")
-  return key !== "" && items.some((item) => item.source !== "scoped_custom" && [...new Set(item.workflow_labels)].sort().join("\u0000") === key)
+  const labelKey = (values: string[]) => [...new Set(values.map((label) => label.trim().toLowerCase()).filter(Boolean))].sort().join("\u0000")
+  const key = labelKey(labels)
+  return key !== "" && items.some((item) => item.source !== "scoped_custom" && labelKey(item.workflow_labels) === key)
 }
 
 export function runnerSpecDialogDescriptionKey(mode: "create" | "edit") {

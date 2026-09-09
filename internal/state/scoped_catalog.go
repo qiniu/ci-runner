@@ -36,17 +36,24 @@ func NormalizeWorkflowLabels(labels []string) ([]string, string, error) {
 		if label == "" {
 			continue
 		}
-		if _, ok := seen[label]; ok {
+		canonical := strings.ToLower(label)
+		if _, ok := seen[canonical]; ok {
 			continue
 		}
-		seen[label] = struct{}{}
+		seen[canonical] = struct{}{}
 		normalized = append(normalized, label)
 	}
-	sort.Strings(normalized)
+	sort.Slice(normalized, func(i, j int) bool {
+		return strings.ToLower(normalized[i]) < strings.ToLower(normalized[j])
+	})
 	if len(normalized) == 0 {
 		return nil, "", fmt.Errorf("workflow labels are required")
 	}
-	data, err := json.Marshal(normalized)
+	canonical := make([]string, len(normalized))
+	for i, label := range normalized {
+		canonical[i] = strings.ToLower(label)
+	}
+	data, err := json.Marshal(canonical)
 	if err != nil {
 		return nil, "", err
 	}

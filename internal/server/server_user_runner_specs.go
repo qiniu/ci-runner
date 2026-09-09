@@ -97,6 +97,10 @@ func (s *Server) handleUserListRunnerSpecs(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	s.writeUserRunnerSpecList(w, scope, prefScope)
+}
+
+func (s *Server) writeUserRunnerSpecList(w http.ResponseWriter, scope state.RunnerProfileScope, prefScope accountPreferenceScope) {
 	items, err := s.store.ListEffectiveProfiles(scope)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runner specs")
@@ -152,10 +156,12 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 	// The insert is the publication point for a new spec. An admission racing
 	// creation may be ordered before or after it, and cannot reference stale
 	// state for a spec that did not previously exist.
+	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.create", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, profile.Name), map[string]any{"template_id": profile.TemplateID, "workflow_labels": labels}, func(tx state.Store) error {
 		_, err := tx.UpsertScopedProfileIfUnchanged(profile, nil)
 		return err
 	})
+	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, state.ErrRunnerProfileNameConflict) {
 			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "runner spec name conflicts with an enabled platform spec")
@@ -172,7 +178,7 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.handleUserListRunnerSpecs(w, r)
+	s.writeUserRunnerSpecList(w, scope, prefScope)
 }
 
 func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +289,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.handleUserListRunnerSpecs(w, r)
+	s.writeUserRunnerSpecList(w, scope, prefScope)
 }
 
 func validUserRunnerSpecName(name string) bool {
@@ -307,7 +313,7 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	scope, _, ok := s.userRunnerScope(w, r, account.ID)
+	scope, prefScope, ok := s.userRunnerScope(w, r, account.ID)
 	if !ok {
 		return
 	}
@@ -355,7 +361,7 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.handleUserListRunnerSpecs(w, r)
+	s.writeUserRunnerSpecList(w, scope, prefScope)
 }
 
 func parseRunnerSpecRevision(w http.ResponseWriter, value string, required bool) (time.Time, bool) {
