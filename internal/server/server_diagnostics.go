@@ -93,8 +93,10 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 	identifier := strings.TrimSpace(r.PathValue("id"))
-	requestID := strings.TrimPrefix(identifier, "e2b-")
-	st, err := s.store.ReadState(requestID)
+	st, err := s.store.ReadState(identifier)
+	if err != nil && strings.HasPrefix(identifier, "e2b-") {
+		st, err = s.store.ReadState(strings.TrimPrefix(identifier, "e2b-"))
+	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, "runner request not found")
 		return
@@ -136,10 +138,10 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 
 func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
 	findings := make([]runnerDiagnosticFinding, 0, 5)
-	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || eventMessageContains(events, "runner accepted a job")
-	hasRunnerExit := eventMessageContains(events, "runner process exited")
-	hasCompletedHook := eventMessageContains(events, "runner completed job hook received")
-	hasSandboxGone := eventMessageContains(events, "sandbox already gone")
+	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || controlEventMessageContains(events, "runner accepted a job")
+	hasRunnerExit := controlEventMessageContains(events, "runner process exited")
+	hasCompletedHook := controlEventMessageContains(events, "runner completed job hook received")
+	hasSandboxGone := controlEventMessageContains(events, "sandbox already gone")
 	githubFailed := job.LookupStatus == "ok" && isFailureConclusion(job.Conclusion)
 
 	if st.Status == state.StatusFailed {
@@ -202,9 +204,9 @@ func runnerRequestFailureDetail(st state.RunnerState) string {
 	return strings.Join(parts, ": ")
 }
 
-func eventMessageContains(events []state.RunnerEvent, fragment string) bool {
+func controlEventMessageContains(events []state.RunnerEvent, fragment string) bool {
 	for _, event := range events {
-		if strings.Contains(strings.ToLower(event.Message), fragment) {
+		if event.EventType == "control_log" && strings.Contains(strings.ToLower(event.Message), fragment) {
 			return true
 		}
 	}

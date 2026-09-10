@@ -231,6 +231,27 @@ func TestDiagnoseRunnerRequestUsesPersistedAssignmentWhenAcceptanceEventIsOutsid
 	t.Fatalf("findings = %#v, want critical runner_termination_unobserved", findings)
 }
 
+func TestDiagnoseRunnerRequestIgnoresLifecycleMarkersInProcessOutput(t *testing.T) {
+	findings := diagnoseRunnerRequest(state.RunnerState{
+		Status:        state.StatusCompleted,
+		AssignedJobID: 101445685709,
+	}, []state.RunnerEvent{
+		{EventType: "stdout_log", Message: "runner process exited\n"},
+		{EventType: "stderr_log", Message: "sandbox already gone\n"},
+	}, false, diagnosticGitHubJob{LookupStatus: "ok", Conclusion: "failure"})
+
+	gotCodes := make(map[string]bool, len(findings))
+	for _, finding := range findings {
+		gotCodes[finding.Code] = true
+	}
+	if !gotCodes["runner_termination_unobserved"] {
+		t.Fatalf("findings = %#v, want process output to leave runner termination unobserved", findings)
+	}
+	if gotCodes["sandbox_gone_before_cleanup"] {
+		t.Fatalf("findings = %#v, want process output ignored for Sandbox lifecycle evidence", findings)
+	}
+}
+
 // ---------- runnerExitMessage ----------
 
 func TestRunnerExitMessageIncludesExitCode(t *testing.T) {
@@ -838,6 +859,35 @@ func TestDiagnosticsRunnerRequestAcceptsRunnerName(t *testing.T) {
 	}
 	if body.State.ID != "101445685709" || body.State.RunnerName != "e2b-101445685709" {
 		t.Fatalf("state = %#v, want request resolved from runner name", body.State)
+	}
+}
+
+func TestDiagnosticsRunnerRequestPrefersExactInternalIDWithRunnerPrefix(t *testing.T) {
+	store := state.New(t.TempDir())
+	for _, request := range []state.RunnerRequest{
+		{ID: "manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-manual"},
+		{ID: "e2b-manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-e2b-manual"},
+	} {
+		if _, _, err := store.CreateRequest(request, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/e2b-manual", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET runner request diagnostics by exact internal ID: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		State state.RunnerState `json:"state"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.State.ID != "e2b-manual" || body.State.RunnerName != "e2b-e2b-manual" {
+		t.Fatalf("state = %#v, want exact internal request ID to take precedence", body.State)
 	}
 }
 
