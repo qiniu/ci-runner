@@ -1,11 +1,10 @@
-import { type FormEvent } from "react"
-import { Activity, Copy, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { useState, type FormEvent, type MouseEvent } from "react"
+import { Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
-import { activeStatuses, logNames, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
+import { activeStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
 import { StatusBadge } from "@/components/admin-shared"
-import { RunnerRequestDetails } from "@/components/runner-request-details"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -38,20 +37,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
-
-type LogName = (typeof logNames)[number]
 
 export function RunnerRequestsSection({
   hasAccess,
   loading,
   runners,
   filteredRunners,
-  selected,
-  selectedID,
-  selectedLog,
-  logText,
   createID,
   createRepository,
   createRunnerSpec,
@@ -73,21 +65,14 @@ export function RunnerRequestsSection({
   onStatusFilterChange,
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
-  onSelectRunner,
+  onOpenRunnerRequest,
   onRetryRunner,
   onStopRunner,
-  onCopySelectedID,
-  onLoadLog,
-  onSelectedLogChange,
 }: {
   hasAccess: boolean
   loading: boolean
   runners: RunnerState[]
   filteredRunners: RunnerState[]
-  selected?: RunnerState
-  selectedID: string
-  selectedLog: LogName
-  logText: string
   createID: string
   createRepository: string
   createRunnerSpec: string
@@ -109,16 +94,22 @@ export function RunnerRequestsSection({
   onStatusFilterChange: (value: RunnerDisplayStatus | "all") => void
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
-  onSelectRunner: (id: string) => void
+  onOpenRunnerRequest: (identifier: string) => void
   onRetryRunner: (id: string) => void
   onStopRunner: (id: string) => void
-  onCopySelectedID: () => void
-  onLoadLog: (id: string, name: LogName) => void
-  onSelectedLogChange: (name: LogName) => void
 }) {
   const { t, i18n } = useTranslation()
+  const [requestIdentifier, setRequestIdentifier] = useState("")
+
+  const openRunnerRequest = (event: MouseEvent<HTMLAnchorElement>, runner: RunnerState) => {
+    event.stopPropagation()
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    onOpenRunnerRequest(runner.id)
+  }
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(520px,640px)]">
+    <div>
       <Card className="min-w-0 gap-0 py-0">
         <CardHeader className="border-b px-5 py-4">
           <div className="flex flex-col gap-3">
@@ -194,9 +185,12 @@ export function RunnerRequestsSection({
                 </form>
               </DialogContent>
             </Dialog>
-            <div className="grid gap-2 md:grid-cols-[minmax(160px,220px)_minmax(180px,1fr)_minmax(180px,1fr)]">
+            <div
+              data-testid="runner-request-toolbar"
+              className="grid gap-2 md:grid-cols-3 xl:grid-cols-[minmax(140px,180px)_minmax(180px,240px)_minmax(180px,240px)_minmax(360px,1fr)]"
+            >
               <Select value={runnerStatusFilter} onValueChange={(value) => onStatusFilterChange(value as RunnerDisplayStatus | "all")}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder={t("common.status")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -209,7 +203,7 @@ export function RunnerRequestsSection({
                 </SelectContent>
               </Select>
               <Select value={runnerRepositoryFilter} onValueChange={onRepositoryFilterChange}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder={t("common.repository")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -222,7 +216,7 @@ export function RunnerRequestsSection({
                 </SelectContent>
               </Select>
               <Select value={runnerSpecFilter} onValueChange={onRunnerSpecFilterChange}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder={t("common.runnerSpec")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -234,30 +228,52 @@ export function RunnerRequestsSection({
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {t("admin.requestsShown", { filtered: filteredRunners.length, total: runners.length })}
+              <form
+                className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const identifier = requestIdentifier.trim()
+                  if (identifier) onOpenRunnerRequest(identifier)
+                }}
+              >
+                <label className="sr-only" htmlFor="runner-request-lookup">
+                  {t("admin.runnerRequestID")}
+                </label>
+                <Input
+                  id="runner-request-lookup"
+                  value={requestIdentifier}
+                  onChange={(event) => setRequestIdentifier(event.target.value)}
+                  placeholder={t("admin.runnerRequestPlaceholder")}
+                  autoComplete="off"
+                />
+                <Button type="submit" variant="outline" disabled={!requestIdentifier.trim()}>
+                  <Search />
+                  {t("admin.openRunnerRequest")}
+                </Button>
+              </form>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="max-h-[calc(100vh-18rem)] overflow-auto p-0">
-          <Table>
+        <CardContent className="p-0 [&_[data-slot=table-container]]:overflow-visible">
+          <Table className="table-fixed">
             <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
-                <TableHead>{t("common.status")}</TableHead>
+                <TableHead className="w-24">{t("common.status")}</TableHead>
                 <TableHead>{t("common.repository")}</TableHead>
-                <TableHead>{t("common.runnerSpec")}</TableHead>
-                <TableHead>{t("common.runner")}</TableHead>
-                <TableHead>{t("common.sandbox")}</TableHead>
-                <TableHead>{t("common.github")}</TableHead>
-                <TableHead>{t("common.updated")}</TableHead>
-                <TableHead className="w-36" />
+                <TableHead className="hidden 2xl:table-cell">{t("common.runnerSpec")}</TableHead>
+                <TableHead className="hidden lg:table-cell">{t("user.requestedLabels")}</TableHead>
+                <TableHead className="w-44">{t("common.runner")}</TableHead>
+                <TableHead className="hidden 2xl:table-cell">{t("common.sandbox")}</TableHead>
+                <TableHead className="hidden w-32 md:table-cell">{t("admin.githubJob")}</TableHead>
+                <TableHead className="hidden w-36 xl:table-cell">{t("common.created")}</TableHead>
+                <TableHead className="hidden w-36 2xl:table-cell">{t("common.updated")}</TableHead>
+                <TableHead className="w-24" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredRunners.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                     {t("admin.noRequestsFound")}
                   </TableCell>
                 </TableRow>
@@ -265,44 +281,61 @@ export function RunnerRequestsSection({
                 filteredRunners.map((runner) => (
                   <TableRow
                     key={runner.id}
-                    data-state={runner.id === selectedID ? "selected" : undefined}
                     className="cursor-pointer"
-                    onClick={() => onSelectRunner(runner.id)}
+                    onClick={() => onOpenRunnerRequest(runner.id)}
                   >
-                    <TableCell>
+                    <TableCell className="truncate">
                       <StatusBadge status={runnerDisplayStatus(runner)} />
                     </TableCell>
-                    <TableCell>
-                      <div className="max-w-[220px] truncate">{runner.repository_full_name || "-"}</div>
+                    <TableCell className="truncate" title={runner.repository_full_name || undefined}>
+                      <div className="truncate">{runner.repository_full_name || "-"}</div>
                     </TableCell>
-                    <TableCell>{runner.runner_spec_name || "-"}</TableCell>
-                    <TableCell className="max-w-[260px]">
-                      <div className="truncate font-medium">{runner.runner_name || runner.id}</div>
-                      <div className="truncate text-xs text-muted-foreground">{runner.id}</div>
+                    <TableCell className="hidden truncate 2xl:table-cell" title={runner.runner_spec_name || undefined}>
+                      {runner.runner_spec_name || "-"}
                     </TableCell>
-                    <TableCell>
-                      <div className="max-w-[180px] truncate">{runner.sandbox_id || "-"}</div>
+                    <TableCell className="hidden truncate lg:table-cell">
+                      <div
+                        className="truncate font-mono text-xs text-muted-foreground"
+                        title={runner.requested_labels?.join(", ") || undefined}
+                      >
+                        {runner.requested_labels?.join(", ") || "-"}
+                      </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="truncate">
+                      <a
+                        className="block truncate font-medium text-primary underline-offset-4 hover:underline"
+                        href={`/admin/runner_requests/${encodeURIComponent(runner.id)}`}
+                        title={runner.runner_name || runner.id}
+                        onClick={(event) => openRunnerRequest(event, runner)}
+                      >
+                        {runner.runner_name || runner.id}
+                      </a>
+                    </TableCell>
+                    <TableCell className="hidden truncate 2xl:table-cell" title={runner.sandbox_id || undefined}>
+                      <div className="truncate">{runner.sandbox_id || "-"}</div>
+                    </TableCell>
+                    <TableCell className="hidden truncate md:table-cell">
                       {runner.github_job_url ? (
-                        <Button
-                          asChild
-                          type="button"
-                          variant="outline"
-                          size="sm"
+                        <a
+                          className="font-mono text-primary underline-offset-4 hover:underline"
+                          href={runner.github_job_url}
+                          target="_blank"
+                          rel="noreferrer"
                           onClick={(event) => event.stopPropagation()}
                         >
-                          <a href={runner.github_job_url} target="_blank" rel="noreferrer">
-                            <ExternalLink />
-                            {t("common.job")}
-                          </a>
-                        </Button>
+                          {runner.workflow_job_id || runner.assigned_job_id || t("common.job")}
+                        </a>
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell>{formatTime(runner.updated_at, i18n.resolvedLanguage)}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden truncate xl:table-cell" title={formatTime(runner.created_at, i18n.resolvedLanguage)}>
+                      {formatTime(runner.created_at, i18n.resolvedLanguage)}
+                    </TableCell>
+                    <TableCell className="hidden truncate 2xl:table-cell" title={formatTime(runner.updated_at, i18n.resolvedLanguage)}>
+                      {formatTime(runner.updated_at, i18n.resolvedLanguage)}
+                    </TableCell>
+                    <TableCell className="truncate">
                       <div className="flex gap-2">
                         {runnerDisplayStatus(runner) === "failed" ? (
                           <Button
@@ -339,85 +372,10 @@ export function RunnerRequestsSection({
               )}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-
-      <Card className="min-w-0 gap-0 py-0">
-        <CardHeader className="border-b px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <CardTitle>{t("admin.requestDetails")}</CardTitle>
-              <CardDescription>{selected?.runner_name || t("admin.selectRequest")}</CardDescription>
-            </div>
-            <div className="flex items-center gap-2">
-              {selected ? (
-                <Button asChild type="button" variant="outline" size="sm">
-                  <a href={`/admin/diagnostics?runner=${encodeURIComponent(selected.runner_name || selected.id)}`}>
-                    <Activity />
-                    {t("admin.diagnoseRunnerRequest")}
-                  </a>
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={onCopySelectedID}
-                disabled={!selected}
-                title={t("admin.copyRunnerID")}
-              >
-                <Copy />
-              </Button>
-            </div>
+          <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+            {t("admin.requestsShown", { filtered: filteredRunners.length, total: runners.length })}
           </div>
-        </CardHeader>
-        {selected ? (
-          <CardContent className="grid gap-5 p-5">
-            <RunnerRequestDetails runner={selected} />
-            {runnerDisplayStatus(selected) === "failed" ? (
-              <Button type="button" variant="outline" onClick={() => onRetryRunner(selected.id)}>
-                <RefreshCw />
-                {t("admin.retryRequest")}
-              </Button>
-            ) : null}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium">{t("common.logs")}</div>
-                  <div className="text-xs text-muted-foreground">{t("admin.logsDescription")}</div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onLoadLog(selected.id, selectedLog)}
-                >
-                  <RefreshCw />
-                  {t("common.refresh")}
-                </Button>
-              </div>
-              <Tabs
-                value={selectedLog}
-                onValueChange={(value) => onSelectedLogChange(value as LogName)}
-              >
-                <TabsList>
-                  {logNames.map((name) => (
-                    <TabsTrigger key={name} value={name}>
-                      {name.replace(".log", "")}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <pre className="max-h-[52vh] min-h-80 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-                {logText}
-              </pre>
-            </div>
-          </CardContent>
-        ) : (
-          <CardContent className="p-8 text-sm text-muted-foreground">
-            {t("admin.noRequestSelected")}
-          </CardContent>
-        )}
+        </CardContent>
       </Card>
     </div>
   )

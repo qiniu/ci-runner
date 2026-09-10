@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 
 import i18n from "../i18n"
-import { DiagnosticsSection, RunnerdRuntimeDiagnostics, RunnerRequestDiagnosisResult } from "./admin-sections"
+import { DiagnosticsSection, RunnerdRuntimeDiagnostics, RunnerRequestDiagnosisResult, RunnerRequestSection } from "./admin-sections"
 
 const window = new Window({ url: "http://localhost/" })
 const domGlobals = { window, document: window.document, navigator: window.navigator, HTMLElement: window.HTMLElement, SVGElement: window.SVGElement, Node: window.Node, DocumentFragment: window.DocumentFragment, Event: window.Event, MouseEvent: window.MouseEvent, KeyboardEvent: window.KeyboardEvent, getComputedStyle: window.getComputedStyle.bind(window), requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), IS_REACT_ACT_ENVIRONMENT: true }
@@ -52,6 +52,20 @@ async function renderDiagnostics(request = async () => ({}), props = {}) {
   return container
 }
 
+async function renderRunnerRequest(request = async () => ({}), props = {}) {
+  const container = document.createElement("div")
+  document.body.append(container)
+  const root = createRoot(container)
+  mountedRoots.push({ root, container })
+  await act(async () => root.render(createElement(RunnerRequestSection, {
+    identifier: "e2b-101445685709",
+    request,
+    onBackToRunnerRequests() {},
+    ...props,
+  })))
+  return container
+}
+
 async function renderRuntimeDiagnostics(request = async () => ({})) {
   const container = document.createElement("div")
   document.body.append(container)
@@ -74,32 +88,17 @@ async function click(element) {
 }
 
 describe("admin diagnostics", () => {
-  test("prompts for the user-visible Runner Name while keeping request ID compatibility", async () => {
-    await i18n.changeLanguage("zh")
-    try {
-      const html = renderToStaticMarkup(createElement(DiagnosticsSection, {
-        diagnostics: null,
-        request: async () => ({}),
-      }))
-      expect(html).toContain("Runner Name / Request ID")
-      expect(html).toContain('placeholder="e2b-101445685709"')
-      expect(html).toContain("GitHub Job 页面显示的 Runner Name")
-    } finally {
-      await i18n.changeLanguage("en")
-    }
-  })
-
-  test("separates request diagnosis from runnerd runtime diagnostics", async () => {
+  test("keeps the diagnostics page focused on runnerd runtime diagnostics", async () => {
     await i18n.changeLanguage("en")
     const html = renderToStaticMarkup(createElement(DiagnosticsSection, {
       diagnostics,
       request: async () => ({}),
     }))
 
-    expect(html).toContain("Request diagnosis")
-    expect(html).toContain("runnerd runtime")
-    expect(html).not.toContain("Diagnostics summary")
-    expect(html).not.toContain("No /debug/vars data available")
+    expect(html).toContain("Diagnostics summary")
+    expect(html).toContain("Load expvar")
+    expect(html).not.toContain("Request diagnosis")
+    expect(html).not.toContain("Runner Name / Request ID")
   })
 
   test("keeps diagnosis focused instead of duplicating runner request browsing", async () => {
@@ -112,8 +111,9 @@ describe("admin diagnostics", () => {
     expect(html).not.toContain("data-diagnostic-runner")
   })
 
-  test("runs the diagnosis from a shareable runner deep link", async () => {
+  test("loads the request resource and resolves a Runner Name to its canonical ID", async () => {
     const requestedURLs = []
+    const resolvedIDs = []
     const request = async (url) => {
       requestedURLs.push(url)
       return {
@@ -125,10 +125,204 @@ describe("admin diagnostics", () => {
       }
     }
 
-    const container = await renderDiagnostics(request, { initialRequestIdentifier: "e2b-101445685709" })
+    const container = await renderRunnerRequest(request, {
+      onResolvedRequestID: (id) => resolvedIDs.push(id),
+    })
 
-    expect(requestedURLs).toEqual(["/diagnostics/runner-requests/e2b-101445685709"])
-    expect(container.querySelector("input")?.value).toBe("e2b-101445685709")
+    expect(requestedURLs).toEqual(["/runner_requests/e2b-101445685709/diagnostics"])
+    expect(resolvedIDs).toEqual(["101445685709"])
+    expect(container.textContent).toContain("101445685709")
+  })
+
+  test("preserves the request card's natural height inside the admin flex scroller", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestSection, {
+      identifier: "e2b-101445685709",
+      request: async () => ({}),
+      onBackToRunnerRequests() {},
+    }))
+    const container = document.createElement("div")
+    container.innerHTML = html
+
+    expect(container.querySelector('[data-slot="card"]')?.classList.contains("shrink-0")).toBe(true)
+  })
+
+  test("loads runner logs only when they are opened from the diagnosis", async () => {
+    const requestedURLs = []
+    const request = async (url) => {
+      requestedURLs.push(url)
+      if (url === "/runner_requests/e2b-101445685709/diagnostics") {
+        return {
+          state: diagnostics.recent_failures[0],
+          github_job: { lookup_status: "unavailable" },
+          findings: [],
+          events: [],
+          events_truncated: false,
+        }
+      }
+      if (url === "/runner_requests/101445685709/logs/control.log") {
+        return "runner accepted a job"
+      }
+      throw new Error(`unexpected request: ${url}`)
+    }
+
+    const container = await renderRunnerRequest(request)
+    expect(requestedURLs).toEqual(["/runner_requests/e2b-101445685709/diagnostics"])
+
+    const logsSummary = Array.from(container.querySelectorAll("summary"))
+      .find((element) => element.textContent?.includes("Runner logs"))
+    expect(logsSummary).toBeDefined()
+    await click(logsSummary)
+
+    expect(requestedURLs).toEqual([
+      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/logs/control.log",
+    ])
+    expect(container.textContent).toContain("runner accepted a job")
+  })
+
+  test("keeps request details on the page scroll surface without nested vertical scrolling", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: diagnostics.recent_failures[0],
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [{
+          id: 4143071,
+          event_type: "control_log",
+          message: "runner accepted a job\n",
+          created_at: "2026-09-06T07:05:06Z",
+        }],
+        events_truncated: false,
+      },
+      request: async () => "runner accepted a job",
+    }))
+    const container = document.createElement("div")
+    container.innerHTML = html
+
+    expect(container.querySelectorAll(".overflow-auto")).toHaveLength(0)
+    expect(container.querySelectorAll('[class*="max-h-"]')).toHaveLength(0)
+  })
+
+  test("refreshes the diagnosis after retrying a failed request", async () => {
+    let status = "failed"
+    const request = async () => ({
+      state: {
+        ...diagnostics.recent_failures[0],
+        status,
+      },
+      github_job: { lookup_status: "unavailable" },
+      findings: [],
+      events: [],
+      events_truncated: false,
+    })
+    const onRetryRunner = async () => {
+      status = "queued"
+      return true
+    }
+
+    const container = await renderRunnerRequest(request, {
+      onRetryRunner,
+    })
+    expect(container.textContent).toContain("Failed")
+
+    const retryButton = Array.from(container.querySelectorAll("button"))
+      .find((element) => element.textContent?.includes("Retry"))
+    expect(retryButton).toBeDefined()
+    await click(retryButton)
+
+    expect(container.textContent).toContain("Queued")
+    expect(container.textContent).not.toContain("Failed")
+  })
+
+  test("polls an active request until it reaches a terminal state", async () => {
+    let requestCount = 0
+    const request = async () => {
+      requestCount += 1
+      return {
+        state: {
+          ...diagnostics.recent_failures[0],
+          status: requestCount === 1 ? "running" : "completed",
+        },
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      }
+    }
+
+    const container = await renderRunnerRequest(request, { pollIntervalMs: 5 })
+    expect(container.textContent).toContain("Running")
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    expect(requestCount).toBe(2)
+    expect(container.textContent).toContain("Completed")
+    expect(container.textContent).not.toContain("Running")
+  })
+
+  test("ignores a stale diagnosis after navigating to another request", async () => {
+    let resolveFirstRequest
+    const resolvedIDs = []
+    const request = (url) => {
+      if (url.includes("first-runner")) {
+        return new Promise((resolve) => {
+          resolveFirstRequest = resolve
+        })
+      }
+      return Promise.resolve({
+        state: {
+          ...diagnostics.recent_failures[0],
+          id: "second-request",
+          runner_name: "second-runner",
+        },
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      })
+    }
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    const props = {
+      request,
+      onBackToRunnerRequests() {},
+      onResolvedRequestID: (id) => resolvedIDs.push(id),
+    }
+
+    await act(async () => root.render(createElement(RunnerRequestSection, {
+      ...props,
+      identifier: "first-runner",
+    })))
+    await act(async () => root.render(createElement(RunnerRequestSection, {
+      ...props,
+      identifier: "second-runner",
+    })))
+
+    expect(container.textContent).toContain("second-request")
+    expect(resolvedIDs).toEqual(["second-request"])
+
+    await act(async () => {
+      resolveFirstRequest({
+        state: {
+          ...diagnostics.recent_failures[0],
+          id: "first-request",
+          runner_name: "first-runner",
+        },
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      })
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain("second-request")
+    expect(container.textContent).not.toContain("first-request")
+    expect(resolvedIDs).toEqual(["second-request"])
   })
 
   test("loads expvar only after the runtime action is requested", async () => {
@@ -206,6 +400,7 @@ describe("admin diagnostics", () => {
             error: "runner communication lost",
             updated_at: "2026-09-06T07:25:09Z",
             created_at: "2026-09-06T07:04:57Z",
+            completed_at: "2026-09-06T07:25:09Z",
           },
           github_job: {
             lookup_status: "ok",
@@ -237,6 +432,8 @@ describe("admin diagnostics", () => {
       expect(html).toContain("sandbox-llgo")
       expect(html).toContain("codex/test-sync-concurrent-wait-20260905")
       expect(html).toContain("runner communication lost")
+      expect(html).toContain("完成时间")
+      expect(html).not.toContain("已完成2026")
     } finally {
       await i18n.changeLanguage("en")
     }

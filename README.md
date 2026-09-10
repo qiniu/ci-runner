@@ -315,14 +315,15 @@ The built-in web UI provides:
 | --- | --- |
 | `/admin/` | Dashboard with diagnostics, metrics, and recent failures |
 | `/admin/accounts` | Account management — list, search, and change roles |
-| `/admin/runner_requests` | Runner request history, retry/stop controls, and persisted logs |
+| `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
+| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, diagnostic findings, lifecycle evidence, GitHub Job result, logs, and automatic refresh while active |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or manageable Organization |
 | `/admin/sandbox_service` | Sandbox service configuration |
 | `/admin/match` | Label-match preview against the current enabled Runner Specs |
 | `/admin/audit` | Audit event history |
-| `/admin/diagnostics` | Request diagnosis by Runner Name or internal request ID, plus a separate runnerd runtime view with redacted summary, pprof discovery, and on-demand expvar |
+| `/admin/diagnostics` | runnerd runtime diagnostics with redacted summary, pprof discovery, and on-demand expvar |
 
 `/` is always the public Qiniu CI Runner product landing page. `/docs` and its fixed guide routes are public, same-origin, and available in English and Simplified Chinese. The ordinary-user Jobs homepage is `/jobs`; other protected routes include `/repositories`, PR job groups (`/github/pulls/{owner}/{repo}/{number}/jobs`), and account settings (`/account/preferences`, `/account/sandbox-templates`, `/account/sandbox-instances`), with matching `/organizations/{login}/...` routes. Opening a protected route without a session shows a focused GitHub sign-in page and returns to the original URL after OAuth.
 
@@ -337,7 +338,7 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | `invalid signature` in logs | Webhook secret mismatch | Ensure `github.webhook_secret` matches the secret in GitHub App/repo webhook settings |
 | `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |
-| GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Diagnostics**, enter the Runner Name shown by GitHub (for example, `e2b-101445685709`) or the internal Request ID, and compare the GitHub result with the persisted lifecycle timeline |
+| GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Runner Requests**, look up the Runner Name shown by GitHub (for example, `e2b-101445685709`), and inspect the request resource's findings and lifecycle timeline |
 
 For detailed local debugging steps, see [docs/testing.md](docs/testing.md#8-troubleshooting-order).
 

@@ -793,7 +793,7 @@ func TestDiagnosticsRunnerRequestReportsUnobservedTermination(t *testing.T) {
 	store.AppendLog(st.ID, "control.log", []byte("runner accepted a job\n"))
 
 	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
-	req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/101445685709", nil)
+	req := adminRequest(http.MethodGet, "/runner_requests/101445685709/diagnostics", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

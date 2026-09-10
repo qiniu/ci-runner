@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import * as appPolicy from "./app-load-policy"
+import * as adminTypes from "./admin-types"
 
 import {
   adminDataResources,
@@ -105,9 +106,18 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/account/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/admin/runner_specs")).toBe("admin")
+    expect(appPolicy.appRouteAccess?.("/admin/runner_requests/101445685709")).toBe("admin")
     expect(appPolicy.appRouteAccess?.("/admin/not-a-section")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/docs/not-a-guide")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/not-a-route")).toBe("not-found")
+  })
+
+  test("resolves only a single encoded runner request path segment", () => {
+    expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/e2b-101445685709")).toBe("e2b-101445685709")
+    expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/request%20one")).toBe("request one")
+    expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/request%2Fextra")).toBe("")
+    expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/%20")).toBe("")
+    expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/request/extra")).toBe("")
   })
 
   test("rejects incomplete legacy Jobs routes", () => {

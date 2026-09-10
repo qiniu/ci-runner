@@ -1,4 +1,4 @@
-import { adminSections, type AdminSection } from "@/admin-types"
+import { adminSections, runnerRequestIdentifierFromAdminPath, type AdminSection } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
 export const userRunnerInitialPageSize = 100
@@ -146,6 +146,7 @@ function isSandboxSettingsRoute(path: string): boolean {
 
 function isAdminRoute(path: string): boolean {
   if (path === "/admin" || path === "/admin/") return true
+  if (runnerRequestIdentifierFromAdminPath(path)) return true
   const match = path.match(/^\/admin\/([^/]+)$/)
   return Boolean(match && adminSections.includes(match[1] as AdminSection))
 }

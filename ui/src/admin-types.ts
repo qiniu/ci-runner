@@ -332,7 +332,19 @@ export const adminSections = [
 
 export type AdminSection = (typeof adminSections)[number]
 
+export function runnerRequestIdentifierFromAdminPath(path: string): string {
+  const match = path.match(/^\/admin\/runner_requests\/([^/]+)$/)
+  if (!match) return ""
+  try {
+    const identifier = decodeURIComponent(match[1])
+    return identifier.trim() && !identifier.includes("/") ? identifier : ""
+  } catch {
+    return ""
+  }
+}
+
 export function sectionFromPath(): AdminSection {
+  if (runnerRequestIdentifierFromAdminPath(window.location.pathname)) return "runner_requests"
   const slug = window.location.pathname.replace(/^\/admin\/?/, "") || "overview"
   return adminSections.includes(slug as AdminSection) ? (slug as AdminSection) : "overview"
 }

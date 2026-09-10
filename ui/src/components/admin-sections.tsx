@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useTranslation } from "react-i18next"
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Gauge, Loader2, RefreshCw, Search, ShieldAlert } from "lucide-react"
+import { Activity, AlertTriangle, ArrowLeft, CheckCircle2, ChevronDown, Copy, Loader2, RefreshCw, ShieldAlert, Trash2 } from "lucide-react"
 
 import {
+  activeStatuses,
+  logNames,
   type AuditEvent,
   type DiagnosticsSummary,
   type RunnerDiagnosticFinding,
@@ -11,6 +13,7 @@ import {
   type RunnerSpecMatch,
   type RunnerState,
 } from "@/admin-types"
+import { localizedLogTextForView, type LocalizedLogText } from "@/app-log-state"
 import { formatTime, runnerDisplayStatus } from "@/admin-format"
 import type { AppTFunction } from "@/i18n"
 import { Detail, StatusBadge } from "@/components/admin-shared"
@@ -25,7 +28,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Table,
   TableBody,
@@ -205,107 +208,147 @@ export function AuditSection({ auditEvents }: { auditEvents: AuditEvent[] }) {
 export function DiagnosticsSection({
   diagnostics,
   request,
-  initialRequestIdentifier = "",
 }: {
   diagnostics: DiagnosticsSummary | null
   request: (url: string, options?: RequestInit) => Promise<unknown>
-  initialRequestIdentifier?: string
+}) {
+  return <RunnerdRuntimeDiagnostics diagnostics={diagnostics} request={request} />
+}
+
+export function RunnerRequestSection({
+  identifier,
+  request,
+  onBackToRunnerRequests,
+  onResolvedRequestID,
+  onCopyRunnerID,
+  onRetryRunner,
+  onStopRunner,
+  pollIntervalMs = 5000,
+}: {
+  identifier: string
+  request: (url: string, options?: RequestInit) => Promise<unknown>
+  onBackToRunnerRequests: () => void
+  onResolvedRequestID?: (id: string) => void
+  onCopyRunnerID?: (id: string) => void
+  onRetryRunner?: (id: string) => Promise<boolean>
+  onStopRunner?: (id: string) => Promise<boolean>
+  pollIntervalMs?: number
 }) {
   const { t } = useTranslation()
-  const [requestID, setRequestID] = useState(initialRequestIdentifier)
   const [diagnosis, setDiagnosis] = useState<RunnerRequestDiagnosis | null>(null)
   const [diagnosisError, setDiagnosisError] = useState("")
   const [diagnosing, setDiagnosing] = useState(false)
+  const [requestAction, setRequestAction] = useState<"retry" | "stop" | null>(null)
+  const diagnosisRequestGeneration = useRef(0)
 
-  const runDiagnosis = useCallback(async (identifier: string) => {
+  const runDiagnosis = useCallback(async (
+    identifier: string,
+    { preserveExisting = false }: { preserveExisting?: boolean } = {},
+  ) => {
     const id = identifier.trim()
     if (!id) return
-    setRequestID(id)
+    const generation = ++diagnosisRequestGeneration.current
     setDiagnosing(true)
     setDiagnosisError("")
     try {
-      const result = await request(`/diagnostics/runner-requests/${encodeURIComponent(id)}`)
-      setDiagnosis(result as RunnerRequestDiagnosis)
+      const result = await request(`/runner_requests/${encodeURIComponent(id)}/diagnostics`) as RunnerRequestDiagnosis
+      if (generation !== diagnosisRequestGeneration.current) return
+      setDiagnosis(result)
+      onResolvedRequestID?.(result.state.id)
     } catch (error) {
-      setDiagnosis(null)
+      if (generation !== diagnosisRequestGeneration.current) return
+      if (!preserveExisting) setDiagnosis(null)
       setDiagnosisError(error instanceof Error ? error.message : t("admin.runnerDiagnosisFailed"))
     } finally {
-      setDiagnosing(false)
+      if (generation === diagnosisRequestGeneration.current) setDiagnosing(false)
     }
-  }, [request, t])
+  }, [onResolvedRequestID, request, t])
 
   useEffect(() => {
-    if (!initialRequestIdentifier.trim()) return
-    void runDiagnosis(initialRequestIdentifier)
-  }, [initialRequestIdentifier, runDiagnosis])
+    setDiagnosis(null)
+    setDiagnosisError("")
+    void runDiagnosis(identifier)
+    return () => {
+      diagnosisRequestGeneration.current += 1
+    }
+  }, [identifier, runDiagnosis])
+
+  useEffect(() => {
+    if (diagnosing || !diagnosis || !activeStatuses.has(diagnosis.state.status)) return
+    const timer = window.setTimeout(() => {
+      void runDiagnosis(diagnosis.state.id, { preserveExisting: true })
+    }, pollIntervalMs)
+    return () => window.clearTimeout(timer)
+  }, [diagnosis, diagnosing, pollIntervalMs, runDiagnosis])
+
+  const runRequestAction = async (
+    action: "retry" | "stop",
+    handler: ((id: string) => Promise<boolean>) | undefined,
+  ) => {
+    if (!diagnosis || !handler) return
+    setRequestAction(action)
+    try {
+      if (await handler(diagnosis.state.id)) {
+        await runDiagnosis(diagnosis.state.id, { preserveExisting: true })
+      }
+    } finally {
+      setRequestAction(null)
+    }
+  }
 
   return (
-    <Tabs defaultValue="requests" className="gap-4">
-      <TabsList aria-label={t("admin.diagnosticsViews")}>
-        <TabsTrigger value="requests">
-          <Activity />
-          {t("admin.diagnosticsRequestTab")}
-        </TabsTrigger>
-        <TabsTrigger value="runtime">
-          <Gauge />
-          {t("admin.diagnosticsRuntimeTab")}
-        </TabsTrigger>
-      </TabsList>
-
-      <TabsContent value="requests">
-        <Card className="gap-0 overflow-hidden py-0">
-          <CardHeader className="gap-1 px-5 py-4">
-            <CardTitle className="text-base tracking-tight">{t("admin.runnerRequestDiagnosis")}</CardTitle>
+    <Card className="shrink-0 gap-0 overflow-hidden py-0">
+      <CardHeader className="gap-1 px-5 py-4">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+          <div className="space-y-1">
+            <CardTitle className="text-base tracking-tight">{t("admin.runnerRequestDetails")}</CardTitle>
             <CardDescription className="max-w-4xl text-pretty leading-relaxed">
-              {t("admin.runnerRequestDiagnosisDescription")}
+              {t("admin.runnerRequestDetailsDescription")}
             </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5 border-t px-5 py-5">
-            <form
-              className="flex flex-col gap-3 sm:flex-row"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void runDiagnosis(requestID)
-              }}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={diagnosing}
+              onClick={() => void runDiagnosis(diagnosis?.state.id || identifier, { preserveExisting: true })}
             >
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground" htmlFor="diagnostic-runner-request-id">
-                  {t("admin.runnerRequestID")}
-                </label>
-                <Input
-                  id="diagnostic-runner-request-id"
-                  value={requestID}
-                  onChange={(event) => setRequestID(event.target.value)}
-                  placeholder={t("admin.runnerRequestPlaceholder")}
-                  autoComplete="off"
-                />
-              </div>
-              <Button className="sm:self-end" type="submit" disabled={diagnosing || !requestID.trim()}>
-                {diagnosing ? <Loader2 className="animate-spin" /> : <Search />}
-                {diagnosing ? t("admin.diagnosingRunnerRequest") : t("admin.diagnoseRunnerRequest")}
-              </Button>
-            </form>
-
-            {diagnosisError ? (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {diagnosisError}
-              </div>
-            ) : null}
-            {diagnosis ? (
-              <RunnerRequestDiagnosisResult diagnosis={diagnosis} />
-            ) : diagnosisError ? null : (
-              <div className="rounded-lg border border-dashed px-4 py-7 text-center text-sm text-muted-foreground">
-                {t("admin.noRunnerDiagnosis")}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      <TabsContent value="runtime">
-        <RunnerdRuntimeDiagnostics diagnostics={diagnostics} request={request} />
-      </TabsContent>
-    </Tabs>
+              <RefreshCw className={diagnosing ? "animate-spin" : undefined} />
+              {t("common.refresh")}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={onBackToRunnerRequests}>
+              <ArrowLeft />
+              {t("admin.backToRunnerRequests")}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 border-t px-5 py-5">
+        {diagnosing && !diagnosis ? (
+          <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-7 text-sm text-muted-foreground">
+            <Loader2 className="animate-spin" />
+            {t("admin.diagnosingRunnerRequest")}
+          </div>
+        ) : null}
+        {diagnosisError ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {diagnosisError}
+          </div>
+        ) : null}
+        {diagnosis ? (
+          <RunnerRequestDiagnosisResult
+            key={diagnosis.state.id}
+            diagnosis={diagnosis}
+            request={request}
+            requestAction={requestAction}
+            onCopyRunnerID={onCopyRunnerID}
+            onRetryRunner={onRetryRunner ? () => void runRequestAction("retry", onRetryRunner) : undefined}
+            onStopRunner={onStopRunner ? () => void runRequestAction("stop", onStopRunner) : undefined}
+          />
+        ) : null}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -400,11 +443,25 @@ export function RunnerdRuntimeDiagnostics({
   )
 }
 
-export function RunnerRequestDiagnosisResult({ diagnosis }: { diagnosis: RunnerRequestDiagnosis }) {
+export function RunnerRequestDiagnosisResult({
+  diagnosis,
+  request,
+  requestAction = null,
+  onCopyRunnerID,
+  onRetryRunner,
+  onStopRunner,
+}: {
+  diagnosis: RunnerRequestDiagnosis
+  request?: (url: string, options?: RequestInit) => Promise<unknown>
+  requestAction?: "retry" | "stop" | null
+  onCopyRunnerID?: (id: string) => void
+  onRetryRunner?: () => void
+  onStopRunner?: () => void
+}) {
   const { t, i18n } = useTranslation()
   const state = diagnosis.state
   return (
-    <div className="space-y-5 border-t pt-5">
+    <div className="space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -420,11 +477,31 @@ export function RunnerRequestDiagnosisResult({ diagnosis }: { diagnosis: RunnerR
             {state.repository_full_name || "-"} · {state.assigned_job_name || state.runner_name}
           </div>
         </div>
-        {state.github_job_url ? (
-          <Button asChild size="sm" variant="outline">
-            <a href={state.github_job_url} target="_blank" rel="noreferrer">{t("admin.openGitHubJob")}</a>
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {onCopyRunnerID ? (
+            <Button type="button" size="sm" variant="outline" onClick={() => onCopyRunnerID(state.id)}>
+              <Copy />
+              {t("admin.copyRunnerID")}
+            </Button>
+          ) : null}
+          {runnerDisplayStatus(state) === "failed" && onRetryRunner ? (
+            <Button type="button" size="sm" variant="outline" disabled={requestAction !== null} onClick={onRetryRunner}>
+              {requestAction === "retry" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              {t("admin.retry")}
+            </Button>
+          ) : null}
+          {activeStatuses.has(state.status) && onStopRunner ? (
+            <Button type="button" size="sm" variant="outline" disabled={requestAction !== null} onClick={onStopRunner}>
+              {requestAction === "stop" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              {t("admin.stop")}
+            </Button>
+          ) : null}
+          {state.github_job_url ? (
+            <Button asChild size="sm" variant="outline">
+              <a href={state.github_job_url} target="_blank" rel="noreferrer">{t("admin.openGitHubJob")}</a>
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <section className="space-y-2">
@@ -460,6 +537,8 @@ export function RunnerRequestDiagnosisResult({ diagnosis }: { diagnosis: RunnerR
         </div>
       </details>
 
+      {request ? <RunnerRequestLogs key={state.id} requestID={state.id} request={request} /> : null}
+
       <section className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -472,7 +551,7 @@ export function RunnerRequestDiagnosisResult({ diagnosis }: { diagnosis: RunnerR
         {diagnosis.events_truncated ? (
           <div className="text-xs text-amber-700 dark:text-amber-300">{t("admin.runnerEventsTruncated")}</div>
         ) : null}
-        <div className="max-h-[34rem] overflow-auto rounded-lg border bg-muted/20 px-4 py-2">
+        <div className="rounded-lg border bg-muted/20 px-4 py-2">
           {diagnosis.events.length ? diagnosis.events.map((event) => (
             <div key={event.id} className="relative grid gap-1 border-l py-3 pl-5 sm:grid-cols-[170px_110px_minmax(0,1fr)] sm:gap-3">
               <span className="absolute -left-1 top-[1.15rem] size-2 rounded-full bg-sky-500 ring-4 ring-background" />
@@ -488,6 +567,89 @@ export function RunnerRequestDiagnosisResult({ diagnosis }: { diagnosis: RunnerR
         </div>
       </section>
     </div>
+  )
+}
+
+type RunnerLogName = (typeof logNames)[number]
+
+function RunnerRequestLogs({
+  requestID,
+  request,
+}: {
+  requestID: string
+  request: (url: string, options?: RequestInit) => Promise<unknown>
+}) {
+  const { t } = useTranslation()
+  const [selectedLog, setSelectedLog] = useState<RunnerLogName>("control.log")
+  const [logText, setLogText] = useState<LocalizedLogText>({ kind: "message", key: "user.loadingRunnerLog" })
+  const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const requestGeneration = useRef(0)
+
+  const loadLog = useCallback(async (name: RunnerLogName) => {
+    const generation = ++requestGeneration.current
+    setLoading(true)
+    setLogText({ kind: "message", key: "user.loadingRunnerLog" })
+    try {
+      const text = await request(`/runner_requests/${encodeURIComponent(requestID)}/logs/${encodeURIComponent(name)}`)
+      if (generation !== requestGeneration.current) return
+      setLogText(typeof text === "string" && text
+        ? { kind: "text", text }
+        : { kind: "message", key: "user.runnerLogEmpty" })
+      setLoaded(true)
+    } catch (error) {
+      if (generation !== requestGeneration.current) return
+      setLogText(error instanceof Error
+        ? { kind: "text", text: error.message }
+        : { kind: "message", key: "app.loadFailed" })
+      setLoaded(true)
+    } finally {
+      if (generation === requestGeneration.current) setLoading(false)
+    }
+  }, [request, requestID])
+
+  return (
+    <details
+      className="group overflow-hidden rounded-lg border bg-muted/10"
+      onToggle={(event) => {
+        if (event.currentTarget.open && !loaded && !loading) void loadLog(selectedLog)
+      }}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 marker:content-none hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        <div>
+          <div className="text-sm font-medium">{t("admin.runnerLogs")}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{t("admin.logsDescription")}</div>
+        </div>
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-3 border-t bg-background/70 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <Tabs
+            value={selectedLog}
+            onValueChange={(value) => {
+              const name = value as RunnerLogName
+              setSelectedLog(name)
+              void loadLog(name)
+            }}
+          >
+            <TabsList>
+              {logNames.map((name) => (
+                <TabsTrigger key={name} value={name}>
+                  {name.replace(".log", "")}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void loadLog(selectedLog)}>
+            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {t("common.refresh")}
+          </Button>
+        </div>
+        <pre className="min-h-64 rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
+          {localizedLogTextForView(logText, t)}
+        </pre>
+      </div>
+    </details>
   )
 }
 

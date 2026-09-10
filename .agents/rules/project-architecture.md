@@ -22,7 +22,7 @@
 - Production UI assets are generated into `internal/server/ui/` by `task ui-build` and embedded by `internal/server/ui_assets_production.go`.
 - Development UI assets are proxied to Vite by `internal/server/ui_assets_development.go`.
 - Shared `ui/` code serves both ordinary-user and admin screens. Keep admin routes and role-gated APIs explicit when changing shared components.
-- Admin Diagnostics may correlate one persisted runner request with a bounded lifecycle-event tail and a bounded live GitHub Job lookup. Keep this path read-only, admin-only, credential-free, useful when GitHub is unavailable, and explicit when historical evidence is incomplete.
+- `/admin/runner_requests/{id}` is the canonical Admin resource page for one persisted Runner request and may correlate a bounded lifecycle-event tail with a bounded live GitHub Job lookup. Keep this path read-only apart from explicit request actions, admin-only, credential-free, useful when GitHub is unavailable, and explicit when historical evidence is incomplete. Active requests refresh automatically, terminal requests support manual refresh, and an older async response must never overwrite a newly selected request. Reserve `/admin/diagnostics` for runnerd runtime diagnostics and preserve legacy request-diagnostic deep links as compatibility redirects.
 
 ## Auth And Routing
 

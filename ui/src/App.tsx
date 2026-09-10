@@ -4,7 +4,7 @@ import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { AccountsSection } from "@/components/accounts-section"
-import { AuditSection, DiagnosticsSection, MatchSection, OverviewSection } from "@/components/admin-sections"
+import { AuditSection, DiagnosticsSection, MatchSection, OverviewSection, RunnerRequestSection } from "@/components/admin-sections"
 import { AccessDeniedPage, NotFoundPage, SessionErrorPage, SessionLoadingPage, SignInPage } from "@/components/auth-pages"
 import { LandingPage } from "@/components/landing-page"
 import { RunnerJobDetail } from "@/components/runner-job-detail"
@@ -25,7 +25,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import {
   adminSections,
-  logNames,
+  runnerRequestIdentifierFromAdminPath,
   sectionFromPath,
   type AdminSection,
   type AuditEvent,
@@ -71,7 +71,6 @@ import {
   settingsPreferenceInstallationID,
 } from "@/repository-readiness"
 import { productTourVersion, shouldCompleteProductTour } from "@/user-onboarding"
-import { runnerLogTextForView, type LocalizedLogText } from "@/app-log-state"
 import {
   createGitHubReauthenticationGate,
   requiresGitHubReauthentication,
@@ -135,9 +134,6 @@ function App() {
   const [section, setSectionState] = useState<AdminSection>(() => sectionFromPath())
   const [runners, setRunners] = useState<RunnerState[]>([])
   const [runnerSpecs, setRunnerSpecs] = useState<RunnerSpec[]>([])
-  const [selectedID, setSelectedID] = useState("")
-  const [selectedLog, setSelectedLog] = useState<(typeof logNames)[number]>("control.log")
-  const [logText, setLogText] = useState<LocalizedLogText>({ kind: "text", text: "" })
   const [loading, setLoading] = useState(false)
   const [createID, setCreateID] = useState("")
   const [createRepository, setCreateRepository] = useState("")
@@ -167,6 +163,7 @@ function App() {
   const [beginGitHubReauthentication] = useState(createGitHubReauthenticationGate)
   const userLoadGate = useRef(createLatestUserLoadGate()).current
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
+  const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
 
   useEffect(() => {
     void fetchSandboxRegions().then((regions) => {
@@ -183,6 +180,22 @@ function App() {
       setLocationPath(nextPath)
       setLocationSearch("")
     }
+  }, [])
+
+  const openRunnerRequest = useCallback((identifier: string) => {
+    const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
+    if (window.location.pathname + window.location.search !== nextPath) {
+      window.history.pushState(null, "", nextPath)
+    }
+    setSectionState("runner_requests")
+    setLocationPath(window.location.pathname)
+    setLocationSearch(window.location.search)
+  }, [])
+
+  const canonicalizeRunnerRequestID = useCallback((id: string) => {
+    const nextPath = `/admin/runner_requests/${encodeURIComponent(id)}`
+    if (window.location.pathname + window.location.search === nextPath) return
+    window.history.replaceState(null, "", nextPath)
   }, [])
 
   const setUserPage = useCallback((next: "home" | "repositories" | "runner-specs" | "settings") => {
@@ -236,11 +249,6 @@ function App() {
     setLocationPath(window.location.pathname)
     setLocationSearch(window.location.search)
   }, [])
-
-  const selected = useMemo(
-    () => runners.find((runner) => runner.id === selectedID),
-    [runners, selectedID]
-  )
 
   const runnerRepositories = useMemo(
     () =>
@@ -374,31 +382,8 @@ function App() {
     window.location.href = `/auth/github/login?return_to=${encodeURIComponent(returnTo || "/")}`
   }, [])
 
-  const loadLog = useCallback(
-    async (id: string, name: (typeof logNames)[number]) => {
-      if (!hasAccess || !id) {
-        setLogText({ kind: "text", text: "" })
-        return
-      }
-      setLogText({ kind: "message", key: "common.loading" })
-      try {
-        const text = (await request(
-          `/runner_requests/${encodeURIComponent(id)}/logs/${encodeURIComponent(name)}`
-        )) as string
-        setLogText(text
-          ? { kind: "text", text }
-          : { kind: "message", key: "user.runnerLogEmpty" })
-      } catch (error) {
-        setLogText(error instanceof Error
-          ? { kind: "text", text: error.message }
-          : { kind: "message", key: "app.loadFailed" })
-      }
-    },
-    [hasAccess, request]
-  )
-
   const loadAll = useCallback(async (polling = false) => {
-    if (!hasAccess || !isAdminRoute) return
+    if (!hasAccess || !isAdminRoute || runnerRequestIdentifier) return
     const resources = polling ? adminPollingResources(section) : adminDataResources(section)
     if (resources.length === 0) return
     setLoading(true)
@@ -408,14 +393,7 @@ function App() {
       )
       for (const [resource, data] of entries) {
         updateAdminResource(resource, data, {
-          setRunners: (nextRunners) => {
-            setRunners(nextRunners)
-            setSelectedID((current) => {
-              if (!current || nextRunners.some((runner) => runner.id === current)) return current
-              setLogText({ kind: "text", text: "" })
-              return ""
-            })
-          },
+          setRunners,
           setRunnerSpecs,
           setAuditEvents,
         })
@@ -425,7 +403,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [hasAccess, isAdminRoute, request, section])
+  }, [hasAccess, isAdminRoute, request, runnerRequestIdentifier, section])
 
   const loadUserAll = useCallback(async (polling = false) => {
     const loadID = userLoadGate.begin(`${authSession.login ?? ""}:${locationPath}`)
@@ -707,6 +685,17 @@ function App() {
   }, [locationPath])
 
   useEffect(() => {
+    if (locationPath !== "/admin/diagnostics") return
+    const identifier = diagnosticRunnerFromSearch(locationSearch)
+    if (!identifier) return
+    const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
+    window.history.replaceState(null, "", nextPath)
+    setSectionState("runner_requests")
+    setLocationPath(window.location.pathname)
+    setLocationSearch(window.location.search)
+  }, [locationPath, locationSearch])
+
+  useEffect(() => {
     if (locationPath !== "/account/sandbox" && !/^\/organizations\/[^/]+\/sandbox$/.test(locationPath)) return
     const nextPath = locationPath.replace(/\/sandbox$/, "/sandbox-templates")
     window.history.replaceState(null, "", nextPath)
@@ -730,10 +719,10 @@ function App() {
   useEffect(() => {
     if (!hasAccess || !isAdminRoute) return
     void loadAll()
-    if (!shouldPollAdminSection(section)) return
+    if (runnerRequestIdentifier || !shouldPollAdminSection(section)) return
     const timer = window.setInterval(() => void loadAll(true), 5000)
     return () => window.clearInterval(timer)
-  }, [hasAccess, isAdminRoute, loadAll, section])
+  }, [hasAccess, isAdminRoute, loadAll, runnerRequestIdentifier, section])
 
   useEffect(() => {
     if (!authSession.authenticated || (hasAccess && isAdminRoute)) return
@@ -786,11 +775,7 @@ function App() {
   }, [syncGitHubAppSetupFromURL])
 
   useEffect(() => {
-    if (selectedID) void loadLog(selectedID, selectedLog)
-  }, [loadLog, selectedID, selectedLog])
-
-  useEffect(() => {
-    if (section !== "diagnostics" || !hasAccess) return
+    if (section !== "diagnostics" || !hasAccess || diagnosticRunnerFromSearch(locationSearch)) return
     void (async () => {
       try {
         const summary = await request("/diagnostics/pprof")
@@ -799,7 +784,7 @@ function App() {
         toast.error(error instanceof Error ? error.message : appI18n.t("app.diagnosticsLoadFailed"))
       }
     })()
-  }, [hasAccess, request, section])
+  }, [hasAccess, locationSearch, request, section])
 
   const signOut = () => {
     void fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).finally(() => {
@@ -815,8 +800,6 @@ function App() {
     setRepositoryErrors({})
     setLoadingRepositoriesFor(null)
     setUserSelectedKey("")
-    setSelectedID("")
-    setLogText({ kind: "text", text: "" })
   }
 
   const resetCreateRunnerForm = () => {
@@ -856,7 +839,6 @@ function App() {
       })) as RunnerState
       resetCreateRunnerForm()
       setCreateRunnerOpen(false)
-      setSelectedID(runner.id)
       toast.success(t("app.runnerQueued", { id: runner.id }))
       await loadAll()
     } catch (error) {
@@ -869,11 +851,12 @@ function App() {
       const runner = (await request(`/runner_requests/${encodeURIComponent(id)}`, {
         method: "DELETE",
       })) as RunnerState
-      setSelectedID(runner.id)
       toast.success(t("app.runnerCompleted", { id: runner.id }))
       await loadAll()
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("app.stopRunnerFailed"))
+      return false
     }
   }
 
@@ -882,11 +865,12 @@ function App() {
       const runner = (await request(`/runner_requests/${encodeURIComponent(id)}/retry`, {
         method: "POST",
       })) as RunnerState
-      setSelectedID(runner.id)
       toast.success(t("app.runnerRequeued", { id: runner.id }))
       await loadAll()
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("app.retryRunnerFailed"))
+      return false
     }
   }
 
@@ -907,9 +891,8 @@ function App() {
     }
   }
 
-  const copySelectedID = async () => {
-    if (!selected) return
-    await navigator.clipboard.writeText(selected.id)
+  const copyRunnerID = async (id: string) => {
+    await navigator.clipboard.writeText(id)
     toast.success(t("app.runnerIDCopied"))
   }
 
@@ -1066,7 +1049,7 @@ function App() {
       <SidebarInset className="min-h-0 overflow-hidden">
         <SiteHeader authSession={authSession} onSignOut={signOut} />
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
-          {section === "overview" || section === "runner_requests" ? (
+          {section === "overview" || (section === "runner_requests" && !runnerRequestIdentifier) ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {metrics.map((metric) => (
                 <Card key={metric.id} className="gap-3 py-5">
@@ -1092,16 +1075,24 @@ function App() {
 
           {section === "accounts" ? <AccountsSection request={request} /> : null}
 
-          {section === "runner_requests" ? (
+          {section === "runner_requests" && runnerRequestIdentifier ? (
+            <RunnerRequestSection
+              identifier={runnerRequestIdentifier}
+              request={request}
+              onBackToRunnerRequests={() => setSection("runner_requests")}
+              onResolvedRequestID={canonicalizeRunnerRequestID}
+              onCopyRunnerID={(id) => void copyRunnerID(id)}
+              onRetryRunner={retryRunner}
+              onStopRunner={stopRunner}
+            />
+          ) : null}
+
+          {section === "runner_requests" && !runnerRequestIdentifier ? (
             <RunnerRequestsSection
               hasAccess={hasAccess}
               loading={loading}
               runners={runners}
               filteredRunners={filteredRunners}
-              selected={selected}
-              selectedID={selectedID}
-              selectedLog={selectedLog}
-              logText={runnerLogTextForView(selectedID, logText, t)}
               createID={createID}
               createRepository={createRepository}
               createRunnerSpec={createRunnerSpec}
@@ -1123,12 +1114,9 @@ function App() {
               onStatusFilterChange={setRunnerStatusFilter}
               onRepositoryFilterChange={setRunnerRepositoryFilter}
               onRunnerSpecFilterChange={setRunnerSpecFilter}
-              onSelectRunner={setSelectedID}
+              onOpenRunnerRequest={openRunnerRequest}
               onRetryRunner={(id) => void retryRunner(id)}
               onStopRunner={(id) => void stopRunner(id)}
-              onCopySelectedID={() => void copySelectedID()}
-              onLoadLog={(id, name) => void loadLog(id, name)}
-              onSelectedLogChange={setSelectedLog}
             />
           ) : null}
 
@@ -1171,7 +1159,6 @@ function App() {
             <DiagnosticsSection
               diagnostics={diagnostics}
               request={request}
-              initialRequestIdentifier={diagnosticRunnerFromSearch(locationSearch)}
             />
           ) : null}
         </main>
