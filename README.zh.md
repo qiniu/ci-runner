@@ -309,7 +309,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/sandbox_service` | Sandbox 服务配置               |
 | `/admin/match`           | 针对当前已启用 Runner Spec 的标签匹配预览 |
 | `/admin/audit`           | 审计事件历史 |
-| `/admin/diagnostics`     | 脱敏运行时摘要、近期失败、pprof discovery 和 expvar |
+| `/admin/diagnostics`     | 支持按 Runner Name 或内部 Request ID 执行请求诊断，另含独立 runnerd 运行时视图，用于查看脱敏摘要、pprof discovery 和按需加载的 expvar |
 
 `/` 始终是公开的 Qiniu CI Runner 产品首页。`/docs` 及其固定指南路由公开、同域，并提供英文和简体中文。普通用户 Jobs 首页位于 `/jobs`；其他受保护路由包括 `/repositories`、PR job 分组（`/github/pulls/{owner}/{repo}/{number}/jobs`）、账户设置（`/account/preferences`、`/account/sandbox-templates`、`/account/sandbox-instances`），以及对应的 `/organizations/{login}/...` 路由。未登录访问受保护路由时会显示独立的 GitHub 登录页，并在 OAuth 完成后返回原 URL。
 
@@ -324,6 +324,7 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | 日志中出现 `invalid signature`                       | Webhook secret 不匹配                    | 确保 `github.webhook_secret` 与 GitHub App/仓库 webhook 设置中的 secret 一致       |
 | `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
+| GitHub 报告 self-hosted runner 失联                  | Runner、Sandbox 或其网络链路停止上报心跳 | 打开 **Admin → Diagnostics**，输入 GitHub 显示的 Runner Name（如 `e2b-101445685709`）或内部 Request ID，对比 GitHub 结果和持久化的生命周期时间线 |
 
 更多本地调试步骤请参阅 [docs/zh/testing.md](docs/zh/testing.md)。
 

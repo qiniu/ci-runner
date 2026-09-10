@@ -1,11 +1,11 @@
 import { type FormEvent } from "react"
-import { Copy, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Activity, Copy, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
 import { activeStatuses, logNames, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
-import { Detail, StatusBadge } from "@/components/admin-shared"
-import type { AppTFunction } from "@/i18n"
+import { StatusBadge } from "@/components/admin-shared"
+import { RunnerRequestDetails } from "@/components/runner-request-details"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -349,66 +349,31 @@ export function RunnerRequestsSection({
               <CardTitle>{t("admin.requestDetails")}</CardTitle>
               <CardDescription>{selected?.runner_name || t("admin.selectRequest")}</CardDescription>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={onCopySelectedID}
-              disabled={!selected}
-              title={t("admin.copyRunnerID")}
-            >
-              <Copy />
-            </Button>
+            <div className="flex items-center gap-2">
+              {selected ? (
+                <Button asChild type="button" variant="outline" size="sm">
+                  <a href={`/admin/diagnostics?runner=${encodeURIComponent(selected.runner_name || selected.id)}`}>
+                    <Activity />
+                    {t("admin.diagnoseRunnerRequest")}
+                  </a>
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={onCopySelectedID}
+                disabled={!selected}
+                title={t("admin.copyRunnerID")}
+              >
+                <Copy />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         {selected ? (
           <CardContent className="grid gap-5 p-5">
-            <div className="space-y-2">
-              <Detail label="ID" value={selected.id} />
-              <Detail label={t("common.status")} value={runnerStatusLabel(runnerDisplayStatus(selected))} />
-              <Detail label={t("common.repository")} value={selected.repository_full_name || "-"} />
-              <Detail label={t("common.runnerSpec")} value={selected.runner_spec_name || "-"} />
-              <Detail label={t("common.sandbox")} value={selected.sandbox_id || "-"} />
-              <Detail label={t("admin.sandboxConfig")} value={sandboxConfigSourceDisplay(selected.sandbox_config_source, t)} />
-              <Detail label="PID" value={selected.process_pid || "-"} />
-              <Detail
-                label={t("user.jobName")}
-                value={selected.assigned_job_name || selected.assigned_job_id || "-"}
-              />
-              <Detail
-                label={t("admin.githubJob")}
-                value={
-                  selected.github_job_url ? (
-                    <a
-                      className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-                      href={selected.github_job_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t("admin.openJob")}
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  ) : (
-                    "-"
-                  )
-                }
-              />
-              <Detail label={t("user.workflowRun")} value={selected.workflow_run_id || "-"} />
-              <Detail label={t("user.workflow")} value={selected.workflow_name || "-"} />
-              <Detail label={t("user.workflowAttempt")} value={selected.workflow_run_attempt || "-"} />
-              <Detail label={t("user.pullRequest")} value={selected.pull_request_number || "-"} />
-              <Detail label={t("user.branch")} value={selected.head_branch || "-"} />
-              <Detail label={t("user.commit")} value={selected.head_sha || "-"} />
-              <Detail label={t("common.created")} value={formatTime(selected.created_at, i18n.resolvedLanguage)} />
-              <Detail label={t("common.updated")} value={formatTime(selected.updated_at, i18n.resolvedLanguage)} />
-              <Detail label={t("user.finished")} value={formatTime(selected.completed_at, i18n.resolvedLanguage)} />
-              <Detail label={t("user.retryCount")} value={selected.retry_count || "-"} />
-              <Detail label={t("user.nextRetry")} value={formatTime(selected.next_retry_at, i18n.resolvedLanguage)} />
-              <Detail label={t("user.requestedLabels")} value={selected.requested_labels?.join(", ") || "-"} />
-              <Detail label={t("user.failure")} value={selected.failure_reason || "-"} />
-              <Detail label={t("admin.lastErrorCode")} value={selected.last_error_code || "-"} />
-              <Detail label={t("admin.error")} value={selected.error || "-"} />
-            </div>
+            <RunnerRequestDetails runner={selected} />
             {runnerDisplayStatus(selected) === "failed" ? (
               <Button type="button" variant="outline" onClick={() => onRetryRunner(selected.id)}>
                 <RefreshCw />
@@ -456,15 +421,4 @@ export function RunnerRequestsSection({
       </Card>
     </div>
   )
-}
-
-function sandboxConfigSourceDisplay(source: string | undefined, t: AppTFunction) {
-  switch (source) {
-    case "installation": return t("admin.configInstallation")
-    case "account": return t("admin.configAccount")
-    case "inherited_account": return t("admin.configInheritedAccount")
-    case "admin_default": return t("admin.configAdminDefault")
-    case "request_snapshot": return t("admin.configRequestSnapshot")
-    default: return "-"
-  }
 }

@@ -107,6 +107,35 @@ export type DiagnosticsSummary = {
   recent_failures: RunnerState[]
 }
 
+export type RunnerDiagnosticEvent = {
+  id: number
+  event_type: "control_log" | "stdout_log" | "stderr_log" | string
+  stage?: string
+  message: string
+  created_at: string
+}
+
+export type RunnerDiagnosticFinding = {
+  code: string
+  severity: "critical" | "warning" | "ok" | string
+  detail?: string
+}
+
+export type RunnerRequestDiagnosis = {
+  state: RunnerState
+  github_job: {
+    lookup_status: "ok" | "unavailable" | "not_applicable" | string
+    id?: number
+    name?: string
+    status?: string
+    conclusion?: string
+    runner_name?: string
+  }
+  findings: RunnerDiagnosticFinding[]
+  events: RunnerDiagnosticEvent[]
+  events_truncated: boolean
+}
+
 export type AuditEvent = {
   id: number
   actor: string

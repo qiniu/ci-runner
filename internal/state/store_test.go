@@ -3186,6 +3186,32 @@ func TestReadLogCanReturnTail(t *testing.T) {
 	}
 }
 
+func TestListRunnerEventsReturnsBoundedChronologicalTail(t *testing.T) {
+	store := New(t.TempDir())
+	if _, _, err := store.CreateRequest(RunnerRequest{
+		ID:         "diagnostic-events",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-diagnostic-events",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	store.AppendLog("diagnostic-events", "control.log", []byte("created\n"))
+	store.AppendLog("diagnostic-events", "stdout.log", []byte("connected\n"))
+	store.AppendLog("diagnostic-events", "control.log", []byte("accepted\n"))
+
+	events, truncated, err := store.ListRunnerEvents("diagnostic-events", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("expected truncated event history")
+	}
+	if len(events) != 2 || events[0].Message != "connected\n" || events[1].Message != "accepted\n" {
+		t.Fatalf("events = %#v, want chronological two-event tail", events)
+	}
+}
+
 func TestProfileConditionalSave(t *testing.T) {
 	testProfileConditionalSave(t, New(t.TempDir()))
 }

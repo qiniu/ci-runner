@@ -15,6 +15,7 @@ function renderSelectedRunner() {
       selected: {
         id: "runner-1",
         status: "completed",
+        runner_name: "e2b-runner-1",
         completed_at: "2026-08-10T08:09:10Z",
       },
       selectedID: "runner-1",
@@ -113,6 +114,14 @@ describe("RunnerRequestsSection", () => {
     } finally {
       await i18n.changeLanguage("en")
     }
+  })
+
+  test("links the selected runner to its shareable diagnosis", async () => {
+    await i18n.changeLanguage("en")
+    const html = renderSelectedRunner()
+
+    expect(html).toContain('href="/admin/diagnostics?runner=e2b-runner-1"')
+    expect(html).toContain("Run diagnosis")
   })
 
   test("shows admission label rejection as unmatched without retry actions", async () => {

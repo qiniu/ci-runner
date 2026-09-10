@@ -151,7 +151,6 @@ function App() {
   const [matchLabels, setMatchLabels] = useState("self-hosted,e2b")
   const [matchResult, setMatchResult] = useState<RunnerSpecMatch | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSummary | null>(null)
-  const [diagnosticsVars, setDiagnosticsVars] = useState("")
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [userRunners, setUserRunners] = useState<RunnerState[]>([])
   const [userRunnerTotal, setUserRunnerTotal] = useState(0)
@@ -182,6 +181,7 @@ function App() {
     if (window.location.pathname !== nextPath) {
       window.history.pushState(null, "", nextPath)
       setLocationPath(nextPath)
+      setLocationSearch("")
     }
   }, [])
 
@@ -793,12 +793,8 @@ function App() {
     if (section !== "diagnostics" || !hasAccess) return
     void (async () => {
       try {
-        const [summary, vars] = await Promise.all([
-          request("/diagnostics/pprof"),
-          request("/diagnostics/vars").catch(() => ""),
-        ])
+        const summary = await request("/diagnostics/pprof")
         setDiagnostics(summary as DiagnosticsSummary)
-        setDiagnosticsVars(typeof vars === "string" ? vars : JSON.stringify(vars, null, 2))
       } catch (error) {
         toast.error(error instanceof Error ? error.message : appI18n.t("app.diagnosticsLoadFailed"))
       }
@@ -1172,7 +1168,11 @@ function App() {
           {section === "audit" ? <AuditSection auditEvents={auditEvents} /> : null}
 
           {section === "diagnostics" ? (
-            <DiagnosticsSection diagnostics={diagnostics} diagnosticsVars={diagnosticsVars} />
+            <DiagnosticsSection
+              diagnostics={diagnostics}
+              request={request}
+              initialRequestIdentifier={diagnosticRunnerFromSearch(locationSearch)}
+            />
           ) : null}
         </main>
       </SidebarInset>
@@ -1180,6 +1180,10 @@ function App() {
     </SidebarProvider>
     </SandboxRegionsContext.Provider>
   )
+}
+
+function diagnosticRunnerFromSearch(search: string) {
+  return new URLSearchParams(search).get("runner")?.trim() || ""
 }
 
 function UserJobRedirect({

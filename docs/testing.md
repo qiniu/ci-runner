@@ -689,6 +689,8 @@ The service imports `github.com/jimmicro/pprof`. After startup it generates `.pp
 ```bash
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/pprof | jq
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/vars | jq
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/diagnostics/runner-requests/e2b-<request_id> | jq
 ```
 
 `/diagnostics/pprof` returns:
@@ -700,6 +702,10 @@ curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/vars | jq
 - recent failed runner requests.
 
 `/diagnostics/vars` serves the current runnerd process's expvar registry directly. It never selects a discovered pprof address file, so a stale artifact from an older process cannot hide the current metrics. Current metrics cover profile current/busy/idle/pending/desired, retry/lease, create/stop counts and durations, GitHub API calls, runner registration/cleanup, and workflow job queued/started/completed, conclusion, failure, queue duration, and run duration.
+
+`/diagnostics/runner-requests/{identifier}` is admin-only and runs on demand. The identifier may be the Runner Name shown by GitHub (`e2b-<request_id>`) or the internal Request ID. It combines the stored request state, the newest 200 lifecycle events, and a bounded live GitHub Job lookup. The response reports machine-readable findings such as a failed GitHub Job whose runner termination was not observed by runnerd. GitHub lookup failure does not discard local evidence, and the endpoint never returns the saved Sandbox credential or raw webhook payload. New workflow completions also persist the GitHub conclusion, Sandbox stop request/result, and final cleanup result so future incidents can be diagnosed without searching the service manager's stdout log first.
+
+The admin Diagnostics page separates request investigation from runnerd runtime inspection. The default Request diagnosis tab accepts the user-visible Runner Name or an internal request ID; Runner Requests details link directly to the corresponding diagnosis. The runnerd runtime tab contains the redacted summary and pprof discovery; it does not fetch or render the potentially large expvar snapshot until an administrator explicitly loads or refreshes it.
 
 Release C removed the temporary catalog migration readiness endpoint and UI after the matcher cutover completed. The retired Runner Group and Policy APIs return `404`, and no active state, server, or UI behavior depends on those removed models.
 

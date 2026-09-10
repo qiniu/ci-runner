@@ -22,6 +22,7 @@
 - Production UI assets are generated into `internal/server/ui/` by `task ui-build` and embedded by `internal/server/ui_assets_production.go`.
 - Development UI assets are proxied to Vite by `internal/server/ui_assets_development.go`.
 - Shared `ui/` code serves both ordinary-user and admin screens. Keep admin routes and role-gated APIs explicit when changing shared components.
+- Admin Diagnostics may correlate one persisted runner request with a bounded lifecycle-event tail and a bounded live GitHub Job lookup. Keep this path read-only, admin-only, credential-free, useful when GitHub is unavailable, and explicit when historical evidence is incomplete.
 
 ## Auth And Routing
 
@@ -57,4 +58,4 @@
 - Global `worker.max_concurrent_runners` and per-spec `max_concurrency` are enforced by worker processing; excess work stays queued.
 - Before starting claimed queued work, reload the request's persisted profile source and scope, then validate the latest global or scoped-custom enabled state and requested labels. Admission-time profile data is not sufficient to start a runner after the relevant spec changes.
 - Transient Qiniu sandbox placement failures, HTTP 429s, and GitHub secondary rate limits are queue deferrals. Deterministic auth/config/template failures should fail immediately.
-- Control/stdout/stderr logs are persisted as runner events and exposed through the admin API/UI.
+- Control/stdout/stderr logs are persisted as runner events and exposed through the admin API/UI. Workflow completion should persist the GitHub conclusion, Sandbox stop request/result, and final cleanup result so lifecycle diagnosis does not depend on service-manager stdout.

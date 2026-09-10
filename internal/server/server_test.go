@@ -5058,6 +5058,20 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("completed event with runner_name stopped sandbox %d times, want 1", fake.stoppedCount())
 	}
+	controlLog, err := store.ReadLog("1001", "control.log", 256<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{
+		"workflow job completed on GitHub: job_id=1001 status=completed conclusion=success",
+		"sandbox stop requested sandbox_id=sb-1001 pid=42",
+		"sandbox stop completed",
+		"runner cleanup completed: job_id=1001 conclusion=success request_status=completed",
+	} {
+		if !strings.Contains(string(controlLog), message) {
+			t.Errorf("control log missing %q:\n%s", message, controlLog)
+		}
+	}
 }
 
 func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {

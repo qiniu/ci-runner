@@ -436,6 +436,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /runner_specs/{name}", s.handleDeleteProfile)
 	s.mux.HandleFunc("GET /diagnostics/pprof", s.handleDiagnosticsPprof)
 	s.mux.HandleFunc("GET /diagnostics/vars", s.handleDiagnosticsVars)
+	s.mux.HandleFunc("GET /diagnostics/runner-requests/{id}", s.handleDiagnosticsRunnerRequest)
 }
 
 func (s *Server) handleAdminRedirect(w http.ResponseWriter, r *http.Request) {

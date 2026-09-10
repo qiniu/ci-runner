@@ -847,6 +847,38 @@ func (s *DBStore) ReadLog(id, name string, maxBytes int64) ([]byte, error) {
 	return append([]byte(nil), data...), nil
 }
 
+func (s *DBStore) ListRunnerEvents(id string, limit int) ([]RunnerEvent, bool, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, false, err
+	}
+	limit = min(max(limit, 1), 500)
+	var records []runnerEventRecord
+	if err := db.
+		Where("request_id = ?", sanitizeID(id)).
+		Order("id DESC").
+		Limit(limit + 1).
+		Find(&records).Error; err != nil {
+		return nil, false, err
+	}
+	truncated := len(records) > limit
+	if truncated {
+		records = records[:limit]
+	}
+	events := make([]RunnerEvent, len(records))
+	for i := range records {
+		record := records[len(records)-1-i]
+		events[i] = RunnerEvent{
+			ID:        record.ID,
+			EventType: record.EventType,
+			Stage:     record.Stage,
+			Message:   record.Message,
+			CreatedAt: record.CreatedAt,
+		}
+	}
+	return events, truncated, nil
+}
+
 func (s *DBStore) readRecord(id string) (runnerRequestRecord, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {

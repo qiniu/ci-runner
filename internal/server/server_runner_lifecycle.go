@@ -1180,6 +1180,14 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		st.AssignedJobID = job.ID
 		st.AssignedJobName = job.Name
 	}
+	if job.ID != 0 {
+		s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf(
+			"workflow job completed on GitHub: job_id=%d status=%s conclusion=%s\n",
+			job.ID,
+			job.Status,
+			workflowConclusion(job),
+		)))
+	}
 	st.Status = state.StatusStopping
 	stopStartedAt := time.Now()
 	if err := s.store.WriteState(st); err != nil {
@@ -1188,6 +1196,7 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	s.logger.Info("runner marked stopping", "id", id, "sandbox_id", st.SandboxID, "pid", st.ProcessPID)
 	st.Version++
 	if st.SandboxID != "" {
+		s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("sandbox stop requested sandbox_id=%s pid=%d\n", st.SandboxID, st.ProcessPID)))
 		if err := s.stopSandboxWithTimeout(ctx, id, st.SandboxID, st.ProcessPID); err != nil {
 			if isSandboxGone(err) {
 				s.logger.Info("sandbox already gone", "id", id, "sandbox_id", st.SandboxID, "error", err)
@@ -1217,6 +1226,8 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 				s.refreshMetrics()
 				return st, false, err
 			}
+		} else {
+			s.store.AppendLog(id, "control.log", []byte("sandbox stop completed\n"))
 		}
 	}
 	if cleanupErr := s.cleanupGitHubRunner(ctx, st); cleanupErr != nil {
@@ -1292,6 +1303,14 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		return state.RunnerState{}, false, err
 	}
 	s.logger.Info("runner stopped", "id", id, "sandbox_id", st.SandboxID, "duration_ms", time.Since(stopStartedAt).Milliseconds())
+	if job.ID != 0 {
+		s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf(
+			"runner cleanup completed: job_id=%d conclusion=%s request_status=%s\n",
+			job.ID,
+			workflowConclusion(job),
+			st.Status,
+		)))
+	}
 	metrics.RecordStop(st.ProfileName, time.Since(stopStartedAt), "success")
 	s.refreshMetrics()
 	return st, true, nil

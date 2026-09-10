@@ -1,11 +1,40 @@
 package server
 
 import (
+	"context"
 	"expvar"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/qiniu/ci-runner/internal/redact"
+	"github.com/qiniu/ci-runner/internal/state"
 )
+
+const diagnosticRunnerEventLimit = 200
+
+type diagnosticGitHubJob struct {
+	LookupStatus string `json:"lookup_status"`
+	ID           int64  `json:"id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Conclusion   string `json:"conclusion,omitempty"`
+	RunnerName   string `json:"runner_name,omitempty"`
+}
+
+type runnerDiagnosticFinding struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+type runnerRequestDiagnostics struct {
+	State           state.RunnerState         `json:"state"`
+	GitHubJob       diagnosticGitHubJob       `json:"github_job"`
+	Findings        []runnerDiagnosticFinding `json:"findings"`
+	Events          []state.RunnerEvent       `json:"events"`
+	EventsTruncated bool                      `json:"events_truncated"`
+}
 
 func (s *Server) handleDiagnosticsPprof(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminAuth(w, r) {
@@ -57,4 +86,131 @@ func (s *Server) handleDiagnosticsVars(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expvar.Handler().ServeHTTP(w, r)
+}
+
+func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	identifier := strings.TrimSpace(r.PathValue("id"))
+	requestID := strings.TrimPrefix(identifier, "e2b-")
+	st, err := s.store.ReadState(requestID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runner request not found")
+		return
+	}
+	events, truncated, err := s.store.ListRunnerEvents(st.ID, diagnosticRunnerEventLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	job := diagnosticGitHubJob{LookupStatus: "not_applicable"}
+	if st.WorkflowJobID != 0 && strings.TrimSpace(st.RepositoryFullName) != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		githubJob, lookupErr := s.gh.GetWorkflowJob(ctx, st.RepositoryFullName, st.WorkflowJobID)
+		if lookupErr != nil {
+			job.LookupStatus = "unavailable"
+			s.logger.Warn("diagnostic github workflow job lookup failed", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "error", lookupErr)
+		} else {
+			job = diagnosticGitHubJob{
+				LookupStatus: "ok",
+				ID:           githubJob.ID,
+				Name:         githubJob.Name,
+				Status:       githubJob.Status,
+				Conclusion:   githubJob.Conclusion,
+				RunnerName:   githubJob.RunnerName,
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, runnerRequestDiagnostics{
+		State:           st,
+		GitHubJob:       job,
+		Findings:        diagnoseRunnerRequest(st, events, truncated, job),
+		Events:          events,
+		EventsTruncated: truncated,
+	})
+}
+
+func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
+	findings := make([]runnerDiagnosticFinding, 0, 5)
+	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || eventMessageContains(events, "runner accepted a job")
+	hasRunnerExit := eventMessageContains(events, "runner process exited")
+	hasCompletedHook := eventMessageContains(events, "runner completed job hook received")
+	hasSandboxGone := eventMessageContains(events, "sandbox already gone")
+	githubFailed := job.LookupStatus == "ok" && isFailureConclusion(job.Conclusion)
+
+	if st.Status == state.StatusFailed {
+		if st.FailureStage == "admission" && st.FailureReason == "profile_labels_not_matched" {
+			findings = append(findings, runnerDiagnosticFinding{Code: "runner_request_unmatched", Severity: "warning", Detail: runnerRequestFailureDetail(st)})
+		} else {
+			findings = append(findings, runnerDiagnosticFinding{Code: "runner_request_failed", Severity: "critical", Detail: runnerRequestFailureDetail(st)})
+		}
+	}
+	if githubFailed {
+		findings = append(findings, runnerDiagnosticFinding{Code: "github_job_failed", Severity: "critical", Detail: job.Conclusion})
+	}
+	if githubFailed && st.Status == state.StatusCompleted {
+		findings = append(findings, runnerDiagnosticFinding{Code: "request_completed_after_github_failure", Severity: "warning"})
+	}
+	if hasAcceptedJob && isTerminalRunnerStatus(st.Status) && !hasRunnerExit && !hasCompletedHook {
+		detail := ""
+		if len(events) > 0 {
+			detail = events[len(events)-1].CreatedAt.Format(time.RFC3339)
+		}
+		severity := "warning"
+		if githubFailed {
+			severity = "critical"
+		}
+		findings = append(findings, runnerDiagnosticFinding{Code: "runner_termination_unobserved", Severity: severity, Detail: detail})
+	}
+	if hasSandboxGone {
+		findings = append(findings, runnerDiagnosticFinding{Code: "sandbox_gone_before_cleanup", Severity: "critical"})
+	}
+	if truncated {
+		findings = append(findings, runnerDiagnosticFinding{Code: "event_history_truncated", Severity: "warning"})
+	}
+	if job.LookupStatus == "unavailable" {
+		findings = append(findings, runnerDiagnosticFinding{Code: "github_lookup_unavailable", Severity: "warning"})
+	}
+	if len(findings) == 0 {
+		findings = append(findings, runnerDiagnosticFinding{Code: "no_anomaly_detected", Severity: "ok"})
+	}
+	return findings
+}
+
+func runnerRequestFailureDetail(st state.RunnerState) string {
+	parts := make([]string, 0, 5)
+	for _, value := range []string{st.FailureStage, st.FailureReason, st.LastErrorCode, st.LastErrorMessage, st.Error} {
+		detail := strings.TrimSpace(value)
+		if detail == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range parts {
+			if detail == existing {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			parts = append(parts, detail)
+		}
+	}
+	return strings.Join(parts, ": ")
+}
+
+func eventMessageContains(events []state.RunnerEvent, fragment string) bool {
+	for _, event := range events {
+		if strings.Contains(strings.ToLower(event.Message), fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTerminalRunnerStatus(status string) bool {
+	return status == state.StatusCompleted || status == state.StatusFailed
 }

@@ -665,6 +665,8 @@ curl -fsS -b "$COOKIE_JAR" \
 ```bash
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/pprof | jq
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/vars | jq
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/diagnostics/runner-requests/e2b-<request_id> | jq
 ```
 
 `/diagnostics/pprof` 会返回：
@@ -676,6 +678,10 @@ curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/vars | jq
 - 最近失败的 runner request
 
 `/diagnostics/vars` 会直接返回当前 runnerd 进程的 expvar registry，不再选择发现到的 pprof address file，因此旧进程留下的 stale artifact 不会遮蔽当前指标。当前指标覆盖 profile current/busy/idle/pending/desired、retry/lease、create/stop 次数与耗时、GitHub API 调用、runner 注册/清理，以及 workflow job queued/started/completed、conclusion、failure、queue duration 和 run duration。
+
+`/diagnostics/runner-requests/{identifier}` 仅供管理员按需调用。identifier 可以是 GitHub 显示的 Runner Name（`e2b-<request_id>`），也可以是内部 Request ID。它会汇总请求状态、最新 200 条生命周期事件，并在受限时间内查询 GitHub Job 当前结果；返回结果包含机器可读的诊断信号，例如“GitHub Job 已失败，但 runnerd 未观察到 Runner 退出”。GitHub 查询失败不会丢弃本地证据，接口也不会返回已保存的 Sandbox 凭证或原始 webhook payload。新的 workflow completion 还会持久化 GitHub conclusion、Sandbox stop 请求／结果和最终清理结果，后续故障通常不必先搜索 service manager 的 stdout 日志。
+
+Admin Diagnostics 页面将请求排障与 runnerd 运行时检查分开。默认的“请求诊断”Tab 接受用户可见的 Runner Name 或内部 Request ID；Runner 请求详情可直接跳转到对应诊断。“runnerd 运行时”Tab 展示脱敏摘要和 pprof discovery，只有管理员主动加载或刷新时才请求并渲染可能体积较大的 expvar 快照。
 
 Release C 在 matcher 切换完成后移除了临时 catalog migration readiness API 与界面。已退役的 Runner Group 和 Policy API 返回 `404`，当前 state、server 和 UI 行为都不依赖这些已移除模型。
 
