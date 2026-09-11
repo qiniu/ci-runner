@@ -130,6 +130,23 @@ func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+func (s *Server) handleResolveRunnerRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	identifier := strings.TrimSpace(r.PathValue("identifier"))
+	if identifier == "" {
+		writeError(w, http.StatusBadRequest, "runner request identifier is required")
+		return
+	}
+	st, err := s.resolveRunnerRequestIdentifier(identifier)
+	if err != nil {
+		s.writeRunnerRequestLookupError(w, identifier, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 func (s *Server) handleRetryRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminAuth(w, r) {
 		return

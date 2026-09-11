@@ -78,6 +78,7 @@ export function RunnerRequestsSection({
   onStatusFilterChange,
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
+  onLookupRunnerRequest,
   onOpenRunnerRequest,
   onRetryRunner,
   onStopRunner,
@@ -107,6 +108,7 @@ export function RunnerRequestsSection({
   onStatusFilterChange: (value: RunnerDisplayStatus | "all") => void
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
+  onLookupRunnerRequest: (identifier: string) => void
   onOpenRunnerRequest: (identifier: string) => void
   onRetryRunner: (id: string) => void
   onStopRunner: (id: string) => void
@@ -283,7 +285,7 @@ export function RunnerRequestsSection({
                 onSubmit={(event) => {
                   event.preventDefault()
                   const identifier = requestIdentifier.trim()
-                  if (identifier) onOpenRunnerRequest(identifier)
+                  if (identifier) onLookupRunnerRequest(identifier)
                 }}
               >
                 <label className="sr-only" htmlFor="runner-request-lookup">

@@ -162,6 +162,7 @@ function App() {
   const [userSelectedKey, setUserSelectedKey] = useState(() => userJobsGroupKeyFromLocation(window.location.pathname, window.location.search))
   const [beginGitHubReauthentication] = useState(createGitHubReauthenticationGate)
   const userLoadGate = useRef(createLatestUserLoadGate()).current
+  const runnerRequestLookupGeneration = useRef(0)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
 
@@ -183,6 +184,7 @@ function App() {
   }, [])
 
   const openRunnerRequest = useCallback((identifier: string) => {
+    runnerRequestLookupGeneration.current += 1
     const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
@@ -355,6 +357,21 @@ function App() {
     },
     [requestResponse]
   )
+
+  const lookupRunnerRequest = useCallback(async (identifier: string) => {
+    const generation = ++runnerRequestLookupGeneration.current
+    try {
+      const runner = await request(
+        `/runner_requests_lookup/${encodeURIComponent(identifier.trim())}`
+      ) as RunnerState
+      if (generation !== runnerRequestLookupGeneration.current) return
+      openRunnerRequest(runner.id)
+    } catch (error) {
+      if (generation === runnerRequestLookupGeneration.current) {
+        toast.error(error instanceof Error ? error.message : appI18n.t("admin.runnerDiagnosisFailed"))
+      }
+    }
+  }, [openRunnerRequest, request])
 
   const requestUserRunnerPage = useCallback(
     async (limit: number, offset: number): Promise<UserRunnerPage> => {
@@ -685,15 +702,29 @@ function App() {
   }, [locationPath])
 
   useEffect(() => {
-    if (locationPath !== "/admin/diagnostics") return
+    if (!hasAccess || locationPath !== "/admin/diagnostics") return
     const identifier = diagnosticRunnerFromSearch(locationSearch)
     if (!identifier) return
-    const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
-    window.history.replaceState(null, "", nextPath)
-    setSectionState("runner_requests")
-    setLocationPath(window.location.pathname)
-    setLocationSearch(window.location.search)
-  }, [locationPath, locationSearch])
+    let cancelled = false
+    void request(`/runner_requests_lookup/${encodeURIComponent(identifier)}`)
+      .then((value) => {
+        if (cancelled) return
+        const runner = value as RunnerState
+        const nextPath = `/admin/runner_requests/${encodeURIComponent(runner.id)}`
+        window.history.replaceState(null, "", nextPath)
+        setSectionState("runner_requests")
+        setLocationPath(window.location.pathname)
+        setLocationSearch(window.location.search)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : appI18n.t("admin.runnerDiagnosisFailed"))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasAccess, locationPath, locationSearch, request])
 
   useEffect(() => {
     if (locationPath !== "/account/sandbox" && !/^\/organizations\/[^/]+\/sandbox$/.test(locationPath)) return
@@ -1114,6 +1145,7 @@ function App() {
               onStatusFilterChange={setRunnerStatusFilter}
               onRepositoryFilterChange={setRunnerRepositoryFilter}
               onRunnerSpecFilterChange={setRunnerSpecFilter}
+              onLookupRunnerRequest={(identifier) => void lookupRunnerRequest(identifier)}
               onOpenRunnerRequest={openRunnerRequest}
               onRetryRunner={(id) => void retryRunner(id)}
               onStopRunner={(id) => void stopRunner(id)}

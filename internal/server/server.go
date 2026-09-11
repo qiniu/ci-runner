@@ -433,6 +433,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)
+	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/diagnostics", s.handleDiagnosticsRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}/events", s.handleRunnerRequestEvents)
@@ -448,7 +449,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /runner_specs/{name}", s.handleDeleteProfile)
 	s.mux.HandleFunc("GET /diagnostics/pprof", s.handleDiagnosticsPprof)
 	s.mux.HandleFunc("GET /diagnostics/vars", s.handleDiagnosticsVars)
-	s.mux.HandleFunc("GET /diagnostics/runner-requests/{id}", s.handleDiagnosticsRunnerRequest)
+	s.mux.HandleFunc("GET /diagnostics/runner-requests/{id}", s.handleLegacyDiagnosticsRunnerRequest)
 }
 
 func (s *Server) handleAdminRedirect(w http.ResponseWriter, r *http.Request) {

@@ -637,6 +637,41 @@ func TestGetRunnerReturns404ForMissing(t *testing.T) {
 	}
 }
 
+func TestResolveRunnerRequestPrefersRunnerNameBeforeInternalID(t *testing.T) {
+	store := state.New(t.TempDir())
+	for _, request := range []state.RunnerRequest{
+		{ID: "manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-manual"},
+		{ID: "e2b-manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-e2b-manual"},
+		{ID: "resolve", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-resolve"},
+	} {
+		if _, _, err := store.CreateRequest(request, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/runner_requests_lookup/e2b-manual", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET runner request resolver: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body state.RunnerState
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ID != "manual" || body.RunnerName != "e2b-manual" {
+		t.Fatalf("state = %#v, want exact Runner Name to take precedence", body)
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests/resolve", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET request whose ID is resolve: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // ---------- handleListProfiles ----------
 
 func TestListProfilesEndpointReturnsProfiles(t *testing.T) {
@@ -841,7 +876,7 @@ func TestRunnerRequestEventsReturnsMixedExclusivePage(t *testing.T) {
 	}
 
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
-	req := adminRequest(http.MethodGet, fmt.Sprintf("/runner_requests/e2b-101445685709/events?before_id=%d", allEvents[4].ID), nil)
+	req := adminRequest(http.MethodGet, fmt.Sprintf("/runner_requests/101445685709/events?before_id=%d", allEvents[4].ID), nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -972,7 +1007,7 @@ func TestDiagnosticsRunnerRequestAcceptsRunnerName(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsRunnerRequestReturnsInternalErrorWithoutAliasFallback(t *testing.T) {
+func TestDiagnosticsRunnerRequestReturnsInternalErrorWithoutExactIDFallback(t *testing.T) {
 	store := &readStateErrorStore{
 		Store: state.New(t.TempDir()),
 		err:   errors.New("database unavailable"),
@@ -984,8 +1019,8 @@ func TestDiagnosticsRunnerRequestReturnsInternalErrorWithoutAliasFallback(t *tes
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("GET runner request diagnostics on DB error: expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(store.ids) != 1 || store.ids[0] != "e2b-101445685709" {
-		t.Fatalf("ReadState ids = %#v, want no alias fallback after DB error", store.ids)
+	if len(store.ids) != 1 || store.ids[0] != "101445685709" {
+		t.Fatalf("ReadState ids = %#v, want no exact-ID fallback after Runner Name lookup DB error", store.ids)
 	}
 }
 
@@ -1118,7 +1153,7 @@ func TestDiagnosticsRunnerRequestPrefersExactInternalIDWithRunnerPrefix(t *testi
 	}
 
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
-	req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/e2b-manual", nil)
+	req := adminRequest(http.MethodGet, "/runner_requests/e2b-manual/diagnostics", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1132,6 +1167,35 @@ func TestDiagnosticsRunnerRequestPrefersExactInternalIDWithRunnerPrefix(t *testi
 	}
 	if body.State.ID != "e2b-manual" || body.State.RunnerName != "e2b-e2b-manual" {
 		t.Fatalf("state = %#v, want exact internal request ID to take precedence", body.State)
+	}
+}
+
+func TestLegacyDiagnosticsRunnerRequestPrefersRunnerNameBeforeInternalID(t *testing.T) {
+	store := state.New(t.TempDir())
+	for _, request := range []state.RunnerRequest{
+		{ID: "manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-manual"},
+		{ID: "e2b-manual", Source: "manual_api", Labels: []string{"self-hosted"}, RunnerName: "e2b-e2b-manual"},
+	} {
+		if _, _, err := store.CreateRequest(request, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/e2b-manual", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET legacy runner request diagnostics: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		State state.RunnerState `json:"state"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.State.ID != "manual" || body.State.RunnerName != "e2b-manual" {
+		t.Fatalf("state = %#v, want legacy lookup to prefer exact Runner Name", body.State)
 	}
 }
 

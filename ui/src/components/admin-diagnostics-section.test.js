@@ -59,7 +59,7 @@ async function renderRunnerRequest(request = async () => ({}), props = {}) {
   const root = createRoot(container)
   mountedRoots.push({ root, container })
   await act(async () => root.render(createElement(RunnerRequestSection, {
-    identifier: "e2b-101445685709",
+    identifier: "101445685709",
     request,
     onBackToRunnerRequests() {},
     ...props,
@@ -112,7 +112,7 @@ describe("admin diagnostics", () => {
     expect(html).not.toContain("data-diagnostic-runner")
   })
 
-  test("loads the request resource and resolves a Runner Name to its canonical ID", async () => {
+  test("loads the canonical request resource by internal ID", async () => {
     const requestedURLs = []
     const resolvedIDs = []
     const request = async (url) => {
@@ -131,7 +131,7 @@ describe("admin diagnostics", () => {
     })
 
     expect(requestedURLs).toEqual([
-      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/diagnostics",
       "/runner_requests/101445685709/events",
     ])
     expect(resolvedIDs).toEqual(["101445685709"])
@@ -140,7 +140,7 @@ describe("admin diagnostics", () => {
 
   test("preserves the request card's natural height inside the admin flex scroller", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestSection, {
-      identifier: "e2b-101445685709",
+      identifier: "101445685709",
       request: async () => ({}),
       onBackToRunnerRequests() {},
     }))
@@ -154,7 +154,7 @@ describe("admin diagnostics", () => {
     const requestedURLs = []
     const request = async (url) => {
       requestedURLs.push(url)
-      if (url === "/runner_requests/e2b-101445685709/diagnostics") {
+      if (url === "/runner_requests/101445685709/diagnostics") {
         return {
           state: runnerState,
           github_job: { lookup_status: "unavailable" },
@@ -193,7 +193,7 @@ describe("admin diagnostics", () => {
     const container = await renderRunnerRequest(request)
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(requestedURLs).toEqual([
-      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/diagnostics",
       "/runner_requests/101445685709/events",
     ])
     expect(container.textContent).toContain("runner accepted a job")
@@ -209,7 +209,7 @@ describe("admin diagnostics", () => {
     expect(container.textContent).not.toContain("setup warning")
     expect(container.textContent).not.toContain("runner accepted a job")
     expect(requestedURLs).toEqual([
-      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/diagnostics",
       "/runner_requests/101445685709/events",
     ])
 
@@ -223,7 +223,7 @@ describe("admin diagnostics", () => {
     await click(loadEarlierButton)
 
     expect(requestedURLs).toEqual([
-      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/diagnostics",
       "/runner_requests/101445685709/events",
       "/runner_requests/101445685709/events?before_id=3",
     ])

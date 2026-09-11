@@ -33,6 +33,7 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all") {
     onStatusFilterChange() {},
     onRepositoryFilterChange() {},
     onRunnerSpecFilterChange() {},
+    onLookupRunnerRequest() {},
     onOpenRunnerRequest() {},
     onRetryRunner() {},
     onStopRunner() {},

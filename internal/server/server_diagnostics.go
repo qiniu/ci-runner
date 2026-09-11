@@ -98,11 +98,27 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
-	st, err := s.readRunnerRequestByIdentifier(r.PathValue("id"))
+	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
 		s.writeRunnerRequestLookupError(w, r.PathValue("id"), err)
 		return
 	}
+	s.writeRunnerRequestDiagnostics(w, r, st)
+}
+
+func (s *Server) handleLegacyDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	st, err := s.resolveRunnerRequestIdentifier(r.PathValue("id"))
+	if err != nil {
+		s.writeRunnerRequestLookupError(w, r.PathValue("id"), err)
+		return
+	}
+	s.writeRunnerRequestDiagnostics(w, r, st)
+}
+
+func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Request, st state.RunnerState) {
 	events, truncated, err := s.store.ListRunnerEvents(st.ID, 0, diagnosticRunnerEventLimit, "control_log")
 	if err != nil {
 		s.writeRunnerEventReadError(w, st.ID, err)
@@ -166,7 +182,7 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 		}
 		beforeID = parsed
 	}
-	st, err := s.readRunnerRequestByIdentifier(r.PathValue("id"))
+	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
 		s.writeRunnerRequestLookupError(w, r.PathValue("id"), err)
 		return
@@ -185,13 +201,18 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, runnerRequestEventPage{Events: events, HasMore: hasMore})
 }
 
-func (s *Server) readRunnerRequestByIdentifier(identifier string) (state.RunnerState, error) {
+func (s *Server) resolveRunnerRequestIdentifier(identifier string) (state.RunnerState, error) {
 	id := strings.TrimSpace(identifier)
-	st, err := s.store.ReadState(id)
-	if errors.Is(err, state.ErrNotFound) && strings.HasPrefix(id, "e2b-") {
-		return s.store.ReadState(strings.TrimPrefix(id, "e2b-"))
+	if strings.HasPrefix(id, "e2b-") {
+		st, err := s.store.ReadState(strings.TrimPrefix(id, "e2b-"))
+		if err == nil && st.RunnerName == id {
+			return st, nil
+		}
+		if err != nil && !errors.Is(err, state.ErrNotFound) {
+			return state.RunnerState{}, err
+		}
 	}
-	return st, err
+	return s.store.ReadState(id)
 }
 
 func (s *Server) writeRunnerRequestLookupError(w http.ResponseWriter, identifier string, err error) {
