@@ -425,6 +425,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/diagnostics", s.handleDiagnosticsRunnerRequest)
+	s.mux.HandleFunc("GET /runner_requests/{id}/events", s.handleRunnerRequestEvents)
 	s.mux.HandleFunc("POST /runner_requests/{id}/retry", s.handleRetryRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/logs/{name}", s.handleGetRunnerLog)
 	s.mux.HandleFunc("DELETE /runner_requests/{id}", s.handleDeleteRunner)

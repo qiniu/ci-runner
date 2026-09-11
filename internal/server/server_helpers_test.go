@@ -790,6 +790,7 @@ func TestDiagnosticsRunnerRequestReportsUnobservedTermination(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.AppendLog(st.ID, "control.log", []byte("sandbox runner started sandbox_id=sb-1 pid=903\n"))
+	store.AppendLog(st.ID, "stdout.log", []byte("runner setup output\n"))
 	store.AppendLog(st.ID, "control.log", []byte("runner accepted a job\n"))
 
 	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
@@ -809,7 +810,8 @@ func TestDiagnosticsRunnerRequestReportsUnobservedTermination(t *testing.T) {
 			Severity string `json:"severity"`
 		} `json:"findings"`
 		Events []struct {
-			Message string `json:"message"`
+			EventType string `json:"event_type"`
+			Message   string `json:"message"`
 		} `json:"events"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -827,8 +829,138 @@ func TestDiagnosticsRunnerRequestReportsUnobservedTermination(t *testing.T) {
 			t.Errorf("missing diagnostic finding %q in %#v", code, body.Findings)
 		}
 	}
-	if len(body.Events) != 2 || body.Events[1].Message != "runner accepted a job\n" {
-		t.Fatalf("events = %#v, want bounded chronological lifecycle events", body.Events)
+	if len(body.Events) != 2 || body.Events[0].EventType != "control_log" || body.Events[1].EventType != "control_log" || body.Events[1].Message != "runner accepted a job\n" {
+		t.Fatalf("events = %#v, want bounded chronological control events", body.Events)
+	}
+}
+
+func TestRunnerRequestEventsReturnsMixedExclusivePage(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "101445685709",
+		Source:     "github_webhook",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-101445685709",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		name    string
+		message string
+	}{
+		{name: "control.log", message: "created\n"},
+		{name: "stdout.log", message: "setup output\n"},
+		{name: "stderr.log", message: "setup warning\n"},
+		{name: "control.log", message: "accepted\n"},
+		{name: "stdout.log", message: "job output\n"},
+	} {
+		store.AppendLog("101445685709", entry.name, []byte(entry.message))
+	}
+	allEvents, _, err := store.ListRunnerEvents("101445685709", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, fmt.Sprintf("/runner_requests/e2b-101445685709/events?before_id=%d", allEvents[4].ID), nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET runner request events: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		Events  []state.RunnerEvent `json:"events"`
+		HasMore bool                `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.HasMore {
+		t.Fatal("event page unexpectedly reports older records")
+	}
+	if len(page.Events) != 4 {
+		t.Fatalf("events = %#v, want four records before exclusive cursor", page.Events)
+	}
+	wantTypes := []string{"control_log", "stdout_log", "stderr_log", "control_log"}
+	for i, want := range wantTypes {
+		if page.Events[i].EventType != want {
+			t.Fatalf("events[%d].event_type = %q, want %q", i, page.Events[i].EventType, want)
+		}
+	}
+}
+
+func TestRunnerRequestEventsReturnsEventsAfterExclusiveCursor(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "101445685710",
+		Source:     "github_webhook",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-101445685710",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"one\n", "two\n", "three\n", "four\n"} {
+		store.AppendLog("101445685710", "stdout.log", []byte(message))
+	}
+	allEvents, _, err := store.ListRunnerEvents("101445685710", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, fmt.Sprintf("/runner_requests/101445685710/events?after_id=%d", allEvents[1].ID), nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET runner request events after cursor: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		Events  []state.RunnerEvent `json:"events"`
+		HasMore bool                `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.HasMore {
+		t.Fatal("event page unexpectedly reports newer records")
+	}
+	if len(page.Events) != 2 || page.Events[0].Message != "three\n" || page.Events[1].Message != "four\n" {
+		t.Fatalf("events = %#v, want records after exclusive cursor", page.Events)
+	}
+}
+
+func TestRunnerRequestEventsRejectsBothCursorDirections(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/runner_requests/request-1/events?after_id=1&before_id=2", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("conflicting cursors: expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerRequestEventsRejectsInvalidCursor(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/runner_requests/request-1/events?before_id=not-a-number", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor: expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerRequestEventsRequiresAdmin(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := httptest.NewRequest(http.MethodGet, "/runner_requests/request-1/events", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated event page: expected 401, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

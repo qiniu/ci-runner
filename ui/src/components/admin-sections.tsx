@@ -4,16 +4,16 @@ import { Activity, AlertTriangle, ArrowLeft, CheckCircle2, ChevronDown, Copy, Lo
 
 import {
   activeStatuses,
-  logNames,
   type AuditEvent,
   type DiagnosticsSummary,
   type RunnerDiagnosticFinding,
+  type RunnerDiagnosticEvent,
+  type RunnerEventPage,
   type RunnerRequestDiagnosis,
   type RunnerSpec,
   type RunnerSpecMatch,
   type RunnerState,
 } from "@/admin-types"
-import { localizedLogTextForView, type LocalizedLogText } from "@/app-log-state"
 import { formatTime, runnerDisplayStatus } from "@/admin-format"
 import type { AppTFunction } from "@/i18n"
 import { Detail, StatusBadge } from "@/components/admin-shared"
@@ -238,6 +238,7 @@ export function RunnerRequestSection({
   const [diagnosis, setDiagnosis] = useState<RunnerRequestDiagnosis | null>(null)
   const [diagnosisError, setDiagnosisError] = useState("")
   const [diagnosing, setDiagnosing] = useState(false)
+  const [diagnosisRevision, setDiagnosisRevision] = useState(0)
   const [requestAction, setRequestAction] = useState<"retry" | "stop" | null>(null)
   const diagnosisRequestGeneration = useRef(0)
 
@@ -254,6 +255,7 @@ export function RunnerRequestSection({
       const result = await request(`/runner_requests/${encodeURIComponent(id)}/diagnostics`) as RunnerRequestDiagnosis
       if (generation !== diagnosisRequestGeneration.current) return
       setDiagnosis(result)
+      setDiagnosisRevision((revision) => revision + 1)
       onResolvedRequestID?.(result.state.id)
     } catch (error) {
       if (generation !== diagnosisRequestGeneration.current) return
@@ -341,6 +343,7 @@ export function RunnerRequestSection({
             key={diagnosis.state.id}
             diagnosis={diagnosis}
             request={request}
+            activityRefreshRevision={diagnosisRevision}
             requestAction={requestAction}
             onCopyRunnerID={onCopyRunnerID}
             onRetryRunner={onRetryRunner ? () => void runRequestAction("retry", onRetryRunner) : undefined}
@@ -446,6 +449,7 @@ export function RunnerdRuntimeDiagnostics({
 export function RunnerRequestDiagnosisResult({
   diagnosis,
   request,
+  activityRefreshRevision = 0,
   requestAction = null,
   onCopyRunnerID,
   onRetryRunner,
@@ -453,12 +457,13 @@ export function RunnerRequestDiagnosisResult({
 }: {
   diagnosis: RunnerRequestDiagnosis
   request?: (url: string, options?: RequestInit) => Promise<unknown>
+  activityRefreshRevision?: number
   requestAction?: "retry" | "stop" | null
   onCopyRunnerID?: (id: string) => void
   onRetryRunner?: () => void
   onStopRunner?: () => void
 }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const state = diagnosis.state
   return (
     <div className="space-y-5">
@@ -537,119 +542,178 @@ export function RunnerRequestDiagnosisResult({
         </div>
       </details>
 
-      {request ? <RunnerRequestLogs key={state.id} requestID={state.id} request={request} /> : null}
-
-      <section className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            {t("admin.runnerEventTimeline")}
-          </div>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {t("admin.runnerEventCount", { count: diagnosis.events.length })}
-          </span>
-        </div>
-        {diagnosis.events_truncated ? (
-          <div className="text-xs text-amber-700 dark:text-amber-300">{t("admin.runnerEventsTruncated")}</div>
-        ) : null}
-        <div className="rounded-lg border bg-muted/20 px-4 py-2">
-          {diagnosis.events.length ? diagnosis.events.map((event) => (
-            <div key={event.id} className="relative grid gap-1 border-l py-1.5 pl-5 sm:grid-cols-[190px_110px_minmax(0,1fr)] sm:gap-3">
-              <span className="absolute -left-1 top-3 size-2 rounded-full bg-sky-500 ring-4 ring-background" />
-              <time className="font-mono text-[11px] text-muted-foreground">
-                {formatTime(event.created_at, i18n.resolvedLanguage, { fractionalSecondDigits: 3 })}
-              </time>
-              <span className="font-mono text-[11px] text-muted-foreground">{event.event_type}</span>
-              <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{event.message.trimEnd()}</pre>
-            </div>
-          )) : (
-            <div className="py-8 text-center text-sm text-muted-foreground">{t("admin.noRunnerEvents")}</div>
-          )}
-        </div>
-      </section>
+      <RunnerRequestActivity
+        key={state.id}
+        requestID={state.id}
+        request={request}
+        initialEvents={diagnosis.events}
+        refreshRevision={activityRefreshRevision}
+      />
     </div>
   )
 }
 
-type RunnerLogName = (typeof logNames)[number]
+function mergeRunnerEvents(...pages: RunnerDiagnosticEvent[][]): RunnerDiagnosticEvent[] {
+  const byID = new Map<number, RunnerDiagnosticEvent>()
+  for (const page of pages) {
+    for (const event of page) byID.set(event.id, event)
+  }
+  return Array.from(byID.values()).sort((left, right) => left.id - right.id)
+}
 
-function RunnerRequestLogs({
+function RunnerRequestActivity({
   requestID,
   request,
+  initialEvents,
+  refreshRevision,
 }: {
   requestID: string
-  request: (url: string, options?: RequestInit) => Promise<unknown>
+  request?: (url: string, options?: RequestInit) => Promise<unknown>
+  initialEvents: RunnerRequestDiagnosis["events"]
+  refreshRevision: number
 }) {
-  const { t } = useTranslation()
-  const [selectedLog, setSelectedLog] = useState<RunnerLogName>("control.log")
-  const [logText, setLogText] = useState<LocalizedLogText>({ kind: "message", key: "user.loadingRunnerLog" })
-  const [loaded, setLoaded] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const requestGeneration = useRef(0)
+  const { t, i18n } = useTranslation()
+  const [events, setEvents] = useState(initialEvents)
+  const [eventFilter, setEventFilter] = useState<"all" | "control_log" | "stdout_log" | "stderr_log">("all")
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingLatest, setLoadingLatest] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [loadError, setLoadError] = useState("")
+  const latestRequestGeneration = useRef(0)
+  const earlierRequestGeneration = useRef(0)
+  const initialized = useRef(false)
+  const latestEventID = useRef(0)
 
-  const loadLog = useCallback(async (name: RunnerLogName) => {
-    const generation = ++requestGeneration.current
-    setLoading(true)
-    setLogText({ kind: "message", key: "user.loadingRunnerLog" })
-    try {
-      const text = await request(`/runner_requests/${encodeURIComponent(requestID)}/logs/${encodeURIComponent(name)}`)
-      if (generation !== requestGeneration.current) return
-      setLogText(typeof text === "string" && text
-        ? { kind: "text", text }
-        : { kind: "message", key: "user.runnerLogEmpty" })
-      setLoaded(true)
-    } catch (error) {
-      if (generation !== requestGeneration.current) return
-      setLogText(error instanceof Error
-        ? { kind: "text", text: error.message }
-        : { kind: "message", key: "app.loadFailed" })
-      setLoaded(true)
-    } finally {
-      if (generation === requestGeneration.current) setLoading(false)
+  useEffect(() => {
+    if (!request) {
+      setEvents(initialEvents)
+      latestEventID.current = initialEvents[initialEvents.length - 1]?.id ?? 0
+      return
     }
-  }, [request, requestID])
+    const generation = ++latestRequestGeneration.current
+    setLoadingLatest(true)
+    setLoadError("")
+    const loadLatest = async () => {
+      try {
+        if (!initialized.current) {
+          const page = await request(`/runner_requests/${encodeURIComponent(requestID)}/events`) as RunnerEventPage
+          if (generation !== latestRequestGeneration.current) return
+          const pageEvents = Array.isArray(page.events) ? page.events : []
+          initialized.current = true
+          latestEventID.current = pageEvents[pageEvents.length - 1]?.id ?? 0
+          setEvents(pageEvents)
+          setHasMore(Boolean(page.has_more))
+          return
+        }
+
+        let cursor = latestEventID.current
+        let newEvents: RunnerDiagnosticEvent[] = []
+        for (;;) {
+          const page = await request(`/runner_requests/${encodeURIComponent(requestID)}/events?after_id=${cursor}`) as RunnerEventPage
+          if (generation !== latestRequestGeneration.current) return
+          const pageEvents = Array.isArray(page.events) ? page.events : []
+          newEvents = mergeRunnerEvents(newEvents, pageEvents)
+          const nextCursor = pageEvents[pageEvents.length - 1]?.id
+          if (!page.has_more || nextCursor === undefined || nextCursor <= cursor) break
+          cursor = nextCursor
+        }
+        latestEventID.current = newEvents[newEvents.length - 1]?.id ?? latestEventID.current
+        if (newEvents.length) setEvents((current) => mergeRunnerEvents(current, newEvents))
+      } catch (error) {
+        if (generation !== latestRequestGeneration.current) return
+        setLoadError(error instanceof Error ? error.message : t("admin.runnerEventsLoadFailed"))
+      } finally {
+        if (generation === latestRequestGeneration.current) setLoadingLatest(false)
+      }
+    }
+    void loadLatest()
+    return () => {
+      if (latestRequestGeneration.current === generation) latestRequestGeneration.current += 1
+    }
+  }, [initialEvents, refreshRevision, request, requestID, t])
+
+  const loadEarlier = useCallback(async () => {
+    const beforeID = events[0]?.id
+    if (!request || !beforeID || loadingEarlier) return
+    const generation = ++earlierRequestGeneration.current
+    setLoadingEarlier(true)
+    setLoadError("")
+    try {
+      const page = await request(`/runner_requests/${encodeURIComponent(requestID)}/events?before_id=${beforeID}`) as RunnerEventPage
+      if (generation !== earlierRequestGeneration.current) return
+      setEvents((current) => mergeRunnerEvents(page.events ?? [], current))
+      setHasMore(Boolean(page.has_more))
+    } catch (error) {
+      if (generation !== earlierRequestGeneration.current) return
+      setLoadError(error instanceof Error ? error.message : t("admin.runnerEventsLoadFailed"))
+    } finally {
+      if (generation === earlierRequestGeneration.current) setLoadingEarlier(false)
+    }
+  }, [events, loadingEarlier, request, requestID, t])
+
+  const visibleEvents = eventFilter === "all"
+    ? events
+    : events.filter((event) => event.event_type === eventFilter)
 
   return (
-    <details
-      className="group overflow-hidden rounded-lg border bg-muted/10"
-      onToggle={(event) => {
-        if (event.currentTarget.open && !loaded && !loading) void loadLog(selectedLog)
-      }}
-    >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 marker:content-none hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+    <section className="space-y-2">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
         <div>
-          <div className="text-sm font-medium">{t("admin.runnerLogs")}</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">{t("admin.logsDescription")}</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            {t("admin.runnerActivity")}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{t("admin.runnerActivityDescription")}</div>
         </div>
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="space-y-3 border-t bg-background/70 p-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Tabs
-            value={selectedLog}
-            onValueChange={(value) => {
-              const name = value as RunnerLogName
-              setSelectedLog(name)
-              void loadLog(name)
-            }}
+            value={eventFilter}
+            onValueChange={(value) => setEventFilter(value as typeof eventFilter)}
+            className="gap-0"
           >
-            <TabsList>
-              {logNames.map((name) => (
-                <TabsTrigger key={name} value={name}>
-                  {name.replace(".log", "")}
-                </TabsTrigger>
-              ))}
+            <TabsList className="h-8 rounded-md" aria-label={t("admin.runnerEventFilterLabel")}>
+              <TabsTrigger value="all" className="px-2.5 text-xs">{t("admin.runnerEventFilterAll")}</TabsTrigger>
+              <TabsTrigger value="control_log" className="px-2.5 font-mono text-xs">{t("admin.runnerEventFilterControl")}</TabsTrigger>
+              <TabsTrigger value="stdout_log" className="px-2.5 font-mono text-xs">{t("admin.runnerEventFilterStdout")}</TabsTrigger>
+              <TabsTrigger value="stderr_log" className="px-2.5 font-mono text-xs">{t("admin.runnerEventFilterStderr")}</TabsTrigger>
             </TabsList>
           </Tabs>
-          <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void loadLog(selectedLog)}>
-            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            {t("common.refresh")}
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {loadingLatest ? <Loader2 className="mr-1 inline size-3 animate-spin" /> : null}
+            {t("admin.runnerEventCount", { count: events.length })}
+          </span>
+        </div>
+      </div>
+
+      {loadError ? (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{loadError}</div>
+      ) : null}
+      {hasMore && request ? (
+        <div className="flex justify-center">
+          <Button type="button" variant="outline" size="sm" disabled={loadingEarlier} onClick={() => void loadEarlier()}>
+            {loadingEarlier ? <Loader2 className="animate-spin" /> : null}
+            {t("admin.loadEarlierRunnerEvents")}
           </Button>
         </div>
-        <pre className="min-h-64 rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-          {localizedLogTextForView(logText, t)}
-        </pre>
+      ) : null}
+      <div className="rounded-lg border bg-muted/20 px-4 py-2">
+        {visibleEvents.length ? visibleEvents.map((event) => (
+          <div key={event.id} className="relative grid gap-1 border-l py-1.5 pl-5 sm:grid-cols-[190px_90px_minmax(0,1fr)] sm:gap-3">
+            <span className={`absolute -left-1 top-3 size-2 rounded-full ring-4 ring-background ${event.event_type === "stderr_log" ? "bg-amber-500" : event.event_type === "stdout_log" ? "bg-slate-400" : "bg-sky-500"}`} />
+            <time className="font-mono text-[11px] text-muted-foreground">
+              {formatTime(event.created_at, i18n.resolvedLanguage, { fractionalSecondDigits: 3 })}
+            </time>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {event.event_type.replace("_log", "")}{event.stage ? ` · ${event.stage}` : ""}
+            </span>
+            <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{event.message.trimEnd()}</pre>
+          </div>
+        )) : (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            {events.length ? t("admin.noRunnerEventsForFilter", { type: eventFilter.replace("_log", "") }) : t("admin.noRunnerEvents")}
+          </div>
+        )}
       </div>
-    </details>
+    </section>
   )
 }
 

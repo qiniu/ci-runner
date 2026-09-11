@@ -508,6 +508,19 @@ curl -fsS -b "$COOKIE_JAR" \
   http://127.0.0.1:25500/runner_requests/manual-001/logs/stderr.log
 ```
 
+The Admin request detail timeline reads the same event store as a bounded mixed page. Pass the oldest returned event ID as the exclusive cursor to read earlier records:
+
+```bash
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/runner_requests/manual-001/events | jq
+curl -fsS -b "$COOKIE_JAR" \
+  'http://127.0.0.1:25500/runner_requests/manual-001/events?before_id=<oldest-event-id>' | jq
+curl -fsS -b "$COOKIE_JAR" \
+  'http://127.0.0.1:25500/runner_requests/manual-001/events?after_id=<newest-event-id>' | jq
+```
+
+`before_id` and `after_id` are mutually exclusive. Each is an exclusive cursor; `has_more` refers to additional records in the requested direction.
+
 ## 4. First Startup Check
 
 Confirm runnerd read the GitHub App config correctly:
@@ -703,9 +716,9 @@ curl -fsS -b "$COOKIE_JAR" \
 
 `/diagnostics/vars` serves the current runnerd process's expvar registry directly. It never selects a discovered pprof address file, so a stale artifact from an older process cannot hide the current metrics. Current metrics cover profile current/busy/idle/pending/desired, retry/lease, create/stop counts and durations, GitHub API calls, runner registration/cleanup, and workflow job queued/started/completed, conclusion, failure, queue duration, and run duration.
 
-`/runner_requests/{identifier}/diagnostics` is admin-only and runs on demand. The identifier may be the Runner Name shown by GitHub (`e2b-<request_id>`) or the internal Request ID. It combines the stored request state, the newest 200 lifecycle events, and a bounded live GitHub Job lookup. The response reports machine-readable findings such as a failed GitHub Job whose runner termination was not observed by runnerd. GitHub lookup failure does not discard local evidence, and the endpoint never returns the saved Sandbox credential or raw webhook payload. `/diagnostics/runner-requests/{identifier}` remains as a compatibility alias. New workflow completions also persist the GitHub conclusion, Sandbox stop request/result, and final cleanup result so future incidents can be diagnosed without searching the service manager's stdout log first.
+`/runner_requests/{identifier}/diagnostics` is admin-only and runs on demand. The identifier may be the Runner Name shown by GitHub (`e2b-<request_id>`) or the internal Request ID. It combines the stored request state, the newest 200 `control_log` lifecycle events, and a bounded live GitHub Job lookup. Filtering happens before the event limit so high-volume stdout/stderr output cannot displace lifecycle evidence. The response reports machine-readable findings such as a failed GitHub Job whose runner termination was not observed by runnerd. GitHub lookup failure does not discard local evidence, and the endpoint never returns the saved Sandbox credential or raw webhook payload. `/diagnostics/runner-requests/{identifier}` remains as a compatibility alias. New workflow completions also persist the GitHub conclusion, Sandbox stop request/result, and final cleanup result so future incidents can be diagnosed without searching the service manager's stdout log first.
 
-The Runner Requests page accepts the user-visible Runner Name or an internal request ID for exact lookup, then opens the canonical `/admin/runner_requests/{id}` resource page. Its responsive table keeps high-priority columns visible without nested horizontal or vertical scrolling. The resource page aggregates request state, findings, lifecycle events, GitHub Job result, and logs; it refreshes active requests every five seconds and also provides an explicit refresh action. The separate `/admin/diagnostics` page is reserved for runnerd runtime inspection; it contains the redacted summary and pprof discovery, and does not fetch or render the potentially large expvar snapshot until an administrator explicitly loads or refreshes it. Legacy `/admin/diagnostics?runner=...` links redirect to the request resource.
+The Runner Requests page accepts the user-visible Runner Name or an internal request ID for exact lookup, then opens the canonical `/admin/runner_requests/{id}` resource page. Its table keeps every request field on one line and uses horizontal scrolling when the viewport is narrower than the full dataset; vertical scrolling remains on the page instead of a nested table scroller. The resource page aggregates request state, findings, GitHub Job result, and one chronological Run history surface. Every persisted control/stdout/stderr event remains an individual timeline row, and its message is shown directly in normal page flow without a nested output card or disclosure. The newest 200 mixed events load first, and `GET /runner_requests/{identifier}/events?before_id=<event-id>` retrieves older pages using an exclusive cursor. Active diagnostics refresh every five seconds through one or more exclusive `after_id` pages until caught up, while the older-history cursor remains independent, so newly persisted events are merged without gaps or loss of history already loaded by the administrator. The separate `/admin/diagnostics` page is reserved for runnerd runtime inspection; it contains the redacted summary and pprof discovery, and does not fetch or render the potentially large expvar snapshot until an administrator explicitly loads or refreshes it. Legacy `/admin/diagnostics?runner=...` links redirect to the request resource.
 
 Release C removed the temporary catalog migration readiness endpoint and UI after the matcher cutover completed. The retired Runner Group and Policy APIs return `404`, and no active state, server, or UI behavior depends on those removed models.
 

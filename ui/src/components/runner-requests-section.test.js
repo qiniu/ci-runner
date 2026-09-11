@@ -3,6 +3,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 
 import i18n from "../i18n"
+import { stickyTableHeaderOffset } from "./runner-request-table"
 import { RunnerRequestsSection } from "./runner-requests-section"
 
 function renderRunnerRequests(runner, runnerStatusFilter = "all") {
@@ -152,7 +153,7 @@ describe("RunnerRequestsSection", () => {
     expect(html).not.toContain("max-h-[calc(100vh-18rem)]")
   })
 
-  test("keeps the request table usable without a bottom-only horizontal scroller", async () => {
+  test("keeps every request field visible and scrolls horizontally when needed", async () => {
     await i18n.changeLanguage("en")
     const html = renderRunnerRequests({
       id: "101445685709",
@@ -167,10 +168,17 @@ describe("RunnerRequestsSection", () => {
       updated_at: "2026-09-06T07:25:09Z",
       created_at: "2026-09-06T07:04:57Z",
     })
-    expect(html).toContain("table-fixed")
-    expect(html).toContain("[&amp;_[data-slot=table-container]]:overflow-visible")
-    expect(html).toMatch(/class="[^"]*hidden 2xl:table-cell[^"]*">Runner spec<\/th>/)
-    expect(html).toMatch(/class="[^"]*hidden truncate 2xl:table-cell[^"]*"[^>]*>.*ijvttd1cb5dmx85cnuwub/s)
+    expect(html).toContain('data-slot="table-container" class="relative w-full overflow-x-auto"')
+    expect(html).toContain("min-w-max")
+    expect(html).not.toMatch(/<th[^>]*class="[^"]*\bhidden\b/)
+    expect(html).not.toMatch(/<td[^>]*class="[^"]*\bhidden\b/)
+    expect(html).not.toMatch(/<td[^>]*class="[^"]*\btruncate\b/)
+  })
+
+  test("keeps the table header within the visible table while the page scrolls", () => {
+    expect(stickyTableHeaderOffset({ scrollportTop: 56, tableTop: 372, tableHeight: 1_800, headerHeight: 40 })).toBe(0)
+    expect(stickyTableHeaderOffset({ scrollportTop: 56, tableTop: -444, tableHeight: 1_800, headerHeight: 40 })).toBe(500)
+    expect(stickyTableHeaderOffset({ scrollportTop: 56, tableTop: -1_900, tableHeight: 1_800, headerHeight: 40 })).toBe(1_760)
   })
 
   test("shows admission label rejection as unmatched without retry actions", async () => {

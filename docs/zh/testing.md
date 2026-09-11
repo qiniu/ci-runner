@@ -484,6 +484,19 @@ curl -fsS -b "$COOKIE_JAR" \
   http://127.0.0.1:25500/runner_requests/manual-001/logs/stderr.log
 ```
 
+Admin 请求详情的时间线会从同一事件库读取受限的混合事件页。若要读取更早记录，将当前返回的最早事件 ID 作为独占游标传入：
+
+```bash
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/runner_requests/manual-001/events | jq
+curl -fsS -b "$COOKIE_JAR" \
+  'http://127.0.0.1:25500/runner_requests/manual-001/events?before_id=<oldest-event-id>' | jq
+curl -fsS -b "$COOKIE_JAR" \
+  'http://127.0.0.1:25500/runner_requests/manual-001/events?after_id=<newest-event-id>' | jq
+```
+
+`before_id` 与 `after_id` 不能同时使用。两者都是独占游标；`has_more` 表示请求方向上是否还有更多记录。
+
 ## 4. 启动后第一次自检
 
 建议先确认 runnerd 已经正确读到 GitHub App 配置：
@@ -679,9 +692,9 @@ curl -fsS -b "$COOKIE_JAR" \
 
 `/diagnostics/vars` 会直接返回当前 runnerd 进程的 expvar registry，不再选择发现到的 pprof address file，因此旧进程留下的 stale artifact 不会遮蔽当前指标。当前指标覆盖 profile current/busy/idle/pending/desired、retry/lease、create/stop 次数与耗时、GitHub API 调用、runner 注册/清理，以及 workflow job queued/started/completed、conclusion、failure、queue duration 和 run duration。
 
-`/runner_requests/{identifier}/diagnostics` 仅供管理员按需调用。identifier 可以是 GitHub 显示的 Runner Name（`e2b-<request_id>`），也可以是内部 Request ID。它会汇总请求状态、最新 200 条生命周期事件，并在受限时间内查询 GitHub Job 当前结果；返回结果包含机器可读的诊断信号，例如“GitHub Job 已失败，但 runnerd 未观察到 Runner 退出”。GitHub 查询失败不会丢弃本地证据，接口也不会返回已保存的 Sandbox 凭证或原始 webhook payload。`/diagnostics/runner-requests/{identifier}` 继续作为兼容别名。新的 workflow completion 还会持久化 GitHub conclusion、Sandbox stop 请求／结果和最终清理结果，后续故障通常不必先搜索 service manager 的 stdout 日志。
+`/runner_requests/{identifier}/diagnostics` 仅供管理员按需调用。identifier 可以是 GitHub 显示的 Runner Name（`e2b-<request_id>`），也可以是内部 Request ID。它会汇总请求状态、最新 200 条 `control_log` 生命周期事件，并在受限时间内查询 GitHub Job 当前结果；事件会先过滤再应用数量上限，避免高频 stdout/stderr 输出挤掉生命周期证据。返回结果包含机器可读的诊断信号，例如“GitHub Job 已失败，但 runnerd 未观察到 Runner 退出”。GitHub 查询失败不会丢弃本地证据，接口也不会返回已保存的 Sandbox 凭证或原始 webhook payload。`/diagnostics/runner-requests/{identifier}` 继续作为兼容别名。新的 workflow completion 还会持久化 GitHub conclusion、Sandbox stop 请求／结果和最终清理结果，后续故障通常不必先搜索 service manager 的 stdout 日志。
 
-Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精确查找，并跳转到规范的 `/admin/runner_requests/{id}` 资源页面。响应式表格会在不引入嵌套横向或纵向滚动的前提下优先保留重要列。请求资源页面聚合请求状态、诊断结论、生命周期事件、GitHub Job 结果和日志；活动中的请求每 5 秒自动刷新，也支持管理员主动刷新。独立的 `/admin/diagnostics` 页面只负责 runnerd 运行时检查，展示脱敏摘要和 pprof discovery，只有管理员主动加载或刷新时才请求并渲染可能体积较大的 expvar 快照。旧的 `/admin/diagnostics?runner=...` 链接会重定向到请求资源。
+Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精确查找，并跳转到规范的 `/admin/runner_requests/{id}` 资源页面。表格会让每个请求字段保持单行展示；当视口窄于完整数据宽度时允许横向滚动，纵向滚动仍由页面承载而不是嵌套在表格中。请求资源页面聚合请求状态、诊断结论、GitHub Job 结果和一条按时间排序的“运行记录”。每条持久化的 control/stdout/stderr 事件都保留为独立时间线行，消息直接进入页面正常流，不再使用嵌套输出卡片或折叠交互。页面先加载最新 200 条混合事件，再通过 `GET /runner_requests/{identifier}/events?before_id=<event-id>` 使用独占游标读取更早记录。活动请求每 5 秒通过一页或多页独占 `after_id` 请求追平新增事件，同时保持历史游标独立，因此不会遗漏事件或丢弃管理员已经加载的历史。独立的 `/admin/diagnostics` 页面只负责 runnerd 运行时检查，展示脱敏摘要和 pprof discovery，只有管理员主动加载或刷新时才请求并渲染可能体积较大的 expvar 快照。旧的 `/admin/diagnostics?runner=...` 链接会重定向到请求资源。
 
 Release C 在 matcher 切换完成后移除了临时 catalog migration readiness API 与界面。已退役的 Runner Group 和 Policy API 返回 `404`，当前 state、server 和 UI 行为都不依赖这些已移除模型。
 

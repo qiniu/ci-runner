@@ -3200,7 +3200,7 @@ func TestListRunnerEventsReturnsBoundedChronologicalTail(t *testing.T) {
 	store.AppendLog("diagnostic-events", "stdout.log", []byte("connected\n"))
 	store.AppendLog("diagnostic-events", "control.log", []byte("accepted\n"))
 
-	events, truncated, err := store.ListRunnerEvents("diagnostic-events", 2)
+	events, truncated, err := store.ListRunnerEvents("diagnostic-events", 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3209,6 +3209,118 @@ func TestListRunnerEventsReturnsBoundedChronologicalTail(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Message != "connected\n" || events[1].Message != "accepted\n" {
 		t.Fatalf("events = %#v, want chronological two-event tail", events)
+	}
+}
+
+func TestListRunnerEventsFiltersBeforeApplyingLimit(t *testing.T) {
+	store := New(t.TempDir())
+	if _, _, err := store.CreateRequest(RunnerRequest{
+		ID:         "diagnostic-control-events",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-diagnostic-control-events",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	store.AppendLog("diagnostic-control-events", "control.log", []byte("created\n"))
+	store.AppendLog("diagnostic-control-events", "stdout.log", []byte("noisy output 1\n"))
+	store.AppendLog("diagnostic-control-events", "stdout.log", []byte("noisy output 2\n"))
+	store.AppendLog("diagnostic-control-events", "control.log", []byte("accepted\n"))
+	store.AppendLog("diagnostic-control-events", "control.log", []byte("completed\n"))
+
+	events, truncated, err := store.ListRunnerEvents("diagnostic-control-events", 0, 2, "control_log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("expected filtered control event history to be truncated")
+	}
+	if len(events) != 2 || events[0].Message != "accepted\n" || events[1].Message != "completed\n" {
+		t.Fatalf("events = %#v, want chronological control-event tail", events)
+	}
+}
+
+func TestListRunnerEventsUsesExclusiveBeforeIDCursor(t *testing.T) {
+	store := New(t.TempDir())
+	if _, _, err := store.CreateRequest(RunnerRequest{
+		ID:         "diagnostic-event-pages",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-diagnostic-event-pages",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		name    string
+		message string
+	}{
+		{name: "control.log", message: "one\n"},
+		{name: "stdout.log", message: "two\n"},
+		{name: "stderr.log", message: "three\n"},
+		{name: "control.log", message: "four\n"},
+		{name: "stdout.log", message: "five\n"},
+	} {
+		store.AppendLog("diagnostic-event-pages", entry.name, []byte(entry.message))
+	}
+
+	allEvents, _, err := store.ListRunnerEvents("diagnostic-event-pages", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allEvents) != 5 {
+		t.Fatalf("all events = %#v, want five records", allEvents)
+	}
+
+	events, hasMore, err := store.ListRunnerEvents("diagnostic-event-pages", allEvents[4].ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasMore {
+		t.Fatal("expected older event page to report more records")
+	}
+	if len(events) != 2 || events[0].Message != "three\n" || events[1].Message != "four\n" {
+		t.Fatalf("events = %#v, want chronological page before exclusive cursor", events)
+	}
+}
+
+func TestListRunnerEventsAfterUsesExclusiveCursor(t *testing.T) {
+	store := New(t.TempDir())
+	if _, _, err := store.CreateRequest(RunnerRequest{
+		ID:         "diagnostic-forward-event-pages",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-diagnostic-forward-event-pages",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"one\n", "two\n", "three\n", "four\n", "five\n"} {
+		store.AppendLog("diagnostic-forward-event-pages", "stdout.log", []byte(message))
+	}
+
+	allEvents, _, err := store.ListRunnerEvents("diagnostic-forward-event-pages", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, hasMore, err := store.ListRunnerEventsAfter("diagnostic-forward-event-pages", allEvents[1].ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasMore {
+		t.Fatal("expected newer event page to report more records")
+	}
+	if len(events) != 2 || events[0].Message != "three\n" || events[1].Message != "four\n" {
+		t.Fatalf("events = %#v, want first chronological page after exclusive cursor", events)
+	}
+
+	events, hasMore, err = store.ListRunnerEventsAfter("diagnostic-forward-event-pages", events[1].ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMore {
+		t.Fatal("final newer event page unexpectedly reports more records")
+	}
+	if len(events) != 1 || events[0].Message != "five\n" {
+		t.Fatalf("events = %#v, want final chronological event", events)
 	}
 }
 

@@ -115,6 +115,11 @@ export type RunnerDiagnosticEvent = {
   created_at: string
 }
 
+export type RunnerEventPage = {
+  events: RunnerDiagnosticEvent[]
+  has_more: boolean
+}
+
 export type RunnerDiagnosticFinding = {
   code: string
   severity: "critical" | "warning" | "ok" | string

@@ -847,15 +847,21 @@ func (s *DBStore) ReadLog(id, name string, maxBytes int64) ([]byte, error) {
 	return append([]byte(nil), data...), nil
 }
 
-func (s *DBStore) ListRunnerEvents(id string, limit int) ([]RunnerEvent, bool, error) {
+func (s *DBStore) ListRunnerEvents(id string, beforeID int64, limit int, eventTypes ...string) ([]RunnerEvent, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, false, err
 	}
 	limit = min(max(limit, 1), 500)
 	var records []runnerEventRecord
-	if err := db.
-		Where("request_id = ?", sanitizeID(id)).
+	query := db.Where("request_id = ?", sanitizeID(id))
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+	if len(eventTypes) > 0 {
+		query = query.Where("event_type IN ?", eventTypes)
+	}
+	if err := query.
 		Order("id DESC").
 		Limit(limit + 1).
 		Find(&records).Error; err != nil {
@@ -877,6 +883,40 @@ func (s *DBStore) ListRunnerEvents(id string, limit int) ([]RunnerEvent, bool, e
 		}
 	}
 	return events, truncated, nil
+}
+
+func (s *DBStore) ListRunnerEventsAfter(id string, afterID int64, limit int, eventTypes ...string) ([]RunnerEvent, bool, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, false, err
+	}
+	limit = min(max(limit, 1), 500)
+	query := db.Where("request_id = ? AND id > ?", sanitizeID(id), afterID)
+	if len(eventTypes) > 0 {
+		query = query.Where("event_type IN ?", eventTypes)
+	}
+	var records []runnerEventRecord
+	if err := query.
+		Order("id ASC").
+		Limit(limit + 1).
+		Find(&records).Error; err != nil {
+		return nil, false, err
+	}
+	hasMore := len(records) > limit
+	if hasMore {
+		records = records[:limit]
+	}
+	events := make([]RunnerEvent, len(records))
+	for i, record := range records {
+		events[i] = RunnerEvent{
+			ID:        record.ID,
+			EventType: record.EventType,
+			Stage:     record.Stage,
+			Message:   record.Message,
+			CreatedAt: record.CreatedAt,
+		}
+	}
+	return events, hasMore, nil
 }
 
 func (s *DBStore) readRecord(id string) (runnerRequestRecord, error) {

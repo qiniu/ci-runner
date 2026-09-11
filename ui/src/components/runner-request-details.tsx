@@ -10,7 +10,7 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
   const { t, i18n } = useTranslation()
 
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-1 gap-x-10 gap-y-2 xl:grid-cols-2">
       <Detail label="ID" value={runner.id} />
       <Detail label={t("common.status")} value={runnerStatusLabel(runnerDisplayStatus(runner))} />
       <Detail label={t("common.repository")} value={runner.repository_full_name || "-"} />

@@ -129,7 +129,10 @@ describe("admin diagnostics", () => {
       onResolvedRequestID: (id) => resolvedIDs.push(id),
     })
 
-    expect(requestedURLs).toEqual(["/runner_requests/e2b-101445685709/diagnostics"])
+    expect(requestedURLs).toEqual([
+      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/events",
+    ])
     expect(resolvedIDs).toEqual(["101445685709"])
     expect(container.textContent).toContain("101445685709")
   })
@@ -146,7 +149,7 @@ describe("admin diagnostics", () => {
     expect(container.querySelector('[data-slot="card"]')?.classList.contains("shrink-0")).toBe(true)
   })
 
-  test("loads runner logs only when they are opened from the diagnosis", async () => {
+  test("filters the loaded chronological event stream without refetching", async () => {
     const requestedURLs = []
     const request = async (url) => {
       requestedURLs.push(url)
@@ -155,29 +158,86 @@ describe("admin diagnostics", () => {
           state: diagnostics.recent_failures[0],
           github_job: { lookup_status: "unavailable" },
           findings: [],
-          events: [],
+          events: [{
+            id: 1,
+            event_type: "control_log",
+            message: "runner accepted a job\n",
+            created_at: "2026-09-06T07:05:06Z",
+          }],
           events_truncated: false,
         }
       }
-      if (url === "/runner_requests/101445685709/logs/control.log") {
-        return "runner accepted a job"
+      if (url === "/runner_requests/101445685709/events") {
+        return {
+          events: [
+            { id: 3, event_type: "stdout_log", message: "second output line\n", created_at: "2026-09-06T07:05:03Z" },
+            { id: 4, event_type: "stderr_log", message: "setup warning\n", created_at: "2026-09-06T07:05:04Z" },
+            { id: 5, event_type: "control_log", message: "runner accepted a job\n", created_at: "2026-09-06T07:05:05Z" },
+          ],
+          has_more: true,
+        }
+      }
+      if (url === "/runner_requests/101445685709/events?before_id=3") {
+        return {
+          events: [
+            { id: 1, event_type: "control_log", message: "runner request created\n", created_at: "2026-09-06T07:05:01Z" },
+            { id: 2, event_type: "stdout_log", message: "first output line\n", created_at: "2026-09-06T07:05:02Z" },
+          ],
+          has_more: false,
+        }
       }
       throw new Error(`unexpected request: ${url}`)
     }
 
     const container = await renderRunnerRequest(request)
-    expect(requestedURLs).toEqual(["/runner_requests/e2b-101445685709/diagnostics"])
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(requestedURLs).toEqual([
+      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/events",
+    ])
+    expect(container.textContent).toContain("runner accepted a job")
+    expect(container.textContent).not.toContain("Runner logs")
+    const eventTabs = Array.from(container.querySelectorAll('[role="tab"]'))
+    expect(eventTabs.map((element) => element.textContent)).toEqual(["All", "control", "stdout", "stderr"])
+    expect(eventTabs[0]?.getAttribute("aria-selected")).toBe("true")
+    expect(container.textContent).toContain("second output line")
+    expect(container.textContent).toContain("setup warning")
 
-    const logsSummary = Array.from(container.querySelectorAll("summary"))
-      .find((element) => element.textContent?.includes("Runner logs"))
-    expect(logsSummary).toBeDefined()
-    await click(logsSummary)
+    await click(eventTabs[2])
+    expect(container.textContent).toContain("second output line")
+    expect(container.textContent).not.toContain("setup warning")
+    expect(container.textContent).not.toContain("runner accepted a job")
+    expect(requestedURLs).toEqual([
+      "/runner_requests/e2b-101445685709/diagnostics",
+      "/runner_requests/101445685709/events",
+    ])
+
+    await click(eventTabs[0])
+    expect(container.textContent).toContain("runner accepted a job")
+    expect(container.textContent).toContain("setup warning")
+
+    const loadEarlierButton = Array.from(container.querySelectorAll("button"))
+      .find((element) => element.textContent?.includes("Load earlier records"))
+    expect(loadEarlierButton).toBeDefined()
+    await click(loadEarlierButton)
 
     expect(requestedURLs).toEqual([
       "/runner_requests/e2b-101445685709/diagnostics",
-      "/runner_requests/101445685709/logs/control.log",
+      "/runner_requests/101445685709/events",
+      "/runner_requests/101445685709/events?before_id=3",
     ])
-    expect(container.textContent).toContain("runner accepted a job")
+    expect(container.textContent).toContain("runner request created")
+
+    const outputRows = Array.from(container.querySelectorAll("pre"))
+      .filter((element) => element.textContent?.includes("output line") || element.textContent?.includes("setup warning"))
+    expect(outputRows.map((element) => element.textContent)).toEqual([
+      "first output line",
+      "second output line",
+      "setup warning",
+    ])
+    expect(outputRows.every((element) => element.parentElement?.classList.contains("grid"))).toBe(true)
+    expect(container.textContent).not.toContain("2 lines")
+    expect(container.textContent?.match(/first output line/g)).toHaveLength(1)
   })
 
   test("keeps request details on the page scroll surface without nested vertical scrolling", () => {
@@ -201,6 +261,27 @@ describe("admin diagnostics", () => {
 
     expect(container.querySelectorAll(".overflow-auto")).toHaveLength(0)
     expect(container.querySelectorAll('[class*="max-h-"]')).toHaveLength(0)
+  })
+
+  test("uses two request-context columns only when the page is wide enough", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: diagnostics.recent_failures[0],
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      },
+    }))
+    const container = document.createElement("div")
+    container.innerHTML = html
+    const idLabel = Array.from(container.querySelectorAll(".text-muted-foreground"))
+      .find((element) => element.textContent === "ID")
+    const detailsGrid = idLabel?.parentElement?.parentElement
+
+    expect(detailsGrid?.classList.contains("grid")).toBe(true)
+    expect(detailsGrid?.classList.contains("grid-cols-1")).toBe(true)
+    expect(detailsGrid?.classList.contains("xl:grid-cols-2")).toBe(true)
   })
 
   test("refreshes the diagnosis after retrying a failed request", async () => {
@@ -234,14 +315,48 @@ describe("admin diagnostics", () => {
     expect(container.textContent).not.toContain("Failed")
   })
 
-  test("polls an active request until it reaches a terminal state", async () => {
-    let requestCount = 0
-    const request = async () => {
-      requestCount += 1
+  test("polls every new event page without reopening exhausted history", async () => {
+    let diagnosisRequestCount = 0
+    const eventURLs = []
+    const request = async (url) => {
+      if (url.includes("/events")) {
+        eventURLs.push(url)
+        if (url.endsWith("/events")) {
+          return {
+            events: [
+              { id: 1, event_type: "control_log", message: "runner started\n", created_at: "2026-09-06T07:05:01Z" },
+              { id: 2, event_type: "stdout_log", message: "first output\n", created_at: "2026-09-06T07:05:02Z" },
+            ],
+            has_more: false,
+          }
+        }
+        if (url.endsWith("/events?after_id=2")) {
+          return {
+            events: [
+              { id: 3, event_type: "stdout_log", message: "second output\n", created_at: "2026-09-06T07:05:03Z" },
+              { id: 4, event_type: "stderr_log", message: "warning output\n", created_at: "2026-09-06T07:05:04Z" },
+            ],
+            has_more: true,
+          }
+        }
+        if (url.endsWith("/events?after_id=4")) {
+          return {
+            events: [
+              { id: 5, event_type: "control_log", message: "runner completed\n", created_at: "2026-09-06T07:05:05Z" },
+            ],
+            has_more: false,
+          }
+        }
+        return {
+          events: [],
+          has_more: false,
+        }
+      }
+      diagnosisRequestCount += 1
       return {
         state: {
           ...diagnostics.recent_failures[0],
-          status: requestCount === 1 ? "running" : "completed",
+          status: diagnosisRequestCount === 1 ? "running" : "completed",
         },
         github_job: { lookup_status: "unavailable" },
         findings: [],
@@ -251,15 +366,24 @@ describe("admin diagnostics", () => {
     }
 
     const container = await renderRunnerRequest(request, { pollIntervalMs: 5 })
-    expect(container.textContent).toContain("Running")
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
 
-    expect(requestCount).toBe(2)
+    expect(diagnosisRequestCount).toBe(2)
+    expect(eventURLs).toEqual([
+      "/runner_requests/101445685709/events",
+      "/runner_requests/101445685709/events?after_id=2",
+      "/runner_requests/101445685709/events?after_id=4",
+    ])
     expect(container.textContent).toContain("Completed")
     expect(container.textContent).not.toContain("Running")
+    expect(container.textContent).toContain("first output")
+    expect(container.textContent).toContain("second output")
+    expect(container.textContent).toContain("warning output")
+    expect(container.textContent).toContain("runner completed")
+    expect(container.textContent).not.toContain("Load earlier records")
   })
 
   test("ignores a stale diagnosis after navigating to another request", async () => {

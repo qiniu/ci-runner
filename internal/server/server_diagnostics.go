@@ -4,6 +4,7 @@ import (
 	"context"
 	"expvar"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,11 @@ type runnerRequestDiagnostics struct {
 	Findings        []runnerDiagnosticFinding `json:"findings"`
 	Events          []state.RunnerEvent       `json:"events"`
 	EventsTruncated bool                      `json:"events_truncated"`
+}
+
+type runnerRequestEventPage struct {
+	Events  []state.RunnerEvent `json:"events"`
+	HasMore bool                `json:"has_more"`
 }
 
 func (s *Server) handleDiagnosticsPprof(w http.ResponseWriter, r *http.Request) {
@@ -92,16 +98,12 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
-	identifier := strings.TrimSpace(r.PathValue("id"))
-	st, err := s.store.ReadState(identifier)
-	if err != nil && strings.HasPrefix(identifier, "e2b-") {
-		st, err = s.store.ReadState(strings.TrimPrefix(identifier, "e2b-"))
-	}
+	st, err := s.readRunnerRequestByIdentifier(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "runner request not found")
 		return
 	}
-	events, truncated, err := s.store.ListRunnerEvents(st.ID, diagnosticRunnerEventLimit)
+	events, truncated, err := s.store.ListRunnerEvents(st.ID, 0, diagnosticRunnerEventLimit, "control_log")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -134,6 +136,62 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 		Events:          events,
 		EventsTruncated: truncated,
 	})
+}
+
+func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	afterValue := strings.TrimSpace(r.URL.Query().Get("after_id"))
+	beforeValue := strings.TrimSpace(r.URL.Query().Get("before_id"))
+	if afterValue != "" && beforeValue != "" {
+		writeError(w, http.StatusBadRequest, "after_id and before_id cannot be combined")
+		return
+	}
+	var afterID int64
+	if afterValue != "" {
+		parsed, err := strconv.ParseInt(afterValue, 10, 64)
+		if err != nil || parsed < 0 {
+			writeError(w, http.StatusBadRequest, "invalid after_id")
+			return
+		}
+		afterID = parsed
+	}
+	var beforeID int64
+	if beforeValue != "" {
+		parsed, err := strconv.ParseInt(beforeValue, 10, 64)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid before_id")
+			return
+		}
+		beforeID = parsed
+	}
+	st, err := s.readRunnerRequestByIdentifier(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runner request not found")
+		return
+	}
+	var events []state.RunnerEvent
+	var hasMore bool
+	if afterValue != "" {
+		events, hasMore, err = s.store.ListRunnerEventsAfter(st.ID, afterID, diagnosticRunnerEventLimit)
+	} else {
+		events, hasMore, err = s.store.ListRunnerEvents(st.ID, beforeID, diagnosticRunnerEventLimit)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runnerRequestEventPage{Events: events, HasMore: hasMore})
+}
+
+func (s *Server) readRunnerRequestByIdentifier(identifier string) (state.RunnerState, error) {
+	id := strings.TrimSpace(identifier)
+	st, err := s.store.ReadState(id)
+	if err != nil && strings.HasPrefix(id, "e2b-") {
+		return s.store.ReadState(strings.TrimPrefix(id, "e2b-"))
+	}
+	return st, err
 }
 
 func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
