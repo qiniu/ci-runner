@@ -553,10 +553,10 @@ export function RunnerRequestDiagnosisResult({
         ) : null}
         <div className="rounded-lg border bg-muted/20 px-4 py-2">
           {diagnosis.events.length ? diagnosis.events.map((event) => (
-            <div key={event.id} className="relative grid gap-1 border-l py-2 pl-5 sm:grid-cols-[170px_110px_minmax(0,1fr)] sm:gap-3">
-              <span className="absolute -left-1 top-3.5 size-2 rounded-full bg-sky-500 ring-4 ring-background" />
+            <div key={event.id} className="relative grid gap-1 border-l py-1.5 pl-5 sm:grid-cols-[190px_110px_minmax(0,1fr)] sm:gap-3">
+              <span className="absolute -left-1 top-3 size-2 rounded-full bg-sky-500 ring-4 ring-background" />
               <time className="font-mono text-[11px] text-muted-foreground">
-                {formatTime(event.created_at, i18n.resolvedLanguage)}
+                {formatTime(event.created_at, i18n.resolvedLanguage, { fractionalSecondDigits: 3 })}
               </time>
               <span className="font-mono text-[11px] text-muted-foreground">{event.event_type}</span>
               <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{event.message.trimEnd()}</pre>

@@ -96,10 +96,27 @@ export function accountMetrics(stats: AdminAccountStats, t: AppTFunction): Metri
   ]
 }
 
-export function formatTime(value?: string, locale?: string) {
+export function formatTime(
+  value?: string,
+  locale?: string,
+  options?: { fractionalSecondDigits?: 1 | 2 | 3 },
+) {
   if (!value) return "-"
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
+  if (options?.fractionalSecondDigits) {
+    const formatOptions = {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      fractionalSecondDigits: options.fractionalSecondDigits,
+      hour12: false,
+    } as Intl.DateTimeFormatOptions
+    return date.toLocaleString(locale, formatOptions)
+  }
   return date.toLocaleString(locale)
 }
 
