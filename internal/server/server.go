@@ -55,6 +55,10 @@ type Server struct {
 	workflowRunCache map[string]cachedWorkflowRun
 	workflowRunGroup singleflight.Group
 
+	diagnosticJobMu    sync.Mutex
+	diagnosticJobCache map[string]cachedDiagnosticJob
+	diagnosticJobGroup singleflight.Group
+
 	userRepositoryAccessMu    sync.Mutex
 	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
 	userRepositoryAccessEpoch map[int64]uint64
@@ -69,6 +73,11 @@ type cachedPullTitle struct {
 
 type cachedWorkflowRun struct {
 	run       github.WorkflowRun
+	expiresAt time.Time
+}
+
+type cachedDiagnosticJob struct {
+	job       github.WorkflowJob
 	expiresAt time.Time
 }
 
@@ -167,6 +176,7 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		startedAt:                 time.Now().UTC(),
 		pullTitleCache:            map[string]cachedPullTitle{},
 		workflowRunCache:          map[string]cachedWorkflowRun{},
+		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
 		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
 		userRepositoryAccessEpoch: map[int64]uint64{},
 	}

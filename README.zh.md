@@ -300,7 +300,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 
 | 路由                     | 说明                           |
 | ------------------------ | ------------------------------ |
-| `/admin/`                | 仪表盘：诊断、指标与最近失败     |
+| `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/runner_requests` | Runner Request 历史、筛选、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
 | `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、诊断结论、GitHub Job 结果和游标分页的完整时间线；每条 control/stdout/stderr 事件都按时间顺序直接展示 |

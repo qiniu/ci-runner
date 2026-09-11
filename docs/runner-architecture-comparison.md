@@ -269,13 +269,14 @@ Successful repository authorization is cached for at most 30 seconds. A request 
 
 ## Diagnostics
 
-The service imports `github.com/jimmicro/pprof`, which starts a local-only pprof/expvar service and writes discovery files near the binary. The admin diagnostics endpoint summarizes:
+The service imports `github.com/jimmicro/pprof`, which starts a local-only pprof/expvar service and writes discovery files near the binary. The admin runtime diagnostics surface exposes:
 
 - discovered pprof address files and dump scripts;
 - DB backend/path, with secrets redacted;
 - GitHub auth mode and installation details;
-- retry, lease, runner lifecycle, GitHub API, and workflow metrics;
-- recent failure state.
+- retry, lease, runner lifecycle, GitHub API, and workflow metrics from the current process's expvar registry.
+
+Per-request state, findings, GitHub Job correlation, and lifecycle/output events belong to the canonical `/admin/runner_requests/{id}` resource page rather than the runtime diagnostics payload.
 
 The admin UI should display diagnostics summaries, not expose raw pprof directly to the public internet.
 

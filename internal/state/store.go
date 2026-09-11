@@ -329,7 +329,6 @@ type RunnerRequestStore interface {
 	ReadState(id string) (RunnerState, error)
 	WriteState(st RunnerState) error
 	ListStates() ([]RunnerState, error)
-	ListRecentFailedStates(limit int) ([]RunnerState, error)
 	ListActiveStates() ([]RunnerState, error)
 	ListMismatchedCompletedStates(limit int) ([]RunnerState, error)
 	ListFailedWorkflowJobStates(limit int) ([]RunnerState, error)

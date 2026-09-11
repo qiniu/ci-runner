@@ -57,9 +57,9 @@ type runnerRequestRecord struct {
 func (runnerRequestRecord) TableName() string { return "runner_requests" }
 
 type runnerEventRecord struct {
-	ID          int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	RequestID   string    `gorm:"column:request_id;not null;index:idx_runner_events_request_created"`
-	EventType   string    `gorm:"column:event_type;not null"`
+	ID          int64     `gorm:"column:id;primaryKey;autoIncrement;index:idx_runner_events_request_id,priority:2;index:idx_runner_events_request_type_id,priority:3"`
+	RequestID   string    `gorm:"column:request_id;not null;index:idx_runner_events_request_created;index:idx_runner_events_request_id,priority:1;index:idx_runner_events_request_type_id,priority:1"`
+	EventType   string    `gorm:"column:event_type;not null;index:idx_runner_events_request_type_id,priority:2"`
 	Stage       string    `gorm:"column:stage"`
 	Message     string    `gorm:"column:message;type:text"`
 	PayloadJSON string    `gorm:"column:payload_json;type:text"`

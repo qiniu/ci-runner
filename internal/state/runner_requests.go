@@ -167,7 +167,7 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	}
 	if result.RowsAffected == 0 {
 		st, err := s.ReadState(req.ID)
-		if errors.Is(err, gorm.ErrRecordNotFound) && req.JobID != 0 {
+		if errors.Is(err, ErrNotFound) && req.JobID != 0 {
 			var conflicting runnerRequestRecord
 			conflictErr := db.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
 			if conflictErr == nil {
@@ -193,6 +193,9 @@ func (s *DBStore) ReadRequest(id string) (RunnerRequest, error) {
 func (s *DBStore) ReadState(id string) (RunnerState, error) {
 	record, err := s.readRecord(id)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return RunnerState{}, ErrNotFound
+		}
 		return RunnerState{}, err
 	}
 	return recordToState(record), nil
@@ -267,33 +270,6 @@ func (s *DBStore) ListStates() ([]RunnerState, error) {
 	if err := db.
 		Select(runnerRequestListSelectColumns).
 		Order("queued_at DESC").
-		Find(&records).Error; err != nil {
-		return nil, err
-	}
-	states := make([]RunnerState, 0, len(records))
-	for _, record := range records {
-		states = append(states, recordToState(record))
-	}
-	return states, nil
-}
-
-func (s *DBStore) ListRecentFailedStates(limit int) ([]RunnerState, error) {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = 5
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	var records []runnerRequestRecord
-	if err := db.
-		Select(runnerRequestListSelectColumns).
-		Where("status = ?", StatusFailed).
-		Order("queued_at DESC, id ASC").
-		Limit(limit).
 		Find(&records).Error; err != nil {
 		return nil, err
 	}

@@ -313,7 +313,7 @@ The built-in web UI provides:
 
 | Route | Description |
 | --- | --- |
-| `/admin/` | Dashboard with diagnostics, metrics, and recent failures |
+| `/admin/` | Dashboard with runnerd runtime diagnostics and metrics |
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
 | `/admin/runner_requests/{id}` | One Runner request resource with persisted state, diagnostic findings, the GitHub Job result, and a cursor-paged timeline that shows every control/stdout/stderr event directly in chronological order |

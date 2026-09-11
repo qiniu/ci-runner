@@ -269,13 +269,14 @@ Runner-request 列表使用有界 pagination 和 list-only database projections�
 
 ## Diagnostics
 
-服务导入 `github.com/jimmicro/pprof`，它会启动 local-only pprof/expvar service，并在 binary 附近写入 discovery files。Admin diagnostics endpoint 汇总：
+服务导入 `github.com/jimmicro/pprof`，它会启动 local-only pprof/expvar service，并在 binary 附近写入 discovery files。Admin runtime diagnostics surface 提供：
 
 - discovered pprof address files 和 dump scripts；
 - DB backend/path，secret 会 redacted；
 - GitHub auth mode 和 installation details；
-- retry、lease、runner lifecycle、GitHub API 和 workflow metrics；
-- recent failure state。
+- 当前进程 expvar registry 中的 retry、lease、runner lifecycle、GitHub API 和 workflow metrics。
+
+单个请求的状态、诊断结论、GitHub Job 关联和生命周期／输出事件归属于规范的 `/admin/runner_requests/{id}` 资源页面，不进入 runtime diagnostics payload。
 
 Admin UI 应展示 diagnostics summaries，而不是把 raw pprof 直接暴露到公网。
 

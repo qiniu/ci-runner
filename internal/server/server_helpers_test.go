@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -8,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -656,23 +659,15 @@ func TestListProfilesEndpointReturnsProfiles(t *testing.T) {
 	}
 }
 
-type diagnosticsBoundedStore struct {
+type readStateErrorStore struct {
 	state.Store
-	listStatesCalls    int
-	recentFailedCalls  int
-	recentFailedLimit  int
-	recentFailedStates []state.RunnerState
+	err error
+	ids []string
 }
 
-func (s *diagnosticsBoundedStore) ListStates() ([]state.RunnerState, error) {
-	s.listStatesCalls++
-	return nil, errors.New("diagnostics must not scan all runner states")
-}
-
-func (s *diagnosticsBoundedStore) ListRecentFailedStates(limit int) ([]state.RunnerState, error) {
-	s.recentFailedCalls++
-	s.recentFailedLimit = limit
-	return append([]state.RunnerState(nil), s.recentFailedStates...), nil
+func (s *readStateErrorStore) ReadState(id string) (state.RunnerState, error) {
+	s.ids = append(s.ids, id)
+	return state.RunnerState{}, s.err
 }
 
 func TestDiagnosticsPprofEndpointRequiresAuth(t *testing.T) {
@@ -707,38 +702,8 @@ func TestDiagnosticsPprofEndpointReturnsJSON(t *testing.T) {
 	if _, ok := body["github"]; !ok {
 		t.Error("GET /diagnostics/pprof: missing 'github' field in response")
 	}
-}
-
-func TestDiagnosticsPprofEndpointUsesBoundedRecentFailures(t *testing.T) {
-	store := &diagnosticsBoundedStore{
-		Store: state.New(t.TempDir()),
-		recentFailedStates: []state.RunnerState{
-			{ID: "failed-latest", Status: state.StatusFailed},
-			{ID: "failed-previous", Status: state.StatusFailed},
-		},
-	}
-	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
-
-	req := adminRequest(http.MethodGet, "/diagnostics/pprof", nil)
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /diagnostics/pprof: expected 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if store.listStatesCalls != 0 {
-		t.Fatalf("ListStates calls = %d, want 0", store.listStatesCalls)
-	}
-	if store.recentFailedCalls != 1 || store.recentFailedLimit != 5 {
-		t.Fatalf("ListRecentFailedStates calls = %d limit = %d, want 1 call with limit 5", store.recentFailedCalls, store.recentFailedLimit)
-	}
-	var body struct {
-		RecentFailures []state.RunnerState `json:"recent_failures"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("GET /diagnostics/pprof: invalid JSON: %v", err)
-	}
-	if len(body.RecentFailures) != 2 || body.RecentFailures[0].ID != "failed-latest" || body.RecentFailures[1].ID != "failed-previous" {
-		t.Fatalf("recent_failures = %#v, want bounded store result", body.RecentFailures)
+	if _, ok := body["recent_failures"]; ok {
+		t.Error("GET /diagnostics/pprof: returned request history outside the runtime diagnostics scope")
 	}
 }
 
@@ -991,6 +956,110 @@ func TestDiagnosticsRunnerRequestAcceptsRunnerName(t *testing.T) {
 	}
 	if body.State.ID != "101445685709" || body.State.RunnerName != "e2b-101445685709" {
 		t.Fatalf("state = %#v, want request resolved from runner name", body.State)
+	}
+}
+
+func TestDiagnosticsRunnerRequestReturnsInternalErrorWithoutAliasFallback(t *testing.T) {
+	store := &readStateErrorStore{
+		Store: state.New(t.TempDir()),
+		err:   errors.New("database unavailable"),
+	}
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/e2b-101445685709", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET runner request diagnostics on DB error: expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.ids) != 1 || store.ids[0] != "e2b-101445685709" {
+		t.Fatalf("ReadState ids = %#v, want no alias fallback after DB error", store.ids)
+	}
+}
+
+func TestDiagnosticsRunnerRequestCachesGitHubJobLookup(t *testing.T) {
+	githubCalls := 0
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		githubCalls++
+		if r.URL.Path != "/repos/o/r/actions/jobs/42" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, github.WorkflowJob{
+			ID:         42,
+			Status:     "completed",
+			Conclusion: "success",
+			RunnerName: "e2b-cache-github-job",
+		})
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "cache-github-job",
+		Source:             "github_webhook",
+		JobID:              42,
+		RepositoryFullName: "o/r",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-cache-github-job",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusCompleted
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	for range 2 {
+		req := adminRequest(http.MethodGet, "/diagnostics/runner-requests/cache-github-job", nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET runner request diagnostics: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	if githubCalls != 1 {
+		t.Fatalf("GitHub workflow job calls = %d, want 1 within diagnostics cache TTL", githubCalls)
+	}
+}
+
+func TestDiagnosticWorkflowJobCoalescesConcurrentLookups(t *testing.T) {
+	var githubCalls atomic.Int32
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		githubCalls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		writeJSON(w, http.StatusOK, github.WorkflowJob{ID: 42, Status: "completed", Conclusion: "success"})
+	}))
+	defer githubAPI.Close()
+
+	srv := newTestServer(t, state.New(t.TempDir()), githubAPI.URL, &fakeSandbox{})
+	const callers = 8
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			job, err := srv.diagnosticWorkflowJob(context.Background(), "o/r", 42)
+			if err == nil && job.ID != 42 {
+				err = fmt.Errorf("workflow job ID = %d, want 42", job.ID)
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := githubCalls.Load(); calls != 1 {
+		t.Fatalf("concurrent GitHub workflow job calls = %d, want 1", calls)
 	}
 }
 

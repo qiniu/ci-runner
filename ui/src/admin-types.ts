@@ -104,7 +104,6 @@ export type DiagnosticsSummary = {
   pprof: Array<{ address: string; address_file: string; dump_script: string }>
   state: { backend: string; database: string }
   github: { auth_mode: string; installation_id?: number; api_base_url: string }
-  recent_failures: RunnerState[]
 }
 
 export type RunnerDiagnosticEvent = {

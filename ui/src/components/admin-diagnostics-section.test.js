@@ -28,19 +28,20 @@ afterAll(() => {
   window.close()
 })
 
+const runnerState = {
+  id: "101445685709",
+  status: "completed",
+  runner_name: "e2b-101445685709",
+  repository_full_name: "xgo-dev/llgo",
+  failure_reason: "runner communication lost",
+  updated_at: "2026-09-06T07:25:09Z",
+  created_at: "2026-09-06T07:04:57Z",
+}
+
 const diagnostics = {
   pprof: [],
   state: { backend: "sqlite", database: "var/runnerd.db" },
   github: { auth_mode: "app", api_base_url: "https://api.github.com" },
-  recent_failures: [{
-    id: "101445685709",
-    status: "completed",
-    runner_name: "e2b-101445685709",
-    repository_full_name: "xgo-dev/llgo",
-    failure_reason: "runner communication lost",
-    updated_at: "2026-09-06T07:25:09Z",
-    created_at: "2026-09-06T07:04:57Z",
-  }],
 }
 
 async function renderDiagnostics(request = async () => ({}), props = {}) {
@@ -117,7 +118,7 @@ describe("admin diagnostics", () => {
     const request = async (url) => {
       requestedURLs.push(url)
       return {
-        state: diagnostics.recent_failures[0],
+        state: runnerState,
         github_job: { lookup_status: "unavailable" },
         findings: [],
         events: [],
@@ -155,7 +156,7 @@ describe("admin diagnostics", () => {
       requestedURLs.push(url)
       if (url === "/runner_requests/e2b-101445685709/diagnostics") {
         return {
-          state: diagnostics.recent_failures[0],
+          state: runnerState,
           github_job: { lookup_status: "unavailable" },
           findings: [],
           events: [{
@@ -243,7 +244,7 @@ describe("admin diagnostics", () => {
   test("keeps request details on the page scroll surface without nested vertical scrolling", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
       diagnosis: {
-        state: diagnostics.recent_failures[0],
+        state: runnerState,
         github_job: { lookup_status: "unavailable" },
         findings: [],
         events: [{
@@ -266,7 +267,7 @@ describe("admin diagnostics", () => {
   test("uses two request-context columns only when the page is wide enough", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
       diagnosis: {
-        state: diagnostics.recent_failures[0],
+        state: runnerState,
         github_job: { lookup_status: "unavailable" },
         findings: [],
         events: [],
@@ -288,7 +289,7 @@ describe("admin diagnostics", () => {
     let status = "failed"
     const request = async () => ({
       state: {
-        ...diagnostics.recent_failures[0],
+        ...runnerState,
         status,
       },
       github_job: { lookup_status: "unavailable" },
@@ -355,7 +356,7 @@ describe("admin diagnostics", () => {
       diagnosisRequestCount += 1
       return {
         state: {
-          ...diagnostics.recent_failures[0],
+          ...runnerState,
           status: diagnosisRequestCount === 1 ? "running" : "completed",
         },
         github_job: { lookup_status: "unavailable" },
@@ -397,7 +398,7 @@ describe("admin diagnostics", () => {
       }
       return Promise.resolve({
         state: {
-          ...diagnostics.recent_failures[0],
+          ...runnerState,
           id: "second-request",
           runner_name: "second-runner",
         },
@@ -432,7 +433,7 @@ describe("admin diagnostics", () => {
     await act(async () => {
       resolveFirstRequest({
         state: {
-          ...diagnostics.recent_failures[0],
+          ...runnerState,
           id: "first-request",
           runner_name: "first-runner",
         },
@@ -470,7 +471,7 @@ describe("admin diagnostics", () => {
   test("stretches diagnostic findings across the available width", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
       diagnosis: {
-        state: diagnostics.recent_failures[0],
+        state: runnerState,
         github_job: { lookup_status: "unavailable" },
         findings: [{ code: "no_anomaly_detected", severity: "ok" }],
         events: [],
@@ -489,7 +490,7 @@ describe("admin diagnostics", () => {
   test("renders an unknown finding as neutral instead of claiming no anomaly", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
       diagnosis: {
-        state: diagnostics.recent_failures[0],
+        state: runnerState,
         github_job: { lookup_status: "not_applicable" },
         findings: [{ code: "future_diagnostic_signal", severity: "future" }],
         events: [],

@@ -2203,6 +2203,89 @@ func TestMigrateAddsGitHubInstallationLookupIndex(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsRunnerEventCursorIndexes(t *testing.T) {
+	databaseURL := t.TempDir() + "/runnerd.db"
+	store := NewWithOptions(Options{
+		Backend:        BackendSQLite,
+		DatabaseDSN:    databaseURL,
+		MigrateOnStart: false,
+	}).(*DBStore)
+	db, err := store.open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TABLE runner_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		request_id TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		stage TEXT,
+		message TEXT,
+		payload_json TEXT,
+		created_at TIMESTAMP NOT NULL
+	)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE INDEX idx_runner_events_request_created ON runner_events (request_id, created_at)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	closeTestDB(t, db)
+
+	migrated := NewWithOptions(Options{
+		Backend:        BackendSQLite,
+		DatabaseDSN:    databaseURL,
+		MigrateOnStart: true,
+	}).(*DBStore)
+	migratedDB, err := migrated.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, indexName := range []string{"idx_runner_events_request_id", "idx_runner_events_request_type_id"} {
+		if !migratedDB.Migrator().HasIndex(&runnerEventRecord{}, indexName) {
+			t.Fatalf("expected runner event cursor index %s after migration", indexName)
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		query     string
+		args      []any
+		indexName string
+	}{
+		{
+			name:      "mixed event page",
+			query:     `EXPLAIN QUERY PLAN SELECT * FROM runner_events WHERE request_id = ? AND id < ? ORDER BY id DESC LIMIT 201`,
+			args:      []any{"request-1", 5000},
+			indexName: "idx_runner_events_request_id",
+		},
+		{
+			name:      "filtered control tail",
+			query:     `EXPLAIN QUERY PLAN SELECT * FROM runner_events WHERE request_id = ? AND event_type IN (?) ORDER BY id DESC LIMIT 201`,
+			args:      []any{"request-1", "control_log"},
+			indexName: "idx_runner_events_request_type_id",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var plan []struct {
+				Detail string
+			}
+			if err := migratedDB.Raw(tc.query, tc.args...).Scan(&plan).Error; err != nil {
+				t.Fatal(err)
+			}
+			var details []string
+			for _, step := range plan {
+				details = append(details, step.Detail)
+			}
+			joined := strings.Join(details, "\n")
+			if !strings.Contains(joined, tc.indexName) {
+				t.Fatalf("expected query to use %s, plan:\n%s", tc.indexName, joined)
+			}
+			if strings.Contains(joined, "USE TEMP B-TREE FOR ORDER BY") {
+				t.Fatalf("runner event query still sorts through a temporary B-tree, plan:\n%s", joined)
+			}
+		})
+	}
+}
+
 func TestLargePayloadColumnsUseTextType(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	db, err := store.dbOrEnsure()
@@ -2396,65 +2479,6 @@ func TestListStatesPage(t *testing.T) {
 	}
 	if paged[0].ID != "runner-3" || paged[1].ID != "runner-2" {
 		t.Fatalf("unexpected page order: %#v", []string{paged[0].ID, paged[1].ID})
-	}
-}
-
-func TestListRecentFailedStatesBoundsOrdersAndProjects(t *testing.T) {
-	store := New(t.TempDir())
-	base := time.Date(2026, time.August, 20, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 7; i++ {
-		_, st, err := store.CreateRequest(RunnerRequest{
-			ID:                     fmt.Sprintf("failed-%d", i),
-			Source:                 "test",
-			Labels:                 []string{"self-hosted"},
-			RunnerName:             fmt.Sprintf("e2b-failed-%d", i),
-			SandboxAPIURL:          "https://sandbox-secret.example.test",
-			SandboxAPIKeyEncrypted: "encrypted-secret",
-			CreatedAt:              base.Add(time.Duration(i) * time.Minute),
-		}, []byte(`{"workflow_job":{"id":123}}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		st.Status = StatusFailed
-		st.FailureStage = "runner_registration"
-		st.FailureReason = fmt.Sprintf("fixture-%d", i)
-		if err := store.WriteState(st); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_, completed, err := store.CreateRequest(RunnerRequest{
-		ID:         "newest-completed",
-		Source:     "test",
-		Labels:     []string{"self-hosted"},
-		RunnerName: "e2b-newest-completed",
-		CreatedAt:  base.Add(8 * time.Minute),
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completed.Status = StatusCompleted
-	if err := store.WriteState(completed); err != nil {
-		t.Fatal(err)
-	}
-
-	states, err := store.ListRecentFailedStates(5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantIDs := []string{"failed-6", "failed-5", "failed-4", "failed-3", "failed-2"}
-	if len(states) != len(wantIDs) {
-		t.Fatalf("len = %d, want %d", len(states), len(wantIDs))
-	}
-	for i, wantID := range wantIDs {
-		if states[i].ID != wantID {
-			t.Fatalf("states[%d].ID = %q, want %q", i, states[i].ID, wantID)
-		}
-		if states[i].Status != StatusFailed {
-			t.Fatalf("states[%d].Status = %q, want %q", i, states[i].Status, StatusFailed)
-		}
-		if states[i].SandboxAPIURL != "" || states[i].SandboxAPIKeyEncrypted != "" {
-			t.Fatalf("states[%d] loaded secret columns: %#v", i, states[i])
-		}
 	}
 }
 
@@ -3162,6 +3186,13 @@ func TestListActiveStatesExcludesTerminalStates(t *testing.T) {
 	}
 	if got["completed"] || got["failed"] {
 		t.Fatalf("active states included terminal rows: %#v", got)
+	}
+}
+
+func TestReadStateReturnsErrNotFound(t *testing.T) {
+	store := New(t.TempDir())
+	if _, err := store.ReadState("missing-request"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ReadState missing request error = %v, want ErrNotFound", err)
 	}
 }
 
