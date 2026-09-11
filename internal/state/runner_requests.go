@@ -785,7 +785,7 @@ func (s *DBStore) AppendLog(id, name string, data []byte) {
 		return
 	}
 	if err := db.Create(&runnerEventRecord{
-		RequestID: id,
+		RequestID: sanitizeID(id),
 		EventType: eventType,
 		Message:   string(data),
 		CreatedAt: time.Now().UTC(),

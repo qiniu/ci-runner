@@ -105,7 +105,7 @@ func (s *Server) handleDiagnosticsRunnerRequest(w http.ResponseWriter, r *http.R
 	}
 	events, truncated, err := s.store.ListRunnerEvents(st.ID, 0, diagnosticRunnerEventLimit, "control_log")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerEventReadError(w, st.ID, err)
 		return
 	}
 
@@ -179,7 +179,7 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 		events, hasMore, err = s.store.ListRunnerEvents(st.ID, beforeID, diagnosticRunnerEventLimit)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerEventReadError(w, st.ID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runnerRequestEventPage{Events: events, HasMore: hasMore})
@@ -201,6 +201,11 @@ func (s *Server) writeRunnerRequestLookupError(w http.ResponseWriter, identifier
 	}
 	s.logger.Error("read runner request for diagnostics", "identifier", identifier, "error", err)
 	writeError(w, http.StatusInternalServerError, "failed to read runner request")
+}
+
+func (s *Server) writeRunnerEventReadError(w http.ResponseWriter, requestID string, err error) {
+	s.logger.Error("read runner request events", "id", requestID, "error", err)
+	writeError(w, http.StatusInternalServerError, "failed to read runner request events")
 }
 
 func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, jobID int64) (github.WorkflowJob, error) {

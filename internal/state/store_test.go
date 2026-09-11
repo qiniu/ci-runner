@@ -3217,6 +3217,27 @@ func TestReadLogCanReturnTail(t *testing.T) {
 	}
 }
 
+func TestAppendLogSanitizesRequestIDConsistentlyWithReaders(t *testing.T) {
+	store := New(t.TempDir())
+	requestID := " ../unsafe/request "
+	store.AppendLog(requestID, "stdout.log", []byte("runner output\n"))
+
+	events, _, err := store.ListRunnerEvents(requestID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Message != "runner output\n" {
+		t.Fatalf("events = %#v, want the event written under the sanitized request ID", events)
+	}
+	logData, err := store.ReadLog(requestID, "stdout.log", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(logData) != "runner output\n" {
+		t.Fatalf("log = %q, want runner output", logData)
+	}
+}
+
 func TestListRunnerEventsReturnsBoundedChronologicalTail(t *testing.T) {
 	store := New(t.TempDir())
 	if _, _, err := store.CreateRequest(RunnerRequest{

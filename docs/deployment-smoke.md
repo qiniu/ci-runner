@@ -111,7 +111,7 @@ Check:
 - `github.auth_mode` is `app` for the recommended deployment path.
 - `state.database` points at the intended sqlite, Postgres, or MySQL database.
 - pprof discovery files and dump scripts are visible when the local pprof service is available.
-- Recent failure summaries are empty or understood.
+- For a failed or suspicious request, `/admin/runner_requests/{id}` shows findings and a chronological event timeline that explain the observed outcome; local evidence remains available when the GitHub lookup fails.
 - The retired Runner Group, Policy, and temporary catalog migration readiness APIs return `404`; `/admin/runner_groups` and `/admin/runner_policies` still redirect harmlessly to Runner Specs.
 - A Runner Request persisted as `failed` with `failure_stage=admission` and `failure_reason=profile_labels_not_matched` is shown as **Not matched**, is excluded from the failed metric, can be filtered independently, and has no retry action. Genuine failed requests remain **Failed** and retryable where applicable.
 - Existing workflow `runs-on` labels and enabled Runner Spec matching remain unchanged. Do not edit Catalog or Sandbox configuration as part of the Release C deployment.

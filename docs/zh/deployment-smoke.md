@@ -109,7 +109,7 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" https://<runner
 - 推荐部署路径下 `github.auth_mode` 是 `app`。
 - `state.database` 指向预期的 sqlite、Postgres 或 MySQL 数据库。
 - 当 local pprof service 可用时，可以看到 pprof discovery files 和 dump scripts。
-- Recent failure summaries 为空，或每一项都已理解。
+- 对失败或可疑请求，`/admin/runner_requests/{id}` 会显示能够解释当前结果的诊断结论和按时间排序的事件时间线；GitHub 查询失败时，本地证据仍然可用。
 - 已退役的 Runner Group、Policy 及临时 catalog migration readiness API 返回 `404`；`/admin/runner_groups` 与 `/admin/runner_policies` 仍会安全重定向到 Runner Specs。
 - 持久化为 `failed` 且 `failure_stage=admission`、`failure_reason=profile_labels_not_matched` 的 Runner 请求显示为**未匹配**，不计入失败指标，可单独筛选，也不显示重试操作；真正的失败请求仍显示为**失败**，并在适用时允许重试。
 - 现有 workflow `runs-on` labels 和已启用 Runner Spec 的匹配行为保持不变。Release C 部署不得同时修改 Catalog 或 Sandbox 配置。

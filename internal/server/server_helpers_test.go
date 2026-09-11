@@ -670,6 +670,19 @@ func (s *readStateErrorStore) ReadState(id string) (state.RunnerState, error) {
 	return state.RunnerState{}, s.err
 }
 
+type runnerEventsErrorStore struct {
+	state.Store
+	err error
+}
+
+func (s *runnerEventsErrorStore) ListRunnerEvents(string, int64, int, ...string) ([]state.RunnerEvent, bool, error) {
+	return nil, false, s.err
+}
+
+func (s *runnerEventsErrorStore) ListRunnerEventsAfter(string, int64, int, ...string) ([]state.RunnerEvent, bool, error) {
+	return nil, false, s.err
+}
+
 func TestDiagnosticsPprofEndpointRequiresAuth(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
@@ -973,6 +986,36 @@ func TestDiagnosticsRunnerRequestReturnsInternalErrorWithoutAliasFallback(t *tes
 	}
 	if len(store.ids) != 1 || store.ids[0] != "e2b-101445685709" {
 		t.Fatalf("ReadState ids = %#v, want no alias fallback after DB error", store.ids)
+	}
+}
+
+func TestRunnerRequestEventErrorsDoNotLeakStoreDetails(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	_, _, err := baseStore.CreateRequest(state.RunnerRequest{
+		ID:         "event-store-error",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-event-store-error",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &runnerEventsErrorStore{Store: baseStore, err: errors.New("database password leaked")}
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+
+	for _, path := range []string{
+		"/diagnostics/runner-requests/event-store-error",
+		"/runner_requests/event-store-error/events?after_id=0",
+	} {
+		req := adminRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("GET %s: expected 500, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "database password leaked") {
+			t.Fatalf("GET %s leaked the raw store error: %s", path, rec.Body.String())
+		}
 	}
 }
 
