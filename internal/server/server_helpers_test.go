@@ -1564,6 +1564,71 @@ func TestCleanupSandboxAfterExitNoopWhenNoSandboxID(t *testing.T) {
 
 // ---------- runnerExited (clean exit) ----------
 
+type conflictOnStoppingStateStore struct {
+	state.Store
+	replacementCompletedAt time.Time
+}
+
+func (s *conflictOnStoppingStateStore) WriteState(st state.RunnerState) error {
+	if st.Status != state.StatusStopping {
+		return s.Store.WriteState(st)
+	}
+	latest, err := s.Store.ReadState(st.ID)
+	if err != nil {
+		return err
+	}
+	latest.Status = state.StatusCompleted
+	latest.CompletedAt = s.replacementCompletedAt
+	if err := s.Store.WriteState(latest); err != nil {
+		return err
+	}
+	return state.ErrConflict
+}
+
+func TestRunnerExitedDoesNotCleanupWhenStoppingStateConflicts(t *testing.T) {
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("runner exit cleanup should not call GitHub after stopping state conflict: %s %s", r.Method, r.URL.String())
+	}))
+	defer ghServer.Close()
+
+	baseStore := state.New(t.TempDir())
+	replacementCompletedAt := time.Date(2026, time.September, 14, 3, 30, 0, 0, time.UTC)
+	store := &conflictOnStoppingStateStore{Store: baseStore, replacementCompletedAt: replacementCompletedAt}
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, ghServer.URL, fake)
+	srv.Close()
+
+	_, st, err := baseStore.CreateRequest(state.RunnerRequest{
+		ID:                 "exited-stopping-conflict",
+		Source:             "test",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-exited-stopping-conflict",
+		RepositoryFullName: "o/r",
+		ProfileName:        "default",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-exited-stopping-conflict"
+	if err := baseStore.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.runnerExited(st.ID, sandboxrunner.ExitResult{ExitCode: 0}, nil)
+
+	if fake.stoppedCount() != 0 {
+		t.Fatalf("stale exit callback cleaned sandbox %d times after stopping state conflict", fake.stoppedCount())
+	}
+	got, err := baseStore.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || !got.CompletedAt.Equal(replacementCompletedAt) {
+		t.Fatalf("newer replacement state was overwritten: %#v", got)
+	}
+}
+
 func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1576,7 +1641,15 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	defer ghServer.Close()
 
 	store := state.New(t.TempDir())
-	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
+	stopBlock := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(stopBlock)
+		}
+	}()
+	fake := &fakeSandbox{stopBlock: stopBlock, stopStarted: make(chan struct{}, 1)}
+	srv := newTestServer(t, store, ghServer.URL, fake)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "exited-clean",
@@ -1590,12 +1663,36 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Status = state.StatusRunning
-	st.SandboxID = "" // no sandbox to stop
+	st.SandboxID = "sb-exited-clean"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.runnerExited("exited-clean", sandboxrunner.ExitResult{ExitCode: 0}, nil)
+	done := make(chan struct{})
+	go func() {
+		srv.runnerExited("exited-clean", sandboxrunner.ExitResult{ExitCode: 0}, nil)
+		close(done)
+	}()
+	select {
+	case <-fake.stopStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sandbox cleanup after runner exit did not start")
+	}
+	duringCleanup, err := store.ReadState("exited-clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duringCleanup.Status != state.StatusStopping || duringCleanup.StoppingAt.IsZero() || !duringCleanup.CompletedAt.IsZero() {
+		t.Fatalf("expected persisted stopping state during process-exit cleanup, got %#v", duringCleanup)
+	}
+	cleanupStartedAt := duringCleanup.StoppingAt
+	close(stopBlock)
+	released = true
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner exit cleanup did not finish")
+	}
 
 	got, err := store.ReadState("exited-clean")
 	if err != nil {
@@ -1603,6 +1700,12 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	}
 	if got.Status != state.StatusCompleted {
 		t.Errorf("runnerExited exit=0: expected status=completed, got %s", got.Status)
+	}
+	if !got.StoppingAt.Equal(cleanupStartedAt) {
+		t.Fatalf("StoppingAt = %s, want preserved cleanup start %s", got.StoppingAt, cleanupStartedAt)
+	}
+	if got.CompletedAt.Before(got.StoppingAt) {
+		t.Fatalf("CompletedAt = %s before StoppingAt = %s", got.CompletedAt, got.StoppingAt)
 	}
 }
 
@@ -1648,6 +1751,58 @@ func TestRunnerExitedWithNonZeroExitCodeTransitionsToFailed(t *testing.T) {
 	}
 	if !strings.Contains(got.Error, "137") {
 		t.Errorf("runnerExited nonzero: expected error to contain exit code, got %q", got.Error)
+	}
+	if got.StoppingAt.IsZero() {
+		t.Fatal("runnerExited nonzero: expected cleanup start timestamp")
+	}
+}
+
+func TestRunnerExitedWithProcessErrorTransitionsToFailedAfterCleanup(t *testing.T) {
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"runners":[]}`))
+			return
+		}
+		t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, ghServer.URL, fake)
+
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "exited-process-error",
+		Source:             "test",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-exited-process-error",
+		RepositoryFullName: "o/r",
+		ProfileName:        "default",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-exited-process-error"
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.runnerExited(st.ID, sandboxrunner.ExitResult{}, errors.New("runner stream closed"))
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusFailed || got.FailureStage != "runner_exit" || got.FailureReason != "process_error" {
+		t.Fatalf("runnerExited process error: unexpected failure state %#v", got)
+	}
+	if got.StoppingAt.IsZero() || got.FailedAt.Before(got.StoppingAt) {
+		t.Fatalf("runnerExited process error: invalid cleanup timestamps stopping_at=%s failed_at=%s", got.StoppingAt, got.FailedAt)
+	}
+	if fake.stoppedCount() != 1 {
+		t.Fatalf("runnerExited process error: sandbox stops = %d, want 1", fake.stoppedCount())
 	}
 }
 

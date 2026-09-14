@@ -7,6 +7,37 @@ import (
 	"time"
 )
 
+func TestWriteStateCompletedUsesCompletionAsFallbackStoppingTime(t *testing.T) {
+	store := New(t.TempDir())
+	_, st, err := store.CreateRequest(RunnerRequest{
+		ID:         "completed-timestamps",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-completed-timestamps",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	completedAt := time.Date(2026, time.September, 11, 11, 29, 13, 0, time.UTC)
+	st.Status = StatusCompleted
+	st.CompletedAt = completedAt
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CompletedAt.Equal(completedAt) {
+		t.Fatalf("CompletedAt = %s, want %s", got.CompletedAt, completedAt)
+	}
+	if !got.StoppingAt.Equal(completedAt) {
+		t.Fatalf("StoppingAt = %s, want completion fallback %s", got.StoppingAt, completedAt)
+	}
+}
+
 // ---------- InFlightCount ----------
 
 func TestInFlightCountExcludesQueuedAndCompleted(t *testing.T) {

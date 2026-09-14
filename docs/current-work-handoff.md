@@ -10,7 +10,7 @@
 - 交接分支：`improve/runner-diagnostics`；推送目标：`origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
 - 提交标题：`docs: add llgo diagnostics handoff`。文档所在提交通过 `git log -1 --format=fuller -- docs/current-work-handoff.md` 获取，避免在提交内容中自引用提交 SHA。
 - 接收人：用户在另一台电脑上的后续会话。
-- 状态：故障分析完成；改进方案仅为建议，尚未实施。当前明确授权是编写交接文档、创建分支、提交并推送。
+- 状态：故障分析完成；2026-09-14 的后续会话已获授权设定目标并开始执行，当前工作区已实现生命周期时间戳修复，但尚未提交或推送；环境快照、Job 结果留存和网络诊断仍未实施。
 - 传输载体：上述远程分支；推送成功后可跨电脑获取。推送是否成功和精确 SHA 以本次会话最终交付消息及 `git ls-remote` 为准。
 
 用户先要求分析一个 llgo GitHub Actions Job，随后提供 runner_requests 查询结果和 control.log，询问 runnerd 是否有问题、如何向沙箱团队提单、runnerd 能否增加诊断能力。最后要求完整交接并在新分支提交推送。用户没有要求在本次交接中实现诊断功能、修复时间戳、重跑 Job、发布模板或部署线上服务，也没有授权代发服务团队消息。
@@ -147,11 +147,11 @@ GitHub 先取消，Runner 正常退出，runnerd 随后清理。`sandbox cleaned
 
 后续应保留两个维度：Runner 生命周期/回收结果、GitHub Job conclusion。不能将所有取消或测试失败改成 Runner 基础设施失败，也不应自动重跑用户 Job。
 
-### 5.3 时间戳语义瑕疵，尚未修复
+### 5.3 时间戳语义瑕疵，本轮已修复但尚未提交
 
-本例 `stopping_at` 比 `completed_at` 晚约 269 ms。当前代码能产生这个现象：退出处理先设置 CompletedAt；`internal/state/runner_requests.go` 的 `applyStateTimestamps()` 在写入 StatusCompleted 时发现 StoppingAt 为空，就用更晚的 now 补齐。
+本例 `stopping_at` 比 `completed_at` 晚约 269 ms。修复前代码能产生这个现象：退出处理先设置 CompletedAt；`internal/state/runner_requests.go` 的 `applyStateTimestamps()` 在写入 StatusCompleted 时发现 StoppingAt 为空，就用更晚的 now 补齐。
 
-这足以解释字段倒置，不证明清理本身倒序执行。建议后续记录真实清理开始时刻，补充覆盖直接退出、webhook stop、重复完成及重试路径的测试。不要未经授权批量改写历史数据库时间戳。
+本轮改动让 completed 状态的兼容回退使用既有 `CompletedAt`，不再用更晚的数据库写入时间；进程退出会在清理开始前持久化 stopping 状态，webhook stop 与强制停止路径把同一个清理起始时间保留到终态。stopping 的 CAS/数据库写入是进程退出外部清理的硬前置条件：写入失败时旧回调立即返回，不调用 Sandbox 或 GitHub 清理，由新状态、恢复或 reconciler 接管。回归测试覆盖清理中的可观察状态、正常/非零/错误进程退出、stopping 冲突、webhook 完成、cleanup retry 和超时强制停止。没有新增列或迁移，也没有自动改写历史数据库时间戳。
 
 ### 5.4 模板 APT 设置可能放大故障
 
@@ -189,7 +189,7 @@ Acquire::https::Timeout "30";
 | --- | --- | --- |
 | P0 | 运行环境快照 | 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不能把区域物理 ID 写回 managed spec |
 | P0 | GitHub Job 结果留存 | 生命周期 completed 与 conclusion cancelled 分开；复用已有详情页远程查询/缓存能力，评估是否确需新增持久化字段及补查注释 |
-| P0 | 完善控制事件和时间戳 | 退出码、事件来源、清理开始/结束/耗时；修复停止时间倒置，复用已有逐条事件时间线 |
+| P0 | 完善控制事件和时间戳 | **部分完成：** 已修复清理起始时间和终态时间倒置；退出码、事件来源、清理结束/耗时的进一步结构化仍待评估，继续复用已有逐条事件时间线 |
 | P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
 | P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
 
@@ -254,20 +254,22 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 
 ## 10. 后续执行顺序和验收边界
 
-1. 完成第 8 节仓库复核；判断文档相对新代码是否漂移，再读现有诊断实现。
-2. 在获得后续实施指令后，把 P0 缩成明确的字段、事件和 UI 范围；不要直接扩展成全量网络监控。
-3. 优先为时间戳倒置建立回归证据，再修正真实清理开始时间语义，覆盖进程退出和 webhook 收敛路径。历史数据不做自动修复。
+1. 仓库复核已完成：`origin/main` 仍为 `c384341`，交接分支相对它仅有两笔文档提交，开始实施时工作区干净。
+2. 生命周期时间戳修复已按测试先行完成；提交或推送前复核本节和第 11 节证据，不批量修复历史数据。
+3. 下一项实施前，将环境快照或 Job 结果留存单独缩成明确字段、事件和 UI 范围；不要直接扩展成全量网络监控。
 4. 环境与 Job 结果若新增状态字段，使用现有 SQLite additive migration 约束，不让 GORM 重建旧 runner_requests 表，不持久化 raw webhook。
-5. `go test ./internal/state -count=1` 先于相关广泛验证；按变更运行 focused server/sandboxrunner tests。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库运行项目要求的后端测试；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
+5. 状态或调用方变更继续先运行 `go test ./internal/state -count=1`，再运行 focused package 和更广验证。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
 6. UI 文案改动运行 `task ui-i18n-check` 与相关 Bun tests；依赖、构建、公共指南或 Jobs 滚动布局改动运行 `task ui-production-smoke`。生产嵌入 UI 用 `task build`；禁止手改 `internal/server/ui/`。
 7. 按实际变更同步 README 中英文、testing 中英文、TODO 和相关 agent 规则。模板验证遵守 qshell ready + 双区域真实 smoke；本地 Docker build 不能冒充 Sandbox 模板可用证据。
 8. 服务团队调查与实现可独立推进，但服务提单、真实新建 Sandbox、发布模板和线上部署均未在本会话执行。不要认为“建议下一步”就是已经完成。
 
 ## 11. 验证、工作区与关闭条件
 
-- 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有修改业务代码，没有跑 Go/Bun/部署/模板测试，也没有重跑 GitHub Job。
-- 本次交接开始时工作区干净：无 staged、modified、untracked 文件；main 与本地 tracking ref ahead/behind 为 0/0。该计数不是远程实时查询的替代。
-- 本次计划提交仅包含本文、TODO 链接和中英文 docs 索引链接。没有其他实现成果等待搬运，没有 stash 或未提交修复。
-- 文档验证使用路径检查及 `git diff --check`；精确提交后状态和远程 SHA 由交付时验证，不把未运行的测试写成通过。
+- 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
+- 后续实施开始时工作区干净，`improve/runner-diagnostics` 与 `origin/improve/runner-diagnostics` 为 0/0；`git fetch origin main improve/runner-diagnostics` 后确认 `origin/main=c384341`。当前未提交改动包括 `internal/state/runner_requests.go`、`internal/state/store_extra_test.go`、`internal/server/server_runner_lifecycle.go`、`internal/server/server_test.go`、`internal/server/server_helpers_test.go`、`TODO.md` 和本文。
+- TDD RED 证据：状态回退测试读到的 `StoppingAt` 使用更晚写入时间；进程退出清理期间数据库仍为 running；非零退出没有 stopping 时间；webhook 终态覆盖了清理中间态的 stopping 时间；stopping CAS 冲突后旧退出回调仍错误调用了 Sandbox 和 GitHub 清理。
+- 已通过 `go test ./internal/state -run TestWriteStateCompletedUsesCompletionAsFallbackStoppingTime -count=1`、四个 lifecycle focused tests、`go test ./internal/state -count=1`、`go test ./internal/server -count=1`、`go test ./...` 和 `task test`。`task test` 重建生产 UI，Bun 222 项测试通过，Go race/coverage 全套通过，最终退出码为 0；专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
+- 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
+- 最终文档和 diff 检查已在本轮收尾时运行；当前没有 commit、push 或远程 SHA 可交付，也没有 stash。
 - 可继续静态设计，无凭证阻塞。真正复现需要新电脑的 GitHub 权限、runnerd 管理登录及单独授权的沙箱凭证/测试环境。线上版本、模板构建版本、底层网络原因仍未知。
 - 继续自：本次会话，无前置 handoff 文件。完成选定改进且取得相应验证后，将耐久结论迁入正式文档，更新 TODO，并删除或标记完成这份临时交接记录。
