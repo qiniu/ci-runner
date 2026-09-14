@@ -7,7 +7,7 @@
 - 仓库：`miclle/qiniu-ci-runner`；上游：`qiniu/ci-runner`。
 - 原电脑路径：`/Users/miclle/github/miclle/qiniu-ci-runner`；接收电脑可使用其他路径。
 - 起始分支：`main`；分析及本次交接的代码基线：`c384341a5ec261903e1e165461ff601c2d3ee132`，`feat(diagnostics): add runner request investigation (#95)`。
-- 交接分支：`docs/llgo-job-diagnostics-handoff-20260914`；推送目标：`origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
+- 交接分支：`improve/runner-diagnostics`；推送目标：`origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
 - 提交标题：`docs: add llgo diagnostics handoff`。文档所在提交通过 `git log -1 --format=fuller -- docs/current-work-handoff.md` 获取，避免在提交内容中自引用提交 SHA。
 - 接收人：用户在另一台电脑上的后续会话。
 - 状态：故障分析完成；改进方案仅为建议，尚未实施。当前明确授权是编写交接文档、创建分支、提交并推送。
@@ -202,8 +202,8 @@ Acquire::https::Timeout "30";
 ## 8. 新电脑最先读取与复核
 
 ```bash
-git fetch origin docs/llgo-job-diagnostics-handoff-20260914
-git switch --track origin/docs/llgo-job-diagnostics-handoff-20260914
+git fetch origin improve/runner-diagnostics
+git switch --track origin/improve/runner-diagnostics
 git status --short --branch
 git rev-parse HEAD
 git log --oneline -5
@@ -212,7 +212,7 @@ git diff --cached --stat
 git rev-list --left-right --count 'HEAD...@{upstream}'
 ```
 
-若本地同名分支已存在，使用 `git switch docs/llgo-job-diagnostics-handoff-20260914` 并检查差异，不强制覆盖。第一步完成标准：文档可读、基线可定位、工作区/远程差异已理解，保留接收电脑已有工作。
+若本地同名分支已存在，使用 `git switch improve/runner-diagnostics` 并检查差异，不强制覆盖。第一步完成标准：文档可读、基线可定位、工作区/远程差异已理解，保留接收电脑已有工作。
 
 必须先读 `AGENTS.md`、`.agents/rules/development-workflow.md`、`.agents/rules/testing-and-verification.md`、`TODO.md`；涉及状态时读 `.agents/skills/runnerd-state-schema/SKILL.md`。
 
