@@ -522,6 +522,8 @@ describe("admin diagnostics", () => {
             sandbox_id: "sandbox-llgo",
             head_branch: "codex/test-sync-concurrent-wait-20260905",
             retry_count: 2,
+            termination_source: "process_exit",
+            runner_exit_code: 137,
             error: "runner communication lost",
             updated_at: "2026-09-06T07:25:09Z",
             created_at: "2026-09-06T07:04:57Z",
@@ -571,6 +573,10 @@ describe("admin diagnostics", () => {
       expect(html).toContain("失败时间")
       expect(html).toContain("清理耗时")
       expect(html).toContain("1m 5s")
+      expect(html).toContain("终止来源")
+      expect(html).toContain("Runner 进程退出")
+      expect(html).toContain("进程退出码")
+      expect(html).toContain("137")
       expect(html).not.toContain("已完成2026")
     } finally {
       await i18n.changeLanguage("en")

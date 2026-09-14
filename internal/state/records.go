@@ -43,6 +43,8 @@ type runnerRequestRecord struct {
 	ProcessPID              uint32     `gorm:"column:process_pid"`
 	AssignedJobID           int64      `gorm:"column:assigned_job_id"`
 	AssignedJobName         string     `gorm:"column:assigned_job_name"`
+	TerminationSource       string     `gorm:"column:termination_source"`
+	RunnerExitCode          *int       `gorm:"column:runner_exit_code"`
 	Error                   string     `gorm:"column:error"`
 	GitHubPayloadJSON       string     `gorm:"column:github_payload_json;type:text"`
 	QueuedAt                time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc"`

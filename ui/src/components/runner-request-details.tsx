@@ -49,6 +49,8 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
         label={t("admin.cleanupDuration")}
         value={formatRunnerCleanupDuration(runner, t("admin.cleanupInProgress"))}
       />
+      <Detail label={t("admin.terminationSource")} value={terminationSourceDisplay(runner.termination_source, t)} />
+      <Detail label={t("admin.runnerExitCode")} value={runner.runner_exit_code ?? "-"} />
       <Detail label={t("user.retryCount")} value={runner.retry_count || "-"} />
       <Detail label={t("user.nextRetry")} value={formatTime(runner.next_retry_at, i18n.resolvedLanguage)} />
       <Detail label={t("user.requestedLabels")} value={runner.requested_labels?.join(", ") || "-"} />
@@ -57,6 +59,18 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
       <Detail label={t("admin.error")} value={runner.error || "-"} />
     </div>
   )
+}
+
+function terminationSourceDisplay(source: string | undefined, t: AppTFunction) {
+  switch (source) {
+    case "process_exit": return `${t("admin.terminationSourceProcessExit")} (${source})`
+    case "workflow_job_webhook": return `${t("admin.terminationSourceWorkflowJobWebhook")} (${source})`
+    case "manual_stop": return `${t("admin.terminationSourceManualStop")} (${source})`
+    case "recovery_cleanup": return `${t("admin.terminationSourceRecoveryCleanup")} (${source})`
+    case "failure_cleanup": return `${t("admin.terminationSourceFailureCleanup")} (${source})`
+    case "idle_cleanup": return `${t("admin.terminationSourceIdleCleanup")} (${source})`
+    default: return source || "-"
+  }
 }
 
 function sandboxConfigSourceDisplay(source: string | undefined, t: AppTFunction) {

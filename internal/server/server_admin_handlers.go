@@ -209,7 +209,7 @@ func (s *Server) handleDeleteRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	st, _, err := s.stopRunner(context.Background(), id, github.WorkflowJob{})
+	st, _, err := s.stopRunner(context.Background(), id, github.WorkflowJob{}, state.TerminationSourceManualStop)
 	if err != nil {
 		s.logger.Error("delete runner request failed", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())

@@ -412,6 +412,13 @@ func TestManualCreateAndDeleteRunner(t *testing.T) {
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected one sandbox stop, got %d", fake.stoppedCount())
 	}
+	stopped, err := store.ReadState("manual-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.TerminationSource != state.TerminationSourceManualStop {
+		t.Fatalf("manual stop termination source = %q, want %q", stopped.TerminationSource, state.TerminationSourceManualStop)
+	}
 
 	req = adminRequest(http.MethodDelete, "/runner_requests/manual-1", nil)
 	rec = httptest.NewRecorder()
@@ -5210,6 +5217,9 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 	if got.Status != state.StatusCompleted {
 		t.Fatalf("completed event with runner_name left runner in status %s", got.Status)
 	}
+	if got.TerminationSource != state.TerminationSourceWorkflowJobWebhook {
+		t.Fatalf("completed event termination source = %q, want %q", got.TerminationSource, state.TerminationSourceWorkflowJobWebhook)
+	}
 	if got.AssignedJobID != 1001 || got.AssignedJobName != "original job" {
 		t.Fatalf("completed event did not record its assignment: id=%d name=%q", got.AssignedJobID, got.AssignedJobName)
 	}
@@ -5263,7 +5273,7 @@ func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, recorded, err := srv.stopRunner(t.Context(), "1001", github.WorkflowJob{ID: 2002, Name: "prepare", Status: "completed"})
+	got, recorded, err := srv.stopRunner(t.Context(), "1001", github.WorkflowJob{ID: 2002, Name: "prepare", Status: "completed"}, state.TerminationSourceWorkflowJobWebhook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5275,6 +5285,9 @@ func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
 	}
 	if got.AssignedJobID != 0 || got.AssignedJobName != "" {
 		t.Fatalf("expected assigned job to be cleared, got id=%d name=%q", got.AssignedJobID, got.AssignedJobName)
+	}
+	if got.TerminationSource != "" || got.RunnerExitCode != nil {
+		t.Fatalf("expected termination evidence to be cleared for the requeued attempt, got %#v", got)
 	}
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected stolen runner sandbox to be stopped, got %d", fake.stoppedCount())
@@ -6499,6 +6512,9 @@ func TestRecoverContinuesStoppingRunnerCleanup(t *testing.T) {
 	if got.Status != state.StatusStopping || got.FailureStage != "cleanup" || got.FailureReason != "github_runner_busy" || got.NextRetryAt.IsZero() {
 		t.Fatalf("expected busy runner cleanup retry, got %#v", got)
 	}
+	if got.TerminationSource != state.TerminationSourceRecoveryCleanup {
+		t.Fatalf("recovery cleanup termination source = %q, want %q", got.TerminationSource, state.TerminationSourceRecoveryCleanup)
+	}
 }
 
 func TestStopRunnerSchedulesGitHubCleanupRetry(t *testing.T) {
@@ -6542,7 +6558,7 @@ func TestStopRunnerSchedulesGitHubCleanupRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, stopped, err := srv.stopRunner(t.Context(), "cleanup-retry", github.WorkflowJob{})
+	got, stopped, err := srv.stopRunner(t.Context(), "cleanup-retry", github.WorkflowJob{}, state.TerminationSourceManualStop)
 	if err != nil {
 		t.Fatalf("stopRunner should schedule retry instead of failing immediately: %v", err)
 	}
@@ -6562,7 +6578,7 @@ func TestStopRunnerSchedulesGitHubCleanupRetry(t *testing.T) {
 	if err := store.WriteState(got); err != nil {
 		t.Fatal(err)
 	}
-	got, stopped, err = srv.stopRunner(t.Context(), "cleanup-retry", github.WorkflowJob{})
+	got, stopped, err = srv.stopRunner(t.Context(), "cleanup-retry", github.WorkflowJob{}, state.TerminationSourceManualStop)
 	if err != nil {
 		t.Fatalf("stopRunner retry should complete after GitHub cleanup succeeds: %v", err)
 	}
@@ -6617,7 +6633,7 @@ func TestStopRunnerPreservesFailureAfterCleanupRetrySuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, stopped, err := srv.stopRunner(t.Context(), "failed-cleanup", github.WorkflowJob{})
+	got, stopped, err := srv.stopRunner(t.Context(), "failed-cleanup", github.WorkflowJob{}, state.TerminationSourceFailureCleanup)
 	if err != nil {
 		t.Fatalf("stopRunner should finish cleanup for failed runner: %v", err)
 	}
@@ -6682,6 +6698,9 @@ func TestSweeperMarksTimedOutRunningRunnerFailed(t *testing.T) {
 	}
 	if got.StoppingAt.IsZero() || got.FailedAt.Before(got.StoppingAt) {
 		t.Fatalf("expected forced-stop cleanup to precede failure, stopping_at=%s failed_at=%s", got.StoppingAt, got.FailedAt)
+	}
+	if got.TerminationSource != state.TerminationSourceFailureCleanup {
+		t.Fatalf("forced-stop termination source = %q, want %q", got.TerminationSource, state.TerminationSourceFailureCleanup)
 	}
 }
 
@@ -7828,6 +7847,9 @@ func TestSweeperStopsIdleRunnerThatNeverAcceptedJob(t *testing.T) {
 	}
 	if got.Status != state.StatusCompleted {
 		t.Fatalf("expected completed idle runner, got %s", got.Status)
+	}
+	if got.TerminationSource != state.TerminationSourceIdleCleanup {
+		t.Fatalf("idle cleanup termination source = %q, want %q", got.TerminationSource, state.TerminationSourceIdleCleanup)
 	}
 }
 

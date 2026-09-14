@@ -95,7 +95,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "ignored"})
 			return
 		}
-		st, recorded, err := s.stopRunner(context.Background(), stopID, event.WorkflowJob)
+		st, recorded, err := s.stopRunner(context.Background(), stopID, event.WorkflowJob, state.TerminationSourceWorkflowJobWebhook)
 		if err != nil {
 			s.logger.Error("stop runner", "id", stopID, "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())

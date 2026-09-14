@@ -15,6 +15,15 @@ const (
 )
 
 const (
+	TerminationSourceProcessExit        = "process_exit"
+	TerminationSourceWorkflowJobWebhook = "workflow_job_webhook"
+	TerminationSourceManualStop         = "manual_stop"
+	TerminationSourceRecoveryCleanup    = "recovery_cleanup"
+	TerminationSourceFailureCleanup     = "failure_cleanup"
+	TerminationSourceIdleCleanup        = "idle_cleanup"
+)
+
+const (
 	BackendSQLite   = "sqlite"
 	BackendPostgres = "postgres"
 	BackendMySQL    = "mysql"
@@ -84,6 +93,8 @@ type RunnerState struct {
 	PullRequestNumber      int64     `json:"pull_request_number,omitempty"`
 	AssignedJobID          int64     `json:"assigned_job_id,omitempty"`
 	AssignedJobName        string    `json:"assigned_job_name,omitempty"`
+	TerminationSource      string    `json:"termination_source,omitempty"`
+	RunnerExitCode         *int      `json:"runner_exit_code,omitempty"`
 	Error                  string    `json:"error,omitempty"`
 	FailureStage           string    `json:"failure_stage,omitempty"`
 	FailureReason          string    `json:"failure_reason,omitempty"`

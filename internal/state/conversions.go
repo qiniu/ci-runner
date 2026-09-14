@@ -78,6 +78,8 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		PullRequestNumber:      githubLinks.pullRequestNumber,
 		AssignedJobID:          record.AssignedJobID,
 		AssignedJobName:        record.AssignedJobName,
+		TerminationSource:      record.TerminationSource,
+		RunnerExitCode:         record.RunnerExitCode,
 		Error:                  record.Error,
 		FailureStage:           record.FailureStage,
 		FailureReason:          record.FailureReason,

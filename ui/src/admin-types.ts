@@ -27,6 +27,8 @@ export type RunnerState = {
   pull_request_number?: number
   assigned_job_id?: number
   assigned_job_name?: string
+  termination_source?: string
+  runner_exit_code?: number
   error?: string
   failure_stage?: string
   failure_reason?: string

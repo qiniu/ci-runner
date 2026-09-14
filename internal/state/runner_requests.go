@@ -61,6 +61,8 @@ var runnerRequestListSelectColumns = []string{
 	"process_pid",
 	"assigned_job_id",
 	"assigned_job_name",
+	"termination_source",
+	"runner_exit_code",
 	"error",
 	"queued_at",
 	"last_attempt_at",
@@ -235,6 +237,8 @@ func (s *DBStore) WriteState(st RunnerState) error {
 		"process_pid":               st.ProcessPID,
 		"assigned_job_id":           st.AssignedJobID,
 		"assigned_job_name":         st.AssignedJobName,
+		"termination_source":        strings.TrimSpace(st.TerminationSource),
+		"runner_exit_code":          st.RunnerExitCode,
 		"github_job_name":           strings.TrimSpace(st.GitHubJobName),
 		"github_job_status":         strings.TrimSpace(st.GitHubJobStatus),
 		"github_job_conclusion":     strings.TrimSpace(st.GitHubJobConclusion),
@@ -727,6 +731,8 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		record.ProcessPID = 0
 		record.AssignedJobID = 0
 		record.AssignedJobName = ""
+		record.TerminationSource = ""
+		record.RunnerExitCode = nil
 		record.NextRetryAt = nil
 		record.LeaseOwner = ""
 		record.LeaseExpiresAt = nil
@@ -754,6 +760,8 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 				"process_pid":               record.ProcessPID,
 				"assigned_job_id":           record.AssignedJobID,
 				"assigned_job_name":         record.AssignedJobName,
+				"termination_source":        record.TerminationSource,
+				"runner_exit_code":          record.RunnerExitCode,
 				"next_retry_at":             nil,
 				"lease_owner":               record.LeaseOwner,
 				"lease_expires_at":          nil,

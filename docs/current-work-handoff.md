@@ -6,12 +6,12 @@
 
 - 仓库：`miclle/qiniu-ci-runner`；上游：`qiniu/ci-runner`。
 - 工作目录：仓库 checkout 根目录；不同电脑不要求使用相同的本地绝对路径。
-- 当前起始分支：`main`；本增量代码基线：`e2bce66e1e336bbf4b27d0e41aef249a3a551d8b`，`feat(diagnostics): expose runner cleanup lifecycle (#96)`。
-- 当前工作分支：`feat/github-job-result-retention`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
-- 交付提交依次为 `3472ef3 docs: add llgo diagnostics handoff`、`33070e2 docs: update diagnostics branch resume commands`、`7174373 fix(runner): preserve cleanup start timestamps` 和 `ca0eca4 feat(diagnostics): expose cleanup lifecycle`。
+- 当前起始分支：`main`；本增量代码基线：`bc03bb90`，`feat(diagnostics): retain GitHub job results (#97)`。
+- 当前工作分支：`feat/runner-termination-diagnostics`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
+- 已发布增量为 PR #96（生命周期时间与结构化清理阶段）和 PR #97（GitHub Job 终态留存）。当前分支继续补充终止来源、进程退出码和诊断语义收敛。
 - 接收人：用户在另一台电脑上的后续会话。
-- 状态：故障分析和 PR #96 生命周期切片已经完成、合并并由用户确认发布到生产。本增量已在本地完成 GitHub Job 终态结果留存及全量验证，尚未提交／推送；环境快照、typed exit payload 和网络诊断仍未实施。
-- 传输载体：PR #96 的历史实现已经进入 `upstream/main=e2bce66`。当前 `feat/github-job-result-retention` 仍有未提交改动，尚未推送，不能视为可跨电脑接收；提交和推送需等待用户明确授权。
+- 状态：故障分析、PR #96 和 PR #97 均已完成、合并，并由用户确认发布到生产。当前分支已完成结构化终止诊断与分层验证；具体提交、远端分支和 PR 状态以 Git history 与 GitHub 为准。环境快照、实际退出信号和网络诊断仍未实施。
+- 传输载体：已发布实现已经进入 `upstream/main=bc03bb90`。`feat/runner-termination-diagnostics` 推送到 `origin` 后可由另一台电脑直接跟踪；恢复时仍须核对本节命令输出，不能只依赖文档中的历史快照。
 
 用户先要求分析一个 llgo GitHub Actions Job，随后提供 runner_requests 查询结果和 control.log，询问 runnerd 是否有问题、如何向沙箱团队提单、runnerd 能否增加诊断能力。首次交接阶段只要求在新分支记录并推送完整交接，未授权重跑 Job、发布模板、部署线上服务或代发服务团队消息；后续已明确授权在同一分支实现生命周期时间戳、详情页字段和结构化退出／清理事件。
 
@@ -153,13 +153,13 @@ GitHub 先取消，Runner 正常退出，runnerd 随后清理。`sandbox cleaned
 
 本轮改动不再为 completed 状态合成 `StoppingAt`；只有真实进入清理时才在外部操作前持久化 stopping 状态，未创建 Sandbox 就完成的请求保持该时间为空。进程退出、webhook stop 与强制停止路径把同一个清理起始时间保留到终态。stopping 的 CAS/数据库写入是进程退出外部清理的硬前置条件：写入失败时旧回调立即返回，不调用 Sandbox 或 GitHub 清理，由新状态、恢复或 reconciler 接管。回归测试覆盖未进入清理的完成路径、清理中的可观察状态、正常/非零/错误进程退出、stopping 冲突、webhook 完成、cleanup retry 和超时强制停止。没有新增列或迁移，也没有自动改写历史数据库时间戳。
 
-### 5.4 详情页时间字段与结构化事件，本分支已实现
+### 5.4 详情页时间字段与结构化事件，已通过 PR #96 发布
 
 Admin Runner request 详情现在直接展示持久化的 Started、Stopping、Completed、Failed，并以 `stopping_at` 到与当前终态一致的 `completed_at` 或 `failed_at` 计算 Cleanup Duration。仍在 stopping 时显示“进行中”；字段缺失、时间无效或终点早于起点时显示 `-`，不使用 `updated_at` 猜测清理结束时间。
 
 现有 `runner_events.stage` 被复用，不新增表、列或迁移。`AppendStagedLog` 与旧 `AppendLog` 共用写入路径，旧 `control.log` 拼接读取保持兼容；Runner 退出、Sandbox 清理、GitHub Runner 注册清理和整体清理完成分别使用稳定的 `runner_exit`、`sandbox_cleanup`、`github_cleanup`、`runner_cleanup` 阶段标识，详情页逐条时间线会直接显示该标识。日志文本和现有状态转换、重试及 GitHub Job conclusion 边界不变。
 
-### 5.5 GitHub Job 终态结果留存，本增量已在本地实现
+### 5.5 GitHub Job 终态结果留存，已通过 PR #97 发布
 
 `runner_requests` 增加可空的 Job 名称、状态、结论、Runner 名称与本地观察时间字段。只有非零 Job ID 与请求原始 `workflow_job_id` 一致并且观察已为终态时才更新；分配到的其他 Job、queued/in_progress 观察和原始 webhook body 都不会进入快照。Runner 请求的 completed/failed 仍描述 runnerd 生命周期，GitHub conclusion 保持独立。
 
@@ -167,7 +167,17 @@ Admin Runner request 详情现在直接展示持久化的 Started、Stopping、C
 
 Schema 继续由 GORM tags 驱动；现有 SQLite `runner_requests` 使用 additive-only 增列，不重建表、不批量改写历史记录。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 验证仍取决于外部测试环境。
 
-### 5.6 模板 APT 设置可能放大故障
+### 5.6 结构化终止诊断，当前分支已在本地完成
+
+`runner_requests` 以 additive-only 方式增加 `termination_source` 和可空 `runner_exit_code`。终止来源记录首次取得清理流程所有权的路径：Runner 进程退出、GitHub Job 完成 Webhook、管理员停止、服务恢复清理、失败清理或空闲 Runner 清理。正常／非零进程结果会保存真实退出码；进程流错误没有退出码。Retry 和错配 Job 重新排队会清除旧终止证据，避免污染新尝试。
+
+进程退出 watcher 绑定启动或恢复时已接受的 Sandbox ID 与 PID。若同一尝试的退出结果晚于 Webhook、管理员或恢复清理到达，只补写缺失的退出码和 `runner_exit` 事件，不改变首次终止来源、不重复清理；旧尝试的延迟回调不会污染新的执行状态。
+
+完成 Hook 使用稳定的 `runner_hook` event stage。诊断优先使用结构化终止字段以及 `runner_exit`、`runner_hook`、`runner_cleanup` stage，仅对升级前历史记录保留英文 control message 回退。这样，已由 GitHub 完成 Webhook 触发且 `runner_cleanup` 已完成的成功请求不会再显示“Runner 终止过程未被 runnerd 观察到”。Admin 详情页展示本地化终止来源、稳定来源标识和可用时的进程退出码。
+
+当前固定版本和检查到的最新 `github.com/qiniu/go-sdk/v7` 的 `sandbox.CommandResult` 都不暴露实际退出信号。`StopRunner` 请求 `SIGKILL` 也不能证明它是进程最终退出原因，因此本分支不会根据 `128+n` 或停止请求猜测信号。后续只有在 provider 返回可观察字段时才保存实际信号。
+
+### 5.7 模板 APT 设置可能放大故障
 
 `templates/github-runner-ubuntu-24.04/scripts/setup-template.sh` 的 `configure_reliable_apt_sources()` 设置优先镜像：
 
@@ -202,12 +212,12 @@ Acquire::https::Timeout "30";
 | 优先级 | 提案 | 目的与边界 |
 | --- | --- | --- |
 | P0 | 运行环境快照 | 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不能把区域物理 ID 写回 managed spec |
-| P0 | GitHub Job 结果留存 | **当前增量已完成：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
-| P0 | 完善控制事件和时间戳 | **本分支已推进：** 已修复清理起始时间和终态时间倒置；详情页已展示 Started、Stopping、Completed、Failed 和语义受限的 Cleanup Duration；退出及 Sandbox/GitHub/整体清理事件已有稳定 `stage`。退出码仍保留在事件消息和失败原因中，尚未新增独立 payload 字段 |
+| P0 | GitHub Job 结果留存 | **PR #97 已发布：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
+| P0 | 完善控制事件和时间戳 | **PR #96 已发布，当前分支继续推进：** 已展示生命周期时间和 Cleanup Duration；退出、Hook 与清理事件有稳定 `stage`；当前分支新增终止来源和可空退出码，并修正成功清理的误导警告。实际退出信号受 provider API 限制 |
 | P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
 | P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
 
-生命周期切片已经通过 PR #96 进入生产；当前独立增量完成 GitHub Job 结果留存后，再评估运行环境快照，typed exit payload 继续作为后续独立范围。主动网络探测保持 P1。环境采集可由模板脚本完成，runnerd 负责触发和保存。APT 快照只取允许字段：镜像、超时、重试、代理是否存在，避免复制全环境或代理凭证。
+生命周期切片和 GitHub Job 结果留存已经分别通过 PR #96、PR #97 进入生产；当前独立增量完成终止来源、退出码和诊断语义收敛后，再评估运行环境快照。主动网络探测保持 P1。环境采集可由模板脚本完成，runnerd 负责触发和保存。APT 快照只取允许字段：镜像、超时、重试、代理是否存在，避免复制全环境或代理凭证。
 
 时机很关键：GitHub 完成通知可能晚于 Sandbox 清理，不能依赖事后连接已销毁实例来收证。启动时保存轻量快照，存活时允许管理员按需触发；若做自动失败采集，应在模板/Job 失败处理阶段给定严格时限，不无限延迟回收。无输出不等于卡死，不能因此杀任务。
 
@@ -215,18 +225,18 @@ Acquire::https::Timeout "30";
 
 ## 8. 新电脑最先读取与复核
 
-当前增量在 `feat/github-job-result-retention` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
+当前增量在 `feat/runner-termination-diagnostics` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
 
 ```bash
 git fetch origin upstream --prune
-git switch feat/github-job-result-retention || git switch -c feat/github-job-result-retention --track origin/feat/github-job-result-retention
+git switch feat/runner-termination-diagnostics || git switch -c feat/runner-termination-diagnostics --track origin/feat/runner-termination-diagnostics
 git status --short --branch
 git rev-parse HEAD
 git merge-base HEAD upstream/main
 sed -n '700,725p' docs/testing.md
 ```
 
-完成标准：分支基线仍可追溯到 `upstream/main=e2bce66`，工作区状态已理解，正式测试文档与本交接内容一致。
+完成标准：分支基线仍可追溯到 `upstream/main=bc03bb90`，工作区状态已理解，正式测试文档与本交接内容一致。
 
 必须先读 `AGENTS.md`、`.agents/rules/development-workflow.md`、`.agents/rules/testing-and-verification.md`、`TODO.md`；涉及状态时读 `.agents/skills/runnerd-state-schema/SKILL.md`。
 

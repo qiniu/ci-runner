@@ -234,6 +234,52 @@ func TestDiagnoseRunnerRequestUsesPersistedAssignmentWhenAcceptanceEventIsOutsid
 	t.Fatalf("findings = %#v, want critical runner_termination_unobserved", findings)
 }
 
+func TestDiagnoseRunnerRequestUsesTypedTerminationEvidence(t *testing.T) {
+	exitCode := 0
+	findings := diagnoseRunnerRequest(state.RunnerState{
+		Status:            state.StatusCompleted,
+		AssignedJobID:     101445685709,
+		TerminationSource: state.TerminationSourceProcessExit,
+		RunnerExitCode:    &exitCode,
+	}, nil, false, diagnosticGitHubJob{LookupStatus: "ok", Conclusion: "failure"})
+
+	for _, finding := range findings {
+		if finding.Code == "runner_termination_unobserved" {
+			t.Fatalf("typed termination evidence still reported as unobserved: %#v", findings)
+		}
+	}
+}
+
+func TestDiagnoseRunnerRequestAcceptsStructuredCleanupCompletion(t *testing.T) {
+	findings := diagnoseRunnerRequest(state.RunnerState{
+		Status:        state.StatusCompleted,
+		AssignedJobID: 101445685709,
+	}, []state.RunnerEvent{
+		{EventType: "control_log", Stage: "runner_cleanup", Message: "localized or changed text"},
+	}, false, diagnosticGitHubJob{LookupStatus: "retained", Conclusion: "success"})
+
+	if len(findings) != 1 || findings[0].Code != "no_anomaly_detected" {
+		t.Fatalf("completed structured cleanup findings = %#v, want no anomaly", findings)
+	}
+}
+
+func TestDiagnoseRunnerRequestAcceptsStructuredExitOrHook(t *testing.T) {
+	for _, stage := range []string{"runner_exit", "runner_hook"} {
+		t.Run(stage, func(t *testing.T) {
+			findings := diagnoseRunnerRequest(state.RunnerState{
+				Status:        state.StatusCompleted,
+				AssignedJobID: 101445685709,
+			}, []state.RunnerEvent{
+				{EventType: "control_log", Stage: stage, Message: "localized or changed text"},
+			}, false, diagnosticGitHubJob{LookupStatus: "retained", Conclusion: "success"})
+
+			if len(findings) != 1 || findings[0].Code != "no_anomaly_detected" {
+				t.Fatalf("structured %s findings = %#v, want no anomaly", stage, findings)
+			}
+		})
+	}
+}
+
 func TestDiagnoseRunnerRequestIgnoresLifecycleMarkersInProcessOutput(t *testing.T) {
 	findings := diagnoseRunnerRequest(state.RunnerState{
 		Status:        state.StatusCompleted,
@@ -252,6 +298,14 @@ func TestDiagnoseRunnerRequestIgnoresLifecycleMarkersInProcessOutput(t *testing.
 	}
 	if gotCodes["sandbox_gone_before_cleanup"] {
 		t.Fatalf("findings = %#v, want process output ignored for Sandbox lifecycle evidence", findings)
+	}
+}
+
+func TestSetTerminationSourcePreservesFirstOwner(t *testing.T) {
+	st := state.RunnerState{TerminationSource: state.TerminationSourceWorkflowJobWebhook}
+	setTerminationSource(&st, state.TerminationSourceRecoveryCleanup)
+	if st.TerminationSource != state.TerminationSourceWorkflowJobWebhook {
+		t.Fatalf("termination source = %q, want first owner %q", st.TerminationSource, state.TerminationSourceWorkflowJobWebhook)
 	}
 }
 
@@ -1625,6 +1679,24 @@ func TestMarkRunnerJobStartedIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAppendRunnerStdoutStagesCompletedHook(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+
+	if _, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "completed-hook",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-completed-hook",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.appendRunnerStdout("completed-hook", []byte("RUNNERD_JOB_COMPLETED\n"))
+
+	requireRunnerEventStageMessage(t, store, "completed-hook", "runner_hook", "runner completed job hook received")
+}
+
 // ---------- cleanupSandboxAfterExit ----------
 
 func TestCleanupSandboxAfterExitNoopWhenNoSandboxID(t *testing.T) {
@@ -1686,11 +1758,12 @@ func TestRunnerExitedDoesNotCleanupWhenStoppingStateConflicts(t *testing.T) {
 	}
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-exited-stopping-conflict"
+	st.ProcessPID = 42
 	if err := baseStore.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.runnerExited(st.ID, sandboxrunner.ExitResult{ExitCode: 0}, nil)
+	srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{ExitCode: 0}, nil)
 
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("stale exit callback cleaned sandbox %d times after stopping state conflict", fake.stoppedCount())
@@ -1739,13 +1812,14 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	}
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-exited-clean"
+	st.ProcessPID = 42
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan struct{})
 	go func() {
-		srv.runnerExited("exited-clean", sandboxrunner.ExitResult{ExitCode: 0}, nil)
+		srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{ExitCode: 0}, nil)
 		close(done)
 	}()
 	select {
@@ -1776,6 +1850,9 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	if got.Status != state.StatusCompleted {
 		t.Errorf("runnerExited exit=0: expected status=completed, got %s", got.Status)
 	}
+	if got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatalf("runnerExited exit=0: unexpected termination evidence %#v", got)
+	}
 	if !got.StoppingAt.Equal(cleanupStartedAt) {
 		t.Fatalf("StoppingAt = %s, want preserved cleanup start %s", got.StoppingAt, cleanupStartedAt)
 	}
@@ -1784,6 +1861,98 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	}
 	requireRunnerEventStageMessage(t, store, st.ID, "runner_exit", "runner process exited cleanly")
 	requireRunnerEventStageMessage(t, store, st.ID, "sandbox_cleanup", "sandbox cleaned after runner exit")
+}
+
+func TestRunnerExitedForAttemptPersistsExitCodeAfterExplicitStop(t *testing.T) {
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "explicit-stop-exit",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-explicit-stop-exit",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-explicit-stop-exit"
+	st.ProcessPID = 42
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped, _, err := srv.stopRunner(t.Context(), st.ID, github.WorkflowJob{}, state.TerminationSourceManualStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.runnerExitedForAttempt(
+		st.ID,
+		runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID},
+		sandboxrunner.ExitResult{ExitCode: 137},
+		nil,
+	)
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceManualStop {
+		t.Fatalf("late exit changed explicit-stop ownership: %#v", got)
+	}
+	if got.RunnerExitCode == nil || *got.RunnerExitCode != 137 {
+		t.Fatalf("late observed exit code = %#v, want 137", got.RunnerExitCode)
+	}
+	if fake.stoppedCount() != 1 {
+		t.Fatalf("late exit repeated Sandbox cleanup: got %d stops, want 1", fake.stoppedCount())
+	}
+	requireRunnerEventStageMessage(t, store, st.ID, "runner_exit", "runner process exited after cleanup started with code 137")
+	if stopped.RunnerExitCode != nil {
+		t.Fatalf("explicit stop unexpectedly had exit evidence before OnExit: %#v", stopped.RunnerExitCode)
+	}
+}
+
+func TestRunnerExitedForAttemptRejectsStaleAttemptEvidence(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		attempt runnerAttemptIdentity
+	}{
+		{name: "sandbox changed", attempt: runnerAttemptIdentity{sandboxID: "sb-old-attempt", processPID: 84}},
+		{name: "pid changed", attempt: runnerAttemptIdentity{sandboxID: "sb-new-attempt", processPID: 42}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := state.New(t.TempDir())
+			srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+
+			_, st, err := store.CreateRequest(state.RunnerRequest{
+				ID:     "stale-attempt-exit",
+				Source: "test",
+				Labels: []string{"self-hosted"},
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status = state.StatusCompleted
+			st.SandboxID = "sb-new-attempt"
+			st.ProcessPID = 84
+			st.TerminationSource = state.TerminationSourceWorkflowJobWebhook
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+
+			srv.runnerExitedForAttempt(st.ID, tt.attempt, sandboxrunner.ExitResult{ExitCode: 137}, nil)
+
+			got, err := store.ReadState(st.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.RunnerExitCode != nil {
+				t.Fatalf("stale attempt wrote exit code into current request state: %#v", got.RunnerExitCode)
+			}
+		})
+	}
 }
 
 func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
@@ -1827,13 +1996,14 @@ func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
 	}
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-exited-retained-job"
+	st.ProcessPID = 42
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan struct{})
 	go func() {
-		srv.runnerExited(st.ID, sandboxrunner.ExitResult{ExitCode: 0}, nil)
+		srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{ExitCode: 0}, nil)
 		close(done)
 	}()
 	select {
@@ -1899,12 +2069,13 @@ func TestRunnerExitedWithNonZeroExitCodeTransitionsToFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Status = state.StatusRunning
-	st.SandboxID = ""
+	st.SandboxID = "sb-exited-nonzero"
+	st.ProcessPID = 42
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.runnerExited("exited-nonzero", sandboxrunner.ExitResult{ExitCode: 137, Stderr: "OOM killed"}, nil)
+	srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{ExitCode: 137, Stderr: "OOM killed"}, nil)
 
 	got, err := store.ReadState("exited-nonzero")
 	if err != nil {
@@ -1915,6 +2086,9 @@ func TestRunnerExitedWithNonZeroExitCodeTransitionsToFailed(t *testing.T) {
 	}
 	if !strings.Contains(got.Error, "137") {
 		t.Errorf("runnerExited nonzero: expected error to contain exit code, got %q", got.Error)
+	}
+	if got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 137 {
+		t.Fatalf("runnerExited nonzero: unexpected termination evidence %#v", got)
 	}
 	if got.StoppingAt.IsZero() {
 		t.Fatal("runnerExited nonzero: expected cleanup start timestamp")
@@ -1964,11 +2138,12 @@ func TestRunnerExitedWithProcessErrorTransitionsToFailedAfterCleanup(t *testing.
 	}
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-exited-process-error"
+	st.ProcessPID = 42
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.runnerExited(st.ID, sandboxrunner.ExitResult{}, errors.New("runner stream closed"))
+	srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{}, errors.New("runner stream closed"))
 
 	got, err := store.ReadState(st.ID)
 	if err != nil {
@@ -1976,6 +2151,9 @@ func TestRunnerExitedWithProcessErrorTransitionsToFailedAfterCleanup(t *testing.
 	}
 	if got.Status != state.StatusFailed || got.FailureStage != "runner_exit" || got.FailureReason != "process_error" {
 		t.Fatalf("runnerExited process error: unexpected failure state %#v", got)
+	}
+	if got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode != nil {
+		t.Fatalf("runnerExited process error: unexpected termination evidence %#v", got)
 	}
 	if got.StoppingAt.IsZero() || got.FailedAt.Before(got.StoppingAt) {
 		t.Fatalf("runnerExited process error: invalid cleanup timestamps stopping_at=%s failed_at=%s", got.StoppingAt, got.FailedAt)
@@ -2018,7 +2196,7 @@ func TestRunnerExitedKeepsSandboxWhenGitHubRunnerIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.runnerExited("exited-busy", sandboxrunner.ExitResult{ExitCode: -1, Error: "deadline_exceeded: context deadline exceeded"}, nil)
+	srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, sandboxrunner.ExitResult{ExitCode: -1, Error: "deadline_exceeded: context deadline exceeded"}, nil)
 
 	got, err := store.ReadState("exited-busy")
 	if err != nil {

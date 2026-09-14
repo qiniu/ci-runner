@@ -2515,7 +2515,7 @@ func TestRunnerRequestListProjectionExcludesHeavyAndSecretColumns(t *testing.T) 
 	}
 }
 
-func TestRunnerStatePersistsGitHubJobResult(t *testing.T) {
+func TestRunnerStatePersistsDiagnosticEvidence(t *testing.T) {
 	databaseURL := filepath.Join(t.TempDir(), "runnerd.db")
 	store := NewWithOptions(Options{
 		Backend:        BackendSQLite,
@@ -2539,6 +2539,9 @@ func TestRunnerStatePersistsGitHubJobResult(t *testing.T) {
 	st.GitHubJobConclusion = "cancelled"
 	st.GitHubJobRunnerName = "e2b-1001"
 	st.GitHubJobObservedAt = observedAt
+	exitCode := 137
+	st.TerminationSource = TerminationSourceProcessExit
+	st.RunnerExitCode = &exitCode
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -2556,7 +2559,8 @@ func TestRunnerStatePersistsGitHubJobResult(t *testing.T) {
 	}
 	if got.GitHubJobName != "test" || got.GitHubJobStatus != "completed" ||
 		got.GitHubJobConclusion != "cancelled" || got.GitHubJobRunnerName != "e2b-1001" ||
-		!got.GitHubJobObservedAt.Equal(observedAt) {
+		!got.GitHubJobObservedAt.Equal(observedAt) || got.TerminationSource != TerminationSourceProcessExit ||
+		got.RunnerExitCode == nil || *got.RunnerExitCode != exitCode {
 		t.Fatalf("unexpected retained GitHub Job result after restart: %#v", got)
 	}
 	states, err := restarted.ListStates()
@@ -2564,7 +2568,9 @@ func TestRunnerStatePersistsGitHubJobResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(states) != 1 || states[0].GitHubJobConclusion != "cancelled" ||
-		!states[0].GitHubJobObservedAt.Equal(observedAt) {
+		!states[0].GitHubJobObservedAt.Equal(observedAt) ||
+		states[0].TerminationSource != TerminationSourceProcessExit ||
+		states[0].RunnerExitCode == nil || *states[0].RunnerExitCode != exitCode {
 		t.Fatalf("list projection lost retained GitHub Job result: %#v", states)
 	}
 }
@@ -4500,6 +4506,9 @@ func TestRetryRequestClearsFailureFields(t *testing.T) {
 	st.LastErrorMessage = "temporary failure"
 	st.LastErrorRetryable = true
 	st.NextRetryAt = time.Now().Add(time.Minute).UTC()
+	exitCode := 1
+	st.TerminationSource = TerminationSourceFailureCleanup
+	st.RunnerExitCode = &exitCode
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -4508,7 +4517,8 @@ func TestRetryRequestClearsFailureFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retried.Status != StatusQueued || retried.FailureStage != "" || retried.LastErrorCode != "" || !retried.NextRetryAt.IsZero() {
+	if retried.Status != StatusQueued || retried.FailureStage != "" || retried.LastErrorCode != "" || !retried.NextRetryAt.IsZero() ||
+		retried.TerminationSource != "" || retried.RunnerExitCode != nil {
 		t.Fatalf("unexpected retried state: %#v", retried)
 	}
 }
@@ -5179,9 +5189,11 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"github_job_conclusion",
 		"github_job_runner_name",
 		"github_job_observed_at",
+		"termination_source",
+		"runner_exit_code",
 	} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
-			t.Fatalf("expected retained GitHub Job result column %s after additive migration", column)
+			t.Fatalf("expected additive runner request column %s after migration", column)
 		}
 	}
 	for _, indexName := range []string{

@@ -306,8 +306,10 @@ func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, j
 func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
 	findings := make([]runnerDiagnosticFinding, 0, 5)
 	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || controlEventMessageContains(events, "runner accepted a job")
-	hasRunnerExit := controlEventMessageContains(events, "runner process exited")
-	hasCompletedHook := controlEventMessageContains(events, "runner completed job hook received")
+	hasRunnerExit := controlEventStage(events, runnerEventStageRunnerExit) || controlEventMessageContains(events, "runner process exited")
+	hasCompletedHook := controlEventStage(events, runnerEventStageRunnerHook) || controlEventMessageContains(events, "runner completed job hook received")
+	hasCompletedCleanup := controlEventStage(events, runnerEventStageRunnerCleanup)
+	hasTerminationEvidence := knownTerminationSource(st.TerminationSource) || hasRunnerExit || hasCompletedHook || hasCompletedCleanup
 	hasSandboxGone := controlEventMessageContains(events, "sandbox already gone")
 	githubFailed := githubJobEvidenceAvailable(job) && isFailureConclusion(job.Conclusion)
 
@@ -324,7 +326,7 @@ func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, tru
 	if githubFailed && st.Status == state.StatusCompleted {
 		findings = append(findings, runnerDiagnosticFinding{Code: "request_completed_after_github_failure", Severity: "warning"})
 	}
-	if hasAcceptedJob && isTerminalRunnerStatus(st.Status) && !hasRunnerExit && !hasCompletedHook {
+	if hasAcceptedJob && isTerminalRunnerStatus(st.Status) && !hasTerminationEvidence {
 		detail := ""
 		if len(events) > 0 {
 			detail = events[len(events)-1].CreatedAt.Format(time.RFC3339)
@@ -382,6 +384,34 @@ func controlEventMessageContains(events []state.RunnerEvent, fragment string) bo
 		}
 	}
 	return false
+}
+
+func controlEventStage(events []state.RunnerEvent, stages ...string) bool {
+	for _, event := range events {
+		if event.EventType != "control_log" {
+			continue
+		}
+		for _, stage := range stages {
+			if event.Stage == stage {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func knownTerminationSource(source string) bool {
+	switch strings.TrimSpace(source) {
+	case state.TerminationSourceProcessExit,
+		state.TerminationSourceWorkflowJobWebhook,
+		state.TerminationSourceManualStop,
+		state.TerminationSourceRecoveryCleanup,
+		state.TerminationSourceFailureCleanup,
+		state.TerminationSourceIdleCleanup:
+		return true
+	default:
+		return false
+	}
 }
 
 func isTerminalRunnerStatus(status string) bool {
