@@ -8,7 +8,6 @@ The public, bilingual end-user guides are served at [runner.qiniuinc.com/docs](h
 
 - [Local Testing And GitHub Setup](testing.md): local configuration, GitHub App/OAuth setup, webhook forwarding, admin API examples, and troubleshooting.
 - [Current Work Handoff (Chinese)](current-work-handoff.md): llgo Job timeout evidence, runnerd lifecycle analysis, implemented cleanup and GitHub Job-result diagnostics slices, remaining diagnostics work, and cross-computer resume instructions.
-- [GitHub Job Result Retention Plan](superpowers/plans/2026-09-14-github-job-result-retention.md): scoped TDD plan for additive terminal-result persistence, retained-first diagnostics, compatibility fallback, and verification.
 - [Deployment Smoke Checklist](deployment-smoke.md): production-style smoke checklist for a real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics.
 - [Public Runner Templates](default-runner-templates.md): qshell requirements, two-region build and publication order, Sandbox smoke evidence, ownership, and rollback.
 - [Runner Architecture Comparison](runner-architecture-comparison.md): current runnerd architecture baseline, Mermaid system/lifecycle/state diagrams, DB-backed state model, and comparison with Fireactions and Actions Runner Controller.

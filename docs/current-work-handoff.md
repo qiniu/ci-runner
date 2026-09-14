@@ -202,7 +202,7 @@ Acquire::https::Timeout "30";
 | 优先级 | 提案 | 目的与边界 |
 | --- | --- | --- |
 | P0 | 运行环境快照 | 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不能把区域物理 ID 写回 managed spec |
-| P0 | GitHub Job 结果留存 | **当前增量已在本地完成：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
+| P0 | GitHub Job 结果留存 | **当前增量已完成：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
 | P0 | 完善控制事件和时间戳 | **本分支已推进：** 已修复清理起始时间和终态时间倒置；详情页已展示 Started、Stopping、Completed、Failed 和语义受限的 Cleanup Duration；退出及 Sandbox/GitHub/整体清理事件已有稳定 `stage`。退出码仍保留在事件消息和失败原因中，尚未新增独立 payload 字段 |
 | P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
 | P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
@@ -215,18 +215,18 @@ Acquire::https::Timeout "30";
 
 ## 8. 新电脑最先读取与复核
 
-当前增量尚未提交／推送，因此暂时只能在本 checkout 继续；不要在新电脑上假设 `origin/feat/github-job-result-retention` 已存在。当前 checkout 的第一动作是：
+当前增量在 `feat/github-job-result-retention` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
 
 ```bash
-git switch feat/github-job-result-retention
+git fetch origin upstream --prune
+git switch feat/github-job-result-retention || git switch -c feat/github-job-result-retention --track origin/feat/github-job-result-retention
 git status --short --branch
 git rev-parse HEAD
-git diff --stat
-git diff --cached --stat
-sed -n '1,280p' docs/superpowers/plans/2026-09-14-github-job-result-retention.md
+git merge-base HEAD upstream/main
+sed -n '700,725p' docs/testing.md
 ```
 
-完成标准：分支基线仍可追溯到 `upstream/main=e2bce66`，现有未提交改动已理解，计划与本交接内容一致。等用户授权提交并推送后，再把这里改成远程分支的可验证 fetch/switch 命令。
+完成标准：分支基线仍可追溯到 `upstream/main=e2bce66`，工作区状态已理解，正式测试文档与本交接内容一致。
 
 必须先读 `AGENTS.md`、`.agents/rules/development-workflow.md`、`.agents/rules/testing-and-verification.md`、`TODO.md`；涉及状态时读 `.agents/skills/runnerd-state-schema/SKILL.md`。
 
@@ -270,7 +270,7 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 
 1. 仓库复核已完成：`upstream/main=e2bce66` 已包含 PR #96，工作区从干净的 `main` 创建 `feat/github-job-result-retention`。
 2. 生命周期时间戳、详情页字段和结构化事件已进入生产；不批量修复历史数据。
-3. 当前增量按 [GitHub Job 结果留存计划](superpowers/plans/2026-09-14-github-job-result-retention.md) 实施，范围只包含 additive 终态字段、原始 Job guard、历史查询回退和 UI 来源／新鲜度；环境快照和 typed exit payload 保持后续独立范围，不扩展成全量网络监控。
+3. 当前增量已完成 additive 终态字段、原始 Job guard、历史查询回退和 UI 来源／新鲜度；环境快照和 typed exit payload 保持后续独立范围，不扩展成全量网络监控。
 4. 环境与 Job 结果若新增状态字段，使用现有 SQLite additive migration 约束，不让 GORM 重建旧 runner_requests 表，不持久化 raw webhook。
 5. 状态或调用方变更继续先运行 `go test ./internal/state -count=1`，再运行 focused package 和更广验证。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
 6. UI 文案改动运行 `task ui-i18n-check` 与相关 Bun tests；依赖、构建、公共指南或 Jobs 滚动布局改动运行 `task ui-production-smoke`。生产嵌入 UI 用 `task build`；禁止手改 `internal/server/ui/`。
@@ -280,7 +280,7 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 ## 11. 验证、工作区与关闭条件
 
 - 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
-- 当前增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。尚未提交／推送；当前变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、计划、TODO、正式中英文文档和 agent 规则。
+- 当前增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、TODO、正式中英文文档和 agent 规则。
 - 当前增量 TDD RED 证据：状态测试先因五个快照字段不存在而编译失败；生命周期 helper 测试先因函数不存在而失败，非终态拒绝测试先证明 `in_progress` 会被错误保留；诊断测试先证明详情 API 仍调用 GitHub 且没有来源字段；UI 测试先证明持久化来源与采集时间未渲染。
 - 已通过 `go test ./internal/state -count=1`、Runner exit/cleanup focused tests、`go test ./...`、`task ui-i18n-check`、`task build`、最终 `task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。最终 UI 全套为 225 项测试、836 个断言全部通过；`task test` 重建生产 UI 并完成 Go race/coverage 全套，退出码为 0。lint 使用 `go.mod` 固定的 Go 1.26.3 后为 0 error，仍有 3 条位于未修改文件的既有 hook dependency warning；本机默认 Go 1.27 会让 staticcheck v0.7.0 因 export-data 版本不兼容而失败。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
 - 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
