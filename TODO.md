@@ -4,7 +4,7 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
-- Land the lifecycle slice from the [llgo Job timeout and runnerd diagnostics handoff](docs/current-work-handoff.md), then implement GitHub Job result retention as a separate increment. Lifecycle cleanup timestamps now preserve the real stopping transition; the Admin detail page exposes Started, Stopping, Completed/Failed, and status-aware Cleanup Duration; exit and cleanup timeline events have stable stages. Environment snapshots and typed exit payloads remain unimplemented, and the network root cause remains unverified.
+- Continue the [llgo Job timeout and runnerd diagnostics roadmap](docs/current-work-handoff.md) after the merged lifecycle slice. The current increment retains the original Workflow Job's terminal result with its observation time and makes the Admin detail page distinguish retained evidence from the live fallback used by historical rows. Environment snapshots and typed exit payloads remain unimplemented, and the network root cause remains unverified.
 - Plan separately authorized cleanup of historical `runner_requests.github_payload_json` after verifying GitHub context and installation-ID backfills on a backup. New requests no longer store raw webhook bodies; existing payloads, the legacy column, and startup backfill remain. Historical request/log retention and repeated-log limits are still undecided.
 - Decide whether repository-level Runner Spec overrides and cross-organization approval are needed; the current scope remains account or manageable Organization only.
 - Decide whether GitHub token and basic auth remain supported compatibility modes or should be removed in favor of GitHub App-only operation.

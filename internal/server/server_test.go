@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -4714,6 +4715,69 @@ func TestWebhookQueuedSkipsSandboxWhenGitHubJobNoLongerQueued(t *testing.T) {
 	if !completed.StoppingAt.IsZero() {
 		t.Fatalf("expected no cleanup start for a job completed before sandbox creation, got %s", completed.StoppingAt)
 	}
+	if completed.GitHubJobStatus != "completed" || completed.GitHubJobConclusion != "cancelled" ||
+		completed.GitHubJobName != "test" || completed.GitHubJobObservedAt.IsZero() {
+		t.Fatalf("expected completed GitHub Job result to be retained before Sandbox creation, got %#v", completed)
+	}
+}
+
+func TestRetainWorkflowJobResultPreservesTerminalResult(t *testing.T) {
+	observedAt := time.Date(2026, 9, 14, 7, 15, 32, 0, time.UTC)
+	st := state.RunnerState{WorkflowJobID: 1001}
+	if !retainWorkflowJobResult(&st, github.WorkflowJob{
+		ID:         1001,
+		Name:       "test",
+		Status:     "completed",
+		Conclusion: "success",
+		RunnerName: "e2b-1001",
+	}, observedAt) {
+		t.Fatal("expected completed result to change the snapshot")
+	}
+	if retainWorkflowJobResult(&st, github.WorkflowJob{
+		ID:         1001,
+		Name:       "test",
+		Status:     "in_progress",
+		RunnerName: "e2b-1001",
+	}, observedAt.Add(time.Second)) {
+		t.Fatal("out-of-order in_progress result must not replace a terminal snapshot")
+	}
+	if st.GitHubJobStatus != "completed" || st.GitHubJobConclusion != "success" ||
+		!st.GitHubJobObservedAt.Equal(observedAt) {
+		t.Fatalf("terminal GitHub Job result was downgraded: %#v", st)
+	}
+}
+
+func TestRetainWorkflowJobResultIgnoresNonterminalObservation(t *testing.T) {
+	st := state.RunnerState{WorkflowJobID: 1001}
+	if retainWorkflowJobResult(&st, github.WorkflowJob{
+		ID:         1001,
+		Name:       "test",
+		Status:     "in_progress",
+		RunnerName: "e2b-1001",
+	}, time.Now().UTC()) {
+		t.Fatal("nonterminal GitHub Job observation must not create a retained result")
+	}
+	if !st.GitHubJobObservedAt.IsZero() || st.GitHubJobStatus != "" || st.GitHubJobName != "" {
+		t.Fatalf("nonterminal GitHub Job observation changed retained result fields: %#v", st)
+	}
+}
+
+func TestRetainWorkflowJobResultRejectsUnrelatedJobs(t *testing.T) {
+	for _, jobID := range []int64{0, 2002} {
+		t.Run(strconv.FormatInt(jobID, 10), func(t *testing.T) {
+			st := state.RunnerState{WorkflowJobID: 1001}
+			if retainWorkflowJobResult(&st, github.WorkflowJob{
+				ID:         jobID,
+				Status:     "completed",
+				Conclusion: "failure",
+			}, time.Now().UTC()) {
+				t.Fatalf("job %d must not update original job 1001", jobID)
+			}
+			if !st.GitHubJobObservedAt.IsZero() || st.GitHubJobConclusion != "" {
+				t.Fatalf("job %d changed retained result fields: %#v", jobID, st)
+			}
+		})
+	}
 }
 
 func TestWebhookQueuedUsesEventRepositoryForRepoRunner(t *testing.T) {
@@ -4909,6 +4973,10 @@ func TestOriginalWorkflowJobCompletionKeepsRunnerAssignedToDifferentJob(t *testi
 	if got.AssignedJobID != 2002 || got.AssignedJobName != "actual job" {
 		t.Fatalf("original job completion replaced actual assignment: id=%d name=%q", got.AssignedJobID, got.AssignedJobName)
 	}
+	if got.GitHubJobStatus != "completed" || got.GitHubJobConclusion != "cancelled" ||
+		got.GitHubJobName != "original job" || got.GitHubJobObservedAt.IsZero() {
+		t.Fatalf("original GitHub Job result was not retained: %#v", got)
+	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("original job completion stopped sandbox assigned to another job %d times", fake.stoppedCount())
 	}
@@ -4965,6 +5033,10 @@ func TestWeakOriginalWorkflowJobCompletionKeepsCompletedRunnerAssignment(t *test
 	}
 	if got.AssignedJobID != 2002 || got.AssignedJobName != "actual job" {
 		t.Fatalf("weak original job completion replaced completed runner assignment: id=%d name=%q", got.AssignedJobID, got.AssignedJobName)
+	}
+	if got.GitHubJobStatus != "completed" || got.GitHubJobConclusion != "cancelled" ||
+		got.GitHubJobName != "original job" || got.GitHubJobObservedAt.IsZero() {
+		t.Fatalf("completed Runner request did not retain the later GitHub Job result: %#v", got)
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("weak original job completion stopped an already completed runner %d times", fake.stoppedCount())

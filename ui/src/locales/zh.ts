@@ -262,6 +262,8 @@ export const zh = {
     runnerDiagnosisFailed: "Runner 请求诊断失败",
     openGitHubJob: "打开 GitHub Job",
     githubJobResult: "GitHub · {{result}}",
+    githubJobRetainedAt: "持久化快照 · 采集于 {{time}}",
+    githubJobLiveAt: "实时查询 · 查询于 {{time}}",
     diagnosticFindings: "诊断结论",
     runnerRequestContext: "请求上下文",
     runnerRequestContextDescription: "该请求在 runnerd 中持久化的完整状态。",

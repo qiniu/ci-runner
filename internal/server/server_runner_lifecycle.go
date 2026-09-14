@@ -629,6 +629,7 @@ func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reaso
 		st.AssignedJobID = job.ID
 		st.AssignedJobName = job.Name
 	}
+	retainWorkflowJobResult(&st, job, time.Now().UTC())
 	st.Status = state.StatusCompleted
 	st.CompletedAt = time.Now().UTC()
 	st.Error = ""
@@ -1178,8 +1179,14 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		s.logger.Error("read runner state for stop", "id", id, "error", err)
 		return state.RunnerState{}, false, err
 	}
+	resultChanged := retainWorkflowJobResult(&st, job, time.Now().UTC())
 	s.logger.Info("runner stop requested", "id", id, "status", st.Status, "sandbox_id", st.SandboxID, "pid", st.ProcessPID, "job_id", job.ID)
 	if workflowJobStopConflictsWithAssignment(st, job) {
+		if resultChanged {
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, fmt.Errorf("write completed github job result: %w", err)
+			}
+		}
 		s.logger.Warn(
 			"runner stop deferred because runner ownership is unresolved or different",
 			"id", id,
@@ -1198,14 +1205,18 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	}
 	if st.Status == state.StatusCompleted {
 		recorded := false
+		stateChanged := resultChanged
 		if shouldRecordAssignedJob(st, job) {
 			st.AssignedJobID = job.ID
 			st.AssignedJobName = job.Name
-			if err := s.store.WriteState(st); err != nil {
-				return state.RunnerState{}, false, fmt.Errorf("write completed job assignment: %w", err)
-			}
 			recorded = true
+			stateChanged = true
 			s.logger.Info("recorded completed runner job assignment", "id", id, "job_id", job.ID, "job_name", job.Name)
+		}
+		if stateChanged {
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, fmt.Errorf("write completed job result: %w", err)
+			}
 		}
 		s.logger.Info("runner stop skipped because already completed", "id", id)
 		return st, recorded, nil
@@ -1594,6 +1605,53 @@ func shouldRecordAssignedJob(st state.RunnerState, job github.WorkflowJob) bool 
 		return false
 	}
 	return st.AssignedJobID != job.ID || st.AssignedJobName != job.Name
+}
+
+func retainWorkflowJobResult(st *state.RunnerState, job github.WorkflowJob, observedAt time.Time) bool {
+	if st == nil || job.ID == 0 || st.WorkflowJobID == 0 || job.ID != st.WorkflowJobID {
+		return false
+	}
+	status := strings.TrimSpace(job.Status)
+	conclusion := strings.TrimSpace(job.Conclusion)
+	if status == "" && conclusion != "" {
+		status = "completed"
+	}
+	incomingTerminal := strings.EqualFold(status, "completed") || conclusion != ""
+	if !incomingTerminal {
+		return false
+	}
+
+	changed := false
+	if name := strings.TrimSpace(job.Name); name != "" && st.GitHubJobName != name {
+		st.GitHubJobName = name
+		changed = true
+	}
+	if status != "" && st.GitHubJobStatus != status {
+		st.GitHubJobStatus = status
+		changed = true
+	}
+	if conclusion != "" && st.GitHubJobConclusion != conclusion {
+		st.GitHubJobConclusion = conclusion
+		changed = true
+	}
+	if runnerName := strings.TrimSpace(job.RunnerName); runnerName != "" && st.GitHubJobRunnerName != runnerName {
+		st.GitHubJobRunnerName = runnerName
+		changed = true
+	}
+	if !changed && st.GitHubJobName == "" && st.GitHubJobStatus == "" &&
+		st.GitHubJobConclusion == "" && st.GitHubJobRunnerName == "" {
+		return false
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
+	if !st.GitHubJobObservedAt.Equal(observedAt) {
+		st.GitHubJobObservedAt = observedAt
+		changed = true
+	}
+	return changed
 }
 
 // workflowJobStopConflictsWithAssignment reports whether a completed workflow

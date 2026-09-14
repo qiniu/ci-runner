@@ -77,8 +77,9 @@ type cachedWorkflowRun struct {
 }
 
 type cachedDiagnosticJob struct {
-	job       github.WorkflowJob
-	expiresAt time.Time
+	job        github.WorkflowJob
+	observedAt time.Time
+	expiresAt  time.Time
 }
 
 type cachedUserRepositoryAccess struct {

@@ -21,12 +21,14 @@ const (
 )
 
 type diagnosticGitHubJob struct {
-	LookupStatus string `json:"lookup_status"`
-	ID           int64  `json:"id,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Conclusion   string `json:"conclusion,omitempty"`
-	RunnerName   string `json:"runner_name,omitempty"`
+	LookupStatus string     `json:"lookup_status"`
+	Source       string     `json:"source,omitempty"`
+	ID           int64      `json:"id,omitempty"`
+	Name         string     `json:"name,omitempty"`
+	Status       string     `json:"status,omitempty"`
+	Conclusion   string     `json:"conclusion,omitempty"`
+	RunnerName   string     `json:"runner_name,omitempty"`
+	ObservedAt   *time.Time `json:"observed_at,omitempty"`
 }
 
 type runnerDiagnosticFinding struct {
@@ -125,22 +127,24 @@ func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	job := diagnosticGitHubJob{LookupStatus: "not_applicable"}
-	if st.WorkflowJobID != 0 && strings.TrimSpace(st.RepositoryFullName) != "" {
+	job, retained := retainedDiagnosticGitHubJob(st)
+	if !retained && st.WorkflowJobID != 0 && strings.TrimSpace(st.RepositoryFullName) != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		githubJob, lookupErr := s.diagnosticWorkflowJob(ctx, st.RepositoryFullName, st.WorkflowJobID)
+		githubJob, observedAt, lookupErr := s.diagnosticWorkflowJob(ctx, st.RepositoryFullName, st.WorkflowJobID)
 		if lookupErr != nil {
 			job.LookupStatus = "unavailable"
 			s.logger.Warn("diagnostic github workflow job lookup failed", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "error", lookupErr)
 		} else {
 			job = diagnosticGitHubJob{
 				LookupStatus: "ok",
+				Source:       "live",
 				ID:           githubJob.ID,
 				Name:         githubJob.Name,
 				Status:       githubJob.Status,
 				Conclusion:   githubJob.Conclusion,
 				RunnerName:   githubJob.RunnerName,
+				ObservedAt:   &observedAt,
 			}
 		}
 	}
@@ -152,6 +156,23 @@ func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Re
 		Events:          events,
 		EventsTruncated: truncated,
 	})
+}
+
+func retainedDiagnosticGitHubJob(st state.RunnerState) (diagnosticGitHubJob, bool) {
+	if st.GitHubJobObservedAt.IsZero() {
+		return diagnosticGitHubJob{LookupStatus: "not_applicable"}, false
+	}
+	observedAt := st.GitHubJobObservedAt.UTC()
+	return diagnosticGitHubJob{
+		LookupStatus: "retained",
+		Source:       "retained",
+		ID:           st.WorkflowJobID,
+		Name:         st.GitHubJobName,
+		Status:       st.GitHubJobStatus,
+		Conclusion:   st.GitHubJobConclusion,
+		RunnerName:   st.GitHubJobRunnerName,
+		ObservedAt:   &observedAt,
+	}, true
 }
 
 func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +250,7 @@ func (s *Server) writeRunnerEventReadError(w http.ResponseWriter, requestID stri
 	writeError(w, http.StatusInternalServerError, "failed to read runner request events")
 }
 
-func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, jobID int64) (github.WorkflowJob, error) {
+func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, jobID int64) (github.WorkflowJob, time.Time, error) {
 	key := strings.ToLower(strings.TrimSpace(repository)) + "#" + strconv.FormatInt(jobID, 10)
 	now := time.Now()
 	s.diagnosticJobMu.Lock()
@@ -238,7 +259,7 @@ func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, j
 	}
 	if cached, ok := s.diagnosticJobCache[key]; ok && now.Before(cached.expiresAt) {
 		s.diagnosticJobMu.Unlock()
-		return cached.job, nil
+		return cached.job, cached.observedAt, nil
 	}
 	s.diagnosticJobMu.Unlock()
 
@@ -266,14 +287,20 @@ func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, j
 				delete(s.diagnosticJobCache, oldestKey)
 			}
 		}
-		s.diagnosticJobCache[key] = cachedDiagnosticJob{job: job, expiresAt: now.Add(diagnosticGitHubJobCacheTTL)}
+		cached := cachedDiagnosticJob{
+			job:        job,
+			observedAt: now.UTC(),
+			expiresAt:  now.Add(diagnosticGitHubJobCacheTTL),
+		}
+		s.diagnosticJobCache[key] = cached
 		s.diagnosticJobMu.Unlock()
-		return job, nil
+		return cached, nil
 	})
 	if err != nil {
-		return github.WorkflowJob{}, err
+		return github.WorkflowJob{}, time.Time{}, err
 	}
-	return value.(github.WorkflowJob), nil
+	cached := value.(cachedDiagnosticJob)
+	return cached.job, cached.observedAt, nil
 }
 
 func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
@@ -282,7 +309,7 @@ func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, tru
 	hasRunnerExit := controlEventMessageContains(events, "runner process exited")
 	hasCompletedHook := controlEventMessageContains(events, "runner completed job hook received")
 	hasSandboxGone := controlEventMessageContains(events, "sandbox already gone")
-	githubFailed := job.LookupStatus == "ok" && isFailureConclusion(job.Conclusion)
+	githubFailed := githubJobEvidenceAvailable(job) && isFailureConclusion(job.Conclusion)
 
 	if st.Status == state.StatusFailed {
 		if st.FailureStage == "admission" && st.FailureReason == "profile_labels_not_matched" {
@@ -321,6 +348,10 @@ func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, tru
 		findings = append(findings, runnerDiagnosticFinding{Code: "no_anomaly_detected", Severity: "ok"})
 	}
 	return findings
+}
+
+func githubJobEvidenceAvailable(job diagnosticGitHubJob) bool {
+	return job.LookupStatus == "ok" || job.LookupStatus == "retained"
 }
 
 func runnerRequestFailureDetail(st state.RunnerState) string {

@@ -76,6 +76,11 @@ type RunnerState struct {
 	HeadBranch             string    `json:"head_branch,omitempty"`
 	HeadSHA                string    `json:"head_sha,omitempty"`
 	GitHubJobURL           string    `json:"github_job_url,omitempty"`
+	GitHubJobName          string    `json:"github_job_name,omitempty"`
+	GitHubJobStatus        string    `json:"github_job_status,omitempty"`
+	GitHubJobConclusion    string    `json:"github_job_conclusion,omitempty"`
+	GitHubJobRunnerName    string    `json:"github_job_runner_name,omitempty"`
+	GitHubJobObservedAt    time.Time `json:"github_job_observed_at,omitempty"`
 	PullRequestNumber      int64     `json:"pull_request_number,omitempty"`
 	AssignedJobID          int64     `json:"assigned_job_id,omitempty"`
 	AssignedJobName        string    `json:"assigned_job_name,omitempty"`

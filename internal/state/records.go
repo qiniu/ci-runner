@@ -13,6 +13,11 @@ type runnerRequestRecord struct {
 	HeadBranch              string     `gorm:"column:head_branch"`
 	HeadSHA                 string     `gorm:"column:head_sha;index:idx_runner_requests_repository_head,priority:2"`
 	GitHubJobURL            string     `gorm:"column:github_job_url"`
+	GitHubJobName           string     `gorm:"column:github_job_name"`
+	GitHubJobStatus         string     `gorm:"column:github_job_status"`
+	GitHubJobConclusion     string     `gorm:"column:github_job_conclusion"`
+	GitHubJobRunnerName     string     `gorm:"column:github_job_runner_name"`
+	GitHubJobObservedAt     *time.Time `gorm:"column:github_job_observed_at"`
 	PullRequestNumber       int64      `gorm:"column:pull_request_number;index:idx_runner_requests_repository_pr,priority:2"`
 	GitHubContextBackfilled bool       `gorm:"column:github_context_backfilled;not null;default:false;index:idx_runner_requests_github_context_backfill"`
 	RepositoryFullName      string     `gorm:"column:repository_full_name;index:idx_runner_requests_repository_pr,priority:1;index:idx_runner_requests_repository_head,priority:1"`

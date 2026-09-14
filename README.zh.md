@@ -303,7 +303,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/runner_requests` | Runner Request 历史、筛选、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
-| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、诊断结论、实时 GitHub Job 结果和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
+| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
 | `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
 | `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |

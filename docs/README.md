@@ -7,7 +7,8 @@ Use these docs alongside the root `README.md`.
 The public, bilingual end-user guides are served at [runner.qiniuinc.com/docs](https://runner.qiniuinc.com/docs). They cover hosted onboarding, runnerd deployment, managed workflows, custom template build-to-use lifecycle, and troubleshooting. Their paired Markdown sources live under `ui/src/content/site-docs/{en,zh}/` so the deployed UI and its guide navigation ship together.
 
 - [Local Testing And GitHub Setup](testing.md): local configuration, GitHub App/OAuth setup, webhook forwarding, admin API examples, and troubleshooting.
-- [Current Work Handoff (Chinese)](current-work-handoff.md): llgo Job timeout evidence, runnerd lifecycle analysis, the implemented cleanup-lifecycle diagnostics slice, remaining diagnostics work, and cross-computer resume instructions.
+- [Current Work Handoff (Chinese)](current-work-handoff.md): llgo Job timeout evidence, runnerd lifecycle analysis, implemented cleanup and GitHub Job-result diagnostics slices, remaining diagnostics work, and cross-computer resume instructions.
+- [GitHub Job Result Retention Plan](superpowers/plans/2026-09-14-github-job-result-retention.md): scoped TDD plan for additive terminal-result persistence, retained-first diagnostics, compatibility fallback, and verification.
 - [Deployment Smoke Checklist](deployment-smoke.md): production-style smoke checklist for a real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics.
 - [Public Runner Templates](default-runner-templates.md): qshell requirements, two-region build and publication order, Sandbox smoke evidence, ownership, and rollback.
 - [Runner Architecture Comparison](runner-architecture-comparison.md): current runnerd architecture baseline, Mermaid system/lifecycle/state diagrams, DB-backed state model, and comparison with Fireactions and Actions Runner Controller.

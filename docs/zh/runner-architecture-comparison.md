@@ -276,7 +276,7 @@ Runner-request 列表使用有界 pagination 和 list-only database projections�
 - GitHub auth mode 和 installation details；
 - 当前进程 expvar registry 中的 retry、lease、runner lifecycle、GitHub API 和 workflow metrics。
 
-单个请求的状态、诊断结论、实时 GitHub Job 关联和生命周期／输出事件归属于规范的 `/admin/runner_requests/{id}` 资源页面，不进入 runtime diagnostics payload。页面会展示持久化的 Started、Stopping、Completed 与 Failed 时间，并且只使用 `stopping_at` 和当前状态所选择的终态时间计算 Cleanup Duration；未进入清理就完成的请求会保持 `stopping_at` 为空。Runner 退出、Sandbox 清理、GitHub Runner 清理和整体清理控制事件在混合时间线中使用稳定的阶段标识，同时保持旧 `control.log` 读取兼容。GitHub Job 结果尚未作为结构化历史结果持久化。
+单个请求的状态、诊断结论、GitHub Job 关联和生命周期／输出事件归属于规范的 `/admin/runner_requests/{id}` 资源页面，不进入 runtime diagnostics payload。页面会展示持久化的 Started、Stopping、Completed 与 Failed 时间，并且只使用 `stopping_at` 和当前状态所选择的终态时间计算 Cleanup Duration；未进入清理就完成的请求会保持 `stopping_at` 为空。Runner 退出、Sandbox 清理、GitHub Runner 清理和整体清理控制事件在混合时间线中使用稳定的阶段标识，同时保持旧 `control.log` 读取兼容。只有观察到的 Job ID 与请求原始 `workflow_job_id` 相同时，runnerd 才保留终态结果；快照独立于 Runner 生命周期状态保存 Job 名称、状态、结论、Runner 名称和本地采集时间。详情 API 优先使用并明确标注这份持久化证据的来源／新鲜度；没有快照的历史记录继续使用有界、缓存且并发合并的 GitHub 实时查询作为回退。
 
 Admin UI 应展示 diagnostics summaries，而不是把 raw pprof 直接暴露到公网。
 

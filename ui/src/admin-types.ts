@@ -19,6 +19,11 @@ export type RunnerState = {
   head_branch?: string
   head_sha?: string
   github_job_url?: string
+  github_job_name?: string
+  github_job_status?: string
+  github_job_conclusion?: string
+  github_job_runner_name?: string
+  github_job_observed_at?: string
   pull_request_number?: number
   assigned_job_id?: number
   assigned_job_name?: string
@@ -129,12 +134,14 @@ export type RunnerDiagnosticFinding = {
 export type RunnerRequestDiagnosis = {
   state: RunnerState
   github_job: {
-    lookup_status: "ok" | "unavailable" | "not_applicable" | string
+    lookup_status: "ok" | "retained" | "unavailable" | "not_applicable" | string
+    source?: "live" | "retained" | string
     id?: number
     name?: string
     status?: string
     conclusion?: string
     runner_name?: string
+    observed_at?: string
   }
   findings: RunnerDiagnosticFinding[]
   events: RunnerDiagnosticEvent[]

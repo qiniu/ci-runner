@@ -530,10 +530,12 @@ describe("admin diagnostics", () => {
             completed_at: "2026-09-06T07:25:09Z",
           },
           github_job: {
-            lookup_status: "ok",
+            lookup_status: "retained",
+            source: "retained",
             id: 101445685709,
             conclusion: "failure",
             status: "completed",
+            observed_at: "2026-09-14T07:15:32Z",
           },
           findings: [
             { code: "github_job_failed", severity: "critical", detail: "failure" },
@@ -552,6 +554,8 @@ describe("admin diagnostics", () => {
         },
       }))
       expect(html).toContain("GitHub Job 已失败")
+      expect(html).toContain("持久化快照")
+      expect(html).toContain("2026/9/14")
       expect(html).toContain("Runner 终止过程未被 runnerd 观察到")
       expect(html).toContain("runner accepted a job")
       expect(html).toContain("control · runner_exit")

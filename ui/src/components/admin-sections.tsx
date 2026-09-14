@@ -463,8 +463,9 @@ export function RunnerRequestDiagnosisResult({
   onRetryRunner?: () => void
   onStopRunner?: () => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const state = diagnosis.state
+  const githubJobAvailable = diagnosis.github_job.lookup_status === "ok" || diagnosis.github_job.lookup_status === "retained"
   return (
     <div className="space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
@@ -472,10 +473,18 @@ export function RunnerRequestDiagnosisResult({
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-sm font-semibold">{state.id}</span>
             <StatusBadge status={runnerDisplayStatus(state)} />
-            {diagnosis.github_job.lookup_status === "ok" ? (
+            {githubJobAvailable ? (
               <Badge variant="outline">
                 {t("admin.githubJobResult", { result: diagnosis.github_job.conclusion || diagnosis.github_job.status || "-" })}
               </Badge>
+            ) : null}
+            {githubJobAvailable && diagnosis.github_job.observed_at ? (
+              <span className="text-xs text-muted-foreground">
+                {t(
+                  diagnosis.github_job.source === "retained" ? "admin.githubJobRetainedAt" : "admin.githubJobLiveAt",
+                  { time: formatTime(diagnosis.github_job.observed_at, i18n.resolvedLanguage) },
+                )}
+              </span>
             ) : null}
           </div>
           <div className="mt-1 truncate text-sm text-muted-foreground">

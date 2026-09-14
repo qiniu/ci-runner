@@ -2501,12 +2501,71 @@ func TestRunnerRequestListProjectionExcludesHeavyAndSecretColumns(t *testing.T) 
 		"repository_full_name",
 		"workflow_run_id",
 		"github_job_url",
+		"github_job_name",
+		"github_job_status",
+		"github_job_conclusion",
+		"github_job_runner_name",
+		"github_job_observed_at",
 		"queued_at",
 		"updated_at",
 	} {
 		if !strings.Contains(projection, ","+required+",") {
 			t.Fatalf("list projection must retain %s: %s", required, projection)
 		}
+	}
+}
+
+func TestRunnerStatePersistsGitHubJobResult(t *testing.T) {
+	databaseURL := filepath.Join(t.TempDir(), "runnerd.db")
+	store := NewWithOptions(Options{
+		Backend:        BackendSQLite,
+		DatabaseDSN:    databaseURL,
+		MigrateOnStart: true,
+	}).(*DBStore)
+	_, st, err := store.CreateRequest(RunnerRequest{
+		ID:                 "1001",
+		Source:             "github_webhook",
+		JobID:              1001,
+		RepositoryFullName: "o/r",
+		Labels:             []string{"self-hosted", "qiniu"},
+		RunnerName:         "e2b-1001",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 14, 7, 15, 32, 123000000, time.UTC)
+	st.GitHubJobName = "test"
+	st.GitHubJobStatus = "completed"
+	st.GitHubJobConclusion = "cancelled"
+	st.GitHubJobRunnerName = "e2b-1001"
+	st.GitHubJobObservedAt = observedAt
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeTestDB(t, db)
+
+	restarted := NewWithOptions(store.opts).(*DBStore)
+	got, err := restarted.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GitHubJobName != "test" || got.GitHubJobStatus != "completed" ||
+		got.GitHubJobConclusion != "cancelled" || got.GitHubJobRunnerName != "e2b-1001" ||
+		!got.GitHubJobObservedAt.Equal(observedAt) {
+		t.Fatalf("unexpected retained GitHub Job result after restart: %#v", got)
+	}
+	states, err := restarted.ListStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].GitHubJobConclusion != "cancelled" ||
+		!states[0].GitHubJobObservedAt.Equal(observedAt) {
+		t.Fatalf("list projection lost retained GitHub Job result: %#v", states)
 	}
 }
 
@@ -4946,6 +5005,11 @@ func TestMigrateBackfillsLegacyRunnerRequestGitHubContext(t *testing.T) {
 		"head_branch",
 		"head_sha",
 		"github_job_url",
+		"github_job_name",
+		"github_job_status",
+		"github_job_conclusion",
+		"github_job_runner_name",
+		"github_job_observed_at",
 		"pull_request_number",
 		"github_context_backfilled",
 	} {
@@ -5108,6 +5172,17 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 	}
 	if !record.UpdatedAt.Equal(originalUpdatedAt) {
 		t.Fatalf("updated_at changed during migration: got %s want %s", record.UpdatedAt, originalUpdatedAt)
+	}
+	for _, column := range []string{
+		"github_job_name",
+		"github_job_status",
+		"github_job_conclusion",
+		"github_job_runner_name",
+		"github_job_observed_at",
+	} {
+		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
+			t.Fatalf("expected retained GitHub Job result column %s after additive migration", column)
+		}
 	}
 	for _, indexName := range []string{
 		"idx_runner_requests_queued_id",

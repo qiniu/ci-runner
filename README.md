@@ -316,7 +316,7 @@ The built-in web UI provides:
 | `/admin/` | Dashboard with runnerd runtime diagnostics and metrics |
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
-| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, diagnostic findings, the live GitHub Job result, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
+| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or manageable Organization |

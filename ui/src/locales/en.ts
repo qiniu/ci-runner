@@ -262,6 +262,8 @@ export const en = {
     runnerDiagnosisFailed: "Failed to diagnose runner request",
     openGitHubJob: "Open GitHub Job",
     githubJobResult: "GitHub · {{result}}",
+    githubJobRetainedAt: "Retained snapshot · captured {{time}}",
+    githubJobLiveAt: "Live lookup · checked {{time}}",
     diagnosticFindings: "Findings",
     runnerRequestContext: "Request context",
     runnerRequestContextDescription: "Persisted runnerd state for this request.",
