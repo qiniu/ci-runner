@@ -1707,6 +1707,8 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	if got.CompletedAt.Before(got.StoppingAt) {
 		t.Fatalf("CompletedAt = %s before StoppingAt = %s", got.CompletedAt, got.StoppingAt)
 	}
+	requireRunnerEventStageMessage(t, store, st.ID, "runner_exit", "runner process exited cleanly")
+	requireRunnerEventStageMessage(t, store, st.ID, "sandbox_cleanup", "sandbox cleaned after runner exit")
 }
 
 func TestRunnerExitedWithNonZeroExitCodeTransitionsToFailed(t *testing.T) {
@@ -1755,6 +1757,21 @@ func TestRunnerExitedWithNonZeroExitCodeTransitionsToFailed(t *testing.T) {
 	if got.StoppingAt.IsZero() {
 		t.Fatal("runnerExited nonzero: expected cleanup start timestamp")
 	}
+	requireRunnerEventStageMessage(t, store, st.ID, "runner_exit", "runner process exited with code 137")
+}
+
+func requireRunnerEventStageMessage(t *testing.T, store state.Store, requestID, stage, message string) {
+	t.Helper()
+	events, _, err := store.ListRunnerEvents(requestID, 0, 100, "control_log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Stage == stage && strings.Contains(event.Message, message) {
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want stage %q with message containing %q", events, stage, message)
 }
 
 func TestRunnerExitedWithProcessErrorTransitionsToFailedAfterCleanup(t *testing.T) {

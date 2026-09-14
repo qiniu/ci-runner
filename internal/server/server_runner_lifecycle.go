@@ -19,7 +19,13 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
-const workflowRunCacheTTL = 30 * time.Second
+const (
+	workflowRunCacheTTL                 = 30 * time.Second
+	runnerEventStageRunnerExit          = "runner_exit"
+	runnerEventStageSandboxCleanup      = "sandbox_cleanup"
+	runnerEventStageGitHubRunnerCleanup = "github_cleanup"
+	runnerEventStageRunnerCleanup       = "runner_cleanup"
+)
 
 func (s *Server) workflowRunForCache(ctx context.Context, repository string, runID int64) (github.WorkflowRun, error) {
 	key := fmt.Sprintf("%s#%d", repository, runID)
@@ -775,7 +781,7 @@ func (s *Server) runnerExited(id string, result sandboxrunner.ExitResult, err er
 		st.FailureStage = "runner_exit"
 		st.FailureReason = "process_error"
 		s.logger.Error("runner process exited with error", "id", id, "error", err)
-		s.store.AppendLog(id, "control.log", []byte("runner process exited with error: "+err.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("runner process exited with error: "+err.Error()+"\n"))
 		if writeErr := s.writeRunnerCleanupStart(id, &st, time.Now()); writeErr != nil {
 			return
 		}
@@ -798,14 +804,14 @@ func (s *Server) runnerExited(id string, result sandboxrunner.ExitResult, err er
 	}
 	if result.ExitCode == 0 {
 		s.logger.Info("runner process exited", "id", id, "exit_code", result.ExitCode)
-		s.store.AppendLog(id, "control.log", []byte("runner process exited cleanly\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("runner process exited cleanly\n"))
 	} else {
 		st.Status = state.StatusFailed
 		st.Error = runnerExitMessage(result)
 		st.FailureStage = "runner_exit"
 		st.FailureReason = strconv.Itoa(result.ExitCode)
 		s.logger.Error("runner process exited non-zero", "id", id, "exit_code", result.ExitCode, "stderr", result.Stderr, "runner_error", result.Error)
-		s.store.AppendLog(id, "control.log", []byte(st.Error+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(st.Error+"\n"))
 	}
 	runnerFailed := st.Status == state.StatusFailed
 	if writeErr := s.writeRunnerCleanupStart(id, &st, time.Now()); writeErr != nil {
@@ -850,7 +856,7 @@ func (s *Server) keepRunnerRunningWhenGitHubBusy(id string, st state.RunnerState
 	busy, busyErr := s.githubRunnerBusy(context.Background(), st)
 	if busyErr != nil {
 		s.logger.Warn("could not verify github runner busy state after runner exit", "id", id, "runner_name", st.RunnerName, "error", busyErr)
-		s.store.AppendLog(id, "control.log", []byte("could not verify github runner busy state after runner exit: "+busyErr.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("could not verify github runner busy state after runner exit: "+busyErr.Error()+"\n"))
 		return false
 	}
 	if !busy {
@@ -886,11 +892,11 @@ func (s *Server) keepRunnerRunningWhenGitHubBusy(id string, st state.RunnerState
 	}
 	if writeErr := s.store.WriteState(latest); writeErr != nil {
 		s.logger.Error("write running state after busy runner exit", "id", id, "error", writeErr)
-		s.store.AppendLog(id, "control.log", []byte("write running state after busy runner exit failed: "+writeErr.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("write running state after busy runner exit failed: "+writeErr.Error()+"\n"))
 		return false
 	}
 	s.logger.Warn("runner process stream ended while github runner is busy; keeping sandbox running", "id", id, "runner_name", latest.RunnerName, "sandbox_id", latest.SandboxID, "error", latest.Error)
-	s.store.AppendLog(id, "control.log", []byte(message+"; keeping sandbox running\n"))
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(message+"; keeping sandbox running\n"))
 	s.refreshMetrics()
 	return true
 }
@@ -902,15 +908,15 @@ func (s *Server) cleanupSandboxAfterExit(id string, st state.RunnerState) error 
 	if err := s.stopSandboxWithTimeout(context.Background(), id, st.SandboxID, st.ProcessPID); err != nil {
 		if isSandboxGone(err) {
 			s.logger.Info("sandbox already gone after runner exit", "id", id, "sandbox_id", st.SandboxID, "error", err)
-			s.store.AppendLog(id, "control.log", []byte("sandbox already gone after runner exit: "+err.Error()+"\n"))
+			s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("sandbox already gone after runner exit: "+err.Error()+"\n"))
 			return nil
 		}
 		s.logger.Error("cleanup sandbox after runner exit", "id", id, "sandbox_id", st.SandboxID, "error", err)
-		s.store.AppendLog(id, "control.log", []byte("cleanup sandbox after runner exit failed: "+err.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("cleanup sandbox after runner exit failed: "+err.Error()+"\n"))
 		return err
 	}
 	s.logger.Info("sandbox cleaned after runner exit", "id", id, "sandbox_id", st.SandboxID)
-	s.store.AppendLog(id, "control.log", []byte("sandbox cleaned after runner exit\n"))
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("sandbox cleaned after runner exit\n"))
 	return nil
 }
 
@@ -925,7 +931,7 @@ func (s *Server) writeRunnerCleanupStart(id string, st *state.RunnerState, start
 	markRunnerCleanupStarted(st, startedAt)
 	if err := s.store.WriteState(*st); err != nil {
 		s.logger.Error("write stopping state after runner exit", "id", id, "error", err)
-		s.store.AppendLog(id, "control.log", []byte("write stopping state after runner exit failed: "+err.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("write stopping state after runner exit failed: "+err.Error()+"\n"))
 		return err
 	}
 	st.Version++
@@ -1035,10 +1041,10 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 			case errors.Is(err, sandboxrunner.ErrRunnerNotFound) && result.SandboxID != "":
 				stopErr := s.stopSandboxWithTimeout(ctx, st.ID, result.SandboxID, 0)
 				if stopErr != nil && !isSandboxGone(stopErr) {
-					s.store.AppendLog(st.ID, "control.log", []byte("cleanup interrupted runner creation failed\n"))
+					s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("cleanup interrupted runner creation failed\n"))
 					return fmt.Errorf("stop sandbox without runner before requeue: %w", stopErr)
 				}
-				s.store.AppendLog(st.ID, "control.log", []byte("stopped sandbox without runner process after restart\n"))
+				s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("stopped sandbox without runner process after restart\n"))
 				return s.requeueInterruptedCreation(st.ID, stateVersion)
 			}
 		}
@@ -1224,18 +1230,18 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	s.logger.Info("runner marked stopping", "id", id, "sandbox_id", st.SandboxID, "pid", st.ProcessPID)
 	st.Version++
 	if st.SandboxID != "" {
-		s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("sandbox stop requested sandbox_id=%s pid=%d\n", st.SandboxID, st.ProcessPID)))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte(fmt.Sprintf("sandbox stop requested sandbox_id=%s pid=%d\n", st.SandboxID, st.ProcessPID)))
 		if err := s.stopSandboxWithTimeout(ctx, id, st.SandboxID, st.ProcessPID); err != nil {
 			if isSandboxGone(err) {
 				s.logger.Info("sandbox already gone", "id", id, "sandbox_id", st.SandboxID, "error", err)
-				s.store.AppendLog(id, "control.log", []byte("sandbox already gone: "+err.Error()+"\n"))
+				s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("sandbox already gone: "+err.Error()+"\n"))
 			} else {
 				if s.scheduleStopRetry(&st, err) {
 					if writeErr := s.store.WriteState(st); writeErr != nil {
 						return state.RunnerState{}, false, fmt.Errorf("schedule stop retry: %v; write stopping state: %w", err, writeErr)
 					}
 					st.Version++
-					s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("stop retry scheduled for %s: %s\n", st.NextRetryAt.Format(time.RFC3339), err)))
+					s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte(fmt.Sprintf("stop retry scheduled for %s: %s\n", st.NextRetryAt.Format(time.RFC3339), err)))
 					s.logger.Info("runner stop retry scheduled", "id", id, "sandbox_id", st.SandboxID, "next_retry_at", st.NextRetryAt, "error", err)
 					s.refreshMetrics()
 					return st, false, nil
@@ -1255,7 +1261,7 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 				return st, false, err
 			}
 		} else {
-			s.store.AppendLog(id, "control.log", []byte("sandbox stop completed\n"))
+			s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("sandbox stop completed\n"))
 		}
 	}
 	if cleanupErr := s.cleanupGitHubRunner(ctx, st); cleanupErr != nil {
@@ -1264,7 +1270,7 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 				return state.RunnerState{}, false, fmt.Errorf("schedule github runner cleanup retry: %v; write stopping state: %w", cleanupErr, writeErr)
 			}
 			st.Version++
-			s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("github runner cleanup retry scheduled for %s: %s\n", st.NextRetryAt.Format(time.RFC3339), cleanupErr)))
+			s.store.AppendStagedLog(id, "control.log", runnerEventStageGitHubRunnerCleanup, []byte(fmt.Sprintf("github runner cleanup retry scheduled for %s: %s\n", st.NextRetryAt.Format(time.RFC3339), cleanupErr)))
 			s.logger.Info("github runner cleanup retry scheduled", "id", id, "runner_name", st.RunnerName, "next_retry_at", st.NextRetryAt, "error", cleanupErr)
 			s.refreshMetrics()
 			return st, false, nil
@@ -1332,7 +1338,7 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	}
 	s.logger.Info("runner stopped", "id", id, "sandbox_id", st.SandboxID, "duration_ms", time.Since(stopStartedAt).Milliseconds())
 	if job.ID != 0 {
-		s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf(
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerCleanup, []byte(fmt.Sprintf(
 			"runner cleanup completed: job_id=%d conclusion=%s request_status=%s\n",
 			job.ID,
 			workflowConclusion(job),
@@ -1430,17 +1436,18 @@ func (s *Server) cleanupGitHubRunner(ctx context.Context, st state.RunnerState) 
 	removed, err := s.gh.RemoveRunnerByName(cleanupCtx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
 	if err != nil {
 		s.logger.Warn("github runner cleanup failed", "id", st.ID, "runner_name", st.RunnerName, "repository", st.RepositoryFullName, "error", err)
-		s.store.AppendLog(st.ID, "control.log", []byte("github runner cleanup failed: "+err.Error()+"\n"))
+		s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("github runner cleanup failed: "+err.Error()+"\n"))
 		metrics.RecordRunnerCleanup(st.ProfileName, "error")
 		return err
 	}
 	if removed {
 		s.logger.Info("github runner registration removed", "id", st.ID, "runner_name", st.RunnerName, "repository", st.RepositoryFullName)
-		s.store.AppendLog(st.ID, "control.log", []byte("github runner registration removed\n"))
+		s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("github runner registration removed\n"))
 		metrics.RecordRunnerCleanup(st.ProfileName, "removed")
 		return nil
 	}
 	s.logger.Info("github runner registration already absent", "id", st.ID, "runner_name", st.RunnerName, "repository", st.RepositoryFullName)
+	s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("github runner registration already absent\n"))
 	metrics.RecordRunnerCleanup(st.ProfileName, "absent")
 	return nil
 }
@@ -1911,11 +1918,11 @@ func (s *Server) cleanupStartedSandbox(id string, result sandboxrunner.StartResu
 	s.logger.Info("cleanup started sandbox", "id", id, "sandbox_id", result.SandboxID, "pid", result.PID)
 	if err := s.stopSandboxWithTimeout(context.Background(), id, result.SandboxID, result.PID); err != nil && !isSandboxGone(err) {
 		s.logger.Error("cleanup started sandbox", "id", id, "sandbox_id", result.SandboxID, "error", err)
-		s.store.AppendLog(id, "control.log", []byte("cleanup started sandbox failed: "+err.Error()+"\n"))
+		s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("cleanup started sandbox failed: "+err.Error()+"\n"))
 		return
 	}
 	s.logger.Info("cleaned started sandbox", "id", id, "sandbox_id", result.SandboxID)
-	s.store.AppendLog(id, "control.log", []byte("cleaned started sandbox\n"))
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte("cleaned started sandbox\n"))
 }
 
 func (s *Server) stopSandboxWithTimeout(ctx context.Context, id, sandboxID string, pid uint32) error {

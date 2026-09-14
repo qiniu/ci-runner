@@ -5127,6 +5127,8 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 			t.Errorf("control log missing %q:\n%s", message, controlLog)
 		}
 	}
+	requireRunnerEventStageMessage(t, store, st.ID, "sandbox_cleanup", "sandbox stop completed")
+	requireRunnerEventStageMessage(t, store, st.ID, "runner_cleanup", "runner cleanup completed")
 }
 
 func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
@@ -6450,6 +6452,7 @@ func TestStopRunnerSchedulesGitHubCleanupRetry(t *testing.T) {
 	if got.StoppingAt.IsZero() {
 		t.Fatal("expected cleanup retry to retain its first stopping timestamp")
 	}
+	requireRunnerEventStageMessage(t, store, st.ID, "github_cleanup", "github runner cleanup failed")
 	cleanupStartedAt := got.StoppingAt
 
 	got.NextRetryAt = time.Now().UTC().Add(-time.Second)
@@ -6469,6 +6472,7 @@ func TestStopRunnerSchedulesGitHubCleanupRetry(t *testing.T) {
 	if !got.StoppingAt.Equal(cleanupStartedAt) {
 		t.Fatalf("StoppingAt = %s after retry, want original cleanup start %s", got.StoppingAt, cleanupStartedAt)
 	}
+	requireRunnerEventStageMessage(t, store, st.ID, "github_cleanup", "github runner registration removed")
 }
 
 func TestStopRunnerPreservesFailureAfterCleanupRetrySuccess(t *testing.T) {

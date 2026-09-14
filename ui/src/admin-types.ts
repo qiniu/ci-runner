@@ -32,6 +32,7 @@ export type RunnerState = {
   updated_at: string
   created_at: string
   running_at?: string
+  stopping_at?: string
   next_retry_at?: string
   completed_at?: string
   failed_at?: string

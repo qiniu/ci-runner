@@ -305,15 +305,15 @@ describe("admin diagnostics", () => {
     const container = await renderRunnerRequest(request, {
       onRetryRunner,
     })
-    expect(container.textContent).toContain("Failed")
+    expect(Array.from(container.querySelectorAll('[data-slot="badge"]')).some((badge) => badge.textContent === "Failed")).toBe(true)
 
     const retryButton = Array.from(container.querySelectorAll("button"))
       .find((element) => element.textContent?.includes("Retry"))
     expect(retryButton).toBeDefined()
     await click(retryButton)
 
-    expect(container.textContent).toContain("Queued")
-    expect(container.textContent).not.toContain("Failed")
+    expect(Array.from(container.querySelectorAll('[data-slot="badge"]')).some((badge) => badge.textContent === "Queued")).toBe(true)
+    expect(Array.from(container.querySelectorAll('[data-slot="badge"]')).some((badge) => badge.textContent === "Failed")).toBe(false)
   })
 
   test("polls every new event page without reopening exhausted history", async () => {
@@ -525,6 +525,8 @@ describe("admin diagnostics", () => {
             error: "runner communication lost",
             updated_at: "2026-09-06T07:25:09Z",
             created_at: "2026-09-06T07:04:57Z",
+            running_at: "2026-09-06T07:05:06Z",
+            stopping_at: "2026-09-06T07:24:04Z",
             completed_at: "2026-09-06T07:25:09Z",
           },
           github_job: {
@@ -541,6 +543,7 @@ describe("admin diagnostics", () => {
             {
               id: 4143071,
               event_type: "control_log",
+              stage: "runner_exit",
               message: "runner accepted a job\n",
               created_at: "2026-09-06T07:05:06Z",
             },
@@ -551,13 +554,19 @@ describe("admin diagnostics", () => {
       expect(html).toContain("GitHub Job 已失败")
       expect(html).toContain("Runner 终止过程未被 runnerd 观察到")
       expect(html).toContain("runner accepted a job")
+      expect(html).toContain("control · runner_exit")
       expect(html).toContain("xgo-dev/llgo")
       expect(html).toContain("请求上下文")
       expect(html).toContain("qiniu-ubuntu-24.04")
       expect(html).toContain("sandbox-llgo")
       expect(html).toContain("codex/test-sync-concurrent-wait-20260905")
       expect(html).toContain("runner communication lost")
+      expect(html).toContain("开始时间")
+      expect(html).toContain("停止开始时间")
       expect(html).toContain("完成时间")
+      expect(html).toContain("失败时间")
+      expect(html).toContain("清理耗时")
+      expect(html).toContain("1m 5s")
       expect(html).not.toContain("已完成2026")
     } finally {
       await i18n.changeLanguage("en")

@@ -10,7 +10,7 @@
 - 交接分支：`improve/runner-diagnostics`；推送目标：`origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
 - 提交标题：`docs: add llgo diagnostics handoff`。文档所在提交通过 `git log -1 --format=fuller -- docs/current-work-handoff.md` 获取，避免在提交内容中自引用提交 SHA。
 - 接收人：用户在另一台电脑上的后续会话。
-- 状态：故障分析完成；2026-09-14 的后续会话已获授权设定目标并开始执行，当前工作区已实现生命周期时间戳修复，但尚未提交或推送；环境快照、Job 结果留存和网络诊断仍未实施。
+- 状态：故障分析完成；生命周期时间戳修复已以 `7174373` 提交并推送到交接分支。详情页生命周期字段和结构化退出/清理事件也已实现并通过验证；环境快照、Job 结果留存和网络诊断仍未实施。
 - 传输载体：上述远程分支；推送成功后可跨电脑获取。推送是否成功和精确 SHA 以本次会话最终交付消息及 `git ls-remote` 为准。
 
 用户先要求分析一个 llgo GitHub Actions Job，随后提供 runner_requests 查询结果和 control.log，询问 runnerd 是否有问题、如何向沙箱团队提单、runnerd 能否增加诊断能力。最后要求完整交接并在新分支提交推送。用户没有要求在本次交接中实现诊断功能、修复时间戳、重跑 Job、发布模板或部署线上服务，也没有授权代发服务团队消息。
@@ -147,13 +147,21 @@ GitHub 先取消，Runner 正常退出，runnerd 随后清理。`sandbox cleaned
 
 后续应保留两个维度：Runner 生命周期/回收结果、GitHub Job conclusion。不能将所有取消或测试失败改成 Runner 基础设施失败，也不应自动重跑用户 Job。
 
-### 5.3 时间戳语义瑕疵，本轮已修复但尚未提交
+### 5.3 时间戳语义瑕疵，已修复并推送
 
 本例 `stopping_at` 比 `completed_at` 晚约 269 ms。修复前代码能产生这个现象：退出处理先设置 CompletedAt；`internal/state/runner_requests.go` 的 `applyStateTimestamps()` 在写入 StatusCompleted 时发现 StoppingAt 为空，就用更晚的 now 补齐。
 
 本轮改动让 completed 状态的兼容回退使用既有 `CompletedAt`，不再用更晚的数据库写入时间；进程退出会在清理开始前持久化 stopping 状态，webhook stop 与强制停止路径把同一个清理起始时间保留到终态。stopping 的 CAS/数据库写入是进程退出外部清理的硬前置条件：写入失败时旧回调立即返回，不调用 Sandbox 或 GitHub 清理，由新状态、恢复或 reconciler 接管。回归测试覆盖清理中的可观察状态、正常/非零/错误进程退出、stopping 冲突、webhook 完成、cleanup retry 和超时强制停止。没有新增列或迁移，也没有自动改写历史数据库时间戳。
 
-### 5.4 模板 APT 设置可能放大故障
+该修复已作为 `7174373 fix(runner): preserve cleanup start timestamps` 推送到 `origin/improve/runner-diagnostics`。
+
+### 5.4 详情页时间字段与结构化事件，本分支已实现
+
+Admin Runner request 详情现在直接展示持久化的 Started、Stopping、Completed、Failed，并以 `stopping_at` 到与当前终态一致的 `completed_at` 或 `failed_at` 计算 Cleanup Duration。仍在 stopping 时显示“进行中”；字段缺失、时间无效或终点早于起点时显示 `-`，不使用 `updated_at` 猜测清理结束时间。
+
+现有 `runner_events.stage` 被复用，不新增表、列或迁移。`AppendStagedLog` 与旧 `AppendLog` 共用写入路径，旧 `control.log` 拼接读取保持兼容；Runner 退出、Sandbox 清理、GitHub Runner 注册清理和整体清理完成分别使用稳定的 `runner_exit`、`sandbox_cleanup`、`github_cleanup`、`runner_cleanup` 阶段标识，详情页逐条时间线会直接显示该标识。日志文本和现有状态转换、重试及 GitHub Job conclusion 边界不变。
+
+### 5.5 模板 APT 设置可能放大故障
 
 `templates/github-runner-ubuntu-24.04/scripts/setup-template.sh` 的 `configure_reliable_apt_sources()` 设置优先镜像：
 
@@ -183,13 +191,13 @@ Acquire::https::Timeout "30";
 
 提单不需要 API Key、cookie 或完整数据库导出。完整日志在发送前仍应检查脱敏。
 
-## 7. 已提出但未实施的优化
+## 7. 优化状态与剩余范围
 
 | 优先级 | 提案 | 目的与边界 |
 | --- | --- | --- |
 | P0 | 运行环境快照 | 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不能把区域物理 ID 写回 managed spec |
 | P0 | GitHub Job 结果留存 | 生命周期 completed 与 conclusion cancelled 分开；复用已有详情页远程查询/缓存能力，评估是否确需新增持久化字段及补查注释 |
-| P0 | 完善控制事件和时间戳 | **部分完成：** 已修复清理起始时间和终态时间倒置；退出码、事件来源、清理结束/耗时的进一步结构化仍待评估，继续复用已有逐条事件时间线 |
+| P0 | 完善控制事件和时间戳 | **本分支已推进：** 已修复清理起始时间和终态时间倒置；详情页已展示 Started、Stopping、Completed、Failed 和语义受限的 Cleanup Duration；退出及 Sandbox/GitHub/整体清理事件已有稳定 `stage`。退出码仍保留在事件消息和失败原因中，尚未新增独立 payload 字段 |
 | P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
 | P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
 
@@ -254,9 +262,9 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 
 ## 10. 后续执行顺序和验收边界
 
-1. 仓库复核已完成：`origin/main` 仍为 `c384341`，交接分支相对它仅有两笔文档提交，开始实施时工作区干净。
-2. 生命周期时间戳修复已按测试先行完成；提交或推送前复核本节和第 11 节证据，不批量修复历史数据。
-3. 下一项实施前，将环境快照或 Job 结果留存单独缩成明确字段、事件和 UI 范围；不要直接扩展成全量网络监控。
+1. 仓库复核已完成：`origin/main` 仍为 `c384341`；交接分支已有两笔文档提交和一笔时间戳修复提交，开始当前阶段时工作区干净。
+2. 生命周期时间戳修复已按测试先行完成并以 `7174373` 推送；详情页字段和结构化事件也按测试先行实现。提交或继续扩展时复核本节和第 11 节证据，不批量修复历史数据。
+3. 下一项实施应在“环境快照”与“Job 结果留存”中只选一项，先缩成明确字段、事件和 UI 范围；不要直接扩展成全量网络监控。
 4. 环境与 Job 结果若新增状态字段，使用现有 SQLite additive migration 约束，不让 GORM 重建旧 runner_requests 表，不持久化 raw webhook。
 5. 状态或调用方变更继续先运行 `go test ./internal/state -count=1`，再运行 focused package 和更广验证。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
 6. UI 文案改动运行 `task ui-i18n-check` 与相关 Bun tests；依赖、构建、公共指南或 Jobs 滚动布局改动运行 `task ui-production-smoke`。生产嵌入 UI 用 `task build`；禁止手改 `internal/server/ui/`。
@@ -266,10 +274,11 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 ## 11. 验证、工作区与关闭条件
 
 - 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
-- 后续实施开始时工作区干净，`improve/runner-diagnostics` 与 `origin/improve/runner-diagnostics` 为 0/0；`git fetch origin main improve/runner-diagnostics` 后确认 `origin/main=c384341`。当前未提交改动包括 `internal/state/runner_requests.go`、`internal/state/store_extra_test.go`、`internal/server/server_runner_lifecycle.go`、`internal/server/server_test.go`、`internal/server/server_helpers_test.go`、`TODO.md` 和本文。
-- TDD RED 证据：状态回退测试读到的 `StoppingAt` 使用更晚写入时间；进程退出清理期间数据库仍为 running；非零退出没有 stopping 时间；webhook 终态覆盖了清理中间态的 stopping 时间；stopping CAS 冲突后旧退出回调仍错误调用了 Sandbox 和 GitHub 清理。
-- 已通过 `go test ./internal/state -run TestWriteStateCompletedUsesCompletionAsFallbackStoppingTime -count=1`、四个 lifecycle focused tests、`go test ./internal/state -count=1`、`go test ./internal/server -count=1`、`go test ./...` 和 `task test`。`task test` 重建生产 UI，Bun 222 项测试通过，Go race/coverage 全套通过，最终退出码为 0；专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
+- 后续实施开始时工作区干净，`improve/runner-diagnostics` 与 `origin/improve/runner-diagnostics` 均位于 `7174373`，相对上游为 0/0；`origin/main=c384341`。本阶段变更集中在 Admin 详情页/中英文资源、runner event 写入接口、Runner 生命周期事件调用点、对应测试、`TODO.md` 和本文。
+- TDD RED 证据：前一阶段覆盖了更晚 `StoppingAt`、清理期间仍为 running、非零退出无 stopping 时间及 stopping CAS 冲突后错误清理；当前阶段先证明详情页字段和 staged event API 缺失，再证明生命周期事件没有 stage。独立审查还复现了 Go 零时间被显示为公元 1 年并产生数百万小时清理耗时，修复前对应前端测试明确失败。
+- 已通过 `go test ./internal/state -count=1`、Runner exit/cleanup focused tests、`go test ./...`、`task ui-i18n-check`、`bun run lint`、`bun run build` 和最终 `task test`。最终 UI 全套为 225 项测试、834 个断言全部通过；`task test` 重建生产 UI并完成 Go race/coverage 全套，退出码为 0。lint 为 0 error，仍有 3 条位于未修改文件的既有 hook dependency warning；专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
 - 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
-- 最终文档和 diff 检查已在本轮收尾时运行；当前没有 commit、push 或远程 SHA 可交付，也没有 stash。
+- 当前阶段的独立只读审查先发现 Go 零时间处理和两个测试覆盖缺口；修复后复审未发现剩余可操作问题，`git diff --check` 通过。
+- 时间戳修复的远程 SHA 为 `71743735870bf40dc30d223df36acb2067cc6927`。详情页与结构化事件阶段和本文位于同一后续提交，精确 SHA 使用 `git log -1 --format=%H -- docs/current-work-handoff.md` 获取；本阶段没有 stash。
 - 可继续静态设计，无凭证阻塞。真正复现需要新电脑的 GitHub 权限、runnerd 管理登录及单独授权的沙箱凭证/测试环境。线上版本、模板构建版本、底层网络原因仍未知。
 - 继续自：本次会话，无前置 handoff 文件。完成选定改进且取得相应验证后，将耐久结论迁入正式文档，更新 TODO，并删除或标记完成这份临时交接记录。

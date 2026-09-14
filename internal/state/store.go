@@ -346,6 +346,7 @@ type RunnerRequestStore interface {
 	ReleaseLease(id, workerID string) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
+	AppendStagedLog(id, name, stage string, data []byte)
 	ReadLog(id, name string, maxBytes int64) ([]byte, error)
 	ListRunnerEvents(id string, beforeID int64, limit int, eventTypes ...string) ([]RunnerEvent, bool, error)
 	ListRunnerEventsAfter(id string, afterID int64, limit int, eventTypes ...string) ([]RunnerEvent, bool, error)

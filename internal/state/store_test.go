@@ -3238,6 +3238,48 @@ func TestAppendLogSanitizesRequestIDConsistentlyWithReaders(t *testing.T) {
 	}
 }
 
+func TestAppendStagedLogPersistsStageAcrossEventAndLogReaders(t *testing.T) {
+	store := New(t.TempDir())
+	requestID := "staged-events"
+	store.AppendLog(requestID, "control.log", []byte("runner started\n"))
+
+	initial, _, err := store.ListRunnerEvents(requestID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial) != 1 {
+		t.Fatalf("initial events = %#v, want one event", initial)
+	}
+
+	store.AppendStagedLog(requestID, "control.log", "runner_exit", []byte("runner process exited cleanly\n"))
+
+	events, hasMore, err := store.ListRunnerEventsAfter(requestID, initial[0].ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMore {
+		t.Fatal("staged event page unexpectedly reports more records")
+	}
+	if len(events) != 1 || events[0].EventType != "control_log" || events[0].Stage != "runner_exit" || events[0].Message != "runner process exited cleanly\n" {
+		t.Fatalf("staged events = %#v, want a structured runner-exit control event", events)
+	}
+	tail, truncated, err := store.ListRunnerEvents(requestID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated || len(tail) != 2 || tail[1].Stage != "runner_exit" {
+		t.Fatalf("event tail = %#v, truncated=%v; want staged event preserved by reverse cursor", tail, truncated)
+	}
+
+	logData, err := store.ReadLog(requestID, "control.log", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(logData) != "runner started\nrunner process exited cleanly\n" {
+		t.Fatalf("control log = %q, want both legacy and staged event messages", logData)
+	}
+}
+
 func TestListRunnerEventsReturnsBoundedChronologicalTail(t *testing.T) {
 	store := New(t.TempDir())
 	if _, _, err := store.CreateRequest(RunnerRequest{

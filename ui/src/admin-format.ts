@@ -101,7 +101,7 @@ export function formatTime(
   locale?: string,
   options?: { fractionalSecondDigits?: 1 | 2 | 3 },
 ) {
-  if (!value) return "-"
+  if (!value || isGoZeroTime(value)) return "-"
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   if (options?.fractionalSecondDigits) {
@@ -139,8 +139,49 @@ export function formatRunnerDuration(job: {
   return `${hours}h ${minutes % 60}m`
 }
 
+export function formatRunnerCleanupDuration(
+  runner: Pick<RunnerState, "status" | "stopping_at" | "completed_at" | "failed_at">,
+  inProgressLabel: string,
+) {
+  const start = parsedTimeValue(runner.stopping_at)
+  if (start === undefined) return "-"
+  if (runner.status === "stopping") return inProgressLabel
+
+  const terminalValue = runner.status === "completed"
+    ? runner.completed_at
+    : runner.status === "failed"
+      ? runner.failed_at
+      : undefined
+  const end = parsedTimeValue(terminalValue)
+  if (end === undefined || end < start) return "-"
+  return formatDurationMilliseconds(end - start)
+}
+
+function formatDurationMilliseconds(totalMilliseconds: number) {
+  if (totalMilliseconds === 0) return "0s"
+  if (totalMilliseconds < 1000) return `${totalMilliseconds}ms`
+
+  const hours = Math.floor(totalMilliseconds / 3_600_000)
+  const minutes = Math.floor((totalMilliseconds % 3_600_000) / 60_000)
+  const seconds = (totalMilliseconds % 60_000) / 1000
+  const formattedSeconds = Number.isInteger(seconds)
+    ? `${seconds}s`
+    : `${seconds.toFixed(3).replace(/0+$/, "")}s`
+  if (hours) return `${hours}h ${minutes}m ${formattedSeconds}`
+  if (minutes) return `${minutes}m ${formattedSeconds}`
+  return formattedSeconds
+}
+
 function timeValue(value?: string) {
-  if (!value) return 0
+  return parsedTimeValue(value) ?? 0
+}
+
+function parsedTimeValue(value?: string) {
+  if (!value || isGoZeroTime(value)) return undefined
   const time = Date.parse(value)
-  return Number.isFinite(time) ? time : 0
+  return Number.isFinite(time) ? time : undefined
+}
+
+function isGoZeroTime(value: string) {
+  return value.startsWith("0001-01-01T00:00:00")
 }

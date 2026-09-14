@@ -771,6 +771,10 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 }
 
 func (s *DBStore) AppendLog(id, name string, data []byte) {
+	s.AppendStagedLog(id, name, "", data)
+}
+
+func (s *DBStore) AppendStagedLog(id, name, stage string, data []byte) {
 	if len(data) == 0 {
 		return
 	}
@@ -787,6 +791,7 @@ func (s *DBStore) AppendLog(id, name string, data []byte) {
 	if err := db.Create(&runnerEventRecord{
 		RequestID: sanitizeID(id),
 		EventType: eventType,
+		Stage:     stage,
 		Message:   string(data),
 		CreatedAt: time.Now().UTC(),
 	}).Error; err != nil {
