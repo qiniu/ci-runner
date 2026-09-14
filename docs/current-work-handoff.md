@@ -163,7 +163,7 @@ Admin Runner request 详情现在直接展示持久化的 Started、Stopping、C
 
 `runner_requests` 增加可空的 Job 名称、状态、结论、Runner 名称与本地观察时间字段。只有非零 Job ID 与请求原始 `workflow_job_id` 一致并且观察已为终态时才更新；分配到的其他 Job、queued/in_progress 观察和原始 webhook body 都不会进入快照。Runner 请求的 completed/failed 仍描述 runnerd 生命周期，GitHub conclusion 保持独立。
 
-完成 webhook、启动前状态检查、恢复和 reconciler 都会经过现有 `stopRunner`／`completeWithoutSandbox` 路径捕获终态，包括 Runner 已先退出并完成的情况。详情 API 对有快照的记录直接返回 `lookup_status/source: retained` 和观察时间，不再依赖远程查询；升级前没有快照的历史记录继续使用原有有界、30 秒成功缓存和同 Job 并发合并的实时查询，并标记 `source: live`。UI 同时显示结论、来源与采集／查询时间，不把持久化快照表述为当前实时状态。
+完成 webhook、启动前状态检查、恢复和 reconciler 都会经过现有 `stopRunner`／`completeWithoutSandbox` 路径捕获终态。Runner 进程退出时会在 Sandbox 清理完成或进入清理重试状态后执行一次有界补偿查询，因此即使完成 webhook 丢失，只要 GitHub 此时已返回原始 Job 终态，也会立即保留结果，而 GitHub 延迟或失败不会阻塞 Sandbox 清理。重复的相同终态观察不会只为刷新采集时间而重写状态；错配完成请求重新排队时会同步清除旧 Job 快照。详情 API 对有快照的记录直接返回 `lookup_status/source: retained` 和观察时间，不再依赖远程查询；升级前没有快照的历史记录继续使用原有有界、30 秒成功缓存和同 Job 并发合并的实时查询，并标记 `source: live`。UI 同时显示结论、来源与采集／查询时间，不把持久化快照表述为当前实时状态。
 
 Schema 继续由 GORM tags 驱动；现有 SQLite `runner_requests` 使用 additive-only 增列，不重建表、不批量改写历史记录。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 验证仍取决于外部测试环境。
 
@@ -282,7 +282,9 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 - 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
 - 当前增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、TODO、正式中英文文档和 agent 规则。
 - 当前增量 TDD RED 证据：状态测试先因五个快照字段不存在而编译失败；生命周期 helper 测试先因函数不存在而失败，非终态拒绝测试先证明 `in_progress` 会被错误保留；诊断测试先证明详情 API 仍调用 GitHub 且没有来源字段；UI 测试先证明持久化来源与采集时间未渲染。
+- PR review 修复继续按 TDD 推进：Runner 退出回归测试先证明清理结束后没有发起终态 Job 查询，重复终态测试先证明仅刷新 `observed_at` 仍触发写入，错配 Job 重排队测试先证明旧快照仍残留；对应实现完成后，三项定向测试和完整 `internal/server` 测试均转绿。
 - 已通过 `go test ./internal/state -count=1`、Runner exit/cleanup focused tests、`go test ./...`、`task ui-i18n-check`、`task build`、最终 `task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。最终 UI 全套为 225 项测试、836 个断言全部通过；`task test` 重建生产 UI 并完成 Go race/coverage 全套，退出码为 0。lint 使用 `go.mod` 固定的 Go 1.26.3 后为 0 error，仍有 3 条位于未修改文件的既有 hook dependency warning；本机默认 Go 1.27 会让 staticcheck v0.7.0 因 export-data 版本不兼容而失败。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
+- PR review 修复后再次通过 `go test ./... -count=1`、`task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`；完整测试仍只跳过需要外部 PostgreSQL/MySQL 数据库和生产 SQLite snapshot 的可选验证，lint 仍为 0 error 与上述 3 条既有 warning。
 - 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
 - 当前阶段的独立只读审查先发现 Go 零时间处理和两个测试覆盖缺口；修复后复审未发现剩余可操作问题，`git diff --check` 通过。
 - 时间戳修复的远程 SHA 为 `71743735870bf40dc30d223df36acb2067cc6927`；详情页与结构化事件阶段的远程 SHA 为 `ca0eca45244208e22b299941604828ee91bc629b`。本阶段没有 stash。

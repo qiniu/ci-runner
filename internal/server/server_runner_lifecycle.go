@@ -775,7 +775,10 @@ func (s *Server) runnerExited(id string, result sandboxrunner.ExitResult, err er
 			return
 		}
 	}
-	defer unlock()
+	defer func() {
+		unlock()
+		s.retainWorkflowJobResultAfterRunnerExit(id)
+	}()
 	if err != nil {
 		st.Status = state.StatusFailed
 		st.Error = err.Error()
@@ -844,6 +847,52 @@ func (s *Server) runnerExited(id string, result sandboxrunner.ExitResult, err er
 	}
 	s.writeStateOrLog(id, st, "write exited state")
 	s.refreshMetrics()
+}
+
+func (s *Server) retainWorkflowJobResultAfterRunnerExit(id string) {
+	unlock := s.lockRunner(id)
+	st, err := s.store.ReadState(id)
+	if err != nil {
+		unlock()
+		s.logger.Error("read runner state for post-exit github job result", "id", id, "error", err)
+		return
+	}
+	if (st.Status != state.StatusStopping && !isTerminalRunnerStatus(st.Status)) ||
+		st.WorkflowJobID == 0 || strings.TrimSpace(st.RepositoryFullName) == "" ||
+		!st.GitHubJobObservedAt.IsZero() {
+		unlock()
+		return
+	}
+	repositoryFullName := st.RepositoryFullName
+	workflowJobID := st.WorkflowJobID
+	unlock()
+
+	jobCtx, cancel := context.WithTimeout(context.Background(), workflowJobLookupTimeout)
+	job, err := s.gh.GetWorkflowJob(jobCtx, repositoryFullName, workflowJobID)
+	cancel()
+	if err != nil {
+		s.logger.Warn("could not retain github job result after runner exit", "id", id, "workflow_job_id", workflowJobID, "error", err)
+		return
+	}
+
+	unlock = s.lockRunner(id)
+	defer unlock()
+	latest, err := s.store.ReadState(id)
+	if err != nil {
+		s.logger.Error("read latest runner state for post-exit github job result", "id", id, "error", err)
+		return
+	}
+	if latest.WorkflowJobID != workflowJobID || latest.RepositoryFullName != repositoryFullName ||
+		(latest.Status != state.StatusStopping && !isTerminalRunnerStatus(latest.Status)) ||
+		!latest.GitHubJobObservedAt.IsZero() {
+		return
+	}
+	if !retainWorkflowJobResult(&latest, job, time.Now().UTC()) {
+		return
+	}
+	if err := s.store.WriteState(latest); err != nil {
+		s.logger.Error("write github job result after runner exit", "id", id, "workflow_job_id", workflowJobID, "error", err)
+	}
 }
 
 func shouldCheckGitHubBusyAfterRunnerExit(result sandboxrunner.ExitResult, err error) bool {
@@ -1640,6 +1689,9 @@ func retainWorkflowJobResult(st *state.RunnerState, job github.WorkflowJob, obse
 	}
 	if !changed && st.GitHubJobName == "" && st.GitHubJobStatus == "" &&
 		st.GitHubJobConclusion == "" && st.GitHubJobRunnerName == "" {
+		return false
+	}
+	if !changed && !st.GitHubJobObservedAt.IsZero() {
 		return false
 	}
 	if observedAt.IsZero() {

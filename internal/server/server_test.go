@@ -4747,6 +4747,30 @@ func TestRetainWorkflowJobResultPreservesTerminalResult(t *testing.T) {
 	}
 }
 
+func TestRetainWorkflowJobResultIgnoresUnchangedTerminalObservation(t *testing.T) {
+	observedAt := time.Date(2026, 9, 14, 7, 15, 32, 0, time.UTC)
+	st := state.RunnerState{
+		WorkflowJobID:       1001,
+		GitHubJobName:       "test",
+		GitHubJobStatus:     "completed",
+		GitHubJobConclusion: "success",
+		GitHubJobRunnerName: "e2b-1001",
+		GitHubJobObservedAt: observedAt,
+	}
+	if retainWorkflowJobResult(&st, github.WorkflowJob{
+		ID:         1001,
+		Name:       "test",
+		Status:     "completed",
+		Conclusion: "success",
+		RunnerName: "e2b-1001",
+	}, observedAt.Add(time.Minute)) {
+		t.Fatal("unchanged terminal result must not request another state write")
+	}
+	if !st.GitHubJobObservedAt.Equal(observedAt) {
+		t.Fatalf("unchanged terminal result refreshed observation time to %s", st.GitHubJobObservedAt)
+	}
+}
+
 func TestRetainWorkflowJobResultIgnoresNonterminalObservation(t *testing.T) {
 	st := state.RunnerState{WorkflowJobID: 1001}
 	if retainWorkflowJobResult(&st, github.WorkflowJob{
