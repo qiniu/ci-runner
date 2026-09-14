@@ -4707,6 +4707,13 @@ func TestWebhookQueuedSkipsSandboxWhenGitHubJobNoLongerQueued(t *testing.T) {
 	if fake.startedCount() != 0 {
 		t.Fatalf("expected no sandbox start, got %d", fake.startedCount())
 	}
+	completed, err := store.ReadState("1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.StoppingAt.IsZero() {
+		t.Fatalf("expected no cleanup start for a job completed before sandbox creation, got %s", completed.StoppingAt)
+	}
 }
 
 func TestWebhookQueuedUsesEventRepositoryForRepoRunner(t *testing.T) {

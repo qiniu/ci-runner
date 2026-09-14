@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestWriteStateCompletedUsesCompletionAsFallbackStoppingTime(t *testing.T) {
+func TestWriteStateCompletedWithoutCleanupLeavesStoppingTimeUnset(t *testing.T) {
 	store := New(t.TempDir())
 	_, st, err := store.CreateRequest(RunnerRequest{
 		ID:         "completed-timestamps",
@@ -33,8 +33,8 @@ func TestWriteStateCompletedUsesCompletionAsFallbackStoppingTime(t *testing.T) {
 	if !got.CompletedAt.Equal(completedAt) {
 		t.Fatalf("CompletedAt = %s, want %s", got.CompletedAt, completedAt)
 	}
-	if !got.StoppingAt.Equal(completedAt) {
-		t.Fatalf("StoppingAt = %s, want completion fallback %s", got.StoppingAt, completedAt)
+	if !got.StoppingAt.IsZero() {
+		t.Fatalf("StoppingAt = %s, want zero without a cleanup transition", got.StoppingAt)
 	}
 }
 

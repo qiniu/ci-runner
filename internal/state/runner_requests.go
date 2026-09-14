@@ -964,9 +964,6 @@ func applyStateTimestamps(st *RunnerState, now time.Time) {
 		if st.CompletedAt.IsZero() {
 			st.CompletedAt = now
 		}
-		if st.StoppingAt.IsZero() {
-			st.StoppingAt = st.CompletedAt
-		}
 	case StatusFailed:
 		if st.FailedAt.IsZero() {
 			st.FailedAt = now

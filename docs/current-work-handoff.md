@@ -151,9 +151,7 @@ GitHub 先取消，Runner 正常退出，runnerd 随后清理。`sandbox cleaned
 
 本例 `stopping_at` 比 `completed_at` 晚约 269 ms。修复前代码能产生这个现象：退出处理先设置 CompletedAt；`internal/state/runner_requests.go` 的 `applyStateTimestamps()` 在写入 StatusCompleted 时发现 StoppingAt 为空，就用更晚的 now 补齐。
 
-本轮改动让 completed 状态的兼容回退使用既有 `CompletedAt`，不再用更晚的数据库写入时间；进程退出会在清理开始前持久化 stopping 状态，webhook stop 与强制停止路径把同一个清理起始时间保留到终态。stopping 的 CAS/数据库写入是进程退出外部清理的硬前置条件：写入失败时旧回调立即返回，不调用 Sandbox 或 GitHub 清理，由新状态、恢复或 reconciler 接管。回归测试覆盖清理中的可观察状态、正常/非零/错误进程退出、stopping 冲突、webhook 完成、cleanup retry 和超时强制停止。没有新增列或迁移，也没有自动改写历史数据库时间戳。
-
-该修复已作为 `7174373 fix(runner): preserve cleanup start timestamps` 推送到 `origin/improve/runner-diagnostics`。
+本轮改动不再为 completed 状态合成 `StoppingAt`；只有真实进入清理时才在外部操作前持久化 stopping 状态，未创建 Sandbox 就完成的请求保持该时间为空。进程退出、webhook stop 与强制停止路径把同一个清理起始时间保留到终态。stopping 的 CAS/数据库写入是进程退出外部清理的硬前置条件：写入失败时旧回调立即返回，不调用 Sandbox 或 GitHub 清理，由新状态、恢复或 reconciler 接管。回归测试覆盖未进入清理的完成路径、清理中的可观察状态、正常/非零/错误进程退出、stopping 冲突、webhook 完成、cleanup retry 和超时强制停止。没有新增列或迁移，也没有自动改写历史数据库时间戳。
 
 ### 5.4 详情页时间字段与结构化事件，本分支已实现
 
