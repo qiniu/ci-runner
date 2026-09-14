@@ -2028,7 +2028,7 @@ func TestReconcileCompletedWorkflowJobsMarksFailedRecoveryCompleted(t *testing.T
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001":
-			w.Write([]byte(`{"id":1001,"name":"check","status":"completed","conclusion":"success","labels":["self-hosted","e2b"]}`))
+			w.Write([]byte(`{"id":1001,"name":"check","status":"completed","conclusion":"success","runner_name":"e2b-1001","labels":["self-hosted","e2b"]}`))
 		default:
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -2070,6 +2070,11 @@ func TestReconcileCompletedWorkflowJobsMarksFailedRecoveryCompleted(t *testing.T
 	}
 	if got.FailureStage != "" || got.Error != "" || got.CompletedAt.IsZero() {
 		t.Fatalf("expected failure metadata cleared and completed_at set, got %#v", got)
+	}
+	if got.GitHubJobName != "check" || got.GitHubJobStatus != "completed" ||
+		got.GitHubJobConclusion != "success" || got.GitHubJobRunnerName != "e2b-1001" ||
+		got.GitHubJobObservedAt.IsZero() {
+		t.Fatalf("expected reconciler-observed GitHub Job result to be retained, got %#v", got)
 	}
 }
 

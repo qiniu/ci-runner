@@ -402,7 +402,9 @@ func (s *Server) completeIfWorkflowJobCompleted(ctx context.Context, id string) 
 	latest.NextRetryAt = time.Time{}
 	latest.LeaseOwner = ""
 	latest.LeaseExpiresAt = time.Time{}
-	latest.CompletedAt = time.Now().UTC()
+	completedAt := time.Now().UTC()
+	retainWorkflowJobResult(&latest, job, completedAt)
+	latest.CompletedAt = completedAt
 	if err := s.store.WriteState(latest); err != nil {
 		return err
 	}
