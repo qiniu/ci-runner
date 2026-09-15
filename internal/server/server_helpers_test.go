@@ -1955,6 +1955,97 @@ func TestRunnerExitedForAttemptRejectsStaleAttemptEvidence(t *testing.T) {
 	}
 }
 
+func TestRunnerExitedForAttemptRejectsAttemptReplacedDuringBusyLookup(t *testing.T) {
+	lookupStarted := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	var lookupCount atomic.Int32
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/o/r/actions/runners" {
+			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+		}
+		if lookupCount.Add(1) == 1 {
+			close(lookupStarted)
+			<-releaseLookup
+		}
+		_, _ = w.Write([]byte(`{"runners":[]}`))
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, ghServer.URL, fake)
+
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "replaced-during-busy-lookup",
+		Source:             "test",
+		RepositoryFullName: "o/r",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-replaced-during-busy-lookup",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-old-attempt"
+	st.ProcessPID = 42
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		srv.runnerExitedForAttempt(
+			st.ID,
+			runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID},
+			sandboxrunner.ExitResult{ExitCode: 137},
+			nil,
+		)
+		close(done)
+	}()
+
+	select {
+	case <-lookupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("runner exit did not start GitHub busy lookup")
+	}
+
+	unlock := srv.lockRunner(st.ID)
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	current.SandboxID = "sb-new-attempt"
+	current.ProcessPID = 84
+	if err := store.WriteState(current); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	close(releaseLookup)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runner exit did not finish after GitHub busy lookup")
+	}
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusRunning || got.SandboxID != "sb-new-attempt" || got.ProcessPID != 84 {
+		t.Fatalf("stale exit callback changed replacement attempt: %#v", got)
+	}
+	if got.TerminationSource != "" || got.RunnerExitCode != nil {
+		t.Fatalf("stale exit callback wrote evidence into replacement attempt: %#v", got)
+	}
+	if fake.stoppedCount() != 0 {
+		t.Fatalf("stale exit callback stopped replacement Sandbox %d times", fake.stoppedCount())
+	}
+}
+
 func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
 	jobLookupStarted := make(chan struct{}, 1)
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

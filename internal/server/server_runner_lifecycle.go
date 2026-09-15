@@ -810,9 +810,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	}
 	if shouldCheckGitHubBusyAfterRunnerExit(result, err) {
 		unlock()
-		if s.keepRunnerRunningWhenGitHubBusy(id, st, result, err) {
-			return
-		}
+		busy, busyErr := s.githubRunnerBusy(context.Background(), st)
 		unlock = s.lockRunner(id)
 		st, readErr = s.store.ReadState(id)
 		if readErr != nil {
@@ -820,9 +818,48 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			s.logger.Error("read state after runner exit busy check", "id", id, "error", readErr)
 			return
 		}
-		if st.Status != state.StatusCreating && st.Status != state.StatusRunning {
+		if !attempt.matches(st) || (st.Status != state.StatusCreating && st.Status != state.StatusRunning) {
 			unlock()
 			return
+		}
+		if busyErr != nil {
+			s.logger.Warn("could not verify github runner busy state after runner exit", "id", id, "runner_name", st.RunnerName, "error", busyErr)
+			s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("could not verify github runner busy state after runner exit: "+busyErr.Error()+"\n"))
+		} else if busy {
+			message := "runner process stream ended while GitHub still reports the runner is busy"
+			if err != nil {
+				message += ": " + err.Error()
+			} else {
+				message += ": " + runnerExitMessage(result)
+			}
+			st.Status = state.StatusRunning
+			st.LastErrorCode = "github_runner_busy"
+			st.LastErrorMessage = message
+			st.LastErrorRetryable = true
+			st.Error = message
+			if st.AssignedJobName == "" {
+				st.AssignedJobName = runnerJobStartedMarker
+			}
+			if writeErr := s.store.WriteState(st); writeErr != nil {
+				s.logger.Error("write running state after busy runner exit", "id", id, "error", writeErr)
+				s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("write running state after busy runner exit failed: "+writeErr.Error()+"\n"))
+				st, readErr = s.store.ReadState(id)
+				if readErr != nil {
+					unlock()
+					s.logger.Error("read state after busy runner exit write failure", "id", id, "error", readErr)
+					return
+				}
+				if !attempt.matches(st) || (st.Status != state.StatusCreating && st.Status != state.StatusRunning) {
+					unlock()
+					return
+				}
+			} else {
+				s.logger.Warn("runner process stream ended while github runner is busy; keeping sandbox running", "id", id, "runner_name", st.RunnerName, "sandbox_id", st.SandboxID, "error", st.Error)
+				s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(message+"; keeping sandbox running\n"))
+				s.refreshMetrics()
+				unlock()
+				return
+			}
 		}
 	}
 	defer func() {
@@ -952,55 +989,6 @@ func shouldCheckGitHubBusyAfterRunnerExit(result sandboxrunner.ExitResult, err e
 	if err == nil && result.ExitCode == 0 {
 		return false
 	}
-	return true
-}
-
-func (s *Server) keepRunnerRunningWhenGitHubBusy(id string, st state.RunnerState, result sandboxrunner.ExitResult, err error) bool {
-	busy, busyErr := s.githubRunnerBusy(context.Background(), st)
-	if busyErr != nil {
-		s.logger.Warn("could not verify github runner busy state after runner exit", "id", id, "runner_name", st.RunnerName, "error", busyErr)
-		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("could not verify github runner busy state after runner exit: "+busyErr.Error()+"\n"))
-		return false
-	}
-	if !busy {
-		return false
-	}
-	unlock := s.lockRunner(id)
-	defer unlock()
-	latest, readErr := s.store.ReadState(id)
-	if readErr != nil {
-		s.logger.Error("read state after busy runner exit check", "id", id, "error", readErr)
-		return false
-	}
-	if latest.Status != state.StatusCreating && latest.Status != state.StatusRunning {
-		return true
-	}
-	if latest.RunnerName != st.RunnerName || latest.SandboxID != st.SandboxID {
-		s.logger.Info("busy runner exit ignored because runner identity changed", "id", id, "runner_name", st.RunnerName, "sandbox_id", st.SandboxID)
-		return true
-	}
-	message := "runner process stream ended while GitHub still reports the runner is busy"
-	if err != nil {
-		message += ": " + err.Error()
-	} else {
-		message += ": " + runnerExitMessage(result)
-	}
-	latest.Status = state.StatusRunning
-	latest.LastErrorCode = "github_runner_busy"
-	latest.LastErrorMessage = message
-	latest.LastErrorRetryable = true
-	latest.Error = message
-	if latest.AssignedJobName == "" {
-		latest.AssignedJobName = runnerJobStartedMarker
-	}
-	if writeErr := s.store.WriteState(latest); writeErr != nil {
-		s.logger.Error("write running state after busy runner exit", "id", id, "error", writeErr)
-		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("write running state after busy runner exit failed: "+writeErr.Error()+"\n"))
-		return false
-	}
-	s.logger.Warn("runner process stream ended while github runner is busy; keeping sandbox running", "id", id, "runner_name", latest.RunnerName, "sandbox_id", latest.SandboxID, "error", latest.Error)
-	s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(message+"; keeping sandbox running\n"))
-	s.refreshMetrics()
 	return true
 }
 
