@@ -2046,6 +2046,96 @@ func TestRunnerExitedForAttemptRejectsAttemptReplacedDuringBusyLookup(t *testing
 	}
 }
 
+func TestRunnerExitedForAttemptPersistsExitCodeWhenCleanupWinsBusyLookup(t *testing.T) {
+	lookupStarted := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/o/r/actions/runners" {
+			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+		}
+		close(lookupStarted)
+		<-releaseLookup
+		_, _ = w.Write([]byte(`{"runners":[]}`))
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, ghServer.URL, fake)
+
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "cleanup-wins-busy-lookup",
+		Source:             "test",
+		RepositoryFullName: "o/r",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-cleanup-wins-busy-lookup",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-cleanup-wins-busy-lookup"
+	st.ProcessPID = 42
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		srv.runnerExitedForAttempt(
+			st.ID,
+			runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID},
+			sandboxrunner.ExitResult{ExitCode: 137},
+			nil,
+		)
+		close(done)
+	}()
+
+	select {
+	case <-lookupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("runner exit did not start GitHub busy lookup")
+	}
+
+	unlock := srv.lockRunner(st.ID)
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	current.Status = state.StatusStopping
+	current.TerminationSource = state.TerminationSourceManualStop
+	current.StoppingAt = time.Now().UTC()
+	if err := store.WriteState(current); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	close(releaseLookup)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runner exit did not finish after GitHub busy lookup")
+	}
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusStopping || got.TerminationSource != state.TerminationSourceManualStop {
+		t.Fatalf("late exit changed cleanup result or owner: %#v", got)
+	}
+	if got.RunnerExitCode == nil || *got.RunnerExitCode != 137 {
+		t.Fatalf("late observed exit code = %#v, want 137", got.RunnerExitCode)
+	}
+	if fake.stoppedCount() != 0 {
+		t.Fatalf("late exit repeated Sandbox cleanup %d times", fake.stoppedCount())
+	}
+	requireRunnerEventStageMessage(t, store, st.ID, runnerEventStageRunnerExit, "runner process exited after cleanup started with code 137")
+}
+
 func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
 	jobLookupStarted := make(chan struct{}, 1)
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

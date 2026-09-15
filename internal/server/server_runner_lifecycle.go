@@ -791,20 +791,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		return
 	}
 	if st.Status != state.StatusCreating && st.Status != state.StatusRunning {
-		if attempt.matches(st) && err == nil && st.RunnerExitCode == nil &&
-			(st.Status == state.StatusStopping || isTerminalRunnerStatus(st.Status)) {
-			exitCode := result.ExitCode
-			st.RunnerExitCode = &exitCode
-			if writeErr := s.store.WriteState(st); writeErr != nil {
-				s.logger.Error("write late runner exit code", "id", id, "exit_code", result.ExitCode, "error", writeErr)
-			} else {
-				s.logger.Info("runner process exit observed after cleanup started", "id", id, "exit_code", result.ExitCode)
-				s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(fmt.Sprintf(
-					"runner process exited after cleanup started with code %d\n",
-					result.ExitCode,
-				)))
-			}
-		}
+		s.recordLateRunnerExitEvidence(id, &st, attempt, result, err)
 		unlock()
 		return
 	}
@@ -818,7 +805,12 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			s.logger.Error("read state after runner exit busy check", "id", id, "error", readErr)
 			return
 		}
-		if !attempt.matches(st) || (st.Status != state.StatusCreating && st.Status != state.StatusRunning) {
+		if !attempt.matches(st) {
+			unlock()
+			return
+		}
+		if st.Status != state.StatusCreating && st.Status != state.StatusRunning {
+			s.recordLateRunnerExitEvidence(id, &st, attempt, result, err)
 			unlock()
 			return
 		}
@@ -937,6 +929,24 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	}
 	s.writeStateOrLog(id, st, "write exited state")
 	s.refreshMetrics()
+}
+
+func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
+	if !attempt.matches(*st) || err != nil || st.RunnerExitCode != nil ||
+		(st.Status != state.StatusStopping && !isTerminalRunnerStatus(st.Status)) {
+		return
+	}
+	exitCode := result.ExitCode
+	st.RunnerExitCode = &exitCode
+	if writeErr := s.store.WriteState(*st); writeErr != nil {
+		s.logger.Error("write late runner exit code", "id", id, "exit_code", result.ExitCode, "error", writeErr)
+		return
+	}
+	s.logger.Info("runner process exit observed after cleanup started", "id", id, "exit_code", result.ExitCode)
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(fmt.Sprintf(
+		"runner process exited after cleanup started with code %d\n",
+		result.ExitCode,
+	)))
 }
 
 func (s *Server) retainWorkflowJobResultAfterRunnerExit(id string) {
