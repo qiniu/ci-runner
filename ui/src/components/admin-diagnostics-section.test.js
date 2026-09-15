@@ -520,6 +520,10 @@ describe("admin diagnostics", () => {
             repository_full_name: "xgo-dev/llgo",
             runner_spec_name: "qiniu-ubuntu-24.04",
             sandbox_id: "sandbox-llgo",
+            sandbox_region: "us-south-1",
+            resolved_template_id: "tpl-us-south-1-ubuntu-24-04",
+            template_version: "20260915.1",
+            runner_version: "2.336.0",
             head_branch: "codex/test-sync-concurrent-wait-20260905",
             retry_count: 2,
             termination_source: "process_exit",
@@ -565,6 +569,14 @@ describe("admin diagnostics", () => {
       expect(html).toContain("请求上下文")
       expect(html).toContain("qiniu-ubuntu-24.04")
       expect(html).toContain("sandbox-llgo")
+      expect(html).toContain("Sandbox 区域")
+      expect(html).toContain("us-south-1")
+      expect(html).toContain("解析后的模板 ID")
+      expect(html).toContain("tpl-us-south-1-ubuntu-24-04")
+      expect(html).toContain("模板版本")
+      expect(html).toContain("20260915.1")
+      expect(html).toContain("Runner 版本")
+      expect(html).toContain("2.336.0")
       expect(html).toContain("codex/test-sync-concurrent-wait-20260905")
       expect(html).toContain("runner communication lost")
       expect(html).toContain("开始时间")
@@ -580,6 +592,26 @@ describe("admin diagnostics", () => {
       expect(html).not.toContain("已完成2026")
     } finally {
       await i18n.changeLanguage("en")
+    }
+  })
+
+  test("renders unavailable environment snapshot fields for historical requests", async () => {
+    await i18n.changeLanguage("en")
+    const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: runnerState,
+        github_job: { lookup_status: "not_applicable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      },
+    }))
+    const container = document.createElement("div")
+    container.innerHTML = html
+    for (const label of ["Sandbox region", "Resolved template ID", "Template version", "Runner version"]) {
+      const labelElement = Array.from(container.querySelectorAll(".text-muted-foreground")).find((element) => element.textContent === label)
+      expect(labelElement).toBeDefined()
+      expect(labelElement?.nextElementSibling?.textContent).toBe("-")
     }
   })
 })
