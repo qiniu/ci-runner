@@ -154,6 +154,26 @@ export type RunnerRequestDiagnosis = {
   events_truncated: boolean
 }
 
+export type NetworkDiagnosticTarget = "github_api" | "ubuntu_archive" | "llvm_apt"
+
+export type NetworkDiagnosticResult = {
+  target: NetworkDiagnosticTarget
+  host: string
+  dns_addresses: string[]
+  connected_ip?: string
+  http_status?: number
+  exit_code: number
+  timings_ms: {
+    dns_ms: number
+    connect_ms: number
+    tls_ms: number
+    first_byte_ms: number
+    total_ms: number
+  }
+  error?: string
+  observed_at: string
+}
+
 export type AuditEvent = {
   id: number
   actor: string

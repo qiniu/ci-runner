@@ -248,6 +248,21 @@ jobs:
 - 规范的 Admin Runner Request 详情页展示所选 Sandbox 区域、解析后的物理模板
   ID，以及可取得时的镜像模板版本和 GitHub Actions Runner 版本。刷新详情页后这些
   值保持一致；升级前的历史请求对不可用快照字段显示 `-`，浏览器控制台没有报错。
+- 任一请求仍为 `running` 时，在详情页执行 Ubuntu 软件源网络诊断，或调用：
+
+  ```bash
+  curl -fsS -b "$COOKIE_JAR" \
+    -H 'Content-Type: application/json' \
+    -d '{"target":"ubuntu_archive"}' \
+    https://<runnerd-host>/runner_requests/<running-request-id>/network-diagnostics | jq
+  ```
+
+  确认响应只包含固定 target/host、DNS 与实际连接 IP 证据、分阶段耗时、HTTP
+  状态、退出码、稳定错误类别和观察时间，不包含原始 stderr。立即再次调用应返回带 `Retry-After` 的
+  `429`；`https://example.invalid` 等 target 应在不调用 provider 的情况下返回
+  `400`；非管理员 session 调用相同接口应返回 `401`。运行记录新增一条
+  `control · network_diagnostic` 事件，同时请求和 GitHub Job 独立保持运行。若
+  attempt 在探测期间结束，API 应返回 `409` 且不附加过期结果。
 - Job 结束后，runner request 变为 `completed`。
 
 参考证据：2026-08-04（CST），

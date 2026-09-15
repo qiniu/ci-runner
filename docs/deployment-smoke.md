@@ -258,6 +258,24 @@ Expected result:
   and the GitHub Actions Runner version when available. Reloading the detail page
   preserves the same values; a pre-upgrade historical request renders `-` for
   unavailable snapshot fields and produces no browser console error.
+- While one request is still `running`, use the detail page to run the Ubuntu
+  archive network diagnostic, or call:
+
+  ```bash
+  curl -fsS -b "$COOKIE_JAR" \
+    -H 'Content-Type: application/json' \
+    -d '{"target":"ubuntu_archive"}' \
+    https://<runnerd-host>/runner_requests/<running-request-id>/network-diagnostics | jq
+  ```
+
+  Confirm the response contains only the fixed target/host, DNS and connected
+  IP evidence, phase timings, HTTP status, exit code, stable error category,
+  and observation time, with no raw stderr. An immediate second call returns `429` with `Retry-After`;
+  a target such as `https://example.invalid` returns `400` without a provider
+  call; the same request made with a non-admin session returns `401`. The Run
+  history gains one `control · network_diagnostic` event, while the request and
+  GitHub Job continue running independently. If the attempt ends during the
+  probe, the API returns `409` and does not attach the stale result.
 - After the job finishes, the runner request becomes `completed`.
 
 Reference evidence: on 2026-08-04 CST,

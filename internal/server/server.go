@@ -59,6 +59,9 @@ type Server struct {
 	diagnosticJobCache map[string]cachedDiagnosticJob
 	diagnosticJobGroup singleflight.Group
 
+	networkDiagnosticMu       sync.Mutex
+	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
+
 	userRepositoryAccessMu    sync.Mutex
 	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
 	userRepositoryAccessEpoch map[int64]uint64
@@ -178,6 +181,7 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		pullTitleCache:            map[string]cachedPullTitle{},
 		workflowRunCache:          map[string]cachedWorkflowRun{},
 		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
+		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
 		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
 		userRepositoryAccessEpoch: map[int64]uint64{},
 	}
@@ -437,6 +441,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/diagnostics", s.handleDiagnosticsRunnerRequest)
+	s.mux.HandleFunc("POST /runner_requests/{id}/network-diagnostics", s.handleRunnerNetworkDiagnostic)
 	s.mux.HandleFunc("GET /runner_requests/{id}/events", s.handleRunnerRequestEvents)
 	s.mux.HandleFunc("POST /runner_requests/{id}/retry", s.handleRetryRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/logs/{name}", s.handleGetRunnerLog)

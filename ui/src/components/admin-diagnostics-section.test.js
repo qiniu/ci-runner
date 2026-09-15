@@ -614,4 +614,103 @@ describe("admin diagnostics", () => {
       expect(labelElement?.nextElementSibling?.textContent).toBe("-")
     }
   })
+
+  test("runs a fixed network diagnostic only for a live runner and refreshes retained evidence", async () => {
+    let diagnosisRequests = 0
+    const networkRequests = []
+    const request = async (url, options) => {
+      if (url.endsWith("/network-diagnostics")) {
+        networkRequests.push([url, options])
+        return {
+          target: "ubuntu_archive",
+          host: "archive.ubuntu.com",
+          dns_addresses: ["185.125.190.82"],
+          connected_ip: "185.125.190.82",
+          http_status: 206,
+          exit_code: 0,
+          timings_ms: { dns_ms: 10, connect_ms: 20, tls_ms: 30, first_byte_ms: 40, total_ms: 120 },
+          observed_at: "2026-09-15T02:03:04Z",
+        }
+      }
+      if (url.includes("/events")) return { events: [], has_more: false }
+      diagnosisRequests += 1
+      return {
+        state: {
+          ...runnerState,
+          status: "running",
+          sandbox_id: "sb-network-probe",
+          process_pid: 42,
+        },
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      }
+    }
+    const container = await renderRunnerRequest(request, { pollIntervalMs: 60_000 })
+    const selector = container.querySelector('select[aria-label="Network diagnostic target"]')
+    expect(selector).toBeDefined()
+    await act(async () => {
+      selector.value = "ubuntu_archive"
+      selector.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    const runButton = Array.from(container.querySelectorAll("button"))
+      .find((element) => element.textContent?.includes("Run network diagnostic"))
+    expect(runButton).toBeDefined()
+    await click(runButton)
+
+    expect(networkRequests).toEqual([[
+      "/runner_requests/101445685709/network-diagnostics",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "ubuntu_archive" }),
+      },
+    ]])
+    expect(diagnosisRequests).toBe(2)
+    expect(container.textContent).toContain("archive.ubuntu.com · HTTP 206 · 120 ms")
+    expect(container.textContent).toContain("DNS addresses185.125.190.82")
+    expect(container.textContent).toContain("Connected IP185.125.190.82")
+    expect(container.textContent).toContain("DNS 10 ms · Connect 20 ms · TLS 30 ms · TTFB 40 ms · Total 120 ms")
+    expect(container.textContent).toContain("The result was retained in Run history")
+
+    const completed = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: runnerState,
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      },
+    }))
+    expect(completed).not.toContain("Run network diagnostic")
+  })
+
+  test("refreshes retained evidence after a network diagnostic failure", async () => {
+    let diagnosisRequests = 0
+    const request = async (url) => {
+      if (url.endsWith("/network-diagnostics")) throw new Error("network diagnostic failed")
+      if (url.includes("/events")) return { events: [], has_more: false }
+      diagnosisRequests += 1
+      return {
+        state: {
+          ...runnerState,
+          status: "running",
+          sandbox_id: "sb-network-probe",
+          process_pid: 42,
+        },
+        github_job: { lookup_status: "unavailable" },
+        findings: [],
+        events: [],
+        events_truncated: false,
+      }
+    }
+    const container = await renderRunnerRequest(request, { pollIntervalMs: 60_000 })
+    const runButton = Array.from(container.querySelectorAll("button"))
+      .find((element) => element.textContent?.includes("Run network diagnostic"))
+    await click(runButton)
+
+    expect(diagnosisRequests).toBe(2)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("network diagnostic failed")
+  })
 })

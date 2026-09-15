@@ -62,6 +62,14 @@ type fakeSandbox struct {
 	repositoryURL      string
 	runnerGroup        string
 	terminal           *fakeTerminalSession
+	diagnosticResult   sandboxrunner.NetworkDiagnosticResult
+	diagnosticErr      error
+	diagnosticBlock    chan struct{}
+	diagnosticStarted  chan struct{}
+	diagnosticCalls    int
+	diagnosticSandbox  string
+	diagnosticTarget   sandboxrunner.NetworkDiagnosticTarget
+	diagnosticDeadline time.Time
 }
 
 func TestPublicTemplateCatalogIsAvailableWithoutAuthenticationOrSandboxCredentials(t *testing.T) {
@@ -243,6 +251,33 @@ func (f *fakeSandbox) StartTerminal(ctx context.Context, sandboxID string, size 
 		onData([]byte("terminal ready\n"))
 	}
 	return terminal, nil
+}
+
+func (f *fakeSandbox) RunNetworkDiagnostic(ctx context.Context, sandboxID string, target sandboxrunner.NetworkDiagnosticTarget) (sandboxrunner.NetworkDiagnosticResult, error) {
+	f.mu.Lock()
+	f.diagnosticCalls++
+	f.diagnosticSandbox = sandboxID
+	f.diagnosticTarget = target
+	f.diagnosticDeadline, _ = ctx.Deadline()
+	result := f.diagnosticResult
+	err := f.diagnosticErr
+	block := f.diagnosticBlock
+	started := f.diagnosticStarted
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+	}
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return sandboxrunner.NetworkDiagnosticResult{}, ctx.Err()
+		}
+	}
+	return result, err
 }
 
 type fakeTerminalSession struct {

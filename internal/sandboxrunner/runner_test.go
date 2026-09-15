@@ -2,6 +2,7 @@ package sandboxrunner
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -86,6 +87,161 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				t.Fatalf("parseRuntimeEnvironment() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNetworkDiagnosticCommandAcceptsOnlyFixedTargets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		target NetworkDiagnosticTarget
+		host   string
+		url    string
+	}{
+		{target: NetworkDiagnosticTargetGitHubAPI, host: "api.github.com", url: "https://api.github.com/meta"},
+		{target: NetworkDiagnosticTargetUbuntuArchive, host: "archive.ubuntu.com", url: "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"},
+		{target: NetworkDiagnosticTargetLLVMAPT, host: "apt.llvm.org", url: "https://apt.llvm.org/llvm.sh"},
+	}
+	for _, tt := range tests {
+		command, host, err := networkDiagnosticCommand(tt.target)
+		if err != nil {
+			t.Fatalf("target %q: %v", tt.target, err)
+		}
+		if host != tt.host || !strings.Contains(command, tt.url) {
+			t.Fatalf("target %q command=%q host=%q", tt.target, command, host)
+		}
+		for _, bound := range []string{"head -n 8", "--connect-timeout 3", "--max-time 8", "--range 0-65535", "--max-filesize 65536", "2>/dev/null", "probe_error=operation_timed_out"} {
+			if !strings.Contains(command, bound) {
+				t.Errorf("target %q command missing %q: %s", tt.target, bound, command)
+			}
+		}
+		if strings.Contains(command, "--show-error") {
+			t.Errorf("target %q command retains raw curl stderr: %s", tt.target, command)
+		}
+		if strings.Contains(command, "--location") || strings.Contains(command, " -L") {
+			t.Errorf("target %q command follows redirects: %s", tt.target, command)
+		}
+	}
+
+	if _, _, err := networkDiagnosticCommand("https://attacker.invalid"); !errors.Is(err, ErrNetworkDiagnosticTarget) {
+		t.Fatalf("arbitrary target error = %v, want %v", err, ErrNetworkDiagnosticTarget)
+	}
+}
+
+func TestParseNetworkDiagnosticOutputBoundsAndTypesEvidence(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	output := strings.Join([]string{
+		"dns_ip=1.1.1.1",
+		"dns_ip=2606:4700::1111",
+		"dns_ip=not-an-ip",
+		"remote_ip=1.1.1.1",
+		"http_status=206",
+		"dns_seconds=0.010",
+		"connect_seconds=0.030",
+		"tls_seconds=0.060",
+		"first_byte_seconds=0.100",
+		"total_seconds=0.150",
+		"probe_error=operation_timed_out",
+	}, "\n")
+	got := parseNetworkDiagnosticOutput(
+		NetworkDiagnosticTargetGitHubAPI,
+		output,
+		"sensitive provider stderr must not be retained",
+		0,
+		observedAt,
+	)
+	if got.Target != NetworkDiagnosticTargetGitHubAPI || got.HTTPStatus != 206 || got.ExitCode != 0 || got.ConnectedIP != "1.1.1.1" {
+		t.Fatalf("result identity = %#v", got)
+	}
+	if !slices.Equal(got.DNSAddresses, []string{"1.1.1.1", "2606:4700::1111"}) {
+		t.Fatalf("DNS addresses = %#v", got.DNSAddresses)
+	}
+	if got.Timings != (NetworkDiagnosticTimings{DNSMS: 10, ConnectMS: 20, TLSMS: 30, FirstByteMS: 40, TotalMS: 150}) {
+		t.Fatalf("timings = %#v", got.Timings)
+	}
+	if got.Error != "operation_timed_out" {
+		t.Fatalf("error = %q, want stable probe error", got.Error)
+	}
+	if !got.ObservedAt.Equal(observedAt) {
+		t.Fatalf("observed_at = %s, want %s", got.ObservedAt, observedAt)
+	}
+
+	unknown := parseNetworkDiagnosticOutput(
+		NetworkDiagnosticTargetGitHubAPI,
+		"probe_error=secret_from_shell_profile",
+		"sensitive provider stderr must not be retained",
+		1,
+		observedAt,
+	)
+	if unknown.Error != "" {
+		t.Fatalf("unknown probe error = %q, want discarded", unknown.Error)
+	}
+}
+
+func TestParseNetworkDiagnosticCommandResultRejectsProviderError(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseNetworkDiagnosticCommandResult(
+		NetworkDiagnosticTargetGitHubAPI,
+		"api.github.com",
+		&qnsandbox.CommandResult{ExitCode: -1, Error: "rpc stream failed with provider details"},
+		time.Now(),
+	)
+	if !errors.Is(err, ErrNetworkDiagnosticExecution) {
+		t.Fatalf("command result error = %v, want %v", err, ErrNetworkDiagnosticExecution)
+	}
+	if strings.Contains(err.Error(), "provider details") {
+		t.Fatalf("command result leaked provider details: %v", err)
+	}
+}
+
+func TestRunBoundedNetworkDiagnosticCommandCancelsWhenCombinedOutputExceedsBudget(t *testing.T) {
+	t.Parallel()
+
+	result, err := runBoundedNetworkDiagnosticCommand(
+		context.Background(),
+		func(ctx context.Context, onStdout, onStderr func([]byte)) (*qnsandbox.CommandResult, error) {
+			onStdout(bytes.Repeat([]byte("x"), networkDiagnosticOutputLimit))
+			onStderr([]byte("x"))
+			select {
+			case <-ctx.Done():
+				return &qnsandbox.CommandResult{ExitCode: -1, Error: ctx.Err().Error()}, nil
+			default:
+				t.Fatal("network diagnostic output budget did not cancel execution")
+				return nil, nil
+			}
+		},
+	)
+	if result != nil {
+		t.Fatalf("result = %#v, want nil after output limit", result)
+	}
+	if !errors.Is(err, ErrNetworkDiagnosticOutputLimit) {
+		t.Fatalf("error = %v, want %v", err, ErrNetworkDiagnosticOutputLimit)
+	}
+}
+
+func TestRunBoundedNetworkDiagnosticCommandReturnsResultWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	want := &qnsandbox.CommandResult{ExitCode: 0, Stdout: "ok"}
+	result, err := runBoundedNetworkDiagnosticCommand(
+		context.Background(),
+		func(ctx context.Context, onStdout, onStderr func([]byte)) (*qnsandbox.CommandResult, error) {
+			onStdout([]byte("ok"))
+			onStderr([]byte("warning"))
+			if err := ctx.Err(); err != nil {
+				t.Fatalf("bounded output canceled execution: %v", err)
+			}
+			return want, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != want {
+		t.Fatalf("result = %#v, want %#v", result, want)
 	}
 }
 

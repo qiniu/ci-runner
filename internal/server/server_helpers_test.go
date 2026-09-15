@@ -821,6 +821,350 @@ func TestDiagnosticsRunnerRequestEndpointRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestRunnerNetworkDiagnosticRequiresAdminAndFixedTarget(t *testing.T) {
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/runner_requests/101/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, unauthenticated)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	ordinaryUser := httptest.NewRequest(http.MethodPost, "/runner_requests/101/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+	ordinaryUser.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, ordinaryUser)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ordinary-user status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	invalid := adminRequest(http.MethodPost, "/runner_requests/101/network-diagnostics", strings.NewReader(`{"target":"https://attacker.invalid"}`))
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, invalid)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("arbitrary-target status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	fake.mu.Lock()
+	calls := fake.diagnosticCalls
+	fake.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("arbitrary target called Sandbox %d times", calls)
+	}
+
+	oversized := adminRequest(http.MethodPost, "/runner_requests/101/network-diagnostics", strings.NewReader(`{"target":"github_api"}`+strings.Repeat(" ", 4<<10)))
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, oversized)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized request status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestRunnerNetworkDiagnosticRequiresCurrentRunningAttempt(t *testing.T) {
+	store := state.New(t.TempDir())
+	for _, tt := range []struct {
+		id        string
+		status    string
+		sandboxID string
+		pid       uint32
+	}{
+		{id: "queued", status: state.StatusQueued},
+		{id: "creating", status: state.StatusCreating, sandboxID: "sb-creating", pid: 42},
+		{id: "missing-sandbox", status: state.StatusRunning, pid: 42},
+		{id: "missing-pid", status: state.StatusRunning, sandboxID: "sb-missing-pid"},
+		{id: "stopping", status: state.StatusStopping, sandboxID: "sb-stopping", pid: 42},
+		{id: "completed", status: state.StatusCompleted, sandboxID: "sb-completed", pid: 42},
+	} {
+		_, st, err := store.CreateRequest(state.RunnerRequest{ID: tt.id, Source: "test", Labels: []string{"self-hosted"}, RunnerName: "e2b-" + tt.id}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.Status = tt.status
+		st.SandboxID = tt.sandboxID
+		st.ProcessPID = tt.pid
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, "http://example.test", fake)
+	for _, id := range []string{"queued", "creating", "missing-sandbox", "missing-pid", "stopping", "completed"} {
+		req := adminRequest(http.MethodPost, "/runner_requests/"+id+"/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("request %q status = %d, want %d; body=%s", id, rec.Code, http.StatusConflict, rec.Body.String())
+		}
+	}
+}
+
+func TestRunnerNetworkDiagnosticPersistsBoundedEvidenceAndRateLimitsAttempt(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID: "network-probe", Source: "test", Labels: []string{"self-hosted"}, RunnerName: "e2b-network-probe",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-network-probe"
+	st.ProcessPID = 42
+	st.RunningAt = time.Now().UTC()
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 15, 2, 3, 4, 0, time.UTC)
+	fake := &fakeSandbox{diagnosticResult: sandboxrunner.NetworkDiagnosticResult{
+		Target:       sandboxrunner.NetworkDiagnosticTargetUbuntuArchive,
+		Host:         "archive.ubuntu.com",
+		DNSAddresses: []string{"185.125.190.82"},
+		ConnectedIP:  "185.125.190.82",
+		HTTPStatus:   http.StatusPartialContent,
+		ExitCode:     0,
+		Timings:      sandboxrunner.NetworkDiagnosticTimings{DNSMS: 10, ConnectMS: 20, TLSMS: 30, FirstByteMS: 40, TotalMS: 120},
+		ObservedAt:   observedAt,
+	}}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	requestStartedAt := time.Now()
+	req := adminRequest(http.MethodPost, "/runner_requests/network-probe/network-diagnostics", strings.NewReader(`{"target":"ubuntu_archive"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("network diagnostic status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var result sandboxrunner.NetworkDiagnosticResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Target != sandboxrunner.NetworkDiagnosticTargetUbuntuArchive || result.HTTPStatus != http.StatusPartialContent || !result.ObservedAt.Equal(observedAt) {
+		t.Fatalf("network diagnostic result = %#v", result)
+	}
+	requireRunnerEventStageMessage(t, store, st.ID, "network_diagnostic", `"target":"ubuntu_archive"`)
+	fake.mu.Lock()
+	if fake.diagnosticCalls != 1 || fake.diagnosticSandbox != st.SandboxID || fake.diagnosticTarget != sandboxrunner.NetworkDiagnosticTargetUbuntuArchive {
+		t.Fatalf("Sandbox diagnostic call = count:%d sandbox:%q target:%q", fake.diagnosticCalls, fake.diagnosticSandbox, fake.diagnosticTarget)
+	}
+	if remaining := fake.diagnosticDeadline.Sub(requestStartedAt); remaining < 9*time.Second || remaining > 11*time.Second {
+		t.Fatalf("Sandbox diagnostic deadline = %s after request start, want about 10s", remaining)
+	}
+	fake.mu.Unlock()
+
+	req = adminRequest(http.MethodPost, "/runner_requests/network-probe/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second diagnostic status = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") != "30" {
+		t.Fatalf("Retry-After = %q, want 30", rec.Header().Get("Retry-After"))
+	}
+}
+
+func TestRunnerNetworkDiagnosticSanitizesProviderResult(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID: "sanitize-network-probe", Source: "test", Labels: []string{"self-hosted"}, RunnerName: "e2b-sanitize-network-probe",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-sanitize-network-probe"
+	st.ProcessPID = 42
+	st.RunningAt = time.Now().UTC()
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeSandbox{diagnosticResult: sandboxrunner.NetworkDiagnosticResult{
+		Host: "token.internal.example",
+		DNSAddresses: []string{
+			"185.125.190.82", "not-an-ip", "185.125.190.82", "2001:67c:1562::18", "91.189.91.81",
+			"91.189.91.82", "91.189.91.83", "91.189.91.84", "91.189.91.85", "91.189.91.86", "91.189.91.87",
+		},
+		ConnectedIP: "secret.internal.example",
+		HTTPStatus:  999,
+		ExitCode:    1,
+		Timings: sandboxrunner.NetworkDiagnosticTimings{
+			DNSMS: -1, ConnectMS: 10_001, TLSMS: 30, FirstByteMS: 40, TotalMS: 20_000,
+		},
+		Error: strings.Repeat("x", 700),
+	}}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	req := adminRequest(http.MethodPost, "/runner_requests/sanitize-network-probe/network-diagnostics", strings.NewReader(`{"target":"ubuntu_archive"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("network diagnostic status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var result sandboxrunner.NetworkDiagnosticResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Target != sandboxrunner.NetworkDiagnosticTargetUbuntuArchive || result.Host != "archive.ubuntu.com" {
+		t.Fatalf("fixed target identity = %#v", result)
+	}
+	if len(result.DNSAddresses) != 8 || result.ConnectedIP != "" || result.HTTPStatus != 0 {
+		t.Fatalf("network evidence was not sanitized: %#v", result)
+	}
+	if result.Timings.DNSMS != 0 || result.Timings.ConnectMS != 10_000 || result.Timings.TotalMS != 10_000 {
+		t.Fatalf("timings were not bounded: %#v", result.Timings)
+	}
+	if result.Error != "" {
+		t.Fatalf("unknown provider error = %q, want discarded", result.Error)
+	}
+	requireRunnerEventStageMessage(t, store, st.ID, "network_diagnostic", `"host":"archive.ubuntu.com"`)
+	controlLog, err := store.ReadLog(st.ID, "control.log", 256<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(controlLog), "token.internal.example") || strings.Contains(string(controlLog), "secret.internal.example") {
+		t.Fatalf("provider-controlled host leaked into retained event: %s", controlLog)
+	}
+}
+
+func TestRunnerNetworkDiagnosticDiscardsStaleAttemptResult(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID: "stale-network-probe", Source: "test", Labels: []string{"self-hosted"}, RunnerName: "e2b-stale-network-probe",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-stale-network-probe"
+	st.ProcessPID = 42
+	st.RunningAt = time.Now().UTC()
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	started := make(chan struct{}, 1)
+	fake := &fakeSandbox{
+		diagnosticBlock:   block,
+		diagnosticStarted: started,
+		diagnosticResult: sandboxrunner.NetworkDiagnosticResult{
+			Target: sandboxrunner.NetworkDiagnosticTargetGitHubAPI, Host: "api.github.com", ExitCode: 0, ObservedAt: time.Now().UTC(),
+		},
+	}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := adminRequest(http.MethodPost, "/runner_requests/stale-network-probe/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+		srv.ServeHTTP(rec, req)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("network diagnostic did not start")
+	}
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Status = state.StatusStopping
+	current.StoppingAt = time.Now().UTC()
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	close(block)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("network diagnostic did not finish")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale diagnostic status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	events, _, err := store.ListRunnerEvents(st.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Stage == "network_diagnostic" {
+			t.Fatalf("stale attempt persisted event %#v", event)
+		}
+	}
+}
+
+func TestRunnerNetworkDiagnosticRejectsConcurrentProbeAndRetainsProviderFailure(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID: "concurrent-network-probe", Source: "test", Labels: []string{"self-hosted"}, RunnerName: "e2b-concurrent-network-probe",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-concurrent-network-probe"
+	st.ProcessPID = 42
+	st.RunningAt = time.Now().UTC()
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	started := make(chan struct{}, 1)
+	fake := &fakeSandbox{
+		diagnosticBlock:   block,
+		diagnosticStarted: started,
+		diagnosticErr:     errors.New("provider unavailable with implementation details"),
+	}
+	srv := newTestServer(t, store, "http://example.test", fake)
+
+	first := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := adminRequest(http.MethodPost, "/runner_requests/concurrent-network-probe/network-diagnostics", strings.NewReader(`{"target":"llvm_apt"}`))
+		srv.ServeHTTP(first, req)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("network diagnostic did not start")
+	}
+
+	secondRequest := adminRequest(http.MethodPost, "/runner_requests/concurrent-network-probe/network-diagnostics", strings.NewReader(`{"target":"github_api"}`))
+	second := httptest.NewRecorder()
+	srv.ServeHTTP(second, secondRequest)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("concurrent diagnostic status = %d, want %d; body=%s", second.Code, http.StatusTooManyRequests, second.Body.String())
+	}
+
+	close(block)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("network diagnostic did not finish")
+	}
+	if first.Code != http.StatusBadGateway {
+		t.Fatalf("provider failure status = %d, want %d; body=%s", first.Code, http.StatusBadGateway, first.Body.String())
+	}
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != state.StatusRunning || current.SandboxID != st.SandboxID || current.ProcessPID != st.ProcessPID {
+		t.Fatalf("provider failure mutated runner state: %#v", current)
+	}
+	requireRunnerEventStageMessage(t, store, st.ID, "network_diagnostic", `"host":"apt.llvm.org"`)
+	requireRunnerEventStageMessage(t, store, st.ID, "network_diagnostic", `"error":"probe_unavailable"`)
+	controlLog, err := store.ReadLog(st.ID, "control.log", 256<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(controlLog), "implementation details") {
+		t.Fatalf("provider error details leaked into retained event: %s", controlLog)
+	}
+}
+
 func TestDiagnosticsRunnerRequestReportsUnobservedTermination(t *testing.T) {
 	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/xgo-dev/llgo/actions/jobs/101445685709" {

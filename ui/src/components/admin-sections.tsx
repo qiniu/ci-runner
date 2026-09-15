@@ -6,6 +6,8 @@ import {
   activeStatuses,
   type AuditEvent,
   type DiagnosticsSummary,
+  type NetworkDiagnosticResult,
+  type NetworkDiagnosticTarget,
   type RunnerDiagnosticFinding,
   type RunnerDiagnosticEvent,
   type RunnerEventPage,
@@ -240,7 +242,11 @@ export function RunnerRequestSection({
   const [diagnosing, setDiagnosing] = useState(false)
   const [diagnosisRevision, setDiagnosisRevision] = useState(0)
   const [requestAction, setRequestAction] = useState<"retry" | "stop" | null>(null)
+  const [networkDiagnosticRunning, setNetworkDiagnosticRunning] = useState(false)
+  const [networkDiagnosticResult, setNetworkDiagnosticResult] = useState<NetworkDiagnosticResult | null>(null)
+  const [networkDiagnosticError, setNetworkDiagnosticError] = useState("")
   const diagnosisRequestGeneration = useRef(0)
+  const networkDiagnosticGeneration = useRef(0)
 
   const runDiagnosis = useCallback(async (
     identifier: string,
@@ -269,9 +275,13 @@ export function RunnerRequestSection({
   useEffect(() => {
     setDiagnosis(null)
     setDiagnosisError("")
+    setNetworkDiagnosticRunning(false)
+    setNetworkDiagnosticResult(null)
+    setNetworkDiagnosticError("")
     void runDiagnosis(identifier)
     return () => {
       diagnosisRequestGeneration.current += 1
+      networkDiagnosticGeneration.current += 1
     }
   }, [identifier, runDiagnosis])
 
@@ -295,6 +305,32 @@ export function RunnerRequestSection({
       }
     } finally {
       setRequestAction(null)
+    }
+  }
+
+  const runNetworkDiagnostic = async (target: NetworkDiagnosticTarget) => {
+    if (!diagnosis || networkDiagnosticRunning) return
+    const requestID = diagnosis.state.id
+    const generation = ++networkDiagnosticGeneration.current
+    setNetworkDiagnosticRunning(true)
+    setNetworkDiagnosticResult(null)
+    setNetworkDiagnosticError("")
+    try {
+      const result = await request(`/runner_requests/${encodeURIComponent(requestID)}/network-diagnostics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target }),
+      }) as NetworkDiagnosticResult
+      if (generation === networkDiagnosticGeneration.current) setNetworkDiagnosticResult(result)
+    } catch (error) {
+      if (generation === networkDiagnosticGeneration.current) {
+        setNetworkDiagnosticError(error instanceof Error ? error.message : t("admin.networkDiagnosticFailed"))
+      }
+    } finally {
+      if (generation === networkDiagnosticGeneration.current) {
+        await runDiagnosis(requestID, { preserveExisting: true })
+        if (generation === networkDiagnosticGeneration.current) setNetworkDiagnosticRunning(false)
+      }
     }
   }
 
@@ -345,9 +381,13 @@ export function RunnerRequestSection({
             request={request}
             activityRefreshRevision={diagnosisRevision}
             requestAction={requestAction}
+            networkDiagnosticRunning={networkDiagnosticRunning}
+            networkDiagnosticResult={networkDiagnosticResult}
+            networkDiagnosticError={networkDiagnosticError}
             onCopyRunnerID={onCopyRunnerID}
             onRetryRunner={onRetryRunner ? () => void runRequestAction("retry", onRetryRunner) : undefined}
             onStopRunner={onStopRunner ? () => void runRequestAction("stop", onStopRunner) : undefined}
+            onRunNetworkDiagnostic={(target) => void runNetworkDiagnostic(target)}
           />
         ) : null}
       </CardContent>
@@ -451,17 +491,25 @@ export function RunnerRequestDiagnosisResult({
   request,
   activityRefreshRevision = 0,
   requestAction = null,
+  networkDiagnosticRunning = false,
+  networkDiagnosticResult = null,
+  networkDiagnosticError = "",
   onCopyRunnerID,
   onRetryRunner,
   onStopRunner,
+  onRunNetworkDiagnostic,
 }: {
   diagnosis: RunnerRequestDiagnosis
   request?: (url: string, options?: RequestInit) => Promise<unknown>
   activityRefreshRevision?: number
   requestAction?: "retry" | "stop" | null
+  networkDiagnosticRunning?: boolean
+  networkDiagnosticResult?: NetworkDiagnosticResult | null
+  networkDiagnosticError?: string
   onCopyRunnerID?: (id: string) => void
   onRetryRunner?: () => void
   onStopRunner?: () => void
+  onRunNetworkDiagnostic?: (target: NetworkDiagnosticTarget) => void
 }) {
   const { t, i18n } = useTranslation()
   const state = diagnosis.state
@@ -538,6 +586,15 @@ export function RunnerRequestDiagnosisResult({
         </div>
       </section>
 
+      {state.status === "running" && state.sandbox_id && state.process_pid && onRunNetworkDiagnostic ? (
+        <RunnerNetworkDiagnostic
+          running={networkDiagnosticRunning}
+          result={networkDiagnosticResult}
+          error={networkDiagnosticError}
+          onRun={onRunNetworkDiagnostic}
+        />
+      ) : null}
+
       <details className="group overflow-hidden rounded-lg border bg-muted/10">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 marker:content-none hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           <div>
@@ -559,6 +616,84 @@ export function RunnerRequestDiagnosisResult({
         refreshRevision={activityRefreshRevision}
       />
     </div>
+  )
+}
+
+const networkDiagnosticTargets = ["github_api", "ubuntu_archive", "llvm_apt"] as const satisfies readonly NetworkDiagnosticTarget[]
+
+function RunnerNetworkDiagnostic({
+  running,
+  result,
+  error,
+  onRun,
+}: {
+  running: boolean
+  result: NetworkDiagnosticResult | null
+  error: string
+  onRun: (target: NetworkDiagnosticTarget) => void
+}) {
+  const { t } = useTranslation()
+  const [target, setTarget] = useState<NetworkDiagnosticTarget>("github_api")
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!running) onRun(target)
+  }
+  const resultFailed = result ? result.exit_code !== 0 || Boolean(result.error) : false
+  return (
+    <section className="space-y-2 rounded-lg border bg-muted/10 p-4">
+      <div>
+        <div className="text-sm font-medium">{t("admin.networkDiagnostic")}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{t("admin.networkDiagnosticDescription")}</div>
+      </div>
+      <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={submit}>
+        <select
+          className="h-9 min-w-0 rounded-md border bg-background px-3 text-sm sm:min-w-56"
+          aria-label={t("admin.networkDiagnosticTarget")}
+          value={target}
+          disabled={running}
+          onChange={(event) => setTarget(event.target.value as NetworkDiagnosticTarget)}
+        >
+          {networkDiagnosticTargets.map((value) => (
+            <option key={value} value={value}>{t(`admin.networkDiagnosticTarget${value === "github_api" ? "GitHubAPI" : value === "ubuntu_archive" ? "UbuntuArchive" : "LLVMAPT"}`)}</option>
+          ))}
+        </select>
+        <Button type="submit" size="sm" variant="outline" disabled={running}>
+          {running ? <Loader2 className="animate-spin" /> : <Activity />}
+          {t(running ? "admin.networkDiagnosticRunning" : "admin.runNetworkDiagnostic")}
+        </Button>
+      </form>
+      {result ? (
+        <div className={`rounded-md border px-3 py-2 text-xs ${resultFailed ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
+          <div className="font-mono">{t("admin.networkDiagnosticSummary", { host: result.host, status: result.http_status || "-", duration: result.timings_ms.total_ms })}</div>
+          <dl className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+            <div className="min-w-0">
+              <dt className="text-muted-foreground">{t("admin.networkDiagnosticDNSAddresses")}</dt>
+              <dd className="break-all font-mono">{result.dns_addresses.join(", ") || "-"}</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-muted-foreground">{t("admin.networkDiagnosticConnectedIP")}</dt>
+              <dd className="break-all font-mono">{result.connected_ip || "-"}</dd>
+            </div>
+          </dl>
+          <div className="mt-2 break-words font-mono text-muted-foreground">
+            {t("admin.networkDiagnosticTimings", {
+              dns: result.timings_ms.dns_ms,
+              connect: result.timings_ms.connect_ms,
+              tls: result.timings_ms.tls_ms,
+              firstByte: result.timings_ms.first_byte_ms,
+              total: result.timings_ms.total_ms,
+            })}
+          </div>
+          {resultFailed ? (
+            <div className="mt-2 break-all font-mono text-amber-700 dark:text-amber-300">
+              {t("admin.networkDiagnosticProbeFailure", { exitCode: result.exit_code, error: result.error || "-" })}
+            </div>
+          ) : null}
+          <div className="mt-1 text-muted-foreground">{t("admin.networkDiagnosticRetained")}</div>
+        </div>
+      ) : null}
+      {error ? <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div> : null}
+    </section>
   )
 }
 

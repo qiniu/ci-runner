@@ -303,7 +303,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/runner_requests` | Runner Request 历史、筛选、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
-| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与 Runner 版本）、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
+| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与 Runner 版本）、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）、运行中 Sandbox 的有界按需网络探测和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
 | `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
 | `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |
@@ -326,6 +326,8 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
 | GitHub 报告 self-hosted runner 失联                  | Runner、Sandbox 或其网络链路停止上报心跳 | 打开 **Admin → Runner 请求**，用 GitHub 显示的 Runner Name（如 `e2b-101445685709`）精确查找请求，再检查诊断结论和生命周期时间线 |
+
+请求仍为 `running` 时，管理员可在详情页对 GitHub API、Ubuntu 软件源或 LLVM APT 主机执行固定目标探测。探测仅作为诊断证据：最多运行 10 秒，下载和命令 stdout/stderr 合计输出分别限制为 64 KiB；同一 Sandbox/PID attempt 每 30 秒最多执行一次，结果保留在运行记录中，且绝不改变或延长 Runner 生命周期。
 
 更多本地调试步骤请参阅 [docs/zh/testing.md](docs/zh/testing.md)。
 

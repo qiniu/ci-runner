@@ -6,12 +6,12 @@
 
 - 仓库：`miclle/qiniu-ci-runner`；上游：`qiniu/ci-runner`。
 - 工作目录：仓库 checkout 根目录；不同电脑不要求使用相同的本地绝对路径。
-- 当前起始分支：`main`；本增量代码基线：`667cce2c`，`feat(diagnostics): retain runner exit evidence (#98)`。
-- 当前工作分支：`feat/runner-environment-snapshot`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
-- 已发布增量为 PR #96（生命周期时间与结构化清理阶段）、PR #97（GitHub Job 终态留存）和 PR #98（终止来源、进程退出码与诊断语义收敛）。当前分支已在本地实现运行环境快照，尚未创建 PR 或发布。
+- 当前起始分支：`main`；本增量代码基线：`6f3e8c2`，`feat(diagnostics): retain runner environment snapshots (#99)`。
+- 当前工作分支：`feat/runner-network-diagnostics`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
+- 已发布增量为 PR #96（生命周期时间与结构化清理阶段）、PR #97（GitHub Job 终态留存）、PR #98（终止来源、进程退出码与诊断语义收敛）和 PR #99（运行环境快照）。当前分支已在本地完成运行中 Sandbox 的有界按需网络诊断，尚待提交、PR、部署和真实 Sandbox 验收。
 - 接收人：用户在另一台电脑上的后续会话。
-- 状态：故障分析及 PR #96、PR #97、PR #98 均已完成、合并，并由用户确认发布到生产；PR #98 还完成了新旧 Runner Request 的生产兼容性验证。运行环境快照已在 `feat/runner-environment-snapshot` 完成本地实现和验证，尚未推送、创建 PR 或发布；实际退出信号和网络诊断仍未实施。
-- 传输载体：已发布实现已经进入 `upstream/main=667cce2c`。当前 `feat/runner-environment-snapshot` 从该提交创建；恢复时仍须核对本节命令输出，不能只依赖文档中的历史快照。
+- 状态：故障分析及 PR #96 至 PR #99 均已完成、合并，并由用户确认发布到生产。PR #99 已验证新请求快照持久化、历史空字段兼容、普通用户响应不包含 `resolved_template_id`，对应跟踪 Issue #461 已关闭。实际退出信号仍受 Sandbox SDK 限制；按需网络诊断已完成本地实现与验证，底层 llgo 网络根因仍未验证。
+- 传输载体：已发布实现已经进入 `origin/main=6f3e8c2`。当前 `feat/runner-network-diagnostics` 从该提交创建；恢复时仍须核对本节命令输出，不能只依赖文档中的历史快照。
 
 用户先要求分析一个 llgo GitHub Actions Job，随后提供 runner_requests 查询结果和 control.log，询问 runnerd 是否有问题、如何向沙箱团队提单、runnerd 能否增加诊断能力。首次交接阶段只要求在新分支记录并推送完整交接，未授权重跑 Job、发布模板、部署线上服务或代发服务团队消息；后续已明确授权在同一分支实现生命周期时间戳、详情页字段和结构化退出／清理事件。
 
@@ -211,13 +211,13 @@ Acquire::https::Timeout "30";
 
 | 优先级 | 提案 | 目的与边界 |
 | --- | --- | --- |
-| P0 | 运行环境快照 | **当前分支已本地实现，尚未合并或发布：** 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不把区域物理 ID 写回 managed spec |
+| P0 | 运行环境快照 | **PR #99 已发布并完成生产验证：** 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不把区域物理 ID 写回 managed spec，普通用户响应不暴露解析后的物理模板 ID |
 | P0 | GitHub Job 结果留存 | **PR #97 已发布：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
 | P0 | 完善控制事件和时间戳 | **PR #96、PR #98 已发布并完成生产验证：** 已展示生命周期时间、Cleanup Duration、稳定事件阶段、终止来源和可空退出码，并修正成功清理的误导警告。实际退出信号受 provider API 限制 |
-| P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
-| P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
+| P1 | 按需网络诊断 | **当前分支已完成本地实现与验证：** 在 running Sandbox 内对 GitHub API、Ubuntu archive、LLVM APT 三个固定目标执行有界 DNS/连接/下载探测，直接展示并保留连接 IP、阶段耗时、HTTP 状态、退出码和稳定错误类别；原始 stderr/provider 细节不保留，待提交、PR、部署及真实 Sandbox 验收 |
+| 后置 | 脱敏诊断包导出 | 暂不建立第二套诊断格式；请求详情页与保留时间线作为单一诊断面，只有出现无 UI 权限的跨团队交接、长期离线归档或反复手工拼装证据时再评估 |
 
-生命周期、GitHub Job 结果留存和结构化终止诊断已经分别通过 PR #96、PR #97、PR #98 进入生产。当前独立增量在 Sandbox 就绪后、Runner 启动前记录区域与解析后的物理模板 ID，并通过 5 秒有界探测只采集模板版本与 Runner 版本；单项解码后最多 256 字节，不复制完整环境、代理、token、key 或 cache credential。探测失败不阻塞 Runner 启动，重试或 Job 错配重排队会清除旧 attempt 快照，恢复只为同一活跃 Sandbox/PID attempt 补齐缺失值。主动网络探测保持 P1；APT 配置快照仍属于该后续范围，只取镜像、超时、重试、代理是否存在等允许字段。
+生命周期、GitHub Job 结果留存、结构化终止诊断和运行环境快照已经分别通过 PR #96、PR #97、PR #98、PR #99 进入生产。环境快照在 Sandbox 就绪后、Runner 启动前记录区域与解析后的物理模板 ID，并通过 5 秒有界探测只采集模板版本与 Runner 版本；单项解码后最多 256 字节，不复制完整环境、代理、token、key 或 cache credential。探测失败不阻塞 Runner 启动，重试或 Job 错配重排队会清除旧 attempt 快照，恢复只为同一活跃 Sandbox/PID attempt 补齐缺失值。当前网络诊断增量保持 admin-only、running-only、固定目标、10 秒总时限、64 KiB 下载上限、64 KiB 命令 stdout/stderr 合计输出上限、30 秒 attempt 冷却和 `network_diagnostic` 事件留存；输出超限会取消命令。它在 provider I/O 期间不持有生命周期锁，也不改变 Job 超时或清理。APT 配置快照未纳入本次范围。
 
 时机很关键：GitHub 完成通知可能晚于 Sandbox 清理，不能依赖事后连接已销毁实例来收证。启动时保存轻量快照，存活时允许管理员按需触发；若做自动失败采集，应在模板/Job 失败处理阶段给定严格时限，不无限延迟回收。无输出不等于卡死，不能因此杀任务。
 
@@ -225,18 +225,18 @@ Acquire::https::Timeout "30";
 
 ## 8. 新电脑最先读取与复核
 
-当前增量在 `feat/runner-environment-snapshot` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
+当前增量在 `feat/runner-network-diagnostics` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
 
 ```bash
 git fetch origin upstream --prune
-git switch feat/runner-environment-snapshot || git switch -c feat/runner-environment-snapshot --track origin/feat/runner-environment-snapshot
+git switch feat/runner-network-diagnostics || git switch -c feat/runner-network-diagnostics --track origin/feat/runner-network-diagnostics
 git status --short --branch
 git rev-parse HEAD
 git merge-base HEAD upstream/main
 sed -n '700,725p' docs/testing.md
 ```
 
-完成标准：分支基线仍可追溯到 `upstream/main=667cce2c`，工作区状态已理解，正式测试文档与本交接内容一致。
+完成标准：分支基线仍可追溯到 `origin/main=6f3e8c2`，工作区状态已理解，正式测试文档与本交接内容一致。
 
 必须先读 `AGENTS.md`、`.agents/rules/development-workflow.md`、`.agents/rules/testing-and-verification.md`、`TODO.md`；涉及状态时读 `.agents/skills/runnerd-state-schema/SKILL.md`。
 
@@ -278,20 +278,20 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 
 ## 10. 后续执行顺序和验收边界
 
-1. 仓库复核已完成：`upstream/main=667cce2c` 已包含 PR #96、PR #97 和 PR #98；工作区从该干净基线创建 `feat/runner-environment-snapshot`。
+1. 仓库复核已完成：`origin/main=6f3e8c2` 已包含 PR #96、PR #97、PR #98 和 PR #99；工作区从该干净基线创建 `feat/runner-network-diagnostics`。
 2. 生命周期时间戳、详情页字段、GitHub Job 终态快照和结构化事件已进入生产；不批量修复历史数据。
-3. 当前增量已完成 additive 环境字段、安全有界采集、启动与恢复绑定、重试／错配重排队清理，以及 Admin 详情页中英文展示；不扩展成全量环境或网络监控。
+3. 当前增量已完成管理员专用、running-only、固定目标的有界网络诊断；服务端按 Request ID/Sandbox ID/PID attempt 串行化并限流，provider I/O 后复核 attempt，再把安全结果写入 `network_diagnostic` 事件。Admin 详情页直接展示 DNS、连接 IP、分阶段耗时、HTTP 状态、退出码和稳定错误类别；原始 stderr/provider 细节会被丢弃，不扩展成任意目标、全量网络监控或独立诊断包。
 4. 环境与 Job 结果新增状态字段继续使用现有 SQLite additive migration 约束，不让 GORM 重建旧 `runner_requests` 表，不持久化 raw webhook；历史空字段保持兼容并显示为 `-`。
 5. 状态或调用方变更继续先运行 `go test ./internal/state -count=1`，再运行 focused package 和更广验证。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
 6. UI 文案改动运行 `task ui-i18n-check` 与相关 Bun tests；依赖、构建、公共指南或 Jobs 滚动布局改动运行 `task ui-production-smoke`。生产嵌入 UI 用 `task build`；禁止手改 `internal/server/ui/`。
 7. 按实际变更同步 README 中英文、testing 中英文、TODO 和相关 agent 规则。模板验证遵守 qshell ready + 双区域真实 smoke；本地 Docker build 不能冒充 Sandbox 模板可用证据。
-8. 服务团队调查与实现可独立推进，但本次环境快照增量尚未运行真实新建 Sandbox、发布模板或线上部署验证。不要把本地测试当作生产证据。
+8. PR #99 已在生产验证：真实请求 `104298930020` 持久化 `us-south-1`、解析后的模板 ID、模板版本 `20260817.1` 和 Runner 版本 `2.336.0`；历史请求保持空字段兼容，普通用户响应不包含 `resolved_template_id`。当前网络诊断增量仍只有本地验证，尚无真实 Sandbox 探测或线上部署证据。
 
 ## 11. 验证、工作区与关闭条件
 
-- 运行环境快照增量基于 `upstream/main=667cce2c`，代码提交依次为 `ee6fed4`（state）、`28c4bb4`（capture）、`9b30b9f`（UI）、`419fd43`（test formatting）和 `07f843c`（安全解析环境元数据）；正式文档为当前未提交收尾内容。本阶段没有 stash，也尚未推送。
-- 本增量按 TDD 完成：state 测试先因四个字段不存在而编译失败；Sandbox parser/command contract、生命周期持久化、错配重排队清理、recovery 和 UI 历史字段测试分别先观察到 RED，再以最小实现转绿。
-- 最终本地验证通过 `go test ./internal/state -count=1`、`go test ./internal/sandboxrunner -count=1`、`go test ./... -count=1`、完整 226 项 Bun 测试（856 个断言）、`task ui-i18n-check`、`task build`、`task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。`task test` 重建生产 UI 并完成 Go race/coverage，退出码为 0；lint 为 0 error，仍有 3 条位于未修改文件的既有 React Hook dependency warning。Vite 仍报告既有的大 chunk 非阻塞提示。
+- 运行环境快照已通过 PR #99 合并、发布并完成生产验收；当前网络诊断增量基于合并提交 `6f3e8c2`，长期行为与验证边界已同步到 README、testing、deployment smoke、`AGENTS.md` 和 `.agents/rules/`。本阶段没有 stash，当前变更尚未提交或推送。
+- 本增量按 TDD 完成：Sandbox target/command/parser 合同先因类型与函数不存在而编译失败；Admin handler 测试先得到 405；超大 body、provider 返回值净化和 SDK `CommandResult.Error` 测试分别先复现错误行为；UI 交互测试先证明控件不存在。对应实现后均转绿。
+- 最终本地验证通过聚焦的 `go test ./internal/sandboxrunner ./internal/server -count=1`、完整 228 项 Bun 测试（868 个断言）、`task ui-i18n-check`、`task ui-production-smoke`（4 项 Chromium smoke）、`task build`、`task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。`task test` 重建生产 UI 并完成 Go race/coverage，退出码为 0；lint 为 0 error，仍有 3 条位于未修改文件的既有 React Hook dependency warning。Vite 仍报告既有的大 chunk 非阻塞提示。
 - 专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供外部测试环境而跳过；未运行真实 Sandbox、GitHub Actions 工作流或生产部署 smoke，因此这些结果只能证明本地兼容性和构建质量。
 - 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
 - PR #97 增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、TODO、正式中英文文档和 agent 规则。
@@ -302,5 +302,5 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 - 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
 - 当前阶段的独立只读审查先发现 Go 零时间处理和两个测试覆盖缺口；修复后复审未发现剩余可操作问题，`git diff --check` 通过。
 - 时间戳修复的远程 SHA 为 `71743735870bf40dc30d223df36acb2067cc6927`；详情页与结构化事件阶段的远程 SHA 为 `ca0eca45244208e22b299941604828ee91bc629b`。本阶段没有 stash。
-- 可继续静态设计，无凭证阻塞。真正复现需要新电脑的 GitHub 权限、runnerd 管理登录及单独授权的沙箱凭证/测试环境。环境快照的线上行为、模板构建版本和底层网络原因仍未知。
+- 可继续本地实现与静态验证，无凭证阻塞。真实网络探测与底层根因复现需要 GitHub 权限、runnerd 管理登录及单独授权的 Sandbox 凭证/测试环境；不得把本地测试当作生产证据。
 - 继续自：本次会话，无前置 handoff 文件。当前记录仍承载 Job 结果留存与环境快照的事故背景；这些后续范围完成、取消或迁入正式文档后，更新 TODO，并删除或明确标记这份交接记录为历史资料。

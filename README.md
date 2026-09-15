@@ -316,7 +316,7 @@ The built-in web UI provides:
 | `/admin/` | Dashboard with runnerd runtime diagnostics and metrics |
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
-| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and Runner version), typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
+| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and Runner version), typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or manageable Organization |
@@ -339,6 +339,8 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |
 | GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Runner Requests**, look up the Runner Name shown by GitHub (for example, `e2b-101445685709`), and inspect the request resource's findings and lifecycle timeline |
+
+For a request that is still `running`, an administrator can run a fixed-target probe for the GitHub API, Ubuntu archive, or LLVM APT host from the request detail page. The probe is diagnostic evidence only: it is limited to 10 seconds, a 64 KiB download, and 64 KiB of combined command output; it is rate-limited to once per Sandbox/PID attempt every 30 seconds, retained in Run history, and never changes or extends the Runner lifecycle.
 
 For detailed local debugging steps, see [docs/testing.md](docs/testing.md#8-troubleshooting-order).
 
