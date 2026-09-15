@@ -267,7 +267,7 @@ func (s *Server) userRunnerState(w http.ResponseWriter, r *http.Request) (state.
 		return state.RunnerState{}, false
 	}
 	if hasRepositoryAccess(access, st.GitHubInstallationID, st.RepositoryFullName) {
-		return st, true
+		return userVisibleRunnerState(st), true
 	}
 	writeError(w, http.StatusNotFound, "runner not found")
 	return state.RunnerState{}, false
@@ -479,7 +479,15 @@ func (s *Server) userRunnerStatesForRequest(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
+	for i := range states {
+		states[i] = userVisibleRunnerState(states[i])
+	}
 	return states, true
+}
+
+func userVisibleRunnerState(st state.RunnerState) state.RunnerState {
+	st.ResolvedTemplateID = ""
+	return st
 }
 
 func (s *Server) handleUserGetRunnerLog(w http.ResponseWriter, r *http.Request) {

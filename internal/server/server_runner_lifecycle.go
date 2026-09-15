@@ -1194,13 +1194,13 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	if latest.SandboxRegion == "" {
 		latest.SandboxRegion = s.sandboxRegionForAPIURL(req.SandboxAPIURL)
 	}
-	if result.ResolvedTemplateID != "" {
+	if latest.ResolvedTemplateID == "" && result.ResolvedTemplateID != "" {
 		latest.ResolvedTemplateID = strings.TrimSpace(result.ResolvedTemplateID)
 	}
-	if result.TemplateVersion != "" {
+	if latest.TemplateVersion == "" && result.TemplateVersion != "" {
 		latest.TemplateVersion = strings.TrimSpace(result.TemplateVersion)
 	}
-	if result.RunnerVersion != "" {
+	if latest.RunnerVersion == "" && result.RunnerVersion != "" {
 		latest.RunnerVersion = strings.TrimSpace(result.RunnerVersion)
 	}
 	latest.ProcessPID = result.PID

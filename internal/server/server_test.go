@@ -1826,6 +1826,10 @@ func TestUserRunnerDetailLogAndTerminal(t *testing.T) {
 	}
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-job-detail-1"
+	st.SandboxRegion = "us-south-1"
+	st.ResolvedTemplateID = "tpl-private-job-detail-1"
+	st.TemplateVersion = "20260915.1"
+	st.RunnerVersion = "2.336.0"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -1847,6 +1851,12 @@ func TestUserRunnerDetailLogAndTerminal(t *testing.T) {
 	}
 	if got.ID != st.ID || got.SandboxID != st.SandboxID {
 		t.Fatalf("unexpected runner detail: %#v", got)
+	}
+	if got.ResolvedTemplateID != "" {
+		t.Fatalf("user runner detail exposed resolved template id: %#v", got)
+	}
+	if got.SandboxRegion != st.SandboxRegion || got.TemplateVersion != st.TemplateVersion || got.RunnerVersion != st.RunnerVersion {
+		t.Fatalf("user runner detail lost non-private environment metadata: %#v", got)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/user/runner_requests/job-detail-1/logs/control.log", nil)
@@ -5539,6 +5549,52 @@ func TestRecoverReattachesActiveRunnerState(t *testing.T) {
 	}
 	if input.Timeout <= 0 || input.Timeout >= time.Hour {
 		t.Fatalf("expected remaining sandbox timeout, got %s", input.Timeout)
+	}
+}
+
+func TestRecoverPreservesExistingRunnerEnvironmentSnapshot(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "recover-existing-environment",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-recover-existing-environment",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusRunning
+	st.SandboxID = "sb-existing-environment"
+	st.SandboxRegion = "region-original"
+	st.ResolvedTemplateID = "tpl-original"
+	st.TemplateVersion = "template-original"
+	st.RunnerVersion = "runner-original"
+	st.ProcessPID = 42
+	st.RunningAt = time.Now().UTC().Add(-5 * time.Minute)
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{
+		SandboxID:          st.SandboxID,
+		PID:                st.ProcessPID,
+		ResolvedTemplateID: "tpl-changed-after-start",
+		TemplateVersion:    "template-changed-after-start",
+		RunnerVersion:      "runner-changed-after-start",
+	}}
+	srv := newTestServer(t, store, "http://example.test", fake)
+	srv.Close()
+	if err := srv.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SandboxRegion != st.SandboxRegion || got.ResolvedTemplateID != st.ResolvedTemplateID ||
+		got.TemplateVersion != st.TemplateVersion || got.RunnerVersion != st.RunnerVersion {
+		t.Fatalf("recovery replaced the existing runner environment snapshot: %#v", got)
 	}
 }
 
