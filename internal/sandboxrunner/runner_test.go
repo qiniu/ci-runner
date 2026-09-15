@@ -103,7 +103,8 @@ func TestRuntimeEnvironmentCommandCapturesOnlyAllowlistedValues(t *testing.T) {
 	writeExecutable(t, filepath.Join(runnerRoot, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '2.336.0\\n'\n")
 
 	cmd := exec.Command("bash", "-c", runtimeEnvironmentCommand)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(
+		os.Environ(),
 		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
 		"ACTIONS_RUNNER_ROOT="+runnerRoot,
 	)
