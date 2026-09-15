@@ -93,7 +93,7 @@ func TestRuntimeEnvironmentCommandCapturesOnlyAllowlistedValues(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	environmentPath := filepath.Join(root, "environment")
-	if err := os.WriteFile(environmentPath, []byte("IMAGE_VERSION=20260915.1\nHTTP_PROXY=https://user:password@proxy.example\nSECRET_TOKEN=do-not-capture\n"), 0o644); err != nil {
+	if err := os.WriteFile(environmentPath, []byte("HTTP_PROXY=https://user:password@proxy.example\nSECRET_TOKEN=do-not-capture\nprintf 'do-not-execute\\n'\nIMAGE_VERSION=20260915.1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runnerRoot := filepath.Join(root, "actions-runner")
@@ -116,7 +116,7 @@ func TestRuntimeEnvironmentCommandCapturesOnlyAllowlistedValues(t *testing.T) {
 	if got != (runtimeEnvironment{TemplateVersion: "20260915.1", RunnerVersion: "2.336.0"}) {
 		t.Fatalf("runtime environment = %#v", got)
 	}
-	for _, secret := range []string{"user:password", "proxy.example", "do-not-capture"} {
+	for _, secret := range []string{"user:password", "proxy.example", "do-not-capture", "do-not-execute"} {
 		if strings.Contains(string(output), secret) {
 			t.Fatalf("runtime environment output exposed %q: %s", secret, output)
 		}

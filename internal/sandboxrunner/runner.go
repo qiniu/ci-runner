@@ -58,12 +58,27 @@ const (
 	runtimeEnvironmentCommand    = `set +u
 runtime_environment_file="${RUNNER_ENVIRONMENT_FILE:-/etc/environment}"
 actions_runner_root="${ACTIONS_RUNNER_ROOT:-/opt/actions-runner}"
-if [ -r "$runtime_environment_file" ]; then
-  set -a
-  . "$runtime_environment_file"
-  set +a
-fi
 template_version="${IMAGE_VERSION:-${ImageVersion:-}}"
+if [ -z "$template_version" ] && [ -r "$runtime_environment_file" ]; then
+  template_version="$(awk -F= '
+    $1 == "IMAGE_VERSION" || $1 == "ImageVersion" {
+      sub(/^[^=]*=/, "")
+      sub(/\r$/, "")
+      print
+      exit
+    }
+  ' "$runtime_environment_file")"
+  case "$template_version" in
+    \"*\")
+      template_version="${template_version#\"}"
+      template_version="${template_version%\"}"
+      ;;
+    \'*\')
+      template_version="${template_version#\'}"
+      template_version="${template_version%\'}"
+      ;;
+  esac
+fi
 runner_version="$("$actions_runner_root/bin/Runner.Listener" --version 2>/dev/null || true)"
 if [ "${#template_version}" -gt 256 ]; then template_version=""; fi
 if [ "${#runner_version}" -gt 256 ]; then runner_version=""; fi
