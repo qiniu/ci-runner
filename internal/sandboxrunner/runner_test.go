@@ -105,6 +105,8 @@ func TestRuntimeEnvironmentCommandCapturesOnlyAllowlistedValues(t *testing.T) {
 	cmd := exec.Command("bash", "-c", runtimeEnvironmentCommand)
 	cmd.Env = append(
 		os.Environ(),
+		"IMAGE_VERSION=",
+		"ImageVersion=",
 		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
 		"ACTIONS_RUNNER_ROOT="+runnerRoot,
 	)

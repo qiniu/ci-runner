@@ -2596,6 +2596,10 @@ func TestFailStartRequeuesRunnerWhenRetriesRemain(t *testing.T) {
 	}
 	// RetryCount = 0, MaxAttempts = 3 → should retry
 	st.RetryCount = 0
+	st.SandboxRegion = "us-south-1"
+	st.ResolvedTemplateID = "tpl-old-attempt"
+	st.TemplateVersion = "20260915.1"
+	st.RunnerVersion = "2.336.0"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -2610,6 +2614,9 @@ func TestFailStartRequeuesRunnerWhenRetriesRemain(t *testing.T) {
 	// Should be re-queued for retry
 	if got.Status != state.StatusQueued {
 		t.Errorf("failStart retry: expected status=queued, got %s (error=%s)", got.Status, got.Error)
+	}
+	if got.SandboxRegion != "" || got.ResolvedTemplateID != "" || got.TemplateVersion != "" || got.RunnerVersion != "" {
+		t.Fatalf("failStart retry: expected runner environment snapshot to be cleared, got %#v", got)
 	}
 }
 

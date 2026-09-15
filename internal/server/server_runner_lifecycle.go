@@ -1622,6 +1622,13 @@ type failureResult struct {
 	logLine      string
 }
 
+func clearRunnerEnvironmentSnapshot(st *state.RunnerState) {
+	st.SandboxRegion = ""
+	st.ResolvedTemplateID = ""
+	st.TemplateVersion = ""
+	st.RunnerVersion = ""
+}
+
 func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, allowRetry bool) failureResult {
 	now := time.Now().UTC()
 	code, retryable := classifyRetryableError(stage, err)
@@ -1638,6 +1645,7 @@ func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, al
 	st.CompletedAt = time.Time{}
 	if allowRetry && retryable && isQueueDeferFailure(code) {
 		st.Status = state.StatusQueued
+		clearRunnerEnvironmentSnapshot(st)
 		if st.RetryCount < s.cfg.RetryMaxAttempts {
 			st.RetryCount++
 		}
@@ -1653,6 +1661,7 @@ func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, al
 	}
 	if allowRetry && retryable && st.RetryCount < s.cfg.RetryMaxAttempts {
 		st.Status = state.StatusQueued
+		clearRunnerEnvironmentSnapshot(st)
 		st.RetryCount++
 		st.NextRetryAt = s.nextRetryAt(st.RetryCount, now)
 		st.CreatingAt = time.Time{}
