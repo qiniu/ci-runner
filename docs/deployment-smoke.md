@@ -253,6 +253,11 @@ Expected result:
 - Each job starts the requested OS; the 26.04 job is recorded as preview
   acceptance.
 - The job's `Set up runner` log includes the Qiniu sandbox id, runner request id, and runner name.
+- The canonical Admin Runner Request detail shows the selected Sandbox region,
+  the resolved physical template ID, the image template version when available,
+  and the GitHub Actions Runner version when available. Reloading the detail page
+  preserves the same values; a pre-upgrade historical request renders `-` for
+  unavailable snapshot fields and produces no browser console error.
 - After the job finishes, the runner request becomes `completed`.
 
 Reference evidence: on 2026-08-04 CST,
@@ -273,6 +278,9 @@ Expected result:
 - Active requests recover with bounded concurrency instead of waiting for every earlier request serially; each worker derives its per-request sub-budget from the remaining whole-startup timeout and remaining worker-wave count, while the parent deadline remains the hard limit.
 - Startup recovery finishes before runnerd starts its worker loops and accepts new queued work.
 - A `running` request remains `running`, keeps the same sandbox ID and runner PID, and records a successful reconnect event. A recoverable `creating` request may discover and persist the sandbox ID and runner PID that were not saved before restart.
+- Recovery may fill previously missing template or Runner versions only for that
+  same Sandbox/PID execution attempt; it must not replace an existing snapshot
+  with empty probe output or attach metadata from an older attempt.
 - The GitHub Actions job continues without returning to the queue or losing its runner.
 - A queued request with a lease owned by the previous process becomes eligible for the new worker.
 - A temporary GitHub or sandbox status lookup failure is logged without stopping the existing sandbox.

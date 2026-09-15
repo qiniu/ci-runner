@@ -1,17 +1,17 @@
 # llgo Job 超时与 runnerd 可观测性交接
 
-更新时间：2026-09-14，Asia/Shanghai。本文用中文保留本次会话的业务上下文、证据、判断和待办，供另一台电脑直接续接。
+更新时间：2026-09-15，Asia/Shanghai。本文用中文保留本次会话的业务上下文、证据、判断和待办，供另一台电脑直接续接。
 
 ## 1. 目标、授权与交付位置
 
 - 仓库：`miclle/qiniu-ci-runner`；上游：`qiniu/ci-runner`。
 - 工作目录：仓库 checkout 根目录；不同电脑不要求使用相同的本地绝对路径。
-- 当前起始分支：`main`；本增量代码基线：`bc03bb90`，`feat(diagnostics): retain GitHub job results (#97)`。
-- 当前工作分支：`feat/runner-termination-diagnostics`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
-- 已发布增量为 PR #96（生命周期时间与结构化清理阶段）和 PR #97（GitHub Job 终态留存）。当前分支继续补充终止来源、进程退出码和诊断语义收敛。
+- 当前起始分支：`main`；本增量代码基线：`667cce2c`，`feat(diagnostics): retain runner exit evidence (#98)`。
+- 当前工作分支：`feat/runner-environment-snapshot`；后续推送目标仍为 `origin`，即 `git@github.com:miclle/qiniu-ci-runner.git`。
+- 已发布增量为 PR #96（生命周期时间与结构化清理阶段）、PR #97（GitHub Job 终态留存）和 PR #98（终止来源、进程退出码与诊断语义收敛）。当前分支已在本地实现运行环境快照，尚未创建 PR 或发布。
 - 接收人：用户在另一台电脑上的后续会话。
-- 状态：故障分析、PR #96 和 PR #97 均已完成、合并，并由用户确认发布到生产。当前分支已完成结构化终止诊断与分层验证；具体提交、远端分支和 PR 状态以 Git history 与 GitHub 为准。环境快照、实际退出信号和网络诊断仍未实施。
-- 传输载体：已发布实现已经进入 `upstream/main=bc03bb90`。`feat/runner-termination-diagnostics` 推送到 `origin` 后可由另一台电脑直接跟踪；恢复时仍须核对本节命令输出，不能只依赖文档中的历史快照。
+- 状态：故障分析及 PR #96、PR #97、PR #98 均已完成、合并，并由用户确认发布到生产；PR #98 还完成了新旧 Runner Request 的生产兼容性验证。运行环境快照已在 `feat/runner-environment-snapshot` 完成本地实现和验证，尚未推送、创建 PR 或发布；实际退出信号和网络诊断仍未实施。
+- 传输载体：已发布实现已经进入 `upstream/main=667cce2c`。当前 `feat/runner-environment-snapshot` 从该提交创建；恢复时仍须核对本节命令输出，不能只依赖文档中的历史快照。
 
 用户先要求分析一个 llgo GitHub Actions Job，随后提供 runner_requests 查询结果和 control.log，询问 runnerd 是否有问题、如何向沙箱团队提单、runnerd 能否增加诊断能力。首次交接阶段只要求在新分支记录并推送完整交接，未授权重跑 Job、发布模板、部署线上服务或代发服务团队消息；后续已明确授权在同一分支实现生命周期时间戳、详情页字段和结构化退出／清理事件。
 
@@ -167,7 +167,7 @@ Admin Runner request 详情现在直接展示持久化的 Started、Stopping、C
 
 Schema 继续由 GORM tags 驱动；现有 SQLite `runner_requests` 使用 additive-only 增列，不重建表、不批量改写历史记录。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 验证仍取决于外部测试环境。
 
-### 5.6 结构化终止诊断，当前分支已在本地完成
+### 5.6 结构化终止诊断，已通过 PR #98 发布并完成生产验证
 
 `runner_requests` 以 additive-only 方式增加 `termination_source` 和可空 `runner_exit_code`。终止来源记录首次取得清理流程所有权的路径：Runner 进程退出、GitHub Job 完成 Webhook、管理员停止、服务恢复清理、失败清理或空闲 Runner 清理。正常／非零进程结果会保存真实退出码；进程流错误没有退出码。Retry 和错配 Job 重新排队会清除旧终止证据，避免污染新尝试。
 
@@ -211,13 +211,13 @@ Acquire::https::Timeout "30";
 
 | 优先级 | 提案 | 目的与边界 |
 | --- | --- | --- |
-| P0 | 运行环境快照 | 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不能把区域物理 ID 写回 managed spec |
+| P0 | 运行环境快照 | **当前分支已本地实现，尚未合并或发布：** 记录实际 Sandbox 区域、解析后的模板 ID、可取得的构建版本、Runner 版本；不把区域物理 ID 写回 managed spec |
 | P0 | GitHub Job 结果留存 | **PR #97 已发布：** 独立保留原始 Job 终态和观察时间；详情页区分 retained 与 historical live fallback；不改变 Runner 生命周期含义，也不回填历史结果 |
-| P0 | 完善控制事件和时间戳 | **PR #96 已发布，当前分支继续推进：** 已展示生命周期时间和 Cleanup Duration；退出、Hook 与清理事件有稳定 `stage`；当前分支新增终止来源和可空退出码，并修正成功清理的误导警告。实际退出信号受 provider API 限制 |
+| P0 | 完善控制事件和时间戳 | **PR #96、PR #98 已发布并完成生产验证：** 已展示生命周期时间、Cleanup Duration、稳定事件阶段、终止来源和可空退出码，并修正成功清理的误导警告。实际退出信号受 provider API 限制 |
 | P1 | 按需网络诊断 | 存活 Sandbox 内的受限目标 DNS/连接/下载探测，记录连接 IP、阶段耗时、HTTP 状态和退出码 |
 | P1 | 脱敏诊断包导出 | 环境快照、请求关联信息、控制事件、Job 结果、探测输出一次导出 |
 
-生命周期切片和 GitHub Job 结果留存已经分别通过 PR #96、PR #97 进入生产；当前独立增量完成终止来源、退出码和诊断语义收敛后，再评估运行环境快照。主动网络探测保持 P1。环境采集可由模板脚本完成，runnerd 负责触发和保存。APT 快照只取允许字段：镜像、超时、重试、代理是否存在，避免复制全环境或代理凭证。
+生命周期、GitHub Job 结果留存和结构化终止诊断已经分别通过 PR #96、PR #97、PR #98 进入生产。当前独立增量在 Sandbox 就绪后、Runner 启动前记录区域与解析后的物理模板 ID，并通过 5 秒有界探测只采集模板版本与 Runner 版本；单项解码后最多 256 字节，不复制完整环境、代理、token、key 或 cache credential。探测失败不阻塞 Runner 启动，重试或 Job 错配重排队会清除旧 attempt 快照，恢复只为同一活跃 Sandbox/PID attempt 补齐缺失值。主动网络探测保持 P1；APT 配置快照仍属于该后续范围，只取镜像、超时、重试、代理是否存在等允许字段。
 
 时机很关键：GitHub 完成通知可能晚于 Sandbox 清理，不能依赖事后连接已销毁实例来收证。启动时保存轻量快照，存活时允许管理员按需触发；若做自动失败采集，应在模板/Job 失败处理阶段给定严格时限，不无限延迟回收。无输出不等于卡死，不能因此杀任务。
 
@@ -225,18 +225,18 @@ Acquire::https::Timeout "30";
 
 ## 8. 新电脑最先读取与复核
 
-当前增量在 `feat/runner-termination-diagnostics` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
+当前增量在 `feat/runner-environment-snapshot` 维护。新电脑恢复时先同步远程，再核对分支基线和正式行为文档：
 
 ```bash
 git fetch origin upstream --prune
-git switch feat/runner-termination-diagnostics || git switch -c feat/runner-termination-diagnostics --track origin/feat/runner-termination-diagnostics
+git switch feat/runner-environment-snapshot || git switch -c feat/runner-environment-snapshot --track origin/feat/runner-environment-snapshot
 git status --short --branch
 git rev-parse HEAD
 git merge-base HEAD upstream/main
 sed -n '700,725p' docs/testing.md
 ```
 
-完成标准：分支基线仍可追溯到 `upstream/main=bc03bb90`，工作区状态已理解，正式测试文档与本交接内容一致。
+完成标准：分支基线仍可追溯到 `upstream/main=667cce2c`，工作区状态已理解，正式测试文档与本交接内容一致。
 
 必须先读 `AGENTS.md`、`.agents/rules/development-workflow.md`、`.agents/rules/testing-and-verification.md`、`TODO.md`；涉及状态时读 `.agents/skills/runnerd-state-schema/SKILL.md`。
 
@@ -278,25 +278,29 @@ gh api 'repos/xgo-dev/llgo/contents/.github/actions/setup-deps/action.yml?ref=1e
 
 ## 10. 后续执行顺序和验收边界
 
-1. 仓库复核已完成：`upstream/main=e2bce66` 已包含 PR #96，工作区从干净的 `main` 创建 `feat/github-job-result-retention`。
-2. 生命周期时间戳、详情页字段和结构化事件已进入生产；不批量修复历史数据。
-3. 当前增量已完成 additive 终态字段、原始 Job guard、历史查询回退和 UI 来源／新鲜度；环境快照和 typed exit payload 保持后续独立范围，不扩展成全量网络监控。
-4. 环境与 Job 结果若新增状态字段，使用现有 SQLite additive migration 约束，不让 GORM 重建旧 runner_requests 表，不持久化 raw webhook。
+1. 仓库复核已完成：`upstream/main=667cce2c` 已包含 PR #96、PR #97 和 PR #98；工作区从该干净基线创建 `feat/runner-environment-snapshot`。
+2. 生命周期时间戳、详情页字段、GitHub Job 终态快照和结构化事件已进入生产；不批量修复历史数据。
+3. 当前增量已完成 additive 环境字段、安全有界采集、启动与恢复绑定、重试／错配重排队清理，以及 Admin 详情页中英文展示；不扩展成全量环境或网络监控。
+4. 环境与 Job 结果新增状态字段继续使用现有 SQLite additive migration 约束，不让 GORM 重建旧 `runner_requests` 表，不持久化 raw webhook；历史空字段保持兼容并显示为 `-`。
 5. 状态或调用方变更继续先运行 `go test ./internal/state -count=1`，再运行 focused package 和更广验证。跨数据库 schema/审计改动使用名称以 `_test` 结尾的专用 PostgreSQL/MySQL 数据库；生产 SQLite 快照测试需要单独提供文件，不伪造结果。
 6. UI 文案改动运行 `task ui-i18n-check` 与相关 Bun tests；依赖、构建、公共指南或 Jobs 滚动布局改动运行 `task ui-production-smoke`。生产嵌入 UI 用 `task build`；禁止手改 `internal/server/ui/`。
 7. 按实际变更同步 README 中英文、testing 中英文、TODO 和相关 agent 规则。模板验证遵守 qshell ready + 双区域真实 smoke；本地 Docker build 不能冒充 Sandbox 模板可用证据。
-8. 服务团队调查与实现可独立推进，但服务提单、真实新建 Sandbox、发布模板和线上部署均未在本会话执行。不要认为“建议下一步”就是已经完成。
+8. 服务团队调查与实现可独立推进，但本次环境快照增量尚未运行真实新建 Sandbox、发布模板或线上部署验证。不要把本地测试当作生产证据。
 
 ## 11. 验证、工作区与关闭条件
 
+- 运行环境快照增量基于 `upstream/main=667cce2c`，代码提交依次为 `ee6fed4`（state）、`28c4bb4`（capture）、`9b30b9f`（UI）、`419fd43`（test formatting）和 `07f843c`（安全解析环境元数据）；正式文档为当前未提交收尾内容。本阶段没有 stash，也尚未推送。
+- 本增量按 TDD 完成：state 测试先因四个字段不存在而编译失败；Sandbox parser/command contract、生命周期持久化、错配重排队清理、recovery 和 UI 历史字段测试分别先观察到 RED，再以最小实现转绿。
+- 最终本地验证通过 `go test ./internal/state -count=1`、`go test ./internal/sandboxrunner -count=1`、`go test ./... -count=1`、完整 226 项 Bun 测试（856 个断言）、`task ui-i18n-check`、`task build`、`task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。`task test` 重建生产 UI 并完成 Go race/coverage，退出码为 0；lint 为 0 error，仍有 3 条位于未修改文件的既有 React Hook dependency warning。Vite 仍报告既有的大 chunk 非阻塞提示。
+- 专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供外部测试环境而跳过；未运行真实 Sandbox、GitHub Actions 工作流或生产部署 smoke，因此这些结果只能证明本地兼容性和构建质量。
 - 原分析阶段只做 GitHub/API/浏览器只读调查和本地静态代码阅读；没有跑 Bun、部署或模板测试，也没有重跑 GitHub Job。
-- 当前增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、TODO、正式中英文文档和 agent 规则。
-- 当前增量 TDD RED 证据：状态测试先因五个快照字段不存在而编译失败；生命周期 helper 测试先因函数不存在而失败，非终态拒绝测试先证明 `in_progress` 会被错误保留；诊断测试先证明详情 API 仍调用 GitHub 且没有来源字段；UI 测试先证明持久化来源与采集时间未渲染。
+- PR #97 增量开始时工作区干净，分支 `feat/github-job-result-retention` 基于 `upstream/main=e2bce66`。变更集中在 Runner request additive Job-result 字段、终态捕获、详情诊断来源／新鲜度、对应 Go/Bun tests、TODO、正式中英文文档和 agent 规则。
+- PR #97 增量的 TDD RED 证据：状态测试先因五个快照字段不存在而编译失败；生命周期 helper 测试先因函数不存在而失败，非终态拒绝测试先证明 `in_progress` 会被错误保留；诊断测试先证明详情 API 仍调用 GitHub 且没有来源字段；UI 测试先证明持久化来源与采集时间未渲染。
 - PR review 修复继续按 TDD 推进：Runner 退出回归测试先证明清理结束后没有发起终态 Job 查询，重复终态测试先证明仅刷新 `observed_at` 仍触发写入，错配 Job 重排队测试先证明旧快照仍残留；对应实现完成后，三项定向测试和完整 `internal/server` 测试均转绿。
 - 已通过 `go test ./internal/state -count=1`、Runner exit/cleanup focused tests、`go test ./...`、`task ui-i18n-check`、`task build`、最终 `task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`。最终 UI 全套为 225 项测试、836 个断言全部通过；`task test` 重建生产 UI 并完成 Go race/coverage 全套，退出码为 0。lint 使用 `go.mod` 固定的 Go 1.26.3 后为 0 error，仍有 3 条位于未修改文件的既有 hook dependency warning；本机默认 Go 1.27 会让 staticcheck v0.7.0 因 export-data 版本不兼容而失败。专用 PostgreSQL/MySQL 与生产 SQLite snapshot 因未提供测试环境而跳过，未运行部署或真实模板测试。
 - PR review 修复后再次通过 `go test ./... -count=1`、`task test` 和 `GOTOOLCHAIN=go1.26.3 task lint`；完整测试仍只跳过需要外部 PostgreSQL/MySQL 数据库和生产 SQLite snapshot 的可选验证，lint 仍为 0 error 与上述 3 条既有 warning。
 - 只读代码审查第一轮发现 stopping 写失败后仍继续外部清理的问题；修复并补回归测试后复审为 Critical 0、Important 0、Minor 0，相关 server/state race 测试各重复 10 次通过。
 - 当前阶段的独立只读审查先发现 Go 零时间处理和两个测试覆盖缺口；修复后复审未发现剩余可操作问题，`git diff --check` 通过。
 - 时间戳修复的远程 SHA 为 `71743735870bf40dc30d223df36acb2067cc6927`；详情页与结构化事件阶段的远程 SHA 为 `ca0eca45244208e22b299941604828ee91bc629b`。本阶段没有 stash。
-- 可继续静态设计，无凭证阻塞。真正复现需要新电脑的 GitHub 权限、runnerd 管理登录及单独授权的沙箱凭证/测试环境。线上版本、模板构建版本、底层网络原因仍未知。
+- 可继续静态设计，无凭证阻塞。真正复现需要新电脑的 GitHub 权限、runnerd 管理登录及单独授权的沙箱凭证/测试环境。环境快照的线上行为、模板构建版本和底层网络原因仍未知。
 - 继续自：本次会话，无前置 handoff 文件。当前记录仍承载 Job 结果留存与环境快照的事故背景；这些后续范围完成、取消或迁入正式文档后，更新 TODO，并删除或明确标记这份交接记录为历史资料。
