@@ -964,6 +964,31 @@ func TestRunnerNetworkDiagnosticPersistsBoundedEvidenceAndRateLimitsAttempt(t *t
 	}
 }
 
+func TestRunnerNetworkDiagnosticCooldownStartsWhenProbeCompletes(t *testing.T) {
+	srv := &Server{networkDiagnosticAttempts: make(map[string]networkDiagnosticAttempt)}
+	startedAt := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	release, _, ok := srv.acquireRunnerNetworkDiagnostic("request/sandbox/42", startedAt)
+	if !ok {
+		t.Fatal("first network diagnostic was rejected")
+	}
+	completedAt := startedAt.Add(10 * time.Second)
+	release(completedAt)
+
+	_, retryAfter, ok := srv.acquireRunnerNetworkDiagnostic("request/sandbox/42", completedAt.Add(29*time.Second))
+	if ok {
+		t.Fatal("network diagnostic was accepted before the post-completion cooldown elapsed")
+	}
+	if retryAfter != time.Second {
+		t.Fatalf("retry after = %s, want 1s", retryAfter)
+	}
+
+	release, _, ok = srv.acquireRunnerNetworkDiagnostic("request/sandbox/42", completedAt.Add(runnerNetworkDiagnosticCooldown))
+	if !ok {
+		t.Fatal("network diagnostic was rejected after the post-completion cooldown elapsed")
+	}
+	release(completedAt.Add(runnerNetworkDiagnosticCooldown))
+}
+
 func TestRunnerNetworkDiagnosticSanitizesProviderResult(t *testing.T) {
 	store := state.New(t.TempDir())
 	_, st, err := store.CreateRequest(state.RunnerRequest{

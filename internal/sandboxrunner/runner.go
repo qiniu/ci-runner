@@ -648,7 +648,7 @@ func parseNetworkDiagnosticOutput(target NetworkDiagnosticTarget, stdout, _ stri
 		case "total_seconds":
 			totalSeconds = diagnosticSeconds(value)
 		case "probe_error":
-			result.Error = networkDiagnosticProbeError(value)
+			result.Error = SanitizeNetworkDiagnosticError(value)
 		}
 	}
 	connectionEnd := math.Max(connectSeconds, dnsSeconds)
@@ -666,7 +666,8 @@ func parseNetworkDiagnosticOutput(target NetworkDiagnosticTarget, stdout, _ stri
 	return result
 }
 
-func networkDiagnosticProbeError(value string) string {
+func SanitizeNetworkDiagnosticError(value string) string {
+	value = strings.TrimSpace(value)
 	switch value {
 	case "proxy_resolution_failed", "dns_resolution_failed", "connection_failed", "operation_timed_out", "tls_failed", "download_limit_exceeded":
 		return value

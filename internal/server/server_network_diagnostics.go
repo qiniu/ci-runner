@@ -30,8 +30,8 @@ type networkDiagnosticRequest struct {
 }
 
 type networkDiagnosticAttempt struct {
-	Running       bool
-	LastStartedAt time.Time
+	Running         bool
+	LastCompletedAt time.Time
 }
 
 func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +94,9 @@ func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusTooManyRequests, "network diagnostic is already running or was requested recently")
 		return
 	}
-	defer release()
+	defer func() {
+		release(time.Now().UTC())
+	}()
 
 	result, diagnosticErr := diagnosticService.RunNetworkDiagnostic(ctx, st.SandboxID, target)
 	unlock := s.lockRunner(st.ID)
@@ -175,7 +177,7 @@ func sanitizeRunnerNetworkDiagnosticResult(target sandboxrunner.NetworkDiagnosti
 	result.Timings.TLSMS = boundedRunnerNetworkDiagnosticMilliseconds(result.Timings.TLSMS)
 	result.Timings.FirstByteMS = boundedRunnerNetworkDiagnosticMilliseconds(result.Timings.FirstByteMS)
 	result.Timings.TotalMS = boundedRunnerNetworkDiagnosticMilliseconds(result.Timings.TotalMS)
-	result.Error = runnerNetworkDiagnosticError(result.Error)
+	result.Error = sandboxrunner.SanitizeNetworkDiagnosticError(result.Error)
 	if result.ObservedAt.IsZero() {
 		result.ObservedAt = observedAt.UTC()
 	} else {
@@ -193,23 +195,6 @@ func boundedRunnerNetworkDiagnosticMilliseconds(value int64) int64 {
 		return limit
 	}
 	return value
-}
-
-func runnerNetworkDiagnosticError(value string) string {
-	value = strings.TrimSpace(value)
-	switch value {
-	case "proxy_resolution_failed", "dns_resolution_failed", "connection_failed", "operation_timed_out", "tls_failed", "download_limit_exceeded":
-		return value
-	}
-	codeText, ok := strings.CutPrefix(value, "curl_exit_")
-	if !ok {
-		return ""
-	}
-	code, err := strconv.Atoi(codeText)
-	if err != nil || code < 1 || code > 255 {
-		return ""
-	}
-	return "curl_exit_" + strconv.Itoa(code)
 }
 
 func runnerNetworkDiagnosticTarget(value string) (sandboxrunner.NetworkDiagnosticTarget, bool) {
@@ -239,29 +224,30 @@ func sameRunnerNetworkDiagnosticAttempt(before, after state.RunnerState) bool {
 		before.ProcessPID == after.ProcessPID
 }
 
-func (s *Server) acquireRunnerNetworkDiagnostic(key string, now time.Time) (func(), time.Duration, bool) {
+func (s *Server) acquireRunnerNetworkDiagnostic(key string, now time.Time) (func(time.Time), time.Duration, bool) {
 	s.networkDiagnosticMu.Lock()
 	defer s.networkDiagnosticMu.Unlock()
 	for existingKey, attempt := range s.networkDiagnosticAttempts {
-		if !attempt.Running && now.Sub(attempt.LastStartedAt) >= time.Minute {
+		if !attempt.Running && !attempt.LastCompletedAt.IsZero() && now.Sub(attempt.LastCompletedAt) >= time.Minute {
 			delete(s.networkDiagnosticAttempts, existingKey)
 		}
 	}
 	if attempt, exists := s.networkDiagnosticAttempts[key]; exists {
-		remaining := runnerNetworkDiagnosticCooldown - now.Sub(attempt.LastStartedAt)
-		if attempt.Running || remaining > 0 {
-			if remaining <= 0 {
-				remaining = runnerNetworkDiagnosticCooldown
-			}
+		if attempt.Running {
+			return nil, runnerNetworkDiagnosticCooldown, false
+		}
+		remaining := runnerNetworkDiagnosticCooldown - now.Sub(attempt.LastCompletedAt)
+		if remaining > 0 {
 			return nil, remaining, false
 		}
 	}
-	s.networkDiagnosticAttempts[key] = networkDiagnosticAttempt{Running: true, LastStartedAt: now}
-	return func() {
+	s.networkDiagnosticAttempts[key] = networkDiagnosticAttempt{Running: true}
+	return func(completedAt time.Time) {
 		s.networkDiagnosticMu.Lock()
 		attempt, exists := s.networkDiagnosticAttempts[key]
 		if exists {
 			attempt.Running = false
+			attempt.LastCompletedAt = completedAt
 			s.networkDiagnosticAttempts[key] = attempt
 		}
 		s.networkDiagnosticMu.Unlock()

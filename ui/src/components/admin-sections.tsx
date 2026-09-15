@@ -620,6 +620,11 @@ export function RunnerRequestDiagnosisResult({
 }
 
 const networkDiagnosticTargets = ["github_api", "ubuntu_archive", "llvm_apt"] as const satisfies readonly NetworkDiagnosticTarget[]
+const networkDiagnosticTargetLabelKeys = {
+  github_api: "admin.networkDiagnosticTargetGitHubAPI",
+  ubuntu_archive: "admin.networkDiagnosticTargetUbuntuArchive",
+  llvm_apt: "admin.networkDiagnosticTargetLLVMAPT",
+} as const satisfies Record<NetworkDiagnosticTarget, string>
 
 function RunnerNetworkDiagnostic({
   running,
@@ -654,7 +659,7 @@ function RunnerNetworkDiagnostic({
           onChange={(event) => setTarget(event.target.value as NetworkDiagnosticTarget)}
         >
           {networkDiagnosticTargets.map((value) => (
-            <option key={value} value={value}>{t(`admin.networkDiagnosticTarget${value === "github_api" ? "GitHubAPI" : value === "ubuntu_archive" ? "UbuntuArchive" : "LLVMAPT"}`)}</option>
+            <option key={value} value={value}>{t(networkDiagnosticTargetLabelKeys[value])}</option>
           ))}
         </select>
         <Button type="submit" size="sm" variant="outline" disabled={running}>
