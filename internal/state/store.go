@@ -77,6 +77,10 @@ type RunnerState struct {
 	SandboxAPIURL          string    `json:"-"`
 	SandboxAPIKeyEncrypted string    `json:"-"`
 	SandboxConfigSource    string    `json:"sandbox_config_source,omitempty"`
+	SandboxRegion          string    `json:"sandbox_region,omitempty"`
+	ResolvedTemplateID     string    `json:"resolved_template_id,omitempty"`
+	TemplateVersion        string    `json:"template_version,omitempty"`
+	RunnerVersion          string    `json:"runner_version,omitempty"`
 	ProcessPID             uint32    `json:"process_pid,omitempty"`
 	WorkflowJobID          int64     `json:"workflow_job_id,omitempty"`
 	WorkflowRunID          int64     `json:"workflow_run_id,omitempty"`

@@ -40,6 +40,10 @@ type runnerRequestRecord struct {
 	SandboxAPIURL           string     `gorm:"column:sandbox_api_url"`
 	SandboxAPIKeyEncrypted  string     `gorm:"column:sandbox_api_key_encrypted;type:text"`
 	SandboxConfigSource     string     `gorm:"column:sandbox_config_source"`
+	SandboxRegion           string     `gorm:"column:sandbox_region"`
+	ResolvedTemplateID      string     `gorm:"column:resolved_template_id"`
+	TemplateVersion         string     `gorm:"column:template_version"`
+	RunnerVersion           string     `gorm:"column:runner_version"`
 	ProcessPID              uint32     `gorm:"column:process_pid"`
 	AssignedJobID           int64      `gorm:"column:assigned_job_id"`
 	AssignedJobName         string     `gorm:"column:assigned_job_name"`
