@@ -5502,7 +5502,13 @@ func TestRecoverReattachesActiveRunnerState(t *testing.T) {
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeSandbox{}
+	fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{
+		SandboxID:          "sb-recover-1",
+		PID:                42,
+		ResolvedTemplateID: "tpl-recovered",
+		TemplateVersion:    "20260915.1",
+		RunnerVersion:      "2.336.0",
+	}}
 	srv := newTestServer(t, store, "http://example.test", fake)
 	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
@@ -5517,6 +5523,9 @@ func TestRecoverReattachesActiveRunnerState(t *testing.T) {
 	}
 	if got.SandboxID != "sb-recover-1" || got.ProcessPID != 42 {
 		t.Fatalf("unexpected recovered runner identity: %#v", got)
+	}
+	if got.ResolvedTemplateID != "tpl-recovered" || got.TemplateVersion != "20260915.1" || got.RunnerVersion != "2.336.0" {
+		t.Fatalf("recovery did not persist the environment snapshot: %#v", got)
 	}
 	if fake.recoveredCount() != 1 {
 		t.Fatalf("expected recovery to reconnect sandbox once, got %d", fake.recoveredCount())

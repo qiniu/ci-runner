@@ -2455,6 +2455,10 @@ func TestReconcileMismatchedCompletedJobsRequeuesOriginalJob(t *testing.T) {
 	st.GitHubJobConclusion = "cancelled"
 	st.GitHubJobRunnerName = "e2b-1001"
 	st.GitHubJobObservedAt = time.Now().UTC().Add(-time.Minute)
+	st.SandboxRegion = "us-south-1"
+	st.ResolvedTemplateID = "tpl-old-attempt"
+	st.TemplateVersion = "20260915.1"
+	st.RunnerVersion = "2.336.0"
 	st.CompletedAt = time.Now().UTC()
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
@@ -2475,6 +2479,9 @@ func TestReconcileMismatchedCompletedJobsRequeuesOriginalJob(t *testing.T) {
 	if got.GitHubJobName != "" || got.GitHubJobStatus != "" || got.GitHubJobConclusion != "" ||
 		got.GitHubJobRunnerName != "" || !got.GitHubJobObservedAt.IsZero() {
 		t.Fatalf("expected retained GitHub Job result to be cleared when requeued, got %#v", got)
+	}
+	if got.SandboxRegion != "" || got.ResolvedTemplateID != "" || got.TemplateVersion != "" || got.RunnerVersion != "" {
+		t.Fatalf("expected runner environment snapshot to be cleared when requeued, got %#v", got)
 	}
 }
 

@@ -589,6 +589,17 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	st = current
 	st.Status = state.StatusRunning
 	st.SandboxID = result.SandboxID
+	sandboxAPIURL := strings.TrimSpace(sandboxConfig.APIURL)
+	if sandboxAPIURL == "" {
+		sandboxAPIURL = strings.TrimSpace(req.SandboxAPIURL)
+	}
+	st.SandboxRegion = s.sandboxRegionForAPIURL(sandboxAPIURL)
+	st.ResolvedTemplateID = strings.TrimSpace(result.ResolvedTemplateID)
+	if st.ResolvedTemplateID == "" {
+		st.ResolvedTemplateID = strings.TrimSpace(templateID)
+	}
+	st.TemplateVersion = strings.TrimSpace(result.TemplateVersion)
+	st.RunnerVersion = strings.TrimSpace(result.RunnerVersion)
 	st.ProcessPID = result.PID
 	st.Error = ""
 	st.LeaseOwner = ""
@@ -1180,6 +1191,18 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	}
 	latest.Status = state.StatusRunning
 	latest.SandboxID = result.SandboxID
+	if latest.SandboxRegion == "" {
+		latest.SandboxRegion = s.sandboxRegionForAPIURL(req.SandboxAPIURL)
+	}
+	if result.ResolvedTemplateID != "" {
+		latest.ResolvedTemplateID = strings.TrimSpace(result.ResolvedTemplateID)
+	}
+	if result.TemplateVersion != "" {
+		latest.TemplateVersion = strings.TrimSpace(result.TemplateVersion)
+	}
+	if result.RunnerVersion != "" {
+		latest.RunnerVersion = strings.TrimSpace(result.RunnerVersion)
+	}
 	latest.ProcessPID = result.PID
 	latest.LeaseOwner = ""
 	latest.LeaseExpiresAt = time.Time{}

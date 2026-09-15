@@ -40,9 +40,37 @@ type StartInput struct {
 }
 
 type StartResult struct {
-	SandboxID string
-	PID       uint32
+	SandboxID          string
+	PID                uint32
+	ResolvedTemplateID string
+	TemplateVersion    string
+	RunnerVersion      string
 }
+
+type runtimeEnvironment struct {
+	TemplateVersion string
+	RunnerVersion   string
+}
+
+const (
+	runtimeEnvironmentValueLimit = 256
+	runtimeEnvironmentTimeout    = 5 * time.Second
+	runtimeEnvironmentCommand    = `set +u
+runtime_environment_file="${RUNNER_ENVIRONMENT_FILE:-/etc/environment}"
+actions_runner_root="${ACTIONS_RUNNER_ROOT:-/opt/actions-runner}"
+if [ -r "$runtime_environment_file" ]; then
+  set -a
+  . "$runtime_environment_file"
+  set +a
+fi
+template_version="${IMAGE_VERSION:-${ImageVersion:-}}"
+runner_version="$("$actions_runner_root/bin/Runner.Listener" --version 2>/dev/null || true)"
+if [ "${#template_version}" -gt 256 ]; then template_version=""; fi
+if [ "${#runner_version}" -gt 256 ]; then runner_version=""; fi
+printf 'template_version=%s\nrunner_version=%s\n' \
+  "$(printf '%s' "$template_version" | base64 | tr -d '\n')" \
+  "$(printf '%s' "$runner_version" | base64 | tr -d '\n')"`
+)
 
 type RecoverInput struct {
 	RequestID      string
@@ -272,6 +300,7 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	if err != nil {
 		return StartResult{}, err
 	}
+	runtimeEnvironment := readRuntimeEnvironment(ctx, sb)
 
 	if _, err := sb.Files().Write(ctx, "/tmp/start-github-runner.sh", []byte(startScript(input, sb.ID()))); err != nil {
 		_ = sb.Kill(ctx)
@@ -313,7 +342,13 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 			}, err)
 		}()
 	}
-	return StartResult{SandboxID: sb.ID(), PID: pid}, nil
+	return StartResult{
+		SandboxID:          sb.ID(),
+		PID:                pid,
+		ResolvedTemplateID: sb.TemplateID(),
+		TemplateVersion:    runtimeEnvironment.TemplateVersion,
+		RunnerVersion:      runtimeEnvironment.RunnerVersion,
+	}, nil
 }
 
 func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (StartResult, error) {
@@ -335,6 +370,7 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 		}
 		return StartResult{}, fmt.Errorf("connect sandbox %s: %w", sandboxID, err)
 	}
+	runtimeEnvironment := readRuntimeEnvironment(ctx, sb)
 	processes, err := sb.Commands().List(ctx)
 	if err != nil {
 		return StartResult{}, fmt.Errorf("list sandbox %s processes: %w", sandboxID, err)
@@ -367,7 +403,48 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 			}, err)
 		}()
 	}
-	return StartResult{SandboxID: sandboxID, PID: pid}, nil
+	return StartResult{
+		SandboxID:          sandboxID,
+		PID:                pid,
+		ResolvedTemplateID: sb.TemplateID(),
+		TemplateVersion:    runtimeEnvironment.TemplateVersion,
+		RunnerVersion:      runtimeEnvironment.RunnerVersion,
+	}, nil
+}
+
+func readRuntimeEnvironment(ctx context.Context, sb *qnsandbox.Sandbox) runtimeEnvironment {
+	result, err := sb.Commands().Run(
+		ctx,
+		runtimeEnvironmentCommand,
+		qnsandbox.WithCommandUser(runnerBootstrapUser),
+		qnsandbox.WithTimeout(runtimeEnvironmentTimeout),
+	)
+	if err != nil || result == nil || result.ExitCode != 0 {
+		return runtimeEnvironment{}
+	}
+	return parseRuntimeEnvironment(result.Stdout)
+}
+
+func parseRuntimeEnvironment(output string) runtimeEnvironment {
+	var environment runtimeEnvironment
+	for _, line := range strings.Split(output, "\n") {
+		key, encoded, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || (key != "template_version" && key != "runner_version") {
+			continue
+		}
+		value, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+		if err != nil || len(value) > runtimeEnvironmentValueLimit {
+			continue
+		}
+		decoded := strings.TrimSpace(string(value))
+		switch key {
+		case "template_version":
+			environment.TemplateVersion = decoded
+		case "runner_version":
+			environment.RunnerVersion = decoded
+		}
+	}
+	return environment
 }
 
 func (s *E2BService) findRunnerSandbox(ctx context.Context, requestID string) (string, error) {

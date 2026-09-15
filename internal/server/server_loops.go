@@ -295,6 +295,10 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	next := st
 	next.Status = state.StatusQueued
 	next.SandboxID = ""
+	next.SandboxRegion = ""
+	next.ResolvedTemplateID = ""
+	next.TemplateVersion = ""
+	next.RunnerVersion = ""
 	next.ProcessPID = 0
 	next.AssignedJobID = 0
 	next.AssignedJobName = ""

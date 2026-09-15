@@ -238,9 +238,10 @@ func TestRunnerLifecycleCustomTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
 		MaxConcurrency: 10,
 		Enabled:        true,
 	})
-	sandbox := &lifecycleSandboxService{events: events}
+	sandbox := &lifecycleSandboxService{events: events, startResult: &sandboxrunner.StartResult{}}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
-	createLifecycleRequest(t, store, "custom-request", "custom", 0)
+	srv.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "us-south-1", SandboxAPIURL: "https://us-south-1.example"}}
+	createLifecycleRequestWithSandboxAPIURL(t, store, "custom-request", "custom", 0, "https://us-south-1.example")
 
 	go srv.startRunner(context.Background(), "custom-request", "worker-test")
 	waitForState(t, store, "custom-request", state.StatusRunning)
@@ -251,6 +252,16 @@ func TestRunnerLifecycleCustomTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
 	}
 	if inputs[0].RequireDocker {
 		t.Fatalf("custom StartRunner input requires Docker: %#v", inputs[0])
+	}
+	got, err := store.ReadState("custom-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SandboxRegion != "us-south-1" || got.ResolvedTemplateID != "custom-template-id" {
+		t.Fatalf("partial environment snapshot lost known execution metadata: %#v", got)
+	}
+	if got.TemplateVersion != "" || got.RunnerVersion != "" {
+		t.Fatalf("partial environment snapshot invented unavailable versions: %#v", got)
 	}
 }
 
@@ -795,7 +806,8 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 		}},
 	}
 	firstServer := newRunnerLifecycleTestServer(t, store, ghServer.URL, firstSandbox)
-	createLifecycleRequest(t, store, "region-a", "managed", 101)
+	firstServer.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "region-a", SandboxAPIURL: "https://region-a.example"}}
+	createLifecycleRequestWithSandboxAPIURL(t, store, "region-a", "managed", 101, "https://region-a.example")
 	go firstServer.startRunner(context.Background(), "region-a", "worker-a")
 	waitForState(t, store, "region-a", state.StatusRunning)
 
@@ -809,7 +821,8 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 		}},
 	}
 	secondServer := newRunnerLifecycleTestServer(t, store, ghServer.URL, secondSandbox)
-	createLifecycleRequest(t, store, "region-b", "managed", 202)
+	secondServer.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "region-b", SandboxAPIURL: "https://region-b.example"}}
+	createLifecycleRequestWithSandboxAPIURL(t, store, "region-b", "managed", 202, "https://region-b.example")
 	go secondServer.startRunner(context.Background(), "region-b", "worker-b")
 	waitForState(t, store, "region-b", state.StatusRunning)
 
@@ -820,6 +833,22 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 	}
 	if len(secondInputs) != 1 || secondInputs[0].TemplateID != "region-b-template-id" {
 		t.Fatalf("region B inputs = %#v, want its resolved template id", secondInputs)
+	}
+	firstState, err := store.ReadState("region-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondState, err := store.ReadState("region-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstState.SandboxRegion != "region-a" || firstState.ResolvedTemplateID != "region-a-template-id" ||
+		firstState.TemplateVersion != "20260915.1" || firstState.RunnerVersion != "2.336.0" {
+		t.Fatalf("region A environment snapshot = %#v", firstState)
+	}
+	if secondState.SandboxRegion != "region-b" || secondState.ResolvedTemplateID != "region-b-template-id" ||
+		secondState.TemplateVersion != "20260915.1" || secondState.RunnerVersion != "2.336.0" {
+		t.Fatalf("region B environment snapshot = %#v", secondState)
 	}
 	if firstSandbox.catalogCallCount() != 1 || secondSandbox.catalogCallCount() != 1 {
 		t.Fatalf("catalog calls = (%d, %d), want one per runner without cache", firstSandbox.catalogCallCount(), secondSandbox.catalogCallCount())
@@ -879,9 +908,10 @@ func (s *profileLoadRecordingStore) GetProfile(name string) (state.RunnerProfile
 }
 
 type lifecycleSandboxService struct {
-	mu     sync.Mutex
-	events *lifecycleEventRecorder
-	inputs []sandboxrunner.StartInput
+	mu          sync.Mutex
+	events      *lifecycleEventRecorder
+	inputs      []sandboxrunner.StartInput
+	startResult *sandboxrunner.StartResult
 }
 
 func (s *lifecycleSandboxService) ValidateTemplate(context.Context, string) error {
@@ -893,7 +923,23 @@ func (s *lifecycleSandboxService) StartRunner(_ context.Context, input sandboxru
 	s.inputs = append(s.inputs, input)
 	s.mu.Unlock()
 	s.events.add("start")
-	return sandboxrunner.StartResult{SandboxID: "sandbox-" + input.RequestID, PID: 42}, nil
+	if s.startResult != nil {
+		result := *s.startResult
+		if result.SandboxID == "" {
+			result.SandboxID = "sandbox-" + input.RequestID
+		}
+		if result.PID == 0 {
+			result.PID = 42
+		}
+		return result, nil
+	}
+	return sandboxrunner.StartResult{
+		SandboxID:          "sandbox-" + input.RequestID,
+		PID:                42,
+		ResolvedTemplateID: input.TemplateID,
+		TemplateVersion:    "20260915.1",
+		RunnerVersion:      "2.336.0",
+	}, nil
 }
 
 func (s *lifecycleSandboxService) RecoverRunner(_ context.Context, input sandboxrunner.RecoverInput) (sandboxrunner.StartResult, error) {
@@ -995,6 +1041,10 @@ func lifecycleManagedProfile(templateID string) state.RunnerProfile {
 }
 
 func createLifecycleRequest(t *testing.T, store state.Store, id, profileName string, installationID int64) {
+	createLifecycleRequestWithSandboxAPIURL(t, store, id, profileName, installationID, "")
+}
+
+func createLifecycleRequestWithSandboxAPIURL(t *testing.T, store state.Store, id, profileName string, installationID int64, sandboxAPIURL string) {
 	t.Helper()
 	created, _, err := store.CreateRequest(state.RunnerRequest{
 		ID:                   id,
@@ -1004,6 +1054,7 @@ func createLifecycleRequest(t *testing.T, store state.Store, id, profileName str
 		Labels:               []string{"self-hosted", profileName},
 		ProfileName:          profileName,
 		RunnerName:           "e2b-" + id,
+		SandboxAPIURL:        sandboxAPIURL,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

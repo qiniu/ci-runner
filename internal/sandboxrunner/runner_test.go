@@ -49,6 +49,79 @@ func runCommand(t *testing.T, command string, args []string, env ...string) (str
 	return string(output), err
 }
 
+func TestParseRuntimeEnvironment(t *testing.T) {
+	t.Parallel()
+	encode := func(value string) string {
+		return base64.StdEncoding.EncodeToString([]byte(value))
+	}
+	for _, tt := range []struct {
+		name   string
+		output string
+		want   runtimeEnvironment
+	}{
+		{
+			name:   "complete",
+			output: "template_version=" + encode("20260915.1") + "\nrunner_version=" + encode("2.336.0") + "\n",
+			want:   runtimeEnvironment{TemplateVersion: "20260915.1", RunnerVersion: "2.336.0"},
+		},
+		{
+			name:   "partial CRLF",
+			output: "template_version=" + encode("20260915.1") + "\r\n",
+			want:   runtimeEnvironment{TemplateVersion: "20260915.1"},
+		},
+		{
+			name:   "malformed and unknown",
+			output: "template_version=%%%\nsecret=" + encode("must-not-appear") + "\nrunner_version=" + encode("2.336.0") + "\n",
+			want:   runtimeEnvironment{RunnerVersion: "2.336.0"},
+		},
+		{
+			name:   "oversized value",
+			output: "template_version=" + encode(strings.Repeat("x", 257)) + "\nrunner_version=" + encode("2.336.0") + "\n",
+			want:   runtimeEnvironment{RunnerVersion: "2.336.0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseRuntimeEnvironment(tt.output); got != tt.want {
+				t.Fatalf("parseRuntimeEnvironment() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeEnvironmentCommandCapturesOnlyAllowlistedValues(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	environmentPath := filepath.Join(root, "environment")
+	if err := os.WriteFile(environmentPath, []byte("IMAGE_VERSION=20260915.1\nHTTP_PROXY=https://user:password@proxy.example\nSECRET_TOKEN=do-not-capture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runnerRoot := filepath.Join(root, "actions-runner")
+	if err := os.MkdirAll(filepath.Join(runnerRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(runnerRoot, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '2.336.0\\n'\n")
+
+	cmd := exec.Command("bash", "-c", runtimeEnvironmentCommand)
+	cmd.Env = append(os.Environ(),
+		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
+		"ACTIONS_RUNNER_ROOT="+runnerRoot,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runtime environment command: %v: %s", err, output)
+	}
+	got := parseRuntimeEnvironment(string(output))
+	if got != (runtimeEnvironment{TemplateVersion: "20260915.1", RunnerVersion: "2.336.0"}) {
+		t.Fatalf("runtime environment = %#v", got)
+	}
+	for _, secret := range []string{"user:password", "proxy.example", "do-not-capture"} {
+		if strings.Contains(string(output), secret) {
+			t.Fatalf("runtime environment output exposed %q: %s", secret, output)
+		}
+	}
+}
+
 func TestStartScriptEncodesRunnerArguments(t *testing.T) {
 	input := StartInput{
 		RequestID:         `req$(touch /tmp/request)`,
