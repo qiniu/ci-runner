@@ -1,10 +1,10 @@
 # 用户作用域 Runner Spec 架构与发布门禁
 
-> **Lifecycle:** 本文记录 `feat/user-scoped-runner-types` 的最终产品边界、兼容性约束和发布门禁。当前分支尚未上线；未经用户明确授权不得推送、合并或部署。
+> **Lifecycle:** 本文记录用户作用域 Runner Spec 的最终产品边界、兼容性约束和仍未完成的生产验收门禁。实现已通过 [PR #90](https://github.com/qiniu/ci-runner/pull/90) 合入 `main`，并包含在 `v0.2.11`；本文不是活跃分支计划。
 
 **Goal:** 在不开放 Admin Runner Spec API、不破坏全局目录和历史数据库的前提下，让账户或 GitHub Organization 使用自己的 Sandbox 模板创建自定义 Runner Spec，并确保该规格只能服务对应 owner 的仓库。
 
-**Implementation branch:** `feat/user-scoped-runner-types`。
+**Historical implementation branch:** `feat/user-scoped-runner-types`。
 
 ## 1. 最终产品决策
 
@@ -192,7 +192,7 @@ scoped custom spec:
 
 ## 10. 验证与发布门禁
 
-本地变更至少执行：
+后续修改该能力时至少执行：
 
 ```bash
 go test ./internal/state -count=1
@@ -217,7 +217,7 @@ UI 回归必须证明：
 - Settings 只显示 `scoped_custom`，账户表单不显示 Runner Group。
 - Organization-only Runner Group、模板名称加 ID、默认并发 `10`、纵向表单和 stale-scope response isolation 保持有效。
 
-以下仍是生产发布门禁，不能用本地单元测试替代：
+以下仍是完整生产开放与验收的补充门禁，不能因实现已合并或制品已发布而视为通过，也不能用本地单元测试替代：
 
 - 专用 PostgreSQL／MySQL fresh-schema 与 audited-mutation 矩阵。
 - 生产 SQLite snapshot 升级和已记录基线的降版本启动检查。

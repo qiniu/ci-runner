@@ -4,7 +4,7 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
-- Review and land the completed local bounded Runner network diagnostics implementation, then deploy it and verify one real `running` request against the GitHub API, Ubuntu archive, and LLVM APT targets. Confirm the `network_diagnostic` event is retained without changing the Runner lifecycle, arbitrary targets and non-admin callers are rejected, cooldown and stale-attempt protection work, and the original llgo network root cause remains unverified until comparable live evidence is captured.
+- If the original llgo network failure recurs, capture comparable live GitHub API, Ubuntu archive, and LLVM APT evidence from the same running Sandbox before changing diagnostics again. The original root cause remains unverified without that same-window evidence.
 - Keep a separate downloadable diagnostic bundle out of the active roadmap unless a real need emerges for cross-team handoff without UI access, long-term offline archiving, or repeated manual evidence assembly. The Admin Runner request page and its retained timeline remain the single diagnostic surface.
 - Plan separately authorized cleanup of historical `runner_requests.github_payload_json` after verifying GitHub context and installation-ID backfills on a backup. New requests no longer store raw webhook bodies; existing payloads, the legacy column, and startup backfill remain. Historical request/log retention and repeated-log limits are still undecided.
 - Decide whether repository-level Runner Spec overrides and cross-organization approval are needed; the current scope remains account or manageable Organization only.
