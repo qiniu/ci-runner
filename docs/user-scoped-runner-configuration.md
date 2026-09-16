@@ -25,13 +25,13 @@
 | `/admin/runner_specs` | 全局 managed 与 Admin 自定义平台规格 | Admin 创建、修改、启停、删除和设置全局并发 |
 | `/runner-specs` | 平台规格目录 | 普通用户只读、复制工作流标签 |
 | `/account/runner-specs` | 当前账户自定义规格 | 当前账户创建、修改、启停和删除 |
-| `/organizations/{login}/runner-specs` | Organization 自定义规格 | 现有 manageable 成员创建、修改、启停和删除 |
+| `/organizations/{login}/runner-specs` | Organization 自定义规格 | 具有 active GitHub 组织所有者身份（`role == admin`）的用户创建、修改、启停和删除 |
 | `/repositories` | 仓库对应作用域的 Runner 与 Sandbox 就绪状态 | 有仓库访问权的用户只读 |
 
 授权要求：
 
 - Account 请求只能解析为当前登录账户。
-- Organization 请求必须经过 `accountPreferenceScopeManageable`；repository-only、失效成员关系或未关联 Installation 均不得读取完整目录或执行 Mutation。
+- Organization 请求必须经过 `accountPreferenceScopeManageable`，仅 active GitHub 组织所有者（`role == admin`）可管理；普通成员、repository-only 用户、失效成员关系或未关联 Installation 均不得读取完整目录或执行 Mutation。
 - `/runner-specs` 在 UI 上没有作用域概念。当前实现通过登录账户调用 `/user/runner-specs` 获取经过脱敏的平台目录，并只渲染 `managed` 与 `platform_custom` 来源。
 - Settings 页面只渲染当前请求作用域自己的 `scoped_custom` 条目。
 - 异步列表、模板加载、Mutation 和后续刷新必须绑定发起请求的 scope；旧 Organization 响应不能覆盖当前页面或向新 scope 提交。

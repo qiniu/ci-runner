@@ -1025,6 +1025,8 @@ func (s *Server) accountPreferenceScopeManageable(ctx context.Context, viewerAcc
 	return manageable[0], nil
 }
 
+const githubOrganizationOwnerRole = "admin"
+
 func (s *Server) githubInstallationAccountsManageable(
 	ctx context.Context,
 	viewerAccountID int64,
@@ -1078,7 +1080,7 @@ func (s *Server) githubInstallationAccountsManageable(
 	organizationIDs := make(map[int64]struct{}, len(memberships))
 	organizationLogins := make(map[string]struct{}, len(memberships))
 	for _, membership := range memberships {
-		if !strings.EqualFold(strings.TrimSpace(membership.Role), "admin") {
+		if !strings.EqualFold(strings.TrimSpace(membership.Role), githubOrganizationOwnerRole) {
 			continue
 		}
 		organizationIDs[membership.OrganizationID] = struct{}{}
