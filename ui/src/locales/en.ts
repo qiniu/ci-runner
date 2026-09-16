@@ -782,6 +782,7 @@ export const en = {
     loadFailed: "Failed to load log",
     controlPlaneLoadFailed: "Failed to load control plane data",
     workspaceLoadFailed: "Failed to load workspace data",
+    preferencesLoadFailed: "Could not load preferences. Try again.",
     olderJobsLoadFailed: "Failed to load older jobs",
     accountSynced: "GitHub App account synced",
     accountSyncFailed: "Failed to sync GitHub App account",

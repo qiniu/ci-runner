@@ -94,6 +94,44 @@ describe("Sandbox service Settings", () => {
     expect(accountsFailed).not.toContain("Sync existing GitHub App accounts")
   })
 
+  test("keeps loaded Jobs visible when GitHub account metadata fails", () => {
+    const html = renderDashboard({
+      page: "home",
+      locationPath: "/jobs",
+      githubApp: null,
+      runners: [{
+        id: "completed-job",
+        status: "completed",
+        repository_full_name: "miclle/job-repository",
+        head_sha: "deadbeefcafebabe",
+        assigned_job_name: "Completed build",
+        workflow_name: "CI",
+        created_at: "2026-08-10T00:00:00Z",
+        updated_at: "2026-08-10T00:01:00Z",
+        completed_at: "2026-08-10T00:01:00Z",
+      }],
+      runnerTotal: 1,
+      loadingJobs: false,
+      accountsLoadFailed: true,
+    })
+
+    expect(html).toContain("miclle/job-repository")
+    expect(html).toContain("Completed build")
+    expect(html).toContain("Could not load GitHub accounts")
+  })
+
+  test("announces account loading rather than Jobs loading after Jobs are ready", () => {
+    const html = renderDashboard({
+      page: "home",
+      locationPath: "/jobs",
+      githubApp: null,
+      loadingJobs: false,
+      loadingGitHubApp: true,
+    })
+
+    expect(html).toContain('role="status" aria-label="Loading GitHub accounts')
+  })
+
   test("keeps platform Runner Specs at the top level and account specs in Settings", () => {
     const platformHTML = renderDashboard({
       locationPath: "/runner-specs",

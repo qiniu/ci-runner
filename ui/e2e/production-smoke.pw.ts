@@ -373,6 +373,77 @@ test("loads older jobs for the default visible group beyond the initial Jobs pag
   await expect(page.getByRole("button", { name: "Historical workflow" })).toBeVisible()
 })
 
+test("does not show the previous account preferences during an in-place session change", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+
+  let sessionChecks = 0
+  let bobPreferencesStarted = false
+  let releaseBobPreferences = () => {}
+  const bobPreferencesGate = new Promise<void>((resolve) => { releaseBobPreferences = resolve })
+  const preferences = (bucket: string) => ({
+    cache: { configured: true, region: "fixture-region", endpoint: "https://fixture.example", bucket, prefix: "fixture/" },
+    sandbox: { mode: "custom", resolved_source: "none", api_url: "", api_key: { configured: false } },
+  })
+
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: ++sessionChecks === 1 ? "alice" : "bob", role: "user" },
+  }))
+  await page.route("**/sandbox/regions", (route) => route.fulfill({ json: [] }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/github-app") {
+      await route.fulfill({ json: { setup_url: "/github-app/setup", settings_manageability: true, installations: [] } })
+    } else if (url.pathname === "/user/preferences/cache" && route.request().method() === "DELETE") {
+      await route.fulfill({ status: 401 })
+    } else if (url.pathname === "/user/preferences") {
+      if (sessionChecks > 1) {
+        bobPreferencesStarted = true
+        await bobPreferencesGate
+      }
+      await route.fulfill({ json: preferences(sessionChecks > 1 ? "bob-bucket" : "alice-bucket") })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+
+  try {
+    await page.goto("/account/preferences", { waitUntil: "domcontentloaded" })
+    await expect(page.locator("#cache-bucket")).toHaveValue("alice-bucket")
+    await page.locator("form").filter({ has: page.locator("#cache-bucket") }).getByRole("button", { name: "Remove" }).click()
+    await expect.poll(() => bobPreferencesStarted).toBe(true)
+    await expect(page.locator("#cache-bucket")).toHaveValue("")
+  } finally {
+    releaseBobPreferences()
+  }
+})
+
+test("reports a preferences failure without treating GitHub accounts as failed", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "alice", role: "user" },
+  }))
+  await page.route("**/sandbox/regions", (route) => route.fulfill({ json: [] }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/github-app") {
+      await route.fulfill({ json: { setup_url: "/github-app/setup", settings_manageability: true, installations: [] } })
+    } else if (url.pathname === "/user/preferences") {
+      await route.fulfill({ status: 500, body: "" })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+
+  await page.goto("/account/preferences", { waitUntil: "domcontentloaded" })
+  await expect(page.getByText("Could not load preferences. Try again.")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "alice", exact: true })).toBeVisible()
+})
+
 async function routeLocalAnonymousSession(page: Page) {
   const authSessionRoute = getLocalAuthSessionRoute(process.env.RUNNERD_UI_SMOKE_BASE_URL)
   if (!authSessionRoute) return

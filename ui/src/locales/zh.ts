@@ -782,6 +782,7 @@ export const zh = {
     loadFailed: "无法加载日志",
     controlPlaneLoadFailed: "无法加载控制面数据",
     workspaceLoadFailed: "无法加载工作区数据",
+    preferencesLoadFailed: "无法加载偏好设置，请重试。",
     olderJobsLoadFailed: "无法加载更早的任务",
     accountSynced: "GitHub App 账号已同步",
     accountSyncFailed: "无法同步 GitHub App 账号",

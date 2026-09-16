@@ -1239,6 +1239,12 @@ function PullRequestsPage({
       <div className="grid min-h-0 flex-1 xl:grid-cols-[360px_minmax(0,1fr)] xl:overflow-hidden">
         <aside className="min-h-0 border-r bg-muted/20">
           <div className="flex h-full flex-col">
+            {accountsLoadFailed && !loadingJobs && !jobsLoadFailed ? (
+              <div className="flex items-center justify-between gap-2 border-b p-3 text-sm text-muted-foreground" role="alert">
+                <span>{t("user.accountsLoadFailed")}</span>
+                <Button type="button" size="sm" variant="outline" onClick={onRetryJobs}>{t("user.tryAgain")}</Button>
+              </div>
+            ) : null}
             <div className="min-h-0 flex-1 overflow-y-auto">
               {groups.length ? (
                 <>
@@ -1278,13 +1284,13 @@ function PullRequestsPage({
                     </div>
                   ) : null}
                 </>
-              ) : jobsLoadFailed || accountsLoadFailed ? (
+              ) : jobsLoadFailed ? (
                 <div className="space-y-3 p-4 text-sm text-muted-foreground">
-                  <p>{t(jobsLoadFailed ? "user.jobsLoadFailed" : "user.accountsLoadFailed")}</p>
+                  <p>{t("user.jobsLoadFailed")}</p>
                   <Button type="button" size="sm" variant="outline" onClick={onRetryJobs}>{t("user.tryAgain")}</Button>
                 </div>
               ) : loadingJobs || loadingGitHubApp ? (
-                <div className="space-y-3 p-4" role="status" aria-label={t("user.loadingJobs")}>
+                <div className="space-y-3 p-4" role="status" aria-label={t(loadingJobs ? "user.loadingJobs" : "user.loadingAccounts")}>
                   <span className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
                     {loadingJobs ? t("user.loadingJobs") : t("user.loadingAccounts")}
@@ -1293,7 +1299,7 @@ function PullRequestsPage({
                 </div>
               ) : (
                 <div className="p-4 text-sm text-muted-foreground">
-                  {hasInstallations ? (
+                  {hasInstallations || accountsLoadFailed ? (
                     t("user.noJobsYet")
                   ) : (
                     t("user.syncToTrackJobs")
@@ -1366,9 +1372,9 @@ function PullRequestsPage({
                 )}
               </div>
             </div>
-          ) : jobsLoadFailed || accountsLoadFailed ? (
+          ) : jobsLoadFailed ? (
             <div className="p-4 lg:p-6"><div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
-              {t(jobsLoadFailed ? "user.jobsLoadFailed" : "user.accountsLoadFailed")}
+              {t("user.jobsLoadFailed")}
             </div></div>
           ) : loadingJobs || loadingGitHubApp ? (
             <div className="space-y-5 p-4 lg:p-6" aria-hidden="true">
@@ -1382,7 +1388,7 @@ function PullRequestsPage({
                 <div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
                   {t("user.groupNotFound")}
                 </div>
-              ) : hasInstallations ? (
+              ) : hasInstallations || accountsLoadFailed ? (
                 <div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
                   {t("user.noRunnerJobs")}
                 </div>

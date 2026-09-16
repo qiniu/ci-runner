@@ -50,6 +50,7 @@ import {
   createLatestUserLoadGate,
   createScopedRequestGate,
   loadOptionalUserResource,
+  mergeUserRunnerPages,
   shouldPollAdminSection,
   shouldPollUserRoute,
   userDataResources,
@@ -156,9 +157,8 @@ function App() {
   const userRunnerRequestGate = useRef(createScopedRequestGate()).current
   const [loadingUserRunnerHistory, setLoadingUserRunnerHistory] = useState(false)
   const [githubApp, setGitHubApp] = useState<GitHubAppConfig | null>(null)
-  const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null)
-  const [userPreferencesScope, setUserPreferencesScope] = useState("")
-  const [productTourOnboarding, setProductTourOnboarding] = useState<ProductTourOnboarding | null>(null)
+  const [scopedUserPreferences, setScopedUserPreferences] = useState<{ account: string; scope: string; value: UserPreferences } | null>(null)
+  const [scopedProductTourOnboarding, setScopedProductTourOnboarding] = useState<{ account: string; value: ProductTourOnboarding } | null>(null)
   const [authorizedRepositories, setAuthorizedRepositories] = useState<Record<number, string[]>>({})
   const [repositoryErrors, setRepositoryErrors] = useState<Record<number, string>>({})
   const [loadingRepositoriesFor, setLoadingRepositoriesFor] = useState<number | null>(null)
@@ -169,6 +169,11 @@ function App() {
   const runnerRequestLookupGeneration = useRef(0)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
+  const currentAccount = authSession.login ?? ""
+  const currentGithubApp = githubAppLoad?.account === currentAccount ? githubApp : null
+  const userPreferences = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.value : null
+  const userPreferencesScope = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.scope : ""
+  const productTourOnboarding = scopedProductTourOnboarding?.account === currentAccount ? scopedProductTourOnboarding.value : null
 
   useEffect(() => {
     void fetchSandboxRegions().then((regions) => {
@@ -296,7 +301,7 @@ function App() {
   const accountSettingsTab = accountSettingsRoute?.tab
   const selectedRepositoryAccountLogin = repositoryAccountLogin(locationPath, authSession.login)
   const selectedRepositoryInstallation = selectRepositoryInstallation(
-    githubApp?.installations ?? [],
+    currentGithubApp?.installations ?? [],
     selectedRepositoryAccountLogin,
     authSession.login,
   )
@@ -494,10 +499,23 @@ function App() {
               ? undefined
               : repositoryInstallation?.id
             : settingsPreferenceInstallationID(nextApp.installations, nextRoute?.accountLogin, authSession.login)
-          const preferencesData = await request(userPreferencesPath(installationID))
-          if (!userLoadGate.isCurrent(loadID)) return
-          setUserPreferences(preferencesData as UserPreferences)
-          setUserPreferencesScope(installationID ? `github_installation:${installationID}` : "account")
+          return request(userPreferencesPath(installationID))
+            .then((preferencesData) => {
+              if (!userLoadGate.isCurrent(loadID)) return
+              setScopedUserPreferences({
+                account,
+                scope: installationID ? `github_installation:${installationID}` : "account",
+                value: preferencesData as UserPreferences,
+              })
+            })
+            .catch((error) => {
+              if (!userLoadGate.isCurrent(loadID)) return
+              if (requiresGitHubReauthentication(error)) {
+                reportError(error)
+              } else {
+                toast.error(appI18n.t("app.preferencesLoadFailed"))
+              }
+            })
         })
         .catch((error) => {
           if (userLoadGate.isCurrent(loadID)) {
@@ -512,20 +530,21 @@ function App() {
     if (resources.includes("onboarding")) {
       tasks.push(loadOptionalUserResource(request("/user/onboarding/product-tour"))
         .then((data) => {
-          if (data && userLoadGate.isCurrent(loadID)) setProductTourOnboarding(data as ProductTourOnboarding)
+          if (data && userLoadGate.isCurrent(loadID)) setScopedProductTourOnboarding({ account, value: data as ProductTourOnboarding })
         }))
     }
     await Promise.all(tasks)
   }, [authSession.authenticated, authSession.login, beginGitHubReauthentication, hasAccess, isAdminRoute, locationPath, refreshGitHubOAuthLogin, request, requestUserRunnerPage, userLoadGate, userRunnerRequestGate])
 
   const saveProductTourOnboarding = useCallback(async (state: ProductTourOnboarding) => {
+    const account = authSession.login ?? ""
     const saved = (await request("/user/onboarding/product-tour", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state),
     })) as ProductTourOnboarding
-    setProductTourOnboarding(saved)
-  }, [request])
+    setScopedProductTourOnboarding({ account, value: saved })
+  }, [authSession.login, request])
 
   const loadUserRunnerHistory = useCallback(async () => {
     if (!authSession.authenticated || loadingUserRunnerHistory) return
@@ -633,42 +652,42 @@ function App() {
     mode: "custom" | "inherit" = "custom",
     replaceInheritedSource = false,
   ) => {
+    const account = authSession.login ?? ""
     const preferences = (await request(userPreferencesPath(installationID, "/user/preferences/sandbox"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode, api_url: apiURL, api_key: apiKey, replace_inherited_source: replaceInheritedSource }),
     })) as UserPreferences
-    setUserPreferences(preferences)
-    setUserPreferencesScope(installationID ? `github_installation:${installationID}` : "account")
+    setScopedUserPreferences({ account, scope: installationID ? `github_installation:${installationID}` : "account", value: preferences })
     toast.success(appI18n.t("app.sandboxSaved"))
-  }, [request])
+  }, [authSession.login, request])
 
   const saveCacheConfig = useCallback(async (input: { bucket: string; prefix: string; access_key_id: string; secret_access_key: string }, installationID?: number) => {
+    const account = authSession.login ?? ""
     const preferences = (await request(userPreferencesPath(installationID, "/user/preferences/cache"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     })) as UserPreferences
-    setUserPreferences(preferences)
-    setUserPreferencesScope(installationID ? `github_installation:${installationID}` : "account")
+    setScopedUserPreferences({ account, scope: installationID ? `github_installation:${installationID}` : "account", value: preferences })
     toast.success(t("user.cacheS3SettingsSaved"))
-  }, [request])
+  }, [authSession.login, request, t])
 
   const deleteCacheConfig = useCallback(async (installationID?: number) => {
+    const account = authSession.login ?? ""
     const preferences = (await request(userPreferencesPath(installationID, "/user/preferences/cache"), { method: "DELETE" })) as UserPreferences
-    setUserPreferences(preferences)
-    setUserPreferencesScope(installationID ? `github_installation:${installationID}` : "account")
+    setScopedUserPreferences({ account, scope: installationID ? `github_installation:${installationID}` : "account", value: preferences })
     toast.success(t("user.cacheS3SettingsRemoved"))
-  }, [request])
+  }, [authSession.login, request, t])
 
   const deleteSandboxAPIKey = useCallback(async (installationID?: number) => {
+    const account = authSession.login ?? ""
     const preferences = (await request(userPreferencesPath(installationID, "/user/preferences/sandbox-api-key"), {
       method: "DELETE",
     })) as UserPreferences
-    setUserPreferences(preferences)
-    setUserPreferencesScope(installationID ? `github_installation:${installationID}` : "account")
+    setScopedUserPreferences({ account, scope: installationID ? `github_installation:${installationID}` : "account", value: preferences })
     toast.success(appI18n.t("app.apiKeyRemoved"))
-  }, [request])
+  }, [authSession.login, request])
 
   const {
     runnerSpecOpen,
@@ -854,6 +873,8 @@ function App() {
     setUserRunnerTotal(0)
     setUserJobsLoad(null)
     setGithubAppLoad(null)
+    setScopedUserPreferences(null)
+    setScopedProductTourOnboarding(null)
     userLoadGate.begin("")
     userRunnerRequestGate.reset()
     setGitHubApp(null)
@@ -1059,7 +1080,7 @@ function App() {
       <>
         <UserDashboard
           authSession={authSession}
-          githubApp={githubAppLoad?.account === (authSession.login ?? "") ? githubApp : null}
+          githubApp={currentGithubApp}
           locationPath={locationPath}
           productTourOnboarding={productTourOnboarding}
           userPreferences={userPreferences}
@@ -1465,17 +1486,6 @@ function withSearchParam(path: string, key: string, value: string) {
 function withPreservedJobSearch(path: string, search: string) {
   const job = new URLSearchParams(search).get("job")
   return job ? withSearchParam(path, "job", job) : path
-}
-
-function mergeUserRunnerPages(primary: RunnerState[], existing: RunnerState[]): RunnerState[] {
-  const merged: RunnerState[] = []
-  const seen = new Set<string>()
-  for (const runner of [...primary, ...existing]) {
-    if (seen.has(runner.id)) continue
-    seen.add(runner.id)
-    merged.push(runner)
-  }
-  return merged
 }
 
 function decodeRepositoryPath(ownerSegment: string, repoSegment: string) {

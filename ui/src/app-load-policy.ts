@@ -1,4 +1,4 @@
-import { adminSections, runnerRequestIdentifierFromAdminPath, type AdminSection } from "@/admin-types"
+import { adminSections, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
 export const userRunnerInitialPageSize = 100
@@ -31,7 +31,7 @@ export function createLatestUserLoadGate() {
   }
 }
 
-// A completed request must not unlock a newer request after a route or session change.
+// Coalesce requests for the same scope without letting an older completion unlock a newer request.
 export function createScopedRequestGate() {
   let active: { scope: string } | null = null
   return {
@@ -47,6 +47,18 @@ export function createScopedRequestGate() {
       active = null
     },
   }
+}
+
+export function mergeUserRunnerPages(primary: RunnerState[], existing: RunnerState[]): RunnerState[] {
+  const merged: RunnerState[] = []
+  const seen = new Set<string>()
+  for (const runner of [...primary, ...existing]) {
+    if (seen.has(runner.id)) continue
+    seen.add(runner.id)
+    merged.push(runner)
+    if (merged.length >= userRunnerHistoryWindow) break
+  }
+  return merged
 }
 
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {
