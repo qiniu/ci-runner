@@ -98,7 +98,7 @@ func TestNetworkDiagnosticCommandAcceptsOnlyFixedTargets(t *testing.T) {
 		host   string
 		url    string
 	}{
-		{target: NetworkDiagnosticTargetGitHubAPI, host: "api.github.com", url: "https://api.github.com/meta"},
+		{target: NetworkDiagnosticTargetGitHubAPI, host: "api.github.com", url: "https://api.github.com/"},
 		{target: NetworkDiagnosticTargetUbuntuArchive, host: "archive.ubuntu.com", url: "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"},
 		{target: NetworkDiagnosticTargetLLVMAPT, host: "apt.llvm.org", url: "https://apt.llvm.org/llvm.sh"},
 	}

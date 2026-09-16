@@ -551,7 +551,7 @@ func networkDiagnosticCommand(target NetworkDiagnosticTarget) (string, string, e
 	var targetURL string
 	switch target {
 	case NetworkDiagnosticTargetGitHubAPI:
-		targetURL = "https://api.github.com/meta"
+		targetURL = "https://api.github.com/"
 	case NetworkDiagnosticTargetUbuntuArchive:
 		targetURL = "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"
 	case NetworkDiagnosticTargetLLVMAPT:
