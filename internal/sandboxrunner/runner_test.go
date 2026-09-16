@@ -400,6 +400,8 @@ func TestStartScriptUsesHostedRunnerFilesystemContract(t *testing.T) {
 	writeExecutable(t, filepath.Join(actionsRunnerRoot, "config.sh"), `#!/usr/bin/env bash
 set -euo pipefail
 printf 'config HOME=%s PWD=%s TOOL_CACHE=%s AGENT_TOOLS=%s IMAGE_VERSION=%s CUSTOM_RUNNER_ENV=%s\n' "$HOME" "$PWD" "$RUNNER_TOOL_CACHE" "$AGENT_TOOLSDIRECTORY" "${IMAGE_VERSION:-}" "${CUSTOM_RUNNER_ENV:-}" >>"$RUNNER_TEST_LOG"
+printf 'go GOPATH=%s GOBIN=%s\n' "$GOPATH" "$GOBIN" >>"$RUNNER_TEST_LOG"
+printf 'go PATH=%s\n' "$PATH" >>"$RUNNER_TEST_LOG"
 `)
 	writeExecutable(t, filepath.Join(actionsRunnerRoot, "run.sh"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -428,6 +430,8 @@ printf 'run HOME=%s PWD=%s RUNASROOT=%s\n' "$HOME" "$PWD" "${RUNNER_ALLOW_RUNASR
 		"RUNNER_TEST_LOG="+logPath,
 		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
 		"ENSURE_DOCKER=/bin/true",
+		"GOPATH=",
+		"GOBIN=",
 	)
 	if err != nil {
 		t.Fatalf("start script failed: %v\n%s", err, output)
@@ -441,12 +445,27 @@ printf 'run HOME=%s PWD=%s RUNASROOT=%s\n' "$HOME" "$PWD" "${RUNNER_ALLOW_RUNASR
 		"config HOME=" + runnerHome + " PWD=" + workdir,
 		"TOOL_CACHE=/opt/hostedtoolcache AGENT_TOOLS=/opt/hostedtoolcache",
 		"IMAGE_VERSION= CUSTOM_RUNNER_ENV=" + runnerHome + "/from-environment",
+		"go GOPATH=" + filepath.Join(runnerHome, "go") + " GOBIN=" + filepath.Join(runnerHome, "go", "bin"),
 		"run HOME=" + runnerHome + " PWD=" + workdir + " RUNASROOT=",
 	} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("runner execution log missing %q:\n%s", want, log)
 		}
 	}
+	for _, line := range strings.Split(log, "\n") {
+		pathValue, ok := strings.CutPrefix(line, "go PATH=")
+		if !ok {
+			continue
+		}
+		pathEntries := filepath.SplitList(pathValue)
+		goBinIndex := slices.Index(pathEntries, filepath.Join(runnerHome, "go", "bin"))
+		systemBinIndex := slices.Index(pathEntries, "/usr/local/bin")
+		if goBinIndex < 0 || systemBinIndex < 0 || goBinIndex >= systemBinIndex {
+			t.Fatalf("Go binary directory must precede /usr/local/bin in PATH: %q", pathValue)
+		}
+		return
+	}
+	t.Fatalf("runner execution log missing Go PATH: %s", log)
 }
 
 func TestStartScriptDockerBootstrapPolicy(t *testing.T) {

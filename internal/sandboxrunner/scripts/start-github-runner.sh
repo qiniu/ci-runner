@@ -11,11 +11,11 @@ require_docker="%[8]s"
 runner_environment_file="${RUNNER_ENVIRONMENT_FILE:-/etc/environment}"
 export HOME="${RUNNER_HOME:-/home/runner}"
 export XDG_CONFIG_HOME="${HOME}/.config"
-export GOPATH="${GOPATH:-/opt/go}"
-export GOBIN="${GOBIN:-/usr/local/bin}"
+export GOPATH="${GOPATH:-${HOME}/go}"
+export GOBIN="${GOBIN:-${GOPATH}/bin}"
 export RUNNER_TOOL_CACHE="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
 export AGENT_TOOLSDIRECTORY="${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
-export PATH="/usr/local/go/bin:/usr/local/bin:${GOPATH}/bin:${PATH}"
+export PATH="/usr/local/go/bin:${GOPATH}/bin:/usr/local/bin:${PATH}"
 if [ -r "$runner_environment_file" ]; then
   set -a
   # runner-images writes shell-compatible KEY="value" entries here.
