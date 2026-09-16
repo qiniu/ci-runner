@@ -212,6 +212,167 @@ test("keeps the Jobs list independently scrollable beside the Web Console", asyn
   diagnostics.expectClean()
 })
 
+test("reveals Jobs before secondary metadata and loads Runner logs only when selected", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+
+  const diagnostics = observeBrowserDiagnostics(page)
+  const runners = fixtureRunners(1)
+  let releaseJobs = () => {}
+  let releaseGitHubApp = () => {}
+  const jobsGate = new Promise<void>((resolve) => { releaseJobs = resolve })
+  const githubAppGate = new Promise<void>((resolve) => { releaseGitHubApp = resolve })
+  let runnerLogRequests = 0
+  let groupRequests = 0
+
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
+  }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/runner_requests") {
+      await jobsGate
+      await route.fulfill({ headers: { "X-Total-Count": "1" }, json: runners })
+    } else if (url.pathname === "/user/github-app") {
+      await githubAppGate
+      await route.fulfill({ json: { setup_url: "/github-app/setup", installations: [] } })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else if (url.pathname.startsWith("/user/github/branches/")) {
+      groupRequests += 1
+      const selected = runners[0]
+      await route.fulfill({ json: {
+        key: `branch:${selected.repository_full_name}:${selected.head_branch}:${selected.head_sha}`,
+        group: "branch", repository: selected.repository_full_name,
+        title: selected.head_branch, subtitle: selected.head_sha, updated_at: selected.updated_at,
+        jobs: [selected], current_jobs: [selected], previous_jobs: [],
+        workflow_run_ids: [selected.workflow_run_id], head_sha: selected.head_sha, head_branch: selected.head_branch,
+      } })
+    } else if (url.pathname.endsWith("/github-log")) {
+      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
+    } else if (url.pathname.includes("/logs/")) {
+      runnerLogRequests += 1
+      await route.fulfill({ body: "fixture Runner log", contentType: "text/plain" })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+
+  try {
+    const response = await page.goto("/jobs", { waitUntil: "domcontentloaded" })
+    expect(response?.ok()).toBe(true)
+    await expect(page.getByRole("status", { name: /Loading jobs|正在加载任务/ })).toBeVisible()
+
+    releaseJobs()
+    await expect(page.getByRole("button", { name: /fixture\/repository-0/ })).toBeVisible()
+    await expect(page.getByText("fixture GitHub log")).toBeVisible()
+    expect(runnerLogRequests).toBe(0)
+    await expect.poll(() => groupRequests).toBe(1)
+    await page.getByRole("tab", { name: /Runner logs|Runner 日志/i }).click()
+    await expect(page.getByText("fixture Runner log")).toBeVisible()
+    expect(runnerLogRequests).toBe(1)
+    await page.getByRole("button", { name: /fixture\/repository-0/ }).click()
+    expect(groupRequests).toBe(1)
+    diagnostics.expectClean()
+  } finally {
+    releaseJobs()
+    releaseGitHubApp()
+  }
+})
+
+test("reloads Jobs after returning from another page while an older list request is pending", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+
+  const runners = fixtureRunners(1)
+  let releaseFirstJobs = () => {}
+  const firstJobsGate = new Promise<void>((resolve) => { releaseFirstJobs = resolve })
+  let jobsRequests = 0
+
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
+  }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/runner_requests") {
+      jobsRequests += 1
+      if (jobsRequests === 1) await firstJobsGate
+      await route.fulfill({ headers: { "X-Total-Count": "1" }, json: runners })
+    } else if (url.pathname === "/user/github-app") {
+      await route.fulfill({ json: { setup_url: "/github-app/setup", installations: [] } })
+    } else if (url.pathname === "/user/runner-specs") {
+      await route.fulfill({ json: { items: [], sandbox_source: "none" } })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else if (url.pathname.endsWith("/github-log")) {
+      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+
+  try {
+    await page.goto("/jobs", { waitUntil: "domcontentloaded" })
+    await expect(page.getByRole("status", { name: /Loading jobs|正在加载任务/ })).toBeVisible()
+    await expect.poll(() => jobsRequests).toBe(1)
+    await page.locator('nav a[href="/runner-specs"]').first().click()
+    await page.locator('nav a[href="/jobs"]').first().click()
+    await expect(page.getByRole("button", { name: /fixture\/repository-0/ })).toBeVisible({ timeout: 3_000 })
+  } finally {
+    releaseFirstJobs()
+  }
+})
+
+test("loads older jobs for the default visible group beyond the initial Jobs page", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+
+  const runners = fixtureRunners(100)
+  const selected = { ...runners[0], pull_request_number: 42 }
+  runners[0] = selected
+  const previous: RunnerState = {
+    ...selected,
+    id: "fixture-previous-job",
+    status: "completed",
+    workflow_job_id: 30_000,
+    workflow_run_id: 40_000,
+    workflow_name: "Historical workflow",
+    head_sha: "f".repeat(40),
+    created_at: "2026-08-11T00:00:00Z",
+    updated_at: "2026-08-11T00:00:00Z",
+    completed_at: "2026-08-11T00:00:00Z",
+  }
+
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
+  }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/runner_requests") {
+      await route.fulfill({ headers: { "X-Total-Count": "101" }, json: runners })
+    } else if (url.pathname === "/user/github-app") {
+      await route.fulfill({ json: { setup_url: "/github-app/setup", installations: [] } })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else if (url.pathname.startsWith("/user/github/pulls/")) {
+      await route.fulfill({ json: {
+        key: `pr:${selected.repository_full_name}:42`,
+        group: "pull_request", repository: selected.repository_full_name,
+        title: "PR #42", subtitle: selected.head_branch, updated_at: selected.updated_at,
+        jobs: [selected, previous], current_jobs: [selected], previous_jobs: [previous],
+        workflow_run_ids: [selected.workflow_run_id, previous.workflow_run_id],
+        head_sha: selected.head_sha, head_branch: selected.head_branch,
+        pull_request_number: 42,
+      } })
+    } else if (url.pathname.endsWith("/github-log")) {
+      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+
+  await page.goto("/jobs", { waitUntil: "domcontentloaded" })
+  await expect(page.getByRole("button", { name: /fixture\/repository-0/ })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Historical workflow" })).toBeVisible()
+})
+
 async function routeLocalAnonymousSession(page: Page) {
   const authSessionRoute = getLocalAuthSessionRoute(process.env.RUNNERD_UI_SMOKE_BASE_URL)
   if (!authSessionRoute) return

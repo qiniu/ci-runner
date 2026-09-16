@@ -78,6 +78,22 @@ function renderDashboard(overrides = {}) {
 }
 
 describe("Sandbox service Settings", () => {
+  test("keeps Jobs loading and error states distinct from an empty history", () => {
+    const loading = renderDashboard({ page: "home", locationPath: "/jobs", githubApp: null, loadingJobs: true })
+    expect(loading).toContain('role="status"')
+    expect(loading).toContain("Loading jobs")
+    expect(loading).not.toContain("Sync existing GitHub App accounts")
+
+    const failed = renderDashboard({ page: "home", locationPath: "/jobs", githubApp: null, jobsLoadFailed: true })
+    expect(failed).toContain("Could not load jobs")
+    expect(failed).toContain("Try again")
+    expect(failed).not.toContain("Sync existing GitHub App accounts")
+
+    const accountsFailed = renderDashboard({ page: "home", locationPath: "/jobs", githubApp: null, accountsLoadFailed: true })
+    expect(accountsFailed).toContain("Could not load GitHub accounts")
+    expect(accountsFailed).not.toContain("Sync existing GitHub App accounts")
+  })
+
   test("keeps platform Runner Specs at the top level and account specs in Settings", () => {
     const platformHTML = renderDashboard({
       locationPath: "/runner-specs",

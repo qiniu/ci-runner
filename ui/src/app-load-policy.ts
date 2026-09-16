@@ -31,6 +31,24 @@ export function createLatestUserLoadGate() {
   }
 }
 
+// A completed request must not unlock a newer request after a route or session change.
+export function createScopedRequestGate() {
+  let active: { scope: string } | null = null
+  return {
+    begin(scope: string) {
+      if (active?.scope === scope) return null
+      active = { scope }
+      return active
+    },
+    finish(request: { scope: string } | null | undefined) {
+      if (active === request) active = null
+    },
+    reset() {
+      active = null
+    },
+  }
+}
+
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {
   overview: ["runner_requests", "runner_specs"],
   accounts: [],

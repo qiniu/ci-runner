@@ -164,4 +164,18 @@ describe("app load policy", () => {
     expect(gate?.isCurrent(initialLoad)).toBe(true)
     expect(gate?.isCurrent(pollingLoad)).toBe(true)
   })
+
+  test("coalesces a Jobs request without letting an older completion release a new session request", () => {
+    const gate = appPolicy.createScopedRequestGate?.()
+    const oldRequest = gate?.begin("miclle:/jobs")
+    expect(oldRequest).toBeTruthy()
+    expect(gate?.begin("miclle:/jobs")).toBeNull()
+    gate?.reset()
+    const newRequest = gate?.begin("miclle:/jobs")
+    expect(newRequest).toBeTruthy()
+    gate?.finish(oldRequest)
+    expect(gate?.begin("miclle:/jobs")).toBeNull()
+    gate?.finish(newRequest)
+    expect(gate?.begin("miclle:/jobs")).toBeTruthy()
+  })
 })
