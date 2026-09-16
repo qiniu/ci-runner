@@ -26,7 +26,7 @@ Open [Repositories](/repositories).
 2. Select only the repositories that should use Qiniu CI Runner.
 3. Return to Repositories and confirm that the repository appears.
 
-Repository visibility is the intersection of your GitHub access and the repositories authorized for the GitHub App installation. An organization appears in Settings only when you are an active member. Outside collaborators can see authorized repository readiness but cannot manage that organization's Sandbox settings.
+Repository visibility is the intersection of your GitHub access and the repositories authorized for the GitHub App installation. An organization appears in Settings only when GitHub reports an active owner membership (`role: admin`). Ordinary members and outside collaborators can see authorized repository readiness but cannot read or manage that organization's Sandbox settings.
 
 ## 3. Check Sandbox readiness
 
@@ -34,7 +34,7 @@ Select the account or organization that owns the repository. The readiness card 
 
 - **Ready:** continue to the workflow step. The service may come from the selected scope, an inherited account setting, or an eligible platform default.
 - **Setup required:** choose **Configure Sandbox**. The link opens the exact account or organization Preferences page.
-- **Read only:** ask an active organization member to configure the Sandbox service.
+- **Read only:** ask an active organization owner to configure the Sandbox service.
 
 For a personal account, the settings route is [Account Preferences](/account/preferences). Choose a supported region and enter the API Key from the [Qiniu API Key page](https://portal.qiniu.com/developer/user/api-key). The saved key is not shown again.
 

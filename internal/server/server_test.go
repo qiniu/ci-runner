@@ -2672,10 +2672,11 @@ func TestUserSandboxAPIKeyPreferencesAreEncrypted(t *testing.T) {
 	}
 }
 
-func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
+func TestOrganizationSandboxManagementRequiresOwnerRole(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		membershipBody string
+		sessionRole    string
 		wantManageable bool
 		wantSaveStatus int
 	}{
@@ -2687,12 +2688,33 @@ func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
 		{
 			name:           "organization member",
 			membershipBody: `[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`,
+			wantSaveStatus: http.StatusForbidden,
+		},
+		{
+			name:           "organization member with local runnerd admin role",
+			membershipBody: `[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`,
+			sessionRole:    "admin",
+			wantSaveStatus: http.StatusForbidden,
+		},
+		{
+			name:           "organization owner",
+			membershipBody: `[{"state":"active","role":"admin","organization":{"id":9001,"login":"octo-org"}}]`,
 			wantManageable: true,
 			wantSaveStatus: http.StatusOK,
 		},
 		{
+			name:           "membership with an unknown role",
+			membershipBody: `[{"state":"active","role":"","organization":{"id":9001,"login":"octo-org"}}]`,
+			wantSaveStatus: http.StatusForbidden,
+		},
+		{
+			name:           "pending organization owner",
+			membershipBody: `[{"state":"pending","role":"admin","organization":{"id":9001,"login":"octo-org"}}]`,
+			wantSaveStatus: http.StatusForbidden,
+		},
+		{
 			name:           "matching login with a different stable organization id",
-			membershipBody: `[{"state":"active","role":"member","organization":{"id":9002,"login":"octo-org"}}]`,
+			membershipBody: `[{"state":"active","role":"admin","organization":{"id":9002,"login":"octo-org"}}]`,
 			wantSaveStatus: http.StatusForbidden,
 		},
 	} {
@@ -2723,9 +2745,13 @@ func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			sessionRole := test.sessionRole
+			if sessionRole == "" {
+				sessionRole = "user"
+			}
 
 			req := httptest.NewRequest(http.MethodGet, "/user/github-app?include=settings", nil)
-			req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+			req.AddCookie(testSessionCookie("hubot-id", "hubot", sessionRole))
 			rec := httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
@@ -2740,7 +2766,7 @@ func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
 			}
 
 			req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/user/preferences?installation_id=%d", installation.ID), nil)
-			req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+			req.AddCookie(testSessionCookie("hubot-id", "hubot", sessionRole))
 			rec = httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
@@ -2756,7 +2782,7 @@ func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
 				strings.NewReader(`{"api_url":"https://us-south-1-sandbox.qiniuapi.com","api_key":"org-key"}`),
 			)
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+			req.AddCookie(testSessionCookie("hubot-id", "hubot", sessionRole))
 			rec = httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
 			if rec.Code != test.wantSaveStatus {
@@ -2770,15 +2796,141 @@ func TestOrganizationSandboxManagementRequiresActiveMembership(t *testing.T) {
 						fmt.Sprintf("%s?installation_id=%d&region=us-south-1", path, installation.ID),
 						nil,
 					)
-					req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+					req.AddCookie(testSessionCookie("hubot-id", "hubot", sessionRole))
 					rec = httptest.NewRecorder()
 					srv.ServeHTTP(rec, req)
 					if rec.Code != http.StatusForbidden {
 						t.Fatalf("GET %s as outside collaborator: got=%d want=%d body=%s", path, rec.Code, http.StatusForbidden, rec.Body.String())
 					}
 				}
+
+				req = httptest.NewRequest(
+					http.MethodGet,
+					fmt.Sprintf("/user/runner-specs?installation_id=%d", installation.ID),
+					nil,
+				)
+				req.AddCookie(testSessionCookie("hubot-id", "hubot", sessionRole))
+				rec = httptest.NewRecorder()
+				srv.ServeHTTP(rec, req)
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("GET custom Runner Specs without owner role: got=%d want=%d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+				}
 			}
 		})
+	}
+}
+
+func TestOrganizationPreferencesRedactConfigurationForNonOwner(t *testing.T) {
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/user/memberships/orgs" {
+			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`))
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+	installation, err := store.UpsertGitHubInstallation(state.GitHubInstallation{
+		AccountID:       account.ID,
+		InstallationID:  987,
+		GitHubAccountID: 9001,
+		AccountType:     "organization",
+		AccountLogin:    "octo-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpsertAccountPreference(state.AccountPreference{
+		ScopeType: state.AccountScopeTypeAccount,
+		ScopeID:   account.ID,
+		Namespace: accountPreferenceNamespaceSandbox,
+		Key:       accountPreferenceKeySandboxService,
+		ValueJSON: `{"mode":"custom","api_url":"https://us-south-1-sandbox.qiniuapi.com"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertAccountPreference(state.AccountPreference{
+		ScopeType: state.AccountScopeTypeGitHubInstall,
+		ScopeID:   installation.InstallationID,
+		Namespace: accountPreferenceNamespaceSandbox,
+		Key:       accountPreferenceKeySandboxService,
+		ValueJSON: fmt.Sprintf(`{"mode":"inherit","source_account_id":%d}`, account.ID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertAccountPreference(state.AccountPreference{
+		ScopeType: state.AccountScopeTypeGitHubInstall,
+		ScopeID:   installation.InstallationID,
+		Namespace: accountPreferenceNamespaceCache,
+		Key:       accountPreferenceKeyCacheS3,
+		ValueJSON: `{"bucket":"private-cache","prefix":"private-prefix"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []struct {
+		scopeType string
+		scopeID   int64
+		keyType   string
+		value     string
+	}{
+		{state.AccountScopeTypeAccount, account.ID, state.AccountSecretTypeSandboxAPIKey, "private-sandbox-key"},
+		{state.AccountScopeTypeGitHubInstall, installation.InstallationID, state.AccountSecretTypeCacheAccessKeyID, "private-access-key"},
+		{state.AccountScopeTypeGitHubInstall, installation.InstallationID, state.AccountSecretTypeCacheSecretAccessKey, "private-secret-key"},
+	} {
+		encrypted, err := encryptSecret(secret.value, srv.cfg.AuthEncryptionKey.Value())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.UpsertAccountSecret(state.AccountSecret{
+			ScopeType:      secret.scopeType,
+			ScopeID:        secret.scopeID,
+			KeyType:        secret.keyType,
+			EncryptedValue: encrypted,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/user/preferences?installation_id=%d", installation.ID), nil)
+	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET organization preferences: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var preferences accountPreferencesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &preferences); err != nil {
+		t.Fatal(err)
+	}
+	if preferences.Sandbox.Manageable || preferences.Sandbox.ResolvedSource != "inherited" {
+		t.Fatalf("expected redacted inherited readiness: %#v", preferences.Sandbox)
+	}
+	if preferences.Sandbox.APIURL != "" || preferences.Sandbox.APIKey.Configured || preferences.Sandbox.APIKey.UpdatedAt != "" {
+		t.Fatalf("sandbox configuration was exposed: %#v", preferences.Sandbox)
+	}
+	if preferences.Sandbox.Inherited || preferences.Sandbox.SourceAccountID != 0 || preferences.Sandbox.SourceAccountLogin != "" || preferences.Sandbox.SourceIsCurrentAccount || preferences.Sandbox.SourceAvailable {
+		t.Fatalf("sandbox source account metadata was exposed: %#v", preferences.Sandbox)
+	}
+	if preferences.Cache != (accountCachePreference{}) {
+		t.Fatalf("cache configuration was exposed: %#v", preferences.Cache)
+	}
+	for _, privateValue := range []string{
+		"us-south-1-sandbox.qiniuapi.com",
+		"private-cache",
+		"private-prefix",
+		"hubot",
+	} {
+		if strings.Contains(rec.Body.String(), privateValue) {
+			t.Fatalf("response exposed %q: %s", privateValue, rec.Body.String())
+		}
 	}
 }
 
@@ -2929,7 +3081,7 @@ func TestUserSandboxInheritanceRequiresExplicitSourceReplacement(t *testing.T) {
 			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"example-org"}}]`))
+		w.Write([]byte(`[{"state":"active","role":"admin","organization":{"id":9001,"login":"example-org"}}]`))
 	}))
 	defer githubAPI.Close()
 
@@ -3079,7 +3231,7 @@ func TestUserSandboxInheritanceRejectsUnconfiguredSourceAccount(t *testing.T) {
 			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"example-org"}}]`))
+		w.Write([]byte(`[{"state":"active","role":"admin","organization":{"id":9001,"login":"example-org"}}]`))
 	}))
 	defer githubAPI.Close()
 
@@ -8679,7 +8831,7 @@ func TestUserPatchRunnerSpecRejectsRunnerGroupChangeWhileActive(t *testing.T) {
 			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`))
+		_, _ = w.Write([]byte(`[{"state":"active","role":"admin","organization":{"id":9001,"login":"octo-org"}}]`))
 	}))
 	defer githubAPI.Close()
 
@@ -8760,7 +8912,7 @@ func TestOrganizationRunnerSpecMutationDoesNotReauthorizeAfterCommit(t *testing.
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"state":"active","role":"member","organization":{"id":9001,"login":"octo-org"}}]`))
+		_, _ = w.Write([]byte(`[{"state":"active","role":"admin","organization":{"id":9001,"login":"octo-org"}}]`))
 	}))
 	defer githubAPI.Close()
 

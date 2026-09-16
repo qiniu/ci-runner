@@ -74,7 +74,7 @@ cp runnerd.yaml.example runnerd.yaml
 ```
 
 5. 打开 `http://<host>:25500/`，使用 GitHub OAuth 登录。公开产品首页提供同域 `/docs` 指南，以及指向 `/jobs` 受保护的 Jobs 控制台入口。用户首次登录访问 `/jobs` 时，会看到介绍 Jobs、Repositories、Settings 和 Sandbox 设置的六步引导；之后可从账户菜单重播。
-6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户和用户属于 active member 的组织；outside collaborator 只能看到 readiness 只读提示，不能浏览该组织的 Sandbox 资源目录。管理员可以在 `/admin/sandbox_service` 配置兜底。
+6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户，以及 GitHub 返回 active owner membership（`role: admin`）的组织。普通组织成员、outside collaborator 和其他仅有仓库权限的用户只能看到 readiness 只读状态，不能浏览该组织的配置、Sandbox 资源目录或自定义 Runner Specs。管理员可以在 `/admin/sandbox_service` 配置兜底。
 7. 在**管理控制台**中确认 5 个内置 Qiniu managed Runner Specs。4 个标准公共模板已通过双区域 release gate。4 个 `-large` 模板是对外可用的 operator 配置默认 Runner Spec，使用 80 GiB 物理模板；其记录通过自定义 spec 路径保存，但已启用供普通 workflow 使用。operator 仍可禁用 managed 或 large 默认 spec，或调整并发与 idle capacity。
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
 9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用 managed default，或配置自定义 spec 要求的 labels。
@@ -186,7 +186,7 @@ env:
 | Repository   | Administration      | Read & write | 仓库级 runner 注册（spec 未设置 `runner_group` 时）              |
 | Repository   | Metadata            | Read-only    | 识别仓库及其所属账户                                             |
 | Repository   | Pull requests       | Read-only    | 在 job 分组中显示 PR 标题                                        |
-| Organization | Members             | Read-only    | 验证有效组织成员关系，以开放组织 Settings 和 scoped Sandbox 管理 |
+| Organization | Members             | Read-only    | 验证 active 组织所有者角色（`role: admin`），以开放组织 Settings 和 scoped 管理 |
 | Organization | Self-hosted runners | Read & write | 组织级 runner 注册（spec 设置了 `runner_group` 时）              |
 
 设置 `github.app.slug` 可在用户 UI 中显示"安装 GitHub App"链接。使用 `github.allowed_repositories`（支持 `owner/repo` 或 `owner/*` 模式）限制哪些仓库可以使用此 runnerd 实例。

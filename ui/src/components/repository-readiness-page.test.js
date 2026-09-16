@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 
+import "../i18n"
 import { RepositoryReadinessPage } from "./repository-readiness-page"
 
 function renderPage(overrides = {}) {
@@ -127,7 +128,7 @@ describe("RepositoryReadinessPage", () => {
     expect(html).not.toContain("Save settings")
   })
 
-  test("asks an organization member to configure Sandbox for repository-only access", () => {
+  test("asks an organization owner to configure Sandbox for repository-only access", () => {
     const html = renderPage({
       selectedAccountLogin: "qiniu",
       githubApp: {
@@ -160,7 +161,7 @@ describe("RepositoryReadinessPage", () => {
 
     expect(html).toContain(">Unavailable<")
     expect(html).toContain("The qiniu organization has not configured a Sandbox service")
-    expect(html).toContain("Ask an organization member to configure Sandbox")
+    expect(html).toContain("Ask an organization owner to configure Sandbox")
     expect(html).toContain("View on GitHub")
     expect(html).not.toContain("Manage on GitHub")
     expect(html).not.toContain("Configure Sandbox")

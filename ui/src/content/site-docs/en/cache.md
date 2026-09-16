@@ -10,7 +10,7 @@ You need:
 - a bucket in the S3 region that matches the selected Sandbox region;
 - an access key and secret with object read and write permission on that bucket.
 
-Personal accounts use [Account Preferences](/account/preferences). Organization repositories are configured by an active member at `/organizations/{login}/preferences`. Outside collaborators can see readiness status but cannot save organization Cache S3 settings.
+Personal accounts use [Account Preferences](/account/preferences). Organization repositories are configured by an active organization owner (`role: admin`) at `/organizations/{login}/preferences`. Ordinary members and outside collaborators can see readiness status but cannot read or save organization Cache S3 settings.
 
 Do not put Cache access keys in a workflow, repository secret, issue, or chat message.
 
@@ -29,7 +29,7 @@ Keep the familiar `key` / `restore-keys` inputs, but change `uses` to `qiniu/act
 
 ## 1. Save Cache S3 in the web UI
 
-There is no global Cache S3 setting. Each account or organization fills in its own values. Personal accounts open [Account Preferences](/account/preferences). Organization repositories are configured by an active member at `/organizations/{login}/preferences`.
+There is no global Cache S3 setting. Each account or organization fills in its own values. Personal accounts open [Account Preferences](/account/preferences). Organization repositories are configured by an active organization owner (`role: admin`) at `/organizations/{login}/preferences`.
 
 Select and save the Sandbox service region first, then fill in **Cache S3**:
 

@@ -64,7 +64,7 @@ https://<runnerd-host>/admin/
 
 预期结果：GitHub OAuth 完成，signed session 具有 `role: admin`。
 
-使用在某个已安装组织中具有 active membership 的用户登录，然后打开：
+使用在某个已安装组织中具有 active owner membership（`role: admin`）的用户登录，然后打开：
 
 ```text
 https://<runnerd-host>/account/preferences
@@ -72,9 +72,10 @@ https://<runnerd-host>/account/preferences
 
 预期结果：该组织出现在 Settings scope 列表中，并能打开
 `/organizations/<login>/preferences`。这可以验证 GitHub App 的
-`Members: Read-only` 已由该 installation 批准。再使用仅有 repository 权限的
-outside collaborator 重复验证：已授权仓库仍可出现在 `/repositories`，但组织
-不得出现在 Settings 中，其 scoped Sandbox mutation 和 catalog read 必须被拒绝。
+`Members: Read-only` 已由该 installation 批准。再分别使用普通组织成员和仅有
+repository 权限的 outside collaborator 重复验证：已授权仓库仍可出现在
+`/repositories`，但组织不得出现在 Settings 中；Preferences 只能返回脱敏后的
+readiness，scoped mutation、catalog read 和自定义 Runner Specs 必须被拒绝。
 
 准备至少一个次要 account，并打开 Accounts 页面：
 

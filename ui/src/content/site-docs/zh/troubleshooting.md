@@ -24,7 +24,7 @@
 
 返回 Repositories 并同步 installations。确认 App installation 包含目标仓库。如果 GitHub 已拒绝或撤销用户 token，请重新使用 GitHub 登录。
 
-对于组织 Settings，请确认 App 具有 **Organization Members: Read-only**，installation owner 已审批该权限，并且当前登录用户是 active member。Outside collaborator 不能访问组织 Settings。
+对于组织 Settings，请确认 App 具有 **Organization Members: Read-only**，installation owner 已审批该权限，并且 GitHub 返回当前登录用户的 active membership 为 `role: admin`（组织所有者）。普通组织成员和 outside collaborator 不能访问组织 Settings。
 
 ## Sandbox 创建失败
 

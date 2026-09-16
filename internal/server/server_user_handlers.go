@@ -388,16 +388,26 @@ func (s *Server) handleUserPreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	manageable, err := s.accountPreferenceScopeManageable(r.Context(), account.ID, scope)
+	if err != nil {
+		s.writeUserRepositoryAuthorizationError(w, err)
+		return
+	}
+	if !manageable {
+		response, err := s.accountReadinessResponse(scope)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
 	response, err := s.accountPreferencesResponse(scope, account.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Sandbox.Manageable, err = s.accountPreferenceScopeManageable(r.Context(), account.ID, scope)
-	if err != nil {
-		s.writeUserRepositoryAuthorizationError(w, err)
-		return
-	}
+	response.Sandbox.Manageable = true
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -751,6 +761,12 @@ func (s *Server) accountPreferencesResponse(scope accountPreferenceScope, viewer
 	return s.fillCachePreferenceResponse(response, scope)
 }
 
+func (s *Server) accountReadinessResponse(scope accountPreferenceScope) (accountPreferencesResponse, error) {
+	response := accountPreferencesResponse{}
+	response.Sandbox.Mode = sandboxPreferenceModeCustom
+	return s.fillSandboxResolvedSource(response, scope)
+}
+
 func (s *Server) accountPreferencesResponseBase(scope accountPreferenceScope, viewerAccountID int64) (accountPreferencesResponse, error) {
 	var response accountPreferencesResponse
 	preference, err := s.store.GetAccountPreference(scope.Type, scope.ID, accountPreferenceNamespaceSandbox, accountPreferenceKeySandboxService)
@@ -1062,6 +1078,9 @@ func (s *Server) githubInstallationAccountsManageable(
 	organizationIDs := make(map[int64]struct{}, len(memberships))
 	organizationLogins := make(map[string]struct{}, len(memberships))
 	for _, membership := range memberships {
+		if !strings.EqualFold(strings.TrimSpace(membership.Role), "admin") {
+			continue
+		}
 		organizationIDs[membership.OrganizationID] = struct{}{}
 		organizationLogins[strings.ToLower(strings.TrimSpace(membership.OrganizationLogin))] = struct{}{}
 	}

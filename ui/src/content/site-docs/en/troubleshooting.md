@@ -24,7 +24,7 @@ Repository visibility is not copied from an installation alone. It is the inters
 
 Return to Repositories and sync installations. Confirm that the App installation includes the repository. If GitHub rejected or revoked the user token, sign in with GitHub again.
 
-For organization Settings, confirm that the App has **Organization Members: Read-only**, the installation owner approved that permission, and the signed-in user is an active member. Outside collaborators do not receive organization Settings access.
+For organization Settings, confirm that the App has **Organization Members: Read-only**, the installation owner approved that permission, and GitHub reports the signed-in user's active membership as `role: admin` (organization owner). Ordinary members and outside collaborators do not receive organization Settings access.
 
 ## Sandbox creation fails
 

@@ -74,7 +74,7 @@ cp runnerd.yaml.example runnerd.yaml
 ```
 
 5. Open `http://<host>:25500/` and sign in with GitHub OAuth. The public product landing page links to the same-origin `/docs` guides and the protected Jobs console at `/jobs`. On the first authenticated visit to `/jobs`, a six-step product tour introduces Jobs, Repositories, Settings, and Sandbox setup; it can be replayed from the account menu.
-6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where you are an active member; outside collaborators receive a read-only readiness prompt and cannot browse that organization's Sandbox catalogs. Administrators can provide a fallback at `/admin/sandbox_service`.
+6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where GitHub reports an active owner membership (`role: admin`). Organization members, outside collaborators, and other repository-only users receive only read-only readiness and cannot browse that organization's configuration, Sandbox catalogs, or custom Runner Specs. Administrators can provide a fallback at `/admin/sandbox_service`.
 7. Confirm the five built-in managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate. The four `-large` templates are public operator-configured default Runner Specs backed by the 80-GiB physical templates; their records use the custom-spec path but are enabled for ordinary workflow use. Operators can disable managed or large default specs and adjust their concurrency and idle capacity.
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
@@ -186,7 +186,7 @@ env:
 | Repository | Administration | Read & write | Repository-level runner registration (when spec has no `runner_group`) |
 | Repository | Metadata | Read-only | Identify repositories and owners |
 | Repository | Pull requests | Read-only | Show PR titles in job groups |
-| Organization | Members | Read-only | Verify active organization membership for organization Settings and scoped Sandbox management |
+| Organization | Members | Read-only | Verify active organization owner role (`role: admin`) for organization Settings and scoped management |
 | Organization | Self-hosted runners | Read & write | Organization-level runner registration (when spec sets `runner_group`) |
 
 Set `github.app.slug` to show an "Install GitHub App" link in the user UI. Use `github.allowed_repositories` (patterns like `owner/repo` or `owner/*`) to restrict which repositories can use this runnerd instance.
@@ -289,7 +289,7 @@ availability and concurrency policy. Users manage only owned custom Specs under
 `/account/runner-specs` or
 `/organizations/{login}/runner-specs`. The authenticated `/user/runner-specs`
 API combines runnerd-managed specs, read-only platform custom specs, and custom
-specs owned by that account or manageable Organization. Platform availability
+specs owned by that account or owner-manageable Organization. Platform availability
 and concurrency remain global Admin policy. Scoped custom specs use exact
 normalized workflow labels, may override a global spec with the same label set,
 and validate new or changed template IDs only with that scope's explicit or
@@ -319,7 +319,7 @@ The built-in web UI provides:
 | `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and Runner version), typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
-| `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or manageable Organization |
+| `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or owner-manageable Organization |
 | `/admin/sandbox_service` | Sandbox service configuration |
 | `/admin/match` | Label-match preview against the current enabled Runner Specs |
 | `/admin/audit` | Audit event history |

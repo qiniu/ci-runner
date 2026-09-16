@@ -10,7 +10,7 @@
 - 位于所选 Sandbox Region 对应 S3 Region 的 Bucket；
 - 对该 Bucket 有对象读写权限的 AK / SK。
 
-个人账号在[账号 Preferences](/account/preferences) 配置。组织仓库由 active member 在 `/organizations/{login}/preferences` 配置。Outside collaborator 只能查看就绪状态，不能保存组织 Cache S3。
+个人账号在[账号 Preferences](/account/preferences) 配置。组织仓库由 active 组织所有者（`role: admin`）在 `/organizations/{login}/preferences` 配置。普通组织成员和 outside collaborator 只能查看就绪状态，不能读取或保存组织 Cache S3。
 
 不要把 Cache AK/SK 写入 workflow、仓库 Secrets、Issue 或聊天消息。
 
@@ -29,7 +29,7 @@ workflow 的 `key` / `restore-keys` 写法仍接近官方 cache，但 `uses` 必
 
 ## 1. 在网页上配置 Cache S3
 
-Cache S3 没有全局配置，每个账号或组织都要自己填。个人账号打开[账号 Preferences](/account/preferences)；组织仓库由 active member 打开 `/organizations/{login}/preferences`。
+Cache S3 没有全局配置，每个账号或组织都要自己填。个人账号打开[账号 Preferences](/account/preferences)；组织仓库由 active 组织所有者（`role: admin`）打开 `/organizations/{login}/preferences`。
 
 先选择并保存 Sandbox 服务区域，再填写 **Cache S3**：
 

@@ -26,7 +26,7 @@
 2. 只选择需要使用 Qiniu CI Runner 的仓库。
 3. 返回 Repositories，确认目标仓库已经显示。
 
-可见仓库是你的 GitHub 访问范围与 GitHub App installation 授权仓库的交集。只有 active member 才能在 Settings 中看到对应组织。Outside collaborator 可以查看已授权仓库的就绪状态，但不能管理该组织的 Sandbox 设置。
+可见仓库是你的 GitHub 访问范围与 GitHub App installation 授权仓库的交集。只有 GitHub 返回 active owner membership（`role: admin`）时，才能在 Settings 中看到对应组织。普通组织成员和 outside collaborator 可以查看已授权仓库的就绪状态，但不能读取或管理该组织的 Sandbox 设置。
 
 ## 3. 检查 Sandbox 就绪状态
 
@@ -34,7 +34,7 @@
 
 - **已就绪：**继续配置 workflow。服务可能来自当前 scope、继承的账号配置或符合条件的平台默认配置。
 - **需要设置：**选择**配置 Sandbox**，进入准确的账号或组织 Preferences 页面。
-- **只读：**请联系组织的 active member 配置 Sandbox 服务。
+- **只读：**请联系组织的 active owner 配置 Sandbox 服务。
 
 个人账号使用[账号 Preferences](/account/preferences)。选择支持的区域，并填写从[七牛云 API Key 页面](https://portal.qiniu.com/developer/user/api-key)获取的 API Key。保存后页面不会再次显示完整密钥。
 

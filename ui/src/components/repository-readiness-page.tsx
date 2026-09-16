@@ -354,7 +354,7 @@ export function RepositoryReadinessPage({
                             ? t("repositories.checkingDescription")
                             : sandboxManageable
                               ? t("repositories.setupDescription")
-                              : t("repositories.askMember")}
+                              : t("repositories.askOwner")}
                       </div>
                       {!readiness.loading && sandboxManageable ? (
                         <Button

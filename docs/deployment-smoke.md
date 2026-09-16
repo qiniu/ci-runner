@@ -65,7 +65,7 @@ https://<runnerd-host>/admin/
 
 Expected result: GitHub OAuth completes and the signed session has `role: admin`.
 
-With a signed-in user who has an active membership in an installed organization, open:
+With a signed-in user whose active membership role is `admin` (an organization owner) in an installed organization, open:
 
 ```text
 https://<runnerd-host>/account/preferences
@@ -74,9 +74,11 @@ https://<runnerd-host>/account/preferences
 Expected result: the organization appears in the Settings scope list and opens
 `/organizations/<login>/preferences`. This verifies that the GitHub App's
 `Members: Read-only` permission has been approved for the installation. Repeat
-with a repository-only collaborator: authorized repositories may remain visible
-under `/repositories`, but the organization must not appear in Settings and its
-scoped Sandbox mutations and catalog reads must be rejected.
+with an ordinary organization member and a repository-only collaborator:
+authorized repositories may remain visible under `/repositories`, but the
+organization must not appear in Settings; preferences must expose only redacted
+readiness, and scoped mutations, catalog reads, and custom Runner Specs must be
+rejected.
 
 Open the Accounts page with at least one secondary account:
 
