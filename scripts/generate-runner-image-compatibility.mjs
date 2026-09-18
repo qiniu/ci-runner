@@ -21,6 +21,14 @@ const parserPath = join(
   "lib",
   "parse-runner-image-report.awk",
 );
+const runnerPin = readFileSync(
+  join(repositoryRoot, "templates", "common", "actions-runner.env"),
+  "utf8",
+);
+const runnerVersion = runnerPin.match(/^RUNNER_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/m)?.[1];
+if (!runnerVersion) {
+  throw new Error("templates/common/actions-runner.env must pin RUNNER_VERSION");
+}
 const lock = JSON.parse(readFileSync(lockPath, "utf8"));
 const reportDirectory = process.env.RUNNER_IMAGES_REPORT_DIR;
 const workspace = mkdtempSync(join(tmpdir(), "runner-images-compatibility-"));
@@ -343,10 +351,10 @@ function contractEntries(imageKey) {
       category: "Qiniu runner contract",
       kind: "software",
       upstream_name: "preinstalled GitHub Actions runner",
-      upstream_value: "/opt/actions-runner",
+      upstream_value: `/opt/actions-runner (${runnerVersion})`,
       status: "provided",
       verification:
-        "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh",
+        `test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test "$(/opt/actions-runner/bin/Runner.Listener --version)" = ${runnerVersion}`,
     },
     {
       category: "Qiniu runner contract",

@@ -75,7 +75,7 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. Open `http://<host>:25500/` and sign in with GitHub OAuth. The public product landing page links to the same-origin `/docs` guides and the protected Jobs console at `/jobs`. On the first authenticated visit to `/jobs`, a six-step product tour introduces Jobs, Repositories, Settings, and Sandbox setup; it can be replayed from the account menu.
 6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where GitHub reports an active owner membership (`role: admin`). Organization members, outside collaborators, and other repository-only users receive only read-only readiness and cannot browse that organization's configuration, Sandbox catalogs, or custom Runner Specs. Administrators can provide a fallback at `/admin/sandbox_service`.
-7. Confirm the five built-in managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate. The four `-large` templates are public operator-configured default Runner Specs backed by the 80-GiB physical templates; their records use the custom-spec path but are enabled for ordinary workflow use. Operators can disable managed or large default specs and adjust their concurrency and idle capacity.
+7. Confirm the five built-in managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate. The four `-large` variants are documented operator-configured Runner Specs that use the custom-spec path; enable them for ordinary workflows only after their physical templates requesting 80 GiB of build free space pass the regional release gate. Operators can adjust the enabled state, concurrency, and idle capacity.
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
 
@@ -377,14 +377,14 @@ loading.
 
 | Template | Description |
 | --- | --- |
-| `templates/github-runner-ubuntu-slim` | Maintained Ubuntu Slim x64 runner template |
-| `templates/github-runner-ubuntu-22.04` | Maintained Ubuntu 22.04 x64 runner template |
-| `templates/github-runner-ubuntu-24.04` | Maintained Ubuntu 24.04 x64 runner template |
-| `templates/github-runner-ubuntu-26.04` | Preview Ubuntu 26.04 x64 runner template |
-| `templates/github-runner-ubuntu-slim-large` | Ubuntu Slim x64 runner template with an 80-GiB provider disk |
-| `templates/github-runner-ubuntu-22.04-large` | Ubuntu 22.04 x64 runner template with an 80-GiB provider disk |
-| `templates/github-runner-ubuntu-24.04-large` | Ubuntu 24.04 x64 runner template with an 80-GiB provider disk |
-| `templates/github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 runner template with an 80-GiB provider disk |
+| `templates/github-runner-ubuntu-slim` | Ubuntu Slim x64 runner template requesting 20 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-22.04` | Ubuntu 22.04 x64 runner template requesting 20 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-24.04` | Ubuntu 24.04 x64 runner template requesting 20 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-26.04` | Preview Ubuntu 26.04 x64 runner template requesting 20 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-slim-large` | Ubuntu Slim x64 runner template requesting 80 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-22.04-large` | Ubuntu 22.04 x64 runner template requesting 80 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-24.04-large` | Ubuntu 24.04 x64 runner template requesting 80 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 runner template requesting 80 GiB of build free space at creation |
 
 The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
 `github-runner-ubuntu-24-04-large` physical template; it does not add another
@@ -394,7 +394,21 @@ Run `task template-check-all`, then use the eight
 `task template-build-ubuntu-*` targets for real qshell Sandbox builds. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and
-smoke commands.
+smoke commands. Shared setup code and the Actions Runner version pin live in
+`templates/common/`. Build tasks verify the official Runner archive locally,
+upload it as small COPY chunks, and verify it again before installation.
+Template builds require qshell 2.19.13 or newer. Standard configs request
+`disk_size_mb = 20480`, while large configs request `81920` for new templates.
+These values target free space during build provisioning; the API reports total
+rootfs size, which can be larger. Qshell ignores the request on same-name
+rebuilds. An existing template whose total disk is below the request or whose
+runtime free-space smoke fails needs a planned physical-template migration;
+a larger total is not a mismatch by itself.
+Release smoke checks at least 19 GiB or 79 GiB of available runtime rootfs
+space for standard or large templates, respectively, allowing 1 GiB for
+startup writes. This does not prove the original build request.
+The 2.337.0 candidate passed an earlier development Sandbox build and smoke;
+the new runtime free-space check and full two-region release gate remain open.
 
 ## Documentation
 

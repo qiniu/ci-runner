@@ -1,8 +1,8 @@
 # GitHub runner Ubuntu 26.04 template
 
-This preview 8-vCPU, 8192-MiB Linux x86_64 template uses the pinned
-Canonical-published Ubuntu 26.04 OCI index in Amazon ECR Public and the
-disk-bounded Ubuntu Slim-compatible core from
+This preview 8-vCPU, 8192-MiB Linux x86_64 template requests 20 GiB of build
+free space when created. It uses the pinned Canonical-published Ubuntu 26.04 OCI index in
+Amazon ECR Public and the disk-bounded Ubuntu Slim-compatible core from
 `actions/runner-images@e986db797519f06a2e5e53701a715cfa4c1545e8`.
 Apache and the Podman/Buildah/Skopeo container tools are explicit extensions.
 

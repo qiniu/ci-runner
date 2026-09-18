@@ -868,9 +868,9 @@
           "category": "Qiniu runner contract",
           "kind": "software",
           "upstream_name": "preinstalled GitHub Actions runner",
-          "upstream_value": "/opt/actions-runner (2.336.0)",
+          "upstream_value": "/opt/actions-runner (2.337.0)",
           "status": "provided",
-          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.336.0"
+          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.337.0"
         },
         {
           "category": "Qiniu runner contract",
@@ -3281,9 +3281,9 @@
           "category": "Qiniu runner contract",
           "kind": "software",
           "upstream_name": "preinstalled GitHub Actions runner",
-          "upstream_value": "/opt/actions-runner (2.336.0)",
+          "upstream_value": "/opt/actions-runner (2.337.0)",
           "status": "provided",
-          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.336.0"
+          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.337.0"
         },
         {
           "category": "Qiniu runner contract",
@@ -5297,9 +5297,9 @@
           "category": "Qiniu runner contract",
           "kind": "software",
           "upstream_name": "preinstalled GitHub Actions runner",
-          "upstream_value": "/opt/actions-runner (2.336.0)",
+          "upstream_value": "/opt/actions-runner (2.337.0)",
           "status": "provided",
-          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.336.0"
+          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.337.0"
         },
         {
           "category": "Qiniu runner contract",
@@ -7012,9 +7012,9 @@
           "category": "Qiniu runner contract",
           "kind": "software",
           "upstream_name": "preinstalled GitHub Actions runner",
-          "upstream_value": "/opt/actions-runner (2.336.0)",
+          "upstream_value": "/opt/actions-runner (2.337.0)",
           "status": "provided",
-          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.336.0"
+          "verification": "test -x /opt/actions-runner/config.sh && test -x /opt/actions-runner/run.sh && test \"$(/opt/actions-runner/bin/Runner.Listener --version)\" = 2.337.0"
         },
         {
           "category": "Qiniu runner contract",

@@ -16,7 +16,8 @@ Use this checklist before treating a runnerd deployment as ready for real GitHub
 - All four standard public Qiniu templates built, published, catalog-checked,
   and smoke-tested in both supported regions according to
   [Public Runner Templates](default-runner-templates.md). The four large
-  templates must pass the same gate before their development specs are used;
+  templates must pass the same gate, including the runtime rootfs free-space
+  floor, before their development specs are used;
   do not deploy enabled managed defaults before the applicable gate passes.
 - An admin account bootstrapped by running `runnerd --bootstrap-admin github:<github-user-id>` (sets the admin and exits; run before starting the service).
 

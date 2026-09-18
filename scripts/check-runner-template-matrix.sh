@@ -4,7 +4,8 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repository_root"
 templates_readme="${RUNNER_TEMPLATES_README:-templates/README.md}"
-minimum_runner_version="${MINIMUM_ACTIONS_RUNNER_VERSION:-2.336.0}"
+minimum_runner_version="${MINIMUM_ACTIONS_RUNNER_VERSION:-2.337.0}"
+runner_env="templates/common/actions-runner.env"
 
 fail() {
   echo "runner template matrix: $*" >&2
@@ -26,6 +27,22 @@ version_at_least() {
 }
 
 test -f "$templates_readme" || fail "missing templates README $templates_readme"
+test -f "$runner_env" || fail "missing shared Actions Runner pin $runner_env"
+runner_version="$(sed -n 's/^RUNNER_VERSION=//p' "$runner_env")"
+runner_archive_sha256="$(sed -n 's/^RUNNER_ARCHIVE_SHA256=//p' "$runner_env")"
+runner_archive_size="$(sed -n 's/^RUNNER_ARCHIVE_SIZE=//p' "$runner_env")"
+[[ "$runner_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid shared Actions Runner version"
+[[ "$runner_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || fail "invalid shared Actions Runner SHA-256"
+[[ "$runner_archive_size" =~ ^[0-9]+$ ]] && [ "$runner_archive_size" -gt 0 ] ||
+  fail "invalid shared Actions Runner archive size"
+[ "$runner_archive_size" -le $((16 * 16777216)) ] ||
+  fail "Actions Runner archive exceeds the sixteen COPY chunks"
+version_at_least "$runner_version" "$minimum_runner_version" ||
+  fail "Actions Runner $runner_version is below required $minimum_runner_version"
+for shared_script in setup-common.sh ensure-docker download-checked-range assemble-runner-archive curl; do
+  test -f "templates/common/scripts/$shared_script" || fail "missing common script $shared_script"
+  bash -n "templates/common/scripts/$shared_script" || fail "invalid common script $shared_script"
+done
 
 expected_name() {
   case "$1" in
@@ -95,10 +112,32 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
     test -f "$directory/$required_file" || fail "missing $directory/$required_file"
   done
 
-  runner_version="$(awk -F= '$1 == "ARG RUNNER_VERSION" {print $2; exit}' "$directory/Dockerfile")"
-  test -n "$runner_version" || fail "$image_key does not pin RUNNER_VERSION"
-  version_at_least "$runner_version" "$minimum_runner_version" ||
-    fail "$image_key Actions Runner $runner_version is below required $minimum_runner_version"
+  ! grep -Eq '^ARG RUNNER_(VERSION|ARCHIVE_SHA256|ARCHIVE_SIZE)=' "$directory/Dockerfile" ||
+    fail "$image_key duplicates the shared Actions Runner pin"
+  grep -Fq 'COPY common/actions-runner.env /usr/local/share/qiniu-sandbox-runner-template/actions-runner.env' "$directory/Dockerfile" ||
+    fail "$image_key must copy the shared Actions Runner pin"
+  grep -Fq 'COPY common/scripts/assemble-runner-archive /usr/local/share/qiniu-sandbox-runner-template/assemble-runner-archive' "$directory/Dockerfile" ||
+    fail "$image_key must copy the shared Runner archive assembler"
+  grep -Fq 'COPY common/scripts/setup-common.sh /usr/local/share/qiniu-sandbox-runner-template/setup-common.sh' "$directory/Dockerfile" ||
+    fail "$image_key must copy common setup functions"
+  grep -Fq 'source /usr/local/share/qiniu-sandbox-runner-template/setup-common.sh' "$directory/scripts/setup-template.sh" ||
+    fail "$image_key must source common setup functions"
+  bash -n "$directory/scripts/setup-template.sh" || fail "invalid setup script for $image_key"
+  while IFS= read -r shared_function; do
+    ! grep -Fq "$shared_function() {" "$directory/scripts/setup-template.sh" ||
+      fail "$image_key duplicates common function $shared_function"
+  done < <(sed -nE 's/^([a-z_][a-z0-9_]*)\(\) \{/\1/p' templates/common/scripts/setup-common.sh)
+  for helper in ensure-docker download-checked-range curl; do
+    test -L "$directory/scripts/$helper" || fail "$image_key $helper must link to common"
+    test "$(readlink "$directory/scripts/$helper")" = "../../common/scripts/$helper" ||
+      fail "$image_key $helper has an unexpected common link"
+    grep -Fq "COPY common/scripts/$helper " "$directory/Dockerfile" ||
+      fail "$image_key must copy common $helper"
+  done
+  grep -Fq "COPY $base_dir_name/scripts/setup-template.sh " "$directory/Dockerfile" ||
+    fail "$image_key must copy its variant setup script from the shared context"
+  grep -Fq 'path = ".."' "$directory/qshell.sandbox.toml" ||
+    fail "$image_key build context must include templates/common"
 
   template_name="$(
     awk -F= '/^[[:space:]]*name[[:space:]]*=/ {
@@ -120,6 +159,14 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   memory_mb="$(awk -F= '/^[[:space:]]*memory_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$directory/qshell.sandbox.toml")"
   test "$cpu_count" = 8 || fail "$image_key cpu_count is $cpu_count, want 8"
   test "$memory_mb" = 8192 || fail "$image_key memory_mb is $memory_mb, want 8192"
+  disk_size_mb="$(awk -F= '/^[[:space:]]*disk_size_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$directory/qshell.sandbox.toml")"
+  if [[ "$image_key" == *-large ]]; then
+    test "$disk_size_mb" = 81920 ||
+      fail "$image_key disk_size_mb is $disk_size_mb, want 81920"
+  else
+    test "$disk_size_mb" = 20480 ||
+      fail "$image_key disk_size_mb is $disk_size_mb, want 20480"
+  fi
 
   base_reference="$(
     awk '
@@ -164,7 +211,24 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   cloudflare_secondary_line="$(grep -nF "'nameserver 1.0.0.1'" "$directory/Dockerfile" | cut -d: -f1 || true)"
   resolv_conf_line="$(grep -nF '>/etc/resolv.conf' "$directory/Dockerfile" | cut -d: -f1 || true)"
   runtime_phase_line="$(grep -nF "RUNNER_TEMPLATE_PHASE=runtime" "$directory/Dockerfile" | cut -d: -f1)"
+  toolchain_phase_line="$(grep -nF "RUNNER_TEMPLATE_PHASE=toolchain" "$directory/Dockerfile" | cut -d: -f1)"
+  runner_pin_line="$(grep -nF 'COPY common/actions-runner.env ' "$directory/Dockerfile" | cut -d: -f1)"
+  runner_assembler_copy_line="$(grep -nF 'COPY common/scripts/assemble-runner-archive ' "$directory/Dockerfile" | cut -d: -f1)"
+  previous_runner_line="$runner_assembler_copy_line"
+  for ((index = 0; index < 16; index++)); do
+    printf -v part_name 'part-%03d' "$index"
+    part_line="$(grep -nFx "COPY common/.build/actions-runner/$part_name /opt/qiniu-runner-build-cache/actions-runner/$part_name" "$directory/Dockerfile" | cut -d: -f1)"
+    test -n "$part_line" && test "$previous_runner_line" -lt "$part_line" ||
+      fail "$image_key must COPY checked Runner archive chunk $part_name in order"
+    previous_runner_line="$part_line"
+  done
+  runner_assemble_line="$(grep -nFx 'RUN bash /usr/local/share/qiniu-sandbox-runner-template/assemble-runner-archive && \' "$directory/Dockerfile" | cut -d: -f1)"
   user_line="$(grep -nE '^USER[[:space:]]+' "$directory/Dockerfile" | cut -d: -f1)"
+  test "$toolchain_phase_line" -lt "$runner_pin_line" &&
+    test "$runner_pin_line" -lt "$runner_assembler_copy_line" &&
+    test "$previous_runner_line" -lt "$runner_assemble_line" &&
+    test "$runtime_phase_line" -eq "$((runner_assemble_line + 1))" ||
+    fail "$image_key must assemble the checked Runner archive in the runtime RUN after provisioning"
   test -n "$cloudflare_primary_line" && test -n "$cloudflare_secondary_line" && test -n "$resolv_conf_line" ||
     fail "$image_key must configure Cloudflare nameservers 1.1.1.1 and 1.0.0.1"
   test "$runtime_phase_line" -lt "$cloudflare_primary_line" &&
@@ -175,7 +239,8 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   if grep -Eq "['\"]nameserver[[:space:]]+8\\.8\\.(8\\.8|4\\.4)['\"]" "$directory/Dockerfile"; then
     fail "$image_key must not retain Google Public DNS in the final template configuration"
   fi
-  if grep -Fq 'Acquire::https::Verify-Peer=false' "$directory/scripts/setup-template.sh"; then
+  if grep -Fq 'Acquire::https::Verify-Peer=false' "$directory/scripts/setup-template.sh" ||
+    grep -Fq 'Acquire::https::Verify-Peer=false' templates/common/scripts/setup-common.sh; then
     fail "$image_key setup must not disable apt HTTPS peer verification"
   fi
   if [ "$base_key" != ubuntu-22.04 ]; then
@@ -240,7 +305,7 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
         fail "$image_key $shared_entry must point to $base_dir_name/$shared_entry"
     done
     expected_dockerfile="../$base_dir_name/Dockerfile"
-    expected_path="../$base_dir_name"
+    expected_path=".."
     grep -Fq "dockerfile = \"$expected_dockerfile\"" "$directory/qshell.sandbox.toml" ||
       fail "$image_key qshell config must use the in-context Dockerfile $expected_dockerfile"
     grep -Fq "path = \"$expected_path\"" "$directory/qshell.sandbox.toml" ||
@@ -267,7 +332,7 @@ readme_catalog="$(
       print $2 "\t" $3 "\t" $4 "\t" $5
     }' "$templates_readme"
 )"
-expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large\tUbuntu Slim x64 (80 GiB)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large\tUbuntu 22.04 x64 (80 GiB)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large\tUbuntu 24.04 x64 (80 GiB)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large\tUbuntu 26.04 x64 (80 GiB)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
+expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large\tUbuntu Slim x64 (80 GiB build free-space request)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large\tUbuntu 22.04 x64 (80 GiB build free-space request)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large\tUbuntu 24.04 x64 (80 GiB build free-space request)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large\tUbuntu 26.04 x64 (80 GiB build free-space request)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
 test "$readme_catalog" = "$expected_catalog" ||
   fail "templates/README.md support matrix does not match the nine public logical rows"
 

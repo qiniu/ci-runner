@@ -66,6 +66,19 @@ for template_name in "${template_names[@]}"; do
     echo "default template $template_name is not public, runnable, and backed by a nonempty ID" >&2
     exit 1
   fi
+  expected_disk_size=20480
+  if [[ "$template_name" == *-large ]]; then
+    expected_disk_size=81920
+  fi
+  if ! jq -e --argjson expected "$expected_disk_size" '.[0].diskSizeMB | type == "number" and . >= $expected' <<<"$matches" >/dev/null; then
+    actual_disk_size="$(jq -r '.[0].diskSizeMB // "missing"' <<<"$matches")"
+    if ! jq -e '.[0].diskSizeMB | type == "number"' <<<"$matches" >/dev/null; then
+      echo "default template $template_name has invalid total disk size $actual_disk_size MiB" >&2
+    else
+      echo "default template $template_name total disk size $actual_disk_size MiB is below the requested $expected_disk_size MiB of build free space" >&2
+    fi
+    exit 1
+  fi
   jq -r --arg name "$template_name" '
     .[0] |
     "\($name)\t\(.templateID)\t\(.buildStatus)"

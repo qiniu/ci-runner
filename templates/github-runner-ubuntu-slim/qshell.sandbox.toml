@@ -1,7 +1,8 @@
 # Stable public Ubuntu Slim runner template.
 name = "github-runner-ubuntu-slim"
 dockerfile = "./Dockerfile"
-path = "."
+path = ".."
 cpu_count = 8
 memory_mb = 8192
+disk_size_mb = 20480
 no_cache = false

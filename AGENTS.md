@@ -79,7 +79,26 @@ Use `task smee` for standalone GitHub webhook forwarding. It reads `.smee-url` a
 
 Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`.
 
-Public runner templates are built with `qiniu/qshell` 2.19.10 or newer.
+Public runner templates are built with `qiniu/qshell` 2.19.13 or newer.
+All eight public builds use `templates/` as their Docker context. Shared setup
+functions, helper scripts, and the sole Actions Runner version/SHA-256/size pin
+live in `templates/common/`; retain per-Ubuntu setup differences and keep the
+Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
+Keep the host-side archive checksum, sixteen small COPY chunks, and remote full
+checksum in the same Docker `RUN` as runtime installation; qshell does not
+restore cached `/tmp` outputs. Keep every qshell `path = ".."` and the `-large`
+source links aligned. Keep `disk_size_mb = 20480` in the four standard TOML
+files and `81920` in the four `-large` files. These are build free-space
+requests, while the template API reports total rootfs size; do not compare
+them for equality. Qshell 2.19.13 applies the request only when creating a new
+name. An existing same-name template whose total disk is below the request or
+whose runtime free-space smoke fails needs a planned physical-template migration.
+Release smoke also checks at least
+19 GiB or 79 GiB of runtime rootfs free space for standard and `-large`
+templates, leaving 1 GiB for writes after provisioning. Build tasks
+stage ignored archive chunks under
+`templates/common/.build/`; reuse verified chunks without replacing them so
+parallel qshell uploads read stable files. Never commit the archive or chunks.
 `task template-build-ubuntu-*` performs the real remote template build and
 requires `QINIU_SANDBOX_API_URL` plus `QINIU_API_KEY`. A local Docker build is
 diagnostic only and does not prove that a Sandbox template exists or is

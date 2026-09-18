@@ -4,8 +4,6 @@ FROM --platform=$BASE_PLATFORM public.ecr.aws/ubuntu/ubuntu:22.04@sha256:0bc1624
 
 ARG RUNNER_IMAGES_REV=e986db797519f06a2e5e53701a715cfa4c1545e8
 ARG RUNNER_IMAGES_ARCHIVE_SHA256=e87ede55bbdee21ee92113124a598e64d23a21e322f65f45e3a874c563f9f4cb
-ARG RUNNER_VERSION=2.336.0
-ARG RUNNER_ARCHIVE_SHA256=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
 ARG AZCOPY_VERSION=10.32.6
 ARG AZCOPY_DEB_SHA256=1a5078a8260ba7524a4400c602519d36905e592cd87a1db91a30af0da528fc86
 ARG AZURE_CLI_VERSION=2.88.0
@@ -47,11 +45,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-COPY scripts/setup-template.sh /usr/local/share/qiniu-sandbox-runner-template/setup-template.sh
-COPY scripts/ensure-docker /usr/local/share/qiniu-sandbox-runner-template/ensure-docker
-COPY scripts/download-checked-range /usr/local/share/qiniu-sandbox-runner-template/download-checked-range
-COPY scripts/curl /usr/local/share/qiniu-sandbox-runner-template/curl
-COPY scripts/wget /usr/local/share/qiniu-sandbox-runner-template/wget
+COPY common/scripts/setup-common.sh /usr/local/share/qiniu-sandbox-runner-template/setup-common.sh
+COPY github-runner-ubuntu-22.04/scripts/setup-template.sh /usr/local/share/qiniu-sandbox-runner-template/setup-template.sh
+COPY common/scripts/ensure-docker /usr/local/share/qiniu-sandbox-runner-template/ensure-docker
+COPY common/scripts/download-checked-range /usr/local/share/qiniu-sandbox-runner-template/download-checked-range
+COPY common/scripts/curl /usr/local/share/qiniu-sandbox-runner-template/curl
+COPY github-runner-ubuntu-22.04/scripts/wget /usr/local/share/qiniu-sandbox-runner-template/wget
 
 RUN TEMPLATE_FLAVOR=versioned RUNNER_TEMPLATE_PHASE=bootstrap bash /usr/local/share/qiniu-sandbox-runner-template/setup-template.sh
 RUN install -d -m 0755 /opt/qiniu-runner-build-cache
@@ -86,9 +85,29 @@ RUN set -eux; \
     rm -rf /home/runner/.nvm; \
     cp -a /etc/skel/.nvm /home/runner/.nvm; \
     chown -R runner:runner /home/runner/.nvm
-RUN TEMPLATE_FLAVOR=versioned RUNNER_TEMPLATE_PHASE=runtime bash /usr/local/share/qiniu-sandbox-runner-template/setup-template.sh
+COPY common/actions-runner.env /usr/local/share/qiniu-sandbox-runner-template/actions-runner.env
+COPY common/scripts/assemble-runner-archive /usr/local/share/qiniu-sandbox-runner-template/assemble-runner-archive
+RUN install -d -m 0755 /opt/qiniu-runner-build-cache/actions-runner
+COPY common/.build/actions-runner/part-000 /opt/qiniu-runner-build-cache/actions-runner/part-000
+COPY common/.build/actions-runner/part-001 /opt/qiniu-runner-build-cache/actions-runner/part-001
+COPY common/.build/actions-runner/part-002 /opt/qiniu-runner-build-cache/actions-runner/part-002
+COPY common/.build/actions-runner/part-003 /opt/qiniu-runner-build-cache/actions-runner/part-003
+COPY common/.build/actions-runner/part-004 /opt/qiniu-runner-build-cache/actions-runner/part-004
+COPY common/.build/actions-runner/part-005 /opt/qiniu-runner-build-cache/actions-runner/part-005
+COPY common/.build/actions-runner/part-006 /opt/qiniu-runner-build-cache/actions-runner/part-006
+COPY common/.build/actions-runner/part-007 /opt/qiniu-runner-build-cache/actions-runner/part-007
+COPY common/.build/actions-runner/part-008 /opt/qiniu-runner-build-cache/actions-runner/part-008
+COPY common/.build/actions-runner/part-009 /opt/qiniu-runner-build-cache/actions-runner/part-009
+COPY common/.build/actions-runner/part-010 /opt/qiniu-runner-build-cache/actions-runner/part-010
+COPY common/.build/actions-runner/part-011 /opt/qiniu-runner-build-cache/actions-runner/part-011
+COPY common/.build/actions-runner/part-012 /opt/qiniu-runner-build-cache/actions-runner/part-012
+COPY common/.build/actions-runner/part-013 /opt/qiniu-runner-build-cache/actions-runner/part-013
+COPY common/.build/actions-runner/part-014 /opt/qiniu-runner-build-cache/actions-runner/part-014
+COPY common/.build/actions-runner/part-015 /opt/qiniu-runner-build-cache/actions-runner/part-015
+RUN bash /usr/local/share/qiniu-sandbox-runner-template/assemble-runner-archive && \
+    TEMPLATE_FLAVOR=versioned RUNNER_TEMPLATE_PHASE=runtime bash /usr/local/share/qiniu-sandbox-runner-template/setup-template.sh
 
-ARG TEMPLATE_VERSION=20260817.1
+ARG TEMPLATE_VERSION=20260917.3
 ENV ImageVersion=$TEMPLATE_VERSION \
     IMAGE_VERSION=$TEMPLATE_VERSION
 

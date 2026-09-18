@@ -144,6 +144,19 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 - GoReleaser config: `task release-check`.
 - Snapshot release behavior: `task release-snapshot`.
 - Template changes may require the relevant `template-*` task.
+- `task template-check-all` validates all eight public template inputs and runs
+  an offline archive split/reassembly, checksum, reuse, and concurrent preparation
+  test. Real template proof
+  still requires qshell `Status: ready` and the regional `template-smoke` gates.
+- Template builds require qshell 2.19.13 or newer. Standard and large TOML files
+  request 20,480 and 81,920 MiB of free space during new-template build
+  provisioning; qshell ignores the setting on same-name rebuilds. The API
+  reports total rootfs size, so build/publish/catalog checks use the request
+  only as a lower bound, never as an exact expected total. An insufficient
+  existing template needs a planned physical-template migration. Regional
+  release smoke checks runtime rootfs free space of at least 19 GiB for
+  standard templates and 79 GiB for `-large` templates, allowing 1 GiB for
+  startup writes; it remains required before promotion.
 
 ## Deployment Smoke
 

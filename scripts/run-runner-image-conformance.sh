@@ -53,13 +53,15 @@ case "$executor" in
   docker | sandbox) ;;
   *) usage ;;
 esac
-case "$image_key" in
-  ubuntu-slim-large) manifest_image_key=ubuntu-slim ;;
-  ubuntu-22.04-large) manifest_image_key=ubuntu-22.04 ;;
-  ubuntu-24.04-large) manifest_image_key=ubuntu-24.04 ;;
-  ubuntu-26.04-large) manifest_image_key=ubuntu-26.04 ;;
-  *) manifest_image_key="$image_key" ;;
-esac
+manifest_image_key="$image_key"
+if ! jq -e --arg image "$image_key" '.images[$image].entries | type == "array"' "$manifest_file" >/dev/null 2>&1; then
+  case "$image_key" in
+    ubuntu-slim-large) manifest_image_key=ubuntu-slim ;;
+    ubuntu-22.04-large) manifest_image_key=ubuntu-22.04 ;;
+    ubuntu-24.04-large) manifest_image_key=ubuntu-24.04 ;;
+    ubuntu-26.04-large) manifest_image_key=ubuntu-26.04 ;;
+  esac
+fi
 if ! [[ "$sandbox_exec_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNNER_CONFORMANCE_COMMAND_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 64

@@ -15,8 +15,8 @@
 - 目标 account/organization Preferences 已配置 Sandbox service API URL 和 API key，或 `/admin/sandbox_service` 已启用 admin fallback。
 - 已按[公共 Runner 模板](default-runner-templates.md)完成 4 个标准公共 Qiniu 模板的
   双区域构建、发布、catalog 检查和 smoke 验证。4 个 large 模板也必须通过相同门禁
-  后才能使用其 development specs；适用的模板门禁通过前，不要部署默认启用的
-  managed specs。
+  （包括运行时根文件系统可用空间下界）后才能使用其 development specs；适用的
+  模板门禁通过前，不要部署默认启用的 managed specs。
 - 已通过 `runnerd --bootstrap-admin github:<github-user-id>` 引导 admin account（该命令设置 admin 后直接退出，需在启动服务前执行）。
 
 不要在本文档中写入真实 secret，也不要提交部署本地文件，例如 `runnerd.local.yaml`、`.smee-url`、sqlite databases、private keys 或 cookie jars。

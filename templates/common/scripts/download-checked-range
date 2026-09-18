@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${1:?download URL is required}"
+destination="${2:?destination path is required}"
+start="${3:?range start is required}"
+end="${4:?range end is required}"
+attempts="${RUNNER_TEMPLATE_DOWNLOAD_ATTEMPTS:-20}"
+retry_delay="${RUNNER_TEMPLATE_DOWNLOAD_RETRY_DELAY:-2}"
+retry_max_delay="${RUNNER_TEMPLATE_DOWNLOAD_RETRY_MAX_DELAY:-30}"
+
+if [[ ! "$start" =~ ^[0-9]+$ ]] || [[ ! "$end" =~ ^[0-9]+$ ]] || [ "$end" -lt "$start" ]; then
+  echo "invalid byte range: ${start}-${end}" >&2
+  exit 64
+fi
+
+expected_size=$((end - start + 1))
+partial="${destination}.partial"
+install -d -m 0755 "$(dirname "$destination")"
+
+file_size() {
+  if [ -f "$1" ]; then
+    wc -c <"$1" | tr -d '[:space:]'
+  else
+    echo 0
+  fi
+}
+
+if [ "$(file_size "$destination")" -eq "$expected_size" ]; then
+  exit 0
+fi
+rm -f "$destination"
+touch "$partial"
+
+for ((attempt = 1; attempt <= attempts; attempt++)); do
+  current_size="$(file_size "$partial")"
+  if [ "$current_size" -gt "$expected_size" ]; then
+    echo "range server returned too many bytes; restarting chunk" >&2
+    rm -f "$partial"
+    touch "$partial"
+    current_size=0
+  fi
+  if [ "$current_size" -eq "$expected_size" ]; then
+    mv "$partial" "$destination"
+    exit 0
+  fi
+
+  request_start=$((start + current_size))
+  /usr/bin/curl --http1.1 -fsSL --connect-timeout 15 --max-time 1200 \
+    --speed-limit 1024 --speed-time 60 \
+    --range "${request_start}-${end}" "$url" >>"$partial" || true
+
+  current_size="$(file_size "$partial")"
+  if [ "$current_size" -eq "$expected_size" ]; then
+    mv "$partial" "$destination"
+    exit 0
+  fi
+  if [ "$current_size" -gt "$expected_size" ]; then
+    echo "range server returned too many bytes; restarting chunk" >&2
+    rm -f "$partial"
+    touch "$partial"
+  fi
+  if [ "$attempt" -lt "$attempts" ]; then
+    echo "range download interrupted; resuming (${attempt}/${attempts})" >&2
+    if [ "$retry_delay" -gt 0 ]; then
+      sleep "$retry_delay"
+      if [ "$retry_delay" -lt "$retry_max_delay" ]; then
+        retry_delay=$((retry_delay * 2))
+        if [ "$retry_delay" -gt "$retry_max_delay" ]; then
+          retry_delay="$retry_max_delay"
+        fi
+      fi
+    fi
+  fi
+done
+
+echo "range download failed after ${attempts} attempts: ${url} bytes ${start}-${end}" >&2
+exit 1

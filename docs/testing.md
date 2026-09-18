@@ -658,6 +658,11 @@ Common issues:
   scoped Sandbox endpoint exposes exactly one public default template with the
   managed stable name in `ready` or `uploaded` state.
 - sandbox creation fails: confirm the account/organization Preferences or enabled admin default has a complete Sandbox service config matching the template and local environment; the Runner detail shows which source was selected.
+- `template-smoke` reports insufficient runtime rootfs free space: verify the
+  fresh Sandbox has at least 19 GiB for a standard template or 79 GiB for a
+  `-large` template. The catalog's total `diskSizeMB` cannot establish this;
+  follow the [physical-template migration steps](default-runner-templates.md)
+  when an existing name cannot meet the runtime floor.
 - registration token fails: check the [GitHub App permission table](../README.md#required-permissions). Specs without `runner_group` require repository `Administration`; specs with `runner_group` require organization `Self-hosted runners`.
 
 ## 9. How To Read GitHub Actions Logs

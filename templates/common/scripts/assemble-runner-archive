@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pin_file="${1:-/usr/local/share/qiniu-sandbox-runner-template/actions-runner.env}"
+chunks_dir="${2:-/opt/qiniu-runner-build-cache/actions-runner}"
+output="${3:-/tmp/actions-runner.tar.gz}"
+chunk_size="${RUNNER_ARCHIVE_CHUNK_SIZE:-16777216}"
+chunk_slots=16
+
+# shellcheck source=/dev/null
+source "$pin_file"
+: "${RUNNER_ARCHIVE_SHA256:?RUNNER_ARCHIVE_SHA256 is required}"
+: "${RUNNER_ARCHIVE_SIZE:?RUNNER_ARCHIVE_SIZE is required}"
+[[ "$RUNNER_ARCHIVE_SIZE" =~ ^[0-9]+$ ]] && [ "$RUNNER_ARCHIVE_SIZE" -gt 0 ] || {
+  echo 'invalid Runner archive size' >&2
+  exit 64
+}
+[[ "$chunk_size" =~ ^[0-9]+$ ]] && [ "$chunk_size" -gt 0 ] || {
+  echo 'invalid Runner archive chunk size' >&2
+  exit 64
+}
+[ "$RUNNER_ARCHIVE_SIZE" -le $((chunk_slots * chunk_size)) ] || {
+  echo 'Runner archive exceeds the available COPY chunks' >&2
+  exit 64
+}
+
+install -d -m 0755 "$(dirname "$output")"
+partial="${output}.partial"
+: >"$partial"
+for ((index = 0; index < chunk_slots; index++)); do
+  printf -v part '%s/part-%03d' "$chunks_dir" "$index"
+  test -f "$part" || {
+    echo "missing Runner archive chunk $index" >&2
+    exit 1
+  }
+  expected_size=$((RUNNER_ARCHIVE_SIZE - index * chunk_size))
+  if [ "$expected_size" -lt 0 ]; then
+    expected_size=0
+  elif [ "$expected_size" -gt "$chunk_size" ]; then
+    expected_size="$chunk_size"
+  fi
+  actual_size="$(wc -c <"$part" | tr -d '[:space:]')"
+  test "$actual_size" -eq "$expected_size" || {
+    echo "Runner archive chunk $index has $actual_size bytes, want $expected_size" >&2
+    exit 1
+  }
+  cat "$part" >>"$partial"
+done
+printf '%s  %s\n' "$RUNNER_ARCHIVE_SHA256" "$partial" | sha256sum --check -
+mv "$partial" "$output"
+find "$chunks_dir" -type f -name 'part-*' -delete
+rmdir "$chunks_dir"

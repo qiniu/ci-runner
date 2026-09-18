@@ -4,6 +4,7 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lock_file="${RUNNER_IMAGES_LOCK:-$repository_root/templates/runner-images-upstream.lock.json}"
 manifest_file="${RUNNER_IMAGES_MANIFEST:-$repository_root/templates/runner-images-compatibility.json}"
+runner_env="$repository_root/templates/common/actions-runner.env"
 parser="$repository_root/scripts/lib/parse-runner-image-report.awk"
 
 fail() {
@@ -14,7 +15,10 @@ fail() {
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 test -f "$lock_file" || fail "missing lock file $lock_file"
 test -f "$manifest_file" || fail "missing compatibility manifest $manifest_file"
+test -f "$runner_env" || fail "missing shared Actions Runner pin $runner_env"
 test -f "$parser" || fail "missing report parser $parser"
+runner_version="$(sed -n 's/^RUNNER_VERSION=//p' "$runner_env")"
+test -n "$runner_version" || fail "shared Actions Runner version is empty"
 
 repository="$(jq -er '.repository' "$lock_file")"
 commit="$(jq -er '.commit' "$lock_file")"
@@ -107,5 +111,15 @@ bad_exclusion="$(
 )"
 test -z "$bad_exclusion" ||
   fail "excluded entries require a concrete Sandbox-specific reason: $bad_exclusion"
+
+for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04; do
+  jq -e --arg image "$image_key" --arg version "$runner_version" '
+    [.images[$image].entries[]? | select(.upstream_name == "preinstalled GitHub Actions runner")] as $matches |
+    ($matches | length) == 1 and
+    $matches[0].upstream_value == ("/opt/actions-runner (" + $version + ")") and
+    ($matches[0].verification | endswith(" = " + $version))
+  ' "$manifest_file" >/dev/null ||
+    fail "$image_key Actions Runner contract differs from common pin $runner_version"
+done
 
 echo "runner image compatibility: pinned upstream coverage is complete for 4 reports"

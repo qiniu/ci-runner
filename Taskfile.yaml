@@ -248,7 +248,7 @@ tasks:
     desc: Check Dockerfiles without building image layers
     cmds:
       - docker build --check -f Dockerfile .
-      - docker build --check --platform=linux/amd64 -f {{.TEMPLATE_DIR}}/Dockerfile {{.TEMPLATE_DIR}}
+      - docker build --check --platform=linux/amd64 -f {{.TEMPLATE_DIR}}/Dockerfile templates
 
   template-deps:
     desc: Check Qiniu sandbox template build dependencies
@@ -270,12 +270,14 @@ tasks:
     desc: Check the public runner template matrix, compatibility manifest, and Dockerfiles
     cmds:
       - bash scripts/check-runner-template-matrix.sh
+      - bash scripts/test-runner-template-disk.sh
+      - bash scripts/test-prepare-runner-archive.sh
       - bash scripts/check-runner-image-compatibility.sh
       - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04, github-runner-ubuntu-slim-large, github-runner-ubuntu-22.04-large, github-runner-ubuntu-24.04-large, github-runner-ubuntu-26.04-large]
         cmd: |
           template_dir="{{.ITEM}}"
           base_dir="${template_dir%-large}"
-          docker build --check --platform=linux/amd64 -f "templates/${base_dir}/Dockerfile" "templates/${base_dir}"
+          docker build --check --platform=linux/amd64 -f "templates/${base_dir}/Dockerfile" templates
 
   _template-build:
     internal: true

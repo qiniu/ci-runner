@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_curl="${RUNNER_TEMPLATE_CURL_BIN:-/usr/bin/curl}"
+minimum_speed=1024
+for argument in "$@"; do
+  case "$argument" in
+    https://awscli.amazonaws.com/awscli-exe-linux-*.zip) minimum_speed=65536 ;;
+  esac
+done
+transport_options=(
+  --http1.1
+  --connect-timeout 15
+  --speed-limit "$minimum_speed"
+  --speed-time 60
+  --retry 5
+  --retry-all-errors
+  --retry-delay 2
+)
+
+github_release_cache_file() {
+  local owner="$1"
+  local repository="$2"
+  local release_ref="$3"
+  local cache_root="${RUNNER_TEMPLATE_GITHUB_RELEASE_CACHE:-/tmp/qiniu-github-release-cache}"
+  local cache_name="${owner}_${repository}_${release_ref}"
+  cache_name="${cache_name//[^A-Za-z0-9._-]/_}"
+  printf '%s/%s.json\n' "$cache_root" "$cache_name"
+}
+
+cache_github_release_json_file() {
+  local owner="$1"
+  local repository="$2"
+  local release_ref="$3"
+  local source_file="$4"
+  local cache_file
+  cache_file="$(github_release_cache_file "$owner" "$repository" "$release_ref")"
+  install -d -m 0755 "$(dirname "$cache_file")"
+  local cache_tmp
+  cache_tmp="$(mktemp "${cache_file}.XXXXXX")"
+  cp "$source_file" "$cache_tmp"
+  mv "$cache_tmp" "$cache_file"
+
+  local tag
+  tag="$(jq -er '.tag_name | select(type == "string" and length > 0)' "$source_file")" || return 0
+  local tag_cache_file
+  tag_cache_file="$(github_release_cache_file "$owner" "$repository" "$tag")"
+  if [ "$tag_cache_file" != "$cache_file" ]; then
+    cache_tmp="$(mktemp "${tag_cache_file}.XXXXXX")"
+    cp "$source_file" "$cache_tmp"
+    mv "$cache_tmp" "$tag_cache_file"
+  fi
+}
+
+fetch_github_release_json() {
+  local url="$1"
+  local attempts="${RUNNER_TEMPLATE_GITHUB_API_ATTEMPTS:-5}"
+  local retry_delay="${RUNNER_TEMPLATE_GITHUB_API_RETRY_DELAY:-2}"
+  local attempt
+  local response
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    local request_succeeded=false
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+      if response="$("$real_curl" "${transport_options[@]}" --fail --silent --show-error --location \
+        --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+        --header "Accept: application/vnd.github+json" \
+        --header "X-GitHub-Api-Version: 2022-11-28" \
+        "$url")"; then
+        request_succeeded=true
+      fi
+    elif response="$("$real_curl" "${transport_options[@]}" --fail --silent --show-error --location \
+      --header "Accept: application/vnd.github+json" \
+      --header "X-GitHub-Api-Version: 2022-11-28" \
+      "$url")"; then
+      request_succeeded=true
+    fi
+    if [ "$request_succeeded" = true ] &&
+      jq -e . <<<"$response" >/dev/null 2>&1; then
+      printf '%s\n' "$response"
+      return
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      echo "GitHub release API returned an incomplete response; retrying (${attempt}/${attempts})" >&2
+      if [ "$retry_delay" != 0 ]; then
+        sleep "$retry_delay"
+      fi
+    fi
+  done
+  return 1
+}
+
+resolve_github_release_asset_api_url() {
+  local browser_url="$1"
+  if [[ ! "$browser_url" =~ ^https://github.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/?#]+)$ ]]; then
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  local owner="${BASH_REMATCH[1]}"
+  local repository="${BASH_REMATCH[2]}"
+  local tag="${BASH_REMATCH[3]}"
+  local asset_name="${BASH_REMATCH[4]}"
+  local cache_file
+  cache_file="$(github_release_cache_file "$owner" "$repository" "$tag")"
+  local release_json
+  if [ -f "$cache_file" ] && jq -e . "$cache_file" >/dev/null 2>&1; then
+    release_json="$(<"$cache_file")"
+  else
+    release_json="$(fetch_github_release_json \
+      "https://api.github.com/repos/${owner}/${repository}/releases/tags/${tag}")" || return 1
+    install -d -m 0755 "$(dirname "$cache_file")"
+    local cache_tmp
+    cache_tmp="$(mktemp "${cache_file}.XXXXXX")"
+    printf '%s\n' "$release_json" >"$cache_tmp"
+    mv "$cache_tmp" "$cache_file"
+  fi
+  jq -er --arg asset_name "$asset_name" \
+    '.assets[] | select(.name == $asset_name) | .url' <<<"$release_json" |
+    head -n 1
+}
+
+github_api_request=false
+github_release_api_request=false
+github_release_api_owner=
+github_release_api_repository=
+github_release_api_ref=
+github_release_asset_request=false
+validate_github_api_json=true
+rewritten_arguments=("$@")
+for index in "${!rewritten_arguments[@]}"; do
+  argument="${rewritten_arguments[$index]}"
+  case "$argument" in
+    https://api.github.com/repos/*/*/releases/latest | https://api.github.com/repos/*/*/releases/tags/*)
+      github_api_request=true
+      if [[ "$argument" =~ ^https://api\.github\.com/repos/([^/]+)/([^/]+)/releases/(latest|tags/([^/?#]+))$ ]]; then
+        github_release_api_request=true
+        github_release_api_owner="${BASH_REMATCH[1]}"
+        github_release_api_repository="${BASH_REMATCH[2]}"
+        if [ "${BASH_REMATCH[3]}" = latest ]; then
+          github_release_api_ref=latest
+        else
+          github_release_api_ref="${BASH_REMATCH[4]}"
+        fi
+      fi
+      ;;
+    https://api.github.com/*)
+      github_api_request=true
+      ;;
+    https://github.com/*/*/releases/download/*/*)
+      if [ "${RUNNER_TEMPLATE_DIRECT_GITHUB_ASSETS:-0}" != 1 ] &&
+        asset_api_url="$(resolve_github_release_asset_api_url "$argument")"; then
+        rewritten_arguments[index]="$asset_api_url"
+        github_release_asset_request=true
+      fi
+      ;;
+    -o | --output | --output=* | -O | --remote-name | -w | --write-out | --write-out=* | -I | --head | -i | --include)
+      validate_github_api_json=false
+      ;;
+  esac
+done
+
+run_curl() {
+  if { [ "$github_api_request" = true ] || [ "$github_release_asset_request" = true ]; } &&
+    [ -n "${GITHUB_TOKEN:-}" ]; then
+    "$real_curl" "${transport_options[@]}" --header "Authorization: Bearer ${GITHUB_TOKEN}" "$@"
+    return
+  fi
+  "$real_curl" "${transport_options[@]}" "$@"
+}
+
+if [ "$github_api_request" = true ] && [ "$validate_github_api_json" = true ]; then
+  command -v jq >/dev/null 2>&1 || {
+    echo "jq is required to validate GitHub API responses" >&2
+    exit 69
+  }
+  if [ "$github_release_api_request" = true ]; then
+    release_cache_file="$(github_release_cache_file \
+      "$github_release_api_owner" \
+      "$github_release_api_repository" \
+      "$github_release_api_ref")"
+    if [ -f "$release_cache_file" ] && jq -e . "$release_cache_file" >/dev/null 2>&1; then
+      cat "$release_cache_file"
+      exit 0
+    fi
+  fi
+  response_file="$(mktemp)"
+  trap 'rm -f "$response_file"' EXIT
+  attempts="${RUNNER_TEMPLATE_GITHUB_API_ATTEMPTS:-5}"
+  retry_delay="${RUNNER_TEMPLATE_GITHUB_API_RETRY_DELAY:-2}"
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if run_curl "$@" >"$response_file" &&
+      jq -e . "$response_file" >/dev/null 2>&1; then
+      if [ "$github_release_api_request" = true ]; then
+        cache_github_release_json_file \
+          "$github_release_api_owner" \
+          "$github_release_api_repository" \
+          "$github_release_api_ref" \
+          "$response_file" ||
+          echo "could not cache GitHub release metadata" >&2
+      fi
+      cat "$response_file"
+      exit 0
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      echo "GitHub API returned an incomplete response; retrying (${attempt}/${attempts})" >&2
+      if [ "$retry_delay" != 0 ]; then
+        sleep "$retry_delay"
+      fi
+    fi
+  done
+  echo "GitHub API did not return valid JSON after ${attempts} attempts" >&2
+  exit 22
+fi
+
+if [ "$github_release_asset_request" = true ]; then
+  run_curl \
+    --header "Accept: application/octet-stream" \
+    --header "X-GitHub-Api-Version: 2022-11-28" \
+    "${rewritten_arguments[@]}"
+else
+  run_curl "$@"
+fi
