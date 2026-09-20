@@ -22,11 +22,11 @@ the compatibility contract, and per-image differences.
 The four standard build configs now request `disk_size_mb = 20480` (20 GiB of
 free space during build provisioning) for new templates. The provider reports
 total rootfs size, which can exceed the request: a newly created 20,480-MiB
-candidate reported 22,222 MiB total. Qshell ignores the request when rebuilding
-an existing name. Build, publish, and catalog checks therefore require total
-size to be at least 20,480 MiB; a larger value alone does not require an
-ID/name migration. Runtime Sandbox smoke remains required and may reveal that
-an existing template needs migration despite passing the total-size bound.
+candidate reported 22,222 MiB total. Qshell does not send the request when
+rebuilding an existing name. After the provider team's `DiskMb` is adjusted,
+the build helper rebuilds the existing name and ID without checking its stale
+total. Publish and catalog checks require the rebuilt total to be at least
+20,480 MiB. Runtime Sandbox smoke remains required.
 
 The four `-large` variants reuse the standard Dockerfiles and scripts through
 repository links and use distinct physical template names. They are documented
@@ -35,18 +35,11 @@ custom-spec path with explicit template IDs. They are not runnerd-managed
 defaults, but all allowed workflows may use their documented labels when the
 corresponding specs are enabled. Each large `qshell.sandbox.toml` requests an
 80-GiB build free-space target with `disk_size_mb = 81920` when creating a new template; the
-provider must accept the requested allocation. Qshell ignores this setting
-when rebuilding an existing same-name template. The build and publish helpers
-reject a template whose total disk is below the request, and the catalog check
-repeats that lower-bound verification before release.
+provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
+Qshell does not send this setting when rebuilding an existing same-name
+template. The build helper therefore allows the rebuild despite a stale lower
+total; publish and catalog checks enforce the lower bound after the rebuild.
 [Qshell v2.19.13 documents the create-only disk option](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48).
-
-The previous unsuffixed large names already exist with roughly 22 GiB root
-filesystems. The tracked `*-large-80g` names are replacement physical
-templates, so the normal large build tasks create new templates and apply the
-81,920-MiB request. Keep the old template IDs available until each configured
-custom Runner Spec has passed smoke with, and switched to, its replacement ID.
-Do not delete or unpublish the old templates as part of the build step.
 
 All eight qshell configurations use `templates/` as the build context. The
 Dockerfiles copy shared setup functions and helper scripts from
@@ -137,11 +130,11 @@ build free-space request:
 
 | Workflow label | Physical template | Build free-space request |
 | --- | --- | --- |
-| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large-80g` | 80 GiB |
-| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large-80g` | 80 GiB |
-| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
-| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large-80g` | 80 GiB |
-| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
+| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
+| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
+| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
 
 `ubuntu-latest-large` is a logical public label mapped to the Ubuntu 24.04
 large physical template; it does not add a fifth physical large image. These
@@ -238,17 +231,13 @@ task template-build-ubuntu-26-04-large
 
 Standard and large build targets request 20,480 MiB and 81,920 MiB of build
 free space, respectively, from their tracked TOML files when creating new
-templates. Qshell does not apply this value to a same-name rebuild. The public
-build helper fails before downloading the Runner archive only when an existing
-template's total disk is below the requested free-space target; in that case,
-plan an ID/name migration. A total above the target is a necessary capacity
-check, not proof of the exact free-space request. A named standard development
-build remains separate from this public-name check. Do not remove an old
-template while a Runner Spec still references its ID. After creating a
-replacement, check the catalog total `disk_size_mb`, run Sandbox smoke, and
-only then switch the referencing specs and publish it. If runtime free space
-fails smoke on an existing name, migrate it and repeat the gate. A provider quota can
-still reject the requested allocation.
+templates. Qshell does not send this value to a same-name rebuild. Adjust the
+provider team's `DiskMb` first, then run the corresponding build task to rebuild
+the existing name and ID in place. The build helper deliberately does not reject
+the stale pre-rebuild total. After qshell reports `Status: ready`, verify the
+catalog total `disk_size_mb`, run Sandbox smoke, and publish only when both gates
+pass. A total above the target is a necessary capacity check, not proof of the
+exact free-space request. A provider quota can still reject the allocation.
 
 The Dockerfiles keep `bootstrap`, `platform`, `node`, `toolchain`, and
 `runtime` work in separate qshell-compatible cache layers where applicable.

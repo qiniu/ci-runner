@@ -86,6 +86,57 @@ check_template_disk() {
   fi
 }
 
+reconcile_build_status() {
+  local template_name="$1"
+  local build_id="$2"
+  local timeout_seconds="${TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS:-300}"
+  local interval_seconds="${TEMPLATE_BUILD_RECONCILE_INTERVAL_SECONDS:-5}"
+  local deadline status catalog_json
+
+  command -v jq >/dev/null 2>&1 || {
+    echo "jq is required to reconcile template build status" >&2
+    return 1
+  }
+  [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || {
+    echo "TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS must be a non-negative integer" >&2
+    return 1
+  }
+  [[ "$interval_seconds" =~ ^[1-9][0-9]*$ ]] || {
+    echo "TEMPLATE_BUILD_RECONCILE_INTERVAL_SECONDS must be a positive integer" >&2
+    return 1
+  }
+
+  deadline=$((SECONDS + timeout_seconds))
+  while true; do
+    if catalog_json="$("$qshell_bin" sandbox template list --format json)"; then
+      status="$(
+        jq -r --arg name "$template_name" --arg build_id "$build_id" '
+          [ .[] |
+            select(((.Aliases // []) | index($name)) and .BuildID == $build_id)
+          ] |
+          if length == 1 then (.[0].BuildStatus // "unknown") else "unknown" end
+        ' <<<"$catalog_json"
+      )"
+      case "$status" in
+        ready | uploaded)
+          echo "service catalog reports build $build_id as $status"
+          return 0
+          ;;
+        error | failed)
+          echo "service catalog reports build $build_id as $status" >&2
+          return 1
+          ;;
+      esac
+    fi
+
+    if ((SECONDS >= deadline)); then
+      echo "qshell did not report terminal Status: ready and service catalog did not confirm build $build_id within ${timeout_seconds}s" >&2
+      return 1
+    fi
+    sleep "$interval_seconds"
+  done
+}
+
 expected_disk_size="$(sed -nE 's/^[[:space:]]*disk_size_mb[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$template_dir/qshell.sandbox.toml" | head -n 1)"
 test -n "$expected_disk_size" || {
   echo "template config has no valid disk_size_mb: $template_dir/qshell.sandbox.toml" >&2
@@ -115,10 +166,8 @@ trap cleanup EXIT
 
 case "$operation" in
   build)
-    if [ "$check_disk_size" = true ]; then
-      check_template_disk "$template_name" "$expected_disk_size" true
-    fi
     bash "$script_root/scripts/prepare-runner-archive.sh"
+    build_command_status=0
     (
       cd "$template_dir"
       tmp_config="$(mktemp .qshell-sandbox.XXXXXX)"
@@ -129,13 +178,14 @@ case "$operation" in
         build_args+=(--name "$build_name")
       fi
       "$qshell_bin" "${build_args[@]}" 2>&1 | tee "$output_file"
-    )
-    grep -Eq '^Status:[[:space:]]+ready[[:space:]]*$' "$output_file" || {
-      echo "qshell did not report terminal Status: ready" >&2
-      exit 1
-    }
-    if [ "$check_disk_size" = true ]; then
-      check_template_disk "$template_name" "$expected_disk_size" false
+    ) || build_command_status=$?
+    if ! grep -Eq '^Status:[[:space:]]+ready[[:space:]]*$' "$output_file"; then
+      build_id="$(sed -nE 's/^Build ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
+      test -n "$build_id" || {
+        echo "qshell did not report terminal Status: ready or a build ID (exit status $build_command_status)" >&2
+        exit 1
+      }
+      reconcile_build_status "$template_name" "$build_id"
     fi
     ;;
   publish | unpublish)

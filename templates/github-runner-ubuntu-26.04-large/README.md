@@ -10,11 +10,11 @@ adaptation as the standard template. The tracked qshell configuration requests
 `disk_size_mb = 81920`; the provider must accept that allocation. This is a
 preview template.
 
-Build with `task template-build-ubuntu-26-04-large`. The tracked `*-large-80g` physical name
-intentionally differs from the older
-unsuffixed template, allowing qshell to create it with the 81,920-MiB request.
-Keep the old template ID until configured custom Runner Specs have passed smoke
-and switched to the replacement ID. This tracked file does not contain a
-region-specific template ID. See the standard template's
+Build with `task template-build-ubuntu-26-04-large`. After the provider team's
+`DiskMb` is at least 81,920 MiB, this rebuilds the existing template name and
+ID in place. Qshell does not send `disk_size_mb` during the rebuild, so the
+build helper does not reject the stale pre-rebuild total; publish and catalog
+checks require the rebuilt total to meet the configured lower bound. This
+tracked file does not contain a region-specific template ID. See the standard template's
 [`software-diff.md`](../github-runner-ubuntu-26.04/software-diff.md) and the
 repository-level compatibility manifest for the verified contract.

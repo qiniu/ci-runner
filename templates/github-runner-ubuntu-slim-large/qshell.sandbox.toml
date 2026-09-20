@@ -1,5 +1,5 @@
 # Development large Ubuntu Slim runner template.
-name = "github-runner-ubuntu-slim-large-80g"
+name = "github-runner-ubuntu-slim-large"
 dockerfile = "../github-runner-ubuntu-slim/Dockerfile"
 path = ".."
 cpu_count = 8

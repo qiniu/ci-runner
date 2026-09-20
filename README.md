@@ -387,7 +387,7 @@ loading.
 | `templates/github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 runner template requesting 80 GiB of build free space at creation |
 
 The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
-`github-runner-ubuntu-24-04-large-80g` physical template; it does not add another
+`github-runner-ubuntu-24-04-large` physical template; it does not add another
 template directory or build target.
 
 Run `task template-check-all`, then use the eight
@@ -400,12 +400,11 @@ upload it as small COPY chunks, and verify it again before installation.
 Template builds require qshell 2.19.13 or newer. Standard configs request
 `disk_size_mb = 20480`, while large configs request `81920` for new templates.
 These values target free space during build provisioning; the API reports total
-rootfs size, which can be larger. Qshell ignores the request on same-name
-rebuilds. An existing template whose total disk is below the request or whose
-runtime free-space smoke fails needs a planned physical-template migration;
-a larger total is not a mismatch by itself. The four replacements use
-`*-large-80g` physical names so the undersized unsuffixed IDs can remain during
-migration. Their provider team disk limit must be at least 81,920 MiB.
+rootfs size, which can be larger. Qshell does not send the request on same-name
+rebuilds. After the provider team's `DiskMb` is adjusted, the build tasks rebuild
+the existing names and IDs in place without rejecting their stale pre-rebuild
+totals. Publish and catalog checks require the rebuilt totals to meet the
+configured lower bounds; a larger total is not a mismatch by itself.
 Release smoke checks at least 19 GiB or 79 GiB of available runtime rootfs
 space for standard or large templates, respectively, allowing 1 GiB for
 startup writes. This does not prove the original build request.

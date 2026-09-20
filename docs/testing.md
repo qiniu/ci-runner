@@ -661,10 +661,8 @@ Common issues:
 - `template-smoke` reports insufficient runtime rootfs free space: verify the
   fresh Sandbox has at least 19 GiB for a standard template or 79 GiB for a
   `-large` template. The catalog's total `diskSizeMB` cannot establish this;
-  follow the [physical-template migration steps](default-runner-templates.md)
-  when an existing name cannot meet the runtime floor. The tracked
-  `*-large-80g` names create replacement templates alongside the retained
-  undersized unsuffixed IDs; switch custom Runner Specs only after smoke passes.
+  confirm the provider team's `DiskMb`, then follow the
+  [same-name rebuild steps](default-runner-templates.md) and repeat smoke.
 - registration token fails: check the [GitHub App permission table](../README.md#required-permissions). Specs without `runner_group` require repository `Administration`; specs with `runner_group` require organization `Self-hosted runners`.
 
 ## 9. How To Read GitHub Actions Logs

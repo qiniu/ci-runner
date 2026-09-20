@@ -90,11 +90,11 @@ restore cached `/tmp` outputs. Keep every qshell `path = ".."` and the `-large`
 source links aligned. Keep `disk_size_mb = 20480` in the four standard TOML
 files and `81920` in the four `-large` files. These are build free-space
 requests, while the template API reports total rootfs size; do not compare
-them for equality. Qshell 2.19.13 applies the request only when creating a new
-name. An existing same-name template whose total disk is below the request or
-whose runtime free-space smoke fails needs a planned physical-template migration.
-The four tracked large configs use `*-large-80g` physical names so they can be
-created alongside the retained, undersized, unsuffixed legacy templates.
+them for equality. Qshell 2.19.13 sends the request only when creating a new
+name. Before rebuilding an existing name in place, adjust the provider team's
+`DiskMb`; the build task must preserve the name and ID and must not reject the
+stale pre-rebuild total. Publish and catalog checks still require the rebuilt
+total to meet the configured lower bound.
 Release smoke also checks at least
 19 GiB or 79 GiB of runtime rootfs free space for standard and `-large`
 templates, leaving 1 GiB for writes after provisioning. Build tasks
@@ -104,7 +104,9 @@ parallel qshell uploads read stable files. Never commit the archive or chunks.
 `task template-build-ubuntu-*` performs the real remote template build and
 requires `QINIU_SANDBOX_API_URL` plus `QINIU_API_KEY`. A local Docker build is
 diagnostic only and does not prove that a Sandbox template exists or is
-usable. Release evidence requires qshell `Status: ready` followed by
+usable. If qshell's wait stream ends without `Status: ready`, the build helper
+may accept only the same build ID reaching `uploaded` in the service catalog
+within its bounded reconciliation window. Release evidence then still requires
 `task template-smoke` in both supported regions.
 
 Use `cd ui && bun run test` for focused UI tests. `task test` rebuilds the UI, runs the Bun UI tests, and then runs Go tests with race detection and coverage.

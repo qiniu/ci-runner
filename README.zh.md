@@ -373,7 +373,7 @@ task release-check # 验证发布构建
 | `templates/github-runner-ubuntu-26.04-large` | 创建时请求 80 GiB 构建可用空间的 Ubuntu 26.04 x64 Runner 模板 |
 
 对外的 `ubuntu-latest-large` Runner Spec 是映射到
-`github-runner-ubuntu-24-04-large-80g` 物理模板的逻辑标签，不会新增模板目录或构建目标。
+`github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增模板目录或构建目标。
 
 先运行 `task template-check-all`，再通过 8 个
 `task template-build-ubuntu-*` targets 执行真实 qshell Sandbox 构建。发布与
@@ -385,10 +385,9 @@ Actions Runner 版本固定值位于 `templates/common/`。
 模板构建要求 qshell 2.19.13 或更高版本。标准配置为新模板请求
 `disk_size_mb = 20480`，large 配置请求 `81920`。这些值是构建预置阶段的目标
 可用空间；API 展示的是根文件系统总容量，数值可能更大。qshell 在同名 rebuild 时
-忽略磁盘请求。现有模板的总容量低于请求值，或运行时可用空间 smoke 失败时，
-需要规划物理模板迁移；总容量较大本身不能说明配置不符。
-4 个替换模板使用 `*-large-80g` 物理名称，以便迁移期间继续保留容量不足的旧无后缀
-ID；provider 的团队磁盘上限必须至少为 81,920 MiB。
+不会发送磁盘请求。先调整 provider 团队的 `DiskMb`，构建任务会保留现有名称和 ID
+并原地重建，不会用重建前的旧总容量拦截构建。发布与 catalog 检查仍要求重建后的
+总容量达到配置下界；总容量较大本身不能说明配置不符。
 发布 smoke 还会检查标准模板或 large 模板的运行时根文件系统分别至少有 19 GiB
 或 79 GiB 可用空间，为预置后的启动写入留出 1 GiB；该检查不能证明最初的构建请求值。
 2.337.0 候选版已通过此前的一次开发模板构建与 Sandbox smoke；新增的运行时可用

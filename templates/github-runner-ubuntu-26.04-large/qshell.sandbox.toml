@@ -1,5 +1,5 @@
 # Development large Ubuntu 26.04 runner template.
-name = "github-runner-ubuntu-26-04-large-80g"
+name = "github-runner-ubuntu-26-04-large"
 dockerfile = "../github-runner-ubuntu-26.04/Dockerfile"
 path = ".."
 cpu_count = 8

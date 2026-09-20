@@ -8,10 +8,10 @@
 | `ubuntu-22.04` | `github-runner-ubuntu-22-04` | Ubuntu 22.04 x64 | follows upstream deprecation | verified |
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
-| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large-80g` | Ubuntu Slim x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large-80g` | Ubuntu 22.04 x64 (80 GiB build free-space request) | follows upstream deprecation | development |
-| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large-80g` | Ubuntu 24.04 x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large-80g` | Ubuntu 26.04 x64 (80 GiB build free-space request) | preview | development |
+| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB build free-space request) | large | development |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB build free-space request) | follows upstream deprecation | development |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB build free-space request) | large | development |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB build free-space request) | preview | development |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
@@ -33,11 +33,10 @@ on 2026-08-04 CST; every request completed and its Sandbox was cleaned.
 The four standard `qshell.sandbox.toml` files now request
 `disk_size_mb = 20480` (20 GiB of free space during build provisioning) at
 creation. The provider reports total rootfs size instead; a new build with
-this request can report 22,222 MiB total. Qshell ignores the request on a
-same-name rebuild. Build, publish, and catalog gates therefore check only
-that total size is not below the request. A larger total alone is not grounds
-for an ID/name migration; migrate if release smoke finds insufficient runtime
-free space.
+this request can report 22,222 MiB total. Qshell does not send the request on
+a same-name rebuild. After the provider team's `DiskMb` is adjusted, the build
+helper rebuilds the existing name and ID without checking its stale total.
+Publish and catalog gates require the rebuilt total to meet the request.
 That smoke requires at least 19 GiB of runtime rootfs free space for standard
 templates and 79 GiB for large templates. The 1-GiB allowance covers writes
 after build provisioning; runtime free space does not prove the original request.
@@ -46,12 +45,11 @@ The four `-large` variants reuse the standard Dockerfiles and scripts through
 in-repository links, but use distinct provider template names. Their tracked
 `qshell.sandbox.toml` files request `disk_size_mb = 81920` (80 GiB) when
 creating a new template. This requests build free space, so the final total
-rootfs size may exceed 81,920 MiB. The provider team disk limit must be at
-least 81,920 MiB. Qshell ignores the field when rebuilding an existing
-same-name template. The unsuffixed names already identify smaller legacy
-templates, so the tracked replacements use `*-large-80g`; retain the old IDs
-until every configured custom Runner Spec has migrated after smoke.
-The build and publish helpers check the total-size lower bound, and these
+rootfs size may exceed 81,920 MiB. The provider team's `DiskMb` must be at
+least 81,920 MiB before rebuilding an existing name. Qshell does not send the
+field on a same-name rebuild, so the build helper allows the in-place rebuild
+without checking the stale total. Publish and catalog checks enforce the
+total-size lower bound after the rebuild. These
 variants remain in `development` until they
 pass the same regional catalog and smoke gates.
 
@@ -219,7 +217,9 @@ task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<published-template-id>
 ```
 
 The formal template gate is a qshell build reaching terminal `Status: ready`,
-followed by release smoke inside a real Sandbox created from that template.
+or the exact build ID reaching service catalog status `uploaded` during the
+helper's bounded reconciliation window, followed by release smoke inside a real
+Sandbox created from that template.
 The Slim Dockerfile divides setup into four cacheable qshell-compatible phases:
 `bootstrap`, `platform`, `toolchain`, and `runtime`. The versioned templates add
 a dedicated `node` phase between `platform` and `toolchain`, keeping their large
@@ -243,7 +243,7 @@ common pin. If the remote builder hits its hard
 time limit after one or more phases finish, rerun the same
 `template-build-*` task with cache enabled; completed phases are reused. Do not
 use `--no-cache` for that recovery, and do not publish until one build reaches
-terminal `Status: ready`.
+terminal `Status: ready` or its exact build ID is reconciled as `uploaded`.
 Template version metadata and the runner-owned NVM copy are applied only after
 the heavy provisioning layers, so a release identity bump or NVM ownership fix
 does not invalidate otherwise reusable installer caches.

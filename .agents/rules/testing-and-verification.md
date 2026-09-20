@@ -146,16 +146,16 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 - Template changes may require the relevant `template-*` task.
 - `task template-check-all` validates all eight public template inputs and runs
   an offline archive split/reassembly, checksum, reuse, and concurrent preparation
-  test. Real template proof
-  still requires qshell `Status: ready` and the regional `template-smoke` gates.
+  test. Real template proof requires qshell `Status: ready`, or the same build
+  ID reaching catalog status `uploaded` during bounded reconciliation, plus the
+  regional `template-smoke` gates.
 - Template builds require qshell 2.19.13 or newer. Standard and large TOML files
   request 20,480 and 81,920 MiB of free space during new-template build
-  provisioning; qshell ignores the setting on same-name rebuilds. The API
-  reports total rootfs size, so build/publish/catalog checks use the request
-  only as a lower bound, never as an exact expected total. An insufficient
-  existing template needs a planned physical-template migration. The tracked
-  large configs use `*-large-80g` replacement names; retain the old unsuffixed
-  IDs until every configured custom Runner Spec has migrated. Regional
+  provisioning; qshell does not send the setting on same-name rebuilds. Adjust
+  the provider team's `DiskMb` before rebuilding in place. Build must preserve
+  the existing name and ID and may not reject its stale pre-rebuild total;
+  publish and catalog checks use the request only as a lower bound, never as an
+  exact expected total. Regional
   release smoke checks runtime rootfs free space of at least 19 GiB for
   standard templates and 79 GiB for `-large` templates, allowing 1 GiB for
   startup writes; it remains required before promotion.

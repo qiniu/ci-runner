@@ -13,11 +13,20 @@ case "$*" in
     printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.19.13}"
     ;;
   'sandbox template list --format json')
-    jq -n --arg alias "${MOCK_ALIAS:-github-runner-ubuntu-24-04-large-80g}" --argjson disk "$MOCK_DISK" \
-      '[{Aliases: [$alias], DiskSizeMB: $disk}]'
+    jq -n --arg alias "${MOCK_ALIAS:-github-runner-ubuntu-24-04-large}" --argjson disk "$MOCK_DISK" \
+      --arg build_status "${MOCK_BUILD_STATUS:-uploaded}" \
+      '[{Aliases: [$alias], TemplateID: "existing-template-id", BuildID: "fixture-build-id",
+         BuildStatus: $build_status, DiskSizeMB: $disk}]'
     ;;
   'sandbox template publish -y')
     echo 'Template fixture published'
+    ;;
+  sandbox\ template\ build\ --wait\ --config\ *)
+    grep -Fq 'name = "github-runner-ubuntu-24-04-large"' "${*: -1}"
+    echo 'Template ID: existing-template-id'
+    echo 'Build ID: fixture-build-id'
+    echo "Status: ${MOCK_QSHELL_TERMINAL_STATUS:-ready}"
+    exit "${MOCK_QSHELL_EXIT_STATUS:-0}"
     ;;
   sandbox\ create\ *)
     echo 'Sandbox ID: sb-fixture'
@@ -52,6 +61,15 @@ printf '/dev/root 100000 0 %s 0%% /\n' "$MOCK_FREE_MIB"
 EOF
 chmod +x "$workdir/qshell" "$workdir/curl" "$workdir/df"
 
+cat >"$workdir/bash-env" <<EOF
+bash() {
+  if [[ "\${1:-}" == "$repository_root/scripts/prepare-runner-archive.sh" ]]; then
+    return 0
+  fi
+  command bash "\$@"
+}
+EOF
+
 expect_failure() {
   local wanted_message="$1"
   shift
@@ -74,8 +92,12 @@ export QSHELL="$workdir/qshell"
 export MOCK_DISK=22222
 expect_failure 'qshell >= 2.19.13 is required' \
   env MOCK_QSHELL_VERSION=2.19.12 bash "$operation_script" build "$large_template_dir"
-expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
-  bash "$operation_script" build "$large_template_dir"
+BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_dir" >"$workdir/output"
+grep -Fq 'Template ID: existing-template-id' "$workdir/output"
+grep -Fq 'Status: ready' "$workdir/output"
+MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
+  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_dir" >"$workdir/output"
+grep -Fq 'service catalog reports build fixture-build-id as uploaded' "$workdir/output"
 expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
   bash "$operation_script" publish "$large_template_dir"
 
@@ -106,10 +128,10 @@ write_catalog() {
   jq -n --argjson standard_disk "$standard_disk" --argjson large_disk "$large_disk" '
     ["github-runner-ubuntu-slim", "github-runner-ubuntu-22-04",
      "github-runner-ubuntu-24-04", "github-runner-ubuntu-26-04",
-     "github-runner-ubuntu-slim-large-80g", "github-runner-ubuntu-22-04-large-80g",
-     "github-runner-ubuntu-24-04-large-80g", "github-runner-ubuntu-26-04-large-80g"] |
+     "github-runner-ubuntu-slim-large", "github-runner-ubuntu-22-04-large",
+     "github-runner-ubuntu-24-04-large", "github-runner-ubuntu-26-04-large"] |
     map({names: [.], templateID: ., buildStatus: "ready", public: true,
-         diskSizeMB: (if endswith("-large-80g") then $large_disk else $standard_disk end)})
+         diskSizeMB: (if endswith("-large") then $large_disk else $standard_disk end)})
   ' >"$workdir/catalog.json"
 }
 export MOCK_CATALOG="$workdir/catalog.json"

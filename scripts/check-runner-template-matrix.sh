@@ -50,10 +50,10 @@ expected_name() {
     ubuntu-22.04) echo github-runner-ubuntu-22-04 ;;
     ubuntu-24.04) echo github-runner-ubuntu-24-04 ;;
     ubuntu-26.04) echo github-runner-ubuntu-26-04 ;;
-    ubuntu-slim-large) echo github-runner-ubuntu-slim-large-80g ;;
-    ubuntu-22.04-large) echo github-runner-ubuntu-22-04-large-80g ;;
-    ubuntu-24.04-large) echo github-runner-ubuntu-24-04-large-80g ;;
-    ubuntu-26.04-large) echo github-runner-ubuntu-26-04-large-80g ;;
+    ubuntu-slim-large) echo github-runner-ubuntu-slim-large ;;
+    ubuntu-22.04-large) echo github-runner-ubuntu-22-04-large ;;
+    ubuntu-24.04-large) echo github-runner-ubuntu-24-04-large ;;
+    ubuntu-26.04-large) echo github-runner-ubuntu-26-04-large ;;
     *) return 1 ;;
   esac
 }
@@ -332,7 +332,7 @@ readme_catalog="$(
       print $2 "\t" $3 "\t" $4 "\t" $5
     }' "$templates_readme"
 )"
-expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large-80g\tUbuntu Slim x64 (80 GiB build free-space request)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large-80g\tUbuntu 22.04 x64 (80 GiB build free-space request)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large-80g\tUbuntu 24.04 x64 (80 GiB build free-space request)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large-80g\tUbuntu 26.04 x64 (80 GiB build free-space request)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
+expected_catalog=$'ubuntu-slim\tgithub-runner-ubuntu-slim\tUbuntu Slim x64\tstable\nubuntu-22.04\tgithub-runner-ubuntu-22-04\tUbuntu 22.04 x64\tfollows upstream deprecation\nubuntu-24.04\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable\nubuntu-26.04\tgithub-runner-ubuntu-26-04\tUbuntu 26.04 x64\tpreview\nubuntu-slim-large\tgithub-runner-ubuntu-slim-large\tUbuntu Slim x64 (80 GiB build free-space request)\tlarge\nubuntu-22.04-large\tgithub-runner-ubuntu-22-04-large\tUbuntu 22.04 x64 (80 GiB build free-space request)\tfollows upstream deprecation\nubuntu-24.04-large\tgithub-runner-ubuntu-24-04-large\tUbuntu 24.04 x64 (80 GiB build free-space request)\tlarge\nubuntu-26.04-large\tgithub-runner-ubuntu-26-04-large\tUbuntu 26.04 x64 (80 GiB build free-space request)\tpreview\nubuntu-latest\tgithub-runner-ubuntu-24-04\tUbuntu 24.04 x64\tstable logical mapping'
 test "$readme_catalog" = "$expected_catalog" ||
   fail "templates/README.md support matrix does not match the nine public logical rows"
 
