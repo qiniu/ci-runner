@@ -4,7 +4,7 @@
 
 Qiniu 维护 8 个用于 GitHub Actions 的 Linux x64 Sandbox 物理模板：4 个标准
 镜像（Ubuntu Slim、Ubuntu 22.04、Ubuntu 24.04，以及处于预览阶段的 Ubuntu
-26.04）和 4 个请求 80 GiB 构建可用空间的 `-large` 变体。`ubuntu-latest` 是
+26.04）和 4 个磁盘容量下限为 80 GiB 的 `-large` 变体。`ubuntu-latest` 是
 Runner catalog 中指向 Ubuntu 24.04 的逻辑映射，不是第 9 个镜像。
 
 4 个标准物理模板已于 2026-08-03 在两个受支持的 Sandbox 区域完成发布、catalog
@@ -17,10 +17,9 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 上游版本来源、兼容性契约和各镜像差异见
 [`templates/README.md`](../../templates/README.md)。
 
-4 份标准模板的构建配置现为新模板请求 `disk_size_mb = 20480`（构建预置阶段的
-20 GiB 可用空间）。provider 展示的是根文件系统总容量，因此数值可能大于请求值：
-一份新建的 20,480-MiB 候选模板显示总容量为 22,222 MiB。qshell 同名重建时不会
-发送这个请求。先调整 provider 团队的 `DiskMb`，构建脚本会保留现有名称和 ID
+4 份标准模板的构建配置设置 `disk_size_mb = 20480`，表示新模板的根磁盘容量下限为
+20 GiB。provider 展示的实际总容量可以更大。qshell 同名重建时不会
+发送该配置。先调整 provider 团队的 `DiskMb`，构建脚本会保留现有名称和 ID
 原地重建，不检查重建前的旧总容量。发布与 catalog 检查要求重建后的总容量至少为
 20,480 MiB，之后仍需运行 Sandbox smoke。
 
@@ -30,7 +29,7 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 spec 路径在 Admin 中创建并启用带显式 template ID 的条目。它们不属于 runnerd
 managed defaults，但对应 spec 启用后，所有允许的 workflow 都可以使用文档中的
 labels。每份 `qshell.sandbox.large.toml` 都设置了
-`disk_size_mb = 81920`，用于创建新模板时请求 80 GiB 构建可用空间；原地重建前，
+`disk_size_mb = 81920`，表示新模板的根磁盘容量下限为 80 GiB；原地重建前，
 provider 团队的 `DiskMb` 必须至少为 81,920 MiB。qshell 重建同名模板时不会发送
 此字段，因此构建脚本允许旧总容量较小的模板进入 rebuild；发布与 catalog 检查
 会在重建后验证容量下界。
@@ -112,9 +111,9 @@ jobs:
       - run: uname -a
 ```
 
-对外的 large 默认规格使用相同的标签契约和资源配置，但构建可用空间请求为 80 GiB：
+对外的 large 默认规格使用相同的标签契约和资源配置，但磁盘容量下限为 80 GiB：
 
-| Workflow label | 物理模板 | 构建可用空间请求 |
+| Workflow label | 物理模板 | 磁盘容量下限 |
 | --- | --- | --- |
 | `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
 | `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
@@ -206,13 +205,12 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-标准和 large 构建目标分别通过已追踪的 TOML 为新模板请求 20,480 MiB 和
-81,920 MiB 构建可用空间，但 qshell 不会在同名 rebuild 请求中发送该值。先调整
+标准和 large 构建目标分别通过已追踪的 TOML 设置 20,480 MiB 和 81,920 MiB
+磁盘容量下限，但 qshell 不会在同名 rebuild 请求中发送该值。先调整
 provider 团队的 `DiskMb`，再运行对应构建任务，保留现有名称和 ID 原地重建。
 构建脚本不会使用重建前的旧总容量拦截 rebuild。qshell 报告 `Status: ready` 后，
 核对 catalog 的总容量 `disk_size_mb`，完成 Sandbox smoke，并仅在两项门禁通过后
-发布。总容量高于请求值只是必要的容量检查，不能证明构建时的精确可用空间请求；
-provider 配额仍可能拒绝分配。
+发布。总容量高于配置下限是有效结果；provider 配额仍可能拒绝分配。
 
 Dockerfile 会按需将 `bootstrap`、`platform`、`node`、`toolchain` 和
 `runtime` 工作保留为独立的 qshell 兼容缓存层。模板版本元数据会在预置工作
@@ -269,10 +267,9 @@ task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-templa
 ```
 
 Smoke 会通过 qshell 创建临时 Sandbox，检查系统版本、架构、预装 Actions
-Runner、出站 HTTPS、Docker daemon、可写 work/tool-cache 路径、运行时根文件系统
-可用空间和清理行为。标准模板至少需要 19 GiB，large 模板至少需要 79 GiB；
-预留的 1 GiB 用于构建预置后的写入。该检查能发现运行时空间不足，但不能证明
-最初的构建请求值。
+Runner、出站 HTTPS、Docker daemon、可写 work/tool-cache 路径、运行时根磁盘
+容量和清理行为。运行时检查会读取所选 TOML 中的 `disk_size_mb`，并要求根磁盘
+容量达到该下限。
 无论验证是否成功，脚本都会尝试终止临时 Sandbox。请保存命令输出的 JSON 路径
 作为发布证据。完整 compatibility manifest 仍是静态 inventory contract；
 逐条 runtime conformance 只作为可选诊断，不阻塞发布可用性门槛。

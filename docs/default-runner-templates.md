@@ -4,7 +4,7 @@
 
 Qiniu maintains eight physical Linux x64 Sandbox templates for GitHub Actions:
 four standard images (Ubuntu Slim, Ubuntu 22.04, Ubuntu 24.04, and preview
-Ubuntu 26.04) plus four `-large` variants requesting 80 GiB of build free space.
+Ubuntu 26.04) plus four `-large` variants with an 80-GiB minimum disk size.
 `ubuntu-latest` is a logical runner catalog mapping to Ubuntu 24.04, not a
 ninth image.
 
@@ -19,10 +19,9 @@ registration remained. See
 [`templates/README.md`](../templates/README.md) for pinned upstream provenance,
 the compatibility contract, and per-image differences.
 
-The four standard build configs now request `disk_size_mb = 20480` (20 GiB of
-free space during build provisioning) for new templates. The provider reports
-total rootfs size, which can exceed the request: a newly created 20,480-MiB
-candidate reported 22,222 MiB total. Qshell does not send the request when
+The four standard build configs set `disk_size_mb = 20480`, a 20-GiB minimum
+root disk size for new templates. The provider may report a larger total.
+Qshell does not send the setting when
 rebuilding an existing name. After the provider team's `DiskMb` is adjusted,
 the build helper rebuilds the existing name and ID without checking its stale
 total. Publish and catalog checks require the rebuilt total to be at least
@@ -35,8 +34,8 @@ names. The large variants are documented
 operator-configured Runner Specs: operators enable them through the
 custom-spec path with explicit template IDs. They are not runnerd-managed
 defaults, but all allowed workflows may use their documented labels when the
-corresponding specs are enabled. Each `qshell.sandbox.large.toml` requests an
-80-GiB build free-space target with `disk_size_mb = 81920` when creating a new template; the
+corresponding specs are enabled. Each `qshell.sandbox.large.toml` sets
+`disk_size_mb = 81920`, an 80-GiB minimum root disk size for a new template; the
 provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
 Qshell does not send this setting when rebuilding an existing same-name
 template. The build helper therefore allows the rebuild despite a stale lower
@@ -129,9 +128,9 @@ jobs:
 ```
 
 The public large defaults use the same contract and resources with an 80-GiB
-build free-space request:
+minimum disk size:
 
-| Workflow label | Physical template | Build free-space request |
+| Workflow label | Physical template | Minimum disk size |
 | --- | --- | --- |
 | `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
 | `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
@@ -238,15 +237,15 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-Standard and large build targets request 20,480 MiB and 81,920 MiB of build
-free space, respectively, from their tracked TOML files when creating new
-templates. Qshell does not send this value to a same-name rebuild. Adjust the
+Standard and large build targets set minimum disk sizes of 20,480 MiB and
+81,920 MiB, respectively, in their tracked TOML files. Qshell does not send
+this value to a same-name rebuild. Adjust the
 provider team's `DiskMb` first, then run the corresponding build task to rebuild
 the existing name and ID in place. The build helper deliberately does not reject
 the stale pre-rebuild total. After qshell reports `Status: ready`, verify the
 catalog total `disk_size_mb`, run Sandbox smoke, and publish only when both gates
-pass. A total above the target is a necessary capacity check, not proof of the
-exact free-space request. A provider quota can still reject the allocation.
+pass. A total above the configured minimum is valid. A provider quota can still
+reject the allocation.
 
 The Dockerfiles keep `bootstrap`, `platform`, `node`, `toolchain`, and
 `runtime` work in separate qshell-compatible cache layers where applicable.
@@ -293,8 +292,7 @@ task template-defaults-check
 template with a nonempty ID for every physical name, including the four large
 variants. It rejects missing and duplicate catalog entries, a standard
 template whose total `diskSizeMB` is below 20,480 MiB, or a large template
-whose total `diskSizeMB` is below 81,920 MiB. These lower bounds do not prove
-the original build free-space request.
+whose total `diskSizeMB` is below 81,920 MiB.
 
 Retain each ID printed by the catalog check, then run actual Sandbox smoke:
 
@@ -311,10 +309,9 @@ task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-templa
 
 Smoke creates a temporary Sandbox with qshell and checks the OS release,
 architecture, preinstalled Actions runner, outbound HTTPS, Docker daemon,
-writable work/tool-cache paths, runtime rootfs free space, and cleanup. The
-runtime check requires at least 19 GiB for standard templates or 79 GiB for
-large templates, allowing 1 GiB for writes after build provisioning. It catches
-insufficient runtime headroom but cannot prove the original build request.
+writable work/tool-cache paths, runtime root disk size, and cleanup. The runtime
+check reads `disk_size_mb` from the selected TOML and requires the root disk to
+meet that lower bound.
 Preserve the emitted JSON paths as
 release evidence. The full compatibility manifest remains the static inventory
 contract; per-entry runtime conformance is an optional diagnostic and does not
@@ -335,12 +332,12 @@ Complete the whole build, publish, catalog, and smoke sequence in this order:
    `QINIU_SANDBOX_API_URL=https://cn-yangzhou-1-sandbox.qiniuapi.com` and the
    Yangzhou `QINIU_API_KEY`.
 2. Plan an ID/name transition only for existing standard or large templates
-   whose total disk is below the tracked free-space request, keeping old
+   whose total disk is below the tracked `disk_size_mb`, keeping old
    referenced IDs available. Build and publish the four standard templates.
    After the provider accepts an 81,920-MiB request, build and publish the four
    large templates; then run `task template-defaults-check` and smoke all
    eight returned IDs. Migrate and repeat the gate for any existing name whose
-   runtime free-space smoke fails.
+   runtime disk-size smoke fails.
 3. Retain the build output, catalog IDs, smoke JSON, and relevant workflow URL.
 4. Export
    `QINIU_SANDBOX_API_URL=https://us-south-1-sandbox.qiniuapi.com` and the

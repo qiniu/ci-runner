@@ -49,7 +49,7 @@ case "$*" in
     ;;
   sandbox\ exec\ *)
     command="${*: -1}"
-    if [[ "$command" == *'available_mib=$(df -Pm /'* ]]; then
+    if [[ "$command" == *'disk_bytes=$(lsblk -bndo SIZE'* ]]; then
       bash -c "$command"
     else
       echo '__QINIU_RUNNER_CONFORMANCE_REMOTE_STARTED__'
@@ -69,13 +69,17 @@ cat >"$workdir/curl" <<'EOF'
 set -euo pipefail
 cat "$MOCK_CATALOG"
 EOF
-cat >"$workdir/df" <<'EOF'
+cat >"$workdir/findmnt" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'Filesystem 1048576-blocks Used Available Capacity Mounted on\n'
-printf '/dev/root 100000 0 %s 0%% /\n' "$MOCK_FREE_MIB"
+printf '/dev/root\n'
 EOF
-chmod +x "$workdir/qshell" "$workdir/curl" "$workdir/df"
+cat >"$workdir/lsblk" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$((MOCK_DISK_MIB * 1048576))"
+EOF
+chmod +x "$workdir/qshell" "$workdir/curl" "$workdir/findmnt" "$workdir/lsblk"
 
 cat >"$workdir/bash-env" <<EOF
 bash() {
@@ -130,7 +134,7 @@ expect_failure 'Error: fixture exact-build query failed' \
   TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
   BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config"
 grep -Fq 'could not query template build fixture-build-id after 0s of reconciliation' "$workdir/output"
-expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
+expect_failure 'total disk size 22222 MiB is below disk_size_mb 81920 MiB' \
   bash "$operation_script" publish "$large_template_config"
 
 MOCK_DISK=83662 bash "$operation_script" publish "$large_template_config" >"$workdir/output"
@@ -145,7 +149,7 @@ expect_failure 'is duplicated in the service catalog' \
 
 MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=22222 \
   bash "$operation_script" publish "$standard_template_config" >"$workdir/output"
-expect_failure 'total disk size 19000 MiB is below the requested 20480 MiB' \
+expect_failure 'total disk size 19000 MiB is below disk_size_mb 20480 MiB' \
   env MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=19000 bash "$operation_script" publish "$standard_template_config"
 
 mkdir "$workdir/missing-disk" "$workdir/invalid-disk"
@@ -176,10 +180,10 @@ export PATH="$workdir:$PATH"
 write_catalog 22222 81920
 bash "$repository_root/scripts/check-default-template-catalog.sh" >"$workdir/output"
 write_catalog 22222 22222
-expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
+expect_failure 'total disk size 22222 MiB is below disk_size_mb 81920 MiB' \
   bash "$repository_root/scripts/check-default-template-catalog.sh"
 write_catalog 19000 83662
-expect_failure 'total disk size 19000 MiB is below the requested 20480 MiB' \
+expect_failure 'total disk size 19000 MiB is below disk_size_mb 20480 MiB' \
   bash "$repository_root/scripts/check-default-template-catalog.sh"
 write_catalog 22222 83662
 bash "$repository_root/scripts/check-default-template-catalog.sh" >"$workdir/output"
@@ -191,23 +195,23 @@ MOCK_CATALOG="$workdir/catalog-incorrect-type.json" \
 
 mkdir "$workdir/standard-smoke" "$workdir/standard-low-smoke" \
   "$workdir/large-smoke" "$workdir/large-low-smoke"
-if ! MOCK_FREE_MIB=19456 RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-smoke" \
+if ! MOCK_DISK_MIB=20480 RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-smoke" \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04 sb-fixture >"$workdir/output" 2>&1; then
   cat "$workdir/output" >&2
-  jq '.results[] | select(.name == "runtime rootfs free space")' "$workdir/standard-smoke"/*.json >&2
+  jq '.results[] | select(.name == "runtime root disk size")' "$workdir/standard-smoke"/*.json >&2
   exit 1
 fi
-jq -e '.results | any(.name == "runtime rootfs free space" and .exit_status == 0)' \
+jq -e '.results | any(.name == "runtime root disk size" and .exit_status == 0)' \
   "$workdir/standard-smoke"/*.json >/dev/null
-MOCK_FREE_MIB=19455 RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-low-smoke" \
-  expect_failure 'conformance failed: ubuntu-24.04 / Release smoke / runtime rootfs free space' \
+MOCK_DISK_MIB=20479 RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-low-smoke" \
+  expect_failure 'conformance failed: ubuntu-24.04 / Release smoke / runtime root disk size' \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04 sb-fixture
-MOCK_FREE_MIB=80896 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-smoke" \
+MOCK_DISK_MIB=81920 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-smoke" \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04-large sb-fixture >"$workdir/output"
-jq -e '.results | any(.name == "runtime rootfs free space" and .exit_status == 0)' \
+jq -e '.results | any(.name == "runtime root disk size" and .exit_status == 0)' \
   "$workdir/large-smoke"/*.json >/dev/null
-MOCK_FREE_MIB=80895 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-low-smoke" \
-  expect_failure 'conformance failed: ubuntu-24.04-large / Release smoke / runtime rootfs free space' \
+MOCK_DISK_MIB=81919 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-low-smoke" \
+  expect_failure 'conformance failed: ubuntu-24.04-large / Release smoke / runtime root disk size' \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04-large sb-fixture
 
 # The checked-in compatibility manifest has no large-specific entry; retain
@@ -215,7 +219,7 @@ MOCK_FREE_MIB=80895 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-low-smoke" \
 bash "$repository_root/scripts/run-runner-image-conformance.sh" \
   --image ubuntu-24.04-large --executor sandbox --target sb-fixture \
   --output "$workdir/large-fallback.json" >"$workdir/output"
-jq -e '.passed == true and (.results | any(.name == "runtime rootfs free space") | not)' \
+jq -e '.passed == true and (.results | any(.name == "runtime root disk size") | not)' \
   "$workdir/large-fallback.json" >/dev/null
 
-echo 'standard/large template total-disk, runtime free-space, and qshell version gates passed'
+echo 'standard/large template total-disk and qshell version gates passed'

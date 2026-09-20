@@ -8,10 +8,10 @@
 | `ubuntu-22.04` | `github-runner-ubuntu-22-04` | Ubuntu 22.04 x64 | follows upstream deprecation | verified |
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
-| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB build free-space request) | follows upstream deprecation | development |
-| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB build free-space request) | preview | development |
+| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB minimum disk size) | large | development |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB minimum disk size) | follows upstream deprecation | development |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB minimum disk size) | large | development |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB minimum disk size) | preview | development |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
@@ -30,23 +30,20 @@ labels were end-to-end verified by
 [GitHub Actions run 30858489153](https://github.com/miclle/qiniu-ci-runner-test/actions/runs/30858489153)
 on 2026-08-04 CST; every request completed and its Sandbox was cleaned.
 
-The four standard `qshell.sandbox.toml` files now request
-`disk_size_mb = 20480` (20 GiB of free space during build provisioning) at
-creation. The provider reports total rootfs size instead; a new build with
-this request can report 22,222 MiB total. Qshell does not send the request on
-a same-name rebuild. After the provider team's `DiskMb` is adjusted, the build
+The four standard `qshell.sandbox.toml` files set
+`disk_size_mb = 20480`, a 20-GiB minimum root disk size. The provider may
+report a larger total. Qshell does not send the setting on a same-name rebuild.
+After the provider team's `DiskMb` is adjusted, the build
 helper rebuilds the existing name and ID without checking its stale total.
-Publish and catalog gates require the rebuilt total to meet the request.
-That smoke requires at least 19 GiB of runtime rootfs free space for standard
-templates and 79 GiB for large templates. The 1-GiB allowance covers writes
-after build provisioning; runtime free space does not prove the original request.
+Publish, catalog, and release-smoke gates require the reported or runtime root
+disk size to meet the configured lower bound.
 
 Each of the four source directories contains a standard
 `qshell.sandbox.toml` and a large `qshell.sandbox.large.toml`. Both configs
 reuse the same Dockerfile and scripts while naming distinct provider templates.
-The large configs request `disk_size_mb = 81920` (80 GiB) when
-creating a new template. This requests build free space, so the final total
-rootfs size may exceed 81,920 MiB. The provider team's `DiskMb` must be at
+The large configs set `disk_size_mb = 81920`, an 80-GiB minimum root disk
+size when creating a new template. The final total may exceed 81,920 MiB.
+The provider team's `DiskMb` must be at
 least 81,920 MiB before rebuilding an existing name. Qshell does not send the
 field on a same-name rebuild, so the build helper allows the in-place rebuild
 without checking the stale total. Publish and catalog checks enforce the
@@ -262,7 +259,7 @@ than restarting the whole archive. The platform installer runs in the same
 layer as reassembly instead of depending on a cached oversized archive.
 Release smoke checks the OS, architecture, the exact common-pinned Actions
 Runner version, persisted runtime template name/version metadata, outbound
-HTTPS, runtime rootfs free space, the exact Cloudflare resolver configuration,
+HTTPS, runtime root disk size against the selected TOML's `disk_size_mb`, the exact Cloudflare resolver configuration,
 Docker, a runner-owned writable NVM home, writable work/tool-cache paths, and
 cleanup. Full
 per-inventory runtime conformance and local Docker builds remain optional

@@ -156,15 +156,14 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   unavailable, retain the last qshell error instead of describing the build as
   active.
 - Template builds require qshell 2.19.13 or newer. Standard and large TOML files
-  request 20,480 and 81,920 MiB of free space during new-template build
-  provisioning; qshell does not send the setting on same-name rebuilds. Adjust
+  set minimum root disk sizes of 20,480 and 81,920 MiB; qshell does not send
+  the setting on same-name rebuilds. Adjust
   the provider team's `DiskMb` before rebuilding in place. Build must preserve
   the existing name and ID and may not reject its stale pre-rebuild total;
   publish and catalog checks use the request only as a lower bound, never as an
-  exact expected total. Regional
-  release smoke checks runtime rootfs free space of at least 19 GiB for
-  standard templates and 79 GiB for `-large` templates, allowing 1 GiB for
-  startup writes; it remains required before promotion.
+  exact expected total. Regional release smoke reads `disk_size_mb` from the
+  selected TOML and requires the runtime root disk size to meet that lower
+  bound; it remains required before promotion.
 
 ## Deployment Smoke
 

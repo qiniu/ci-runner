@@ -89,7 +89,7 @@ check_template_disk() {
     return 1
   fi
   if [ "$disk_size" -lt "$expected_size" ]; then
-    echo "template $template_name total disk size $disk_size MiB is below the requested $expected_size MiB of build free space" >&2
+    echo "template $template_name total disk size $disk_size MiB is below disk_size_mb $expected_size MiB" >&2
     return 1
   fi
 }

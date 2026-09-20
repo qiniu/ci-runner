@@ -90,16 +90,15 @@ restore cached `/tmp` outputs. Each of the four per-Ubuntu source directories
 contains `qshell.sandbox.toml` and `qshell.sandbox.large.toml`; do not recreate
 separate `-large` directories or source links. Keep every qshell `path = ".."`,
 `disk_size_mb = 20480` in the four standard TOML files, and `81920` in the four
-large TOML files. These are build free-space
-requests, while the template API reports total rootfs size; do not compare
-them for equality. Qshell 2.19.13 sends the request only when creating a new
-name. Before rebuilding an existing name in place, adjust the provider team's
+large TOML files. This value is the minimum root disk size; the template API
+and runtime smoke may report a larger total. Qshell 2.19.13 sends the setting
+only when creating a new name. Before rebuilding an existing name in place,
+adjust the provider team's
 `DiskMb`; the build task must preserve the name and ID and must not reject the
 stale pre-rebuild total. Publish and catalog checks still require the rebuilt
 total to meet the configured lower bound.
-Release smoke also checks at least
-19 GiB or 79 GiB of runtime rootfs free space for standard and `-large`
-templates, leaving 1 GiB for writes after provisioning. Build tasks
+Release smoke reads `disk_size_mb` from the selected TOML and requires the
+runtime root disk size to meet the same lower bound. Build tasks
 stage ignored archive chunks under
 `templates/common/.build/`; reuse verified chunks without replacing them so
 parallel qshell uploads read stable files. Never commit the archive or chunks.

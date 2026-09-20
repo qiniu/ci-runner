@@ -634,9 +634,8 @@ curl -fsS -b "$COOKIE_JAR" \
   scoped Sandbox endpoint 中，managed stable name 恰好对应 1 个公共的
   `ready` 或 `uploaded` 模板。
 - sandbox 创建失败：确认账户/组织 Preferences 或已启用的 admin default 具有与 template 和本地环境匹配的完整 Sandbox service 配置；Runner detail 会显示实际选择的来源。
-- `template-smoke` 报告运行时根文件系统可用空间不足：检查新建 Sandbox 的标准模板
-  至少有 19 GiB、`-large` 模板至少有 79 GiB 可用空间。Catalog 的总容量
-  `diskSizeMB` 无法证明这一点；确认 provider 团队的 `DiskMb` 后，按
+- `template-smoke` 报告运行时根磁盘容量不足：检查新建 Sandbox 的根磁盘容量是否
+  达到所选 TOML 中的 `disk_size_mb`。确认 provider 团队的 `DiskMb` 后，按
   [同名原地重建步骤](default-runner-templates.md)处理并重新执行 smoke。
 - registration token 失败：检查 [GitHub App 权限表](../../README.zh.md#所需权限)。未配置 `runner_group` 的 spec 需要 repository `Administration`；配置了 `runner_group` 的 spec 需要 organization `Self-hosted runners`。
 
