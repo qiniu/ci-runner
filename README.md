@@ -365,7 +365,7 @@ task ui-production-smoke # Execute the production UI bundle in Chromium
 task dev           # Start local dev (runnerd + Vite + smee)
 task lint          # Run linters
 task test          # Rebuild UI + run all tests (Go with race detection + Bun UI tests)
-task docker-check  # Verify Docker build
+task docker-check  # Verify the service Dockerfile
 task release-check # Verify release build
 ```
 

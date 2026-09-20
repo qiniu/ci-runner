@@ -352,7 +352,7 @@ task ui-production-smoke # 在 Chromium 中执行生产 UI bundle
 task dev           # 启动本地开发环境（runnerd + Vite + smee）
 task lint          # 运行代码检查
 task test          # 重建 UI + 运行全部测试（Go race detection + Bun UI tests）
-task docker-check  # 验证 Docker 构建
+task docker-check  # 验证服务 Dockerfile
 task release-check # 验证发布构建
 ```
 

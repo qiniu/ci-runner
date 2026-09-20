@@ -138,7 +138,8 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 
 ## Docker, Templates, And Release
 
-- Dockerfile-only validation: `task docker-check`.
+- Service Dockerfile-only validation: `task docker-check`; use
+  `task template-check-all` for the public template Dockerfiles.
 - Local binary and embedded UI: `task build`.
 - Production UI bundle execution: `task ui-production-smoke`.
 - GoReleaser config: `task release-check`.

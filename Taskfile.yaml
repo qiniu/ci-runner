@@ -4,7 +4,6 @@ vars:
   BINARY: runnerd
   IMAGE: ghcr.io/qiniu/ci-runner
   LDFLAGS: "-s -w"
-  TEMPLATE_DIR: templates/github-runner-ubuntu-24.04
   QSHELL: qshell
   RUNNER_TEMPLATE_IMAGE_PREFIX: qiniu-ci-runner
   GO_PACKAGES: "./cmd/... ./internal/..."
@@ -70,9 +69,8 @@ tasks:
 
   lint:
     desc: Run staticcheck, formatting checks, goimports checks, and go vet
-    deps:
-      - ui-build
     cmds:
+      - task: ui-lint
       - staticcheck {{.GO_PACKAGES}}
       - cmd: |
           UNFORMATTED=$(gofmt -l cmd internal)
@@ -96,7 +94,6 @@ tasks:
             exit 1
           fi
       - go vet {{.GO_PACKAGES}}
-      - task: ui-lint
 
   test:
     desc: Run UI tests and Go tests with the race detector and coverage
@@ -245,26 +242,9 @@ tasks:
       - docker build -t {{.IMAGE}}:local .
 
   docker-check:
-    desc: Check Dockerfiles without building image layers
+    desc: Check the service Dockerfile without building image layers
     cmds:
       - docker build --check -f Dockerfile .
-      - docker build --check --platform=linux/amd64 -f {{.TEMPLATE_DIR}}/Dockerfile templates
-
-  template-deps:
-    desc: Check Qiniu sandbox template build dependencies
-    dir: "{{.TEMPLATE_DIR}}"
-    cmds:
-      - qshell sandbox template build --help >/dev/null
-
-  template-build-dev:
-    desc: Build the development Qiniu sandbox template
-    cmds:
-      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh build "{{.TEMPLATE_DIR}}/qshell.sandbox.toml" github-runner-ubuntu-24-04-dev
-
-  template-build-prod:
-    desc: Build the production Qiniu sandbox template
-    cmds:
-      - task: template-build-ubuntu-24-04
 
   template-check-all:
     desc: Check the public runner template matrix, compatibility manifest, and Dockerfiles
@@ -481,4 +461,4 @@ tasks:
   clean:
     desc: Remove generated local build artifacts
     cmds:
-      - rm -rf bin dist coverage.txt ui/node_modules
+      - rm -rf .build bin coverage.txt dist internal/server/ui templates/common/.build
