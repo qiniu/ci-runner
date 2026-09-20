@@ -1594,8 +1594,8 @@ esac
 	if !result.Passed ||
 		result.SupportChannel != "preview" ||
 		!result.Cleanup.Passed ||
-		len(result.Results) != 9 {
-		t.Fatalf("release smoke result = %#v, want nine passing usability and identity checks plus cleanup", result)
+		len(result.Results) != 10 {
+		t.Fatalf("release smoke result = %#v, want ten passing usability and identity checks plus cleanup", result)
 	}
 	runnerEnv, err := os.ReadFile(filepath.Join(repositoryRoot(t), "templates", "common", "actions-runner.env"))
 	if err != nil {
@@ -1619,6 +1619,7 @@ esac
 	runtimeMetadataChecked := false
 	nvmHomeChecked := false
 	cloudflareDNSChecked := false
+	runtimeRootfsFreeSpaceChecked := false
 	for _, check := range result.Results {
 		if check.Category != "Release smoke" {
 			t.Fatalf("release smoke unexpectedly ran full inventory check %#v", check)
@@ -1659,6 +1660,10 @@ esac
 				strings.Contains(check.Command, `test -w "$HOME/.nvm"`) &&
 				strings.Contains(check.Command, `nvm --version`)
 		}
+		if check.Name == "runtime rootfs free space" {
+			runtimeRootfsFreeSpaceChecked = strings.Contains(check.Command, `df -Pm /`) &&
+				strings.Contains(check.Command, `-lt 19456`)
+		}
 		if check.Name == "Docker daemon" {
 			if !strings.Contains(check.Command, "sudo -H -u runner") {
 				t.Fatalf("Docker smoke does not reproduce the runnerd group context: %#v", check)
@@ -1682,6 +1687,9 @@ esac
 	}
 	if !cloudflareDNSChecked {
 		t.Fatalf("release smoke did not verify Cloudflare DNS: %#v", result.Results)
+	}
+	if !runtimeRootfsFreeSpaceChecked {
+		t.Fatalf("release smoke did not verify the standard template rootfs free-space floor: %#v", result.Results)
 	}
 }
 
