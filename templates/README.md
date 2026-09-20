@@ -202,6 +202,7 @@ The build and verification commands are:
 
 ```bash
 task template-check-all
+task template-build-all
 task template-build-ubuntu-slim
 task template-build-ubuntu-22-04
 task template-build-ubuntu-24-04
@@ -213,6 +214,9 @@ task template-build-ubuntu-26-04-large
 task template-conformance-local
 task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<published-template-id>
 ```
+
+`template-build-all` runs the eight build targets sequentially and stops at the
+first failure. Use an individual target when rebuilding only one template.
 
 The formal template gate is a qshell build reaching terminal `Status: ready`,
 or the exact Template ID and Build ID reaching `ready` or `uploaded` during the

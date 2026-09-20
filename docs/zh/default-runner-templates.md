@@ -195,6 +195,7 @@ compatibility verification 必须同步更新。Python 和 pipx 安装会对软�
 瞬时失败执行有限重试；其他上游安装器可能不具备幂等性，因此不会自动重试。
 
 ```bash
+task template-build-all
 task template-build-ubuntu-slim
 task template-build-ubuntu-22-04
 task template-build-ubuntu-24-04
@@ -204,6 +205,9 @@ task template-build-ubuntu-22-04-large
 task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
+
+`template-build-all` 会串行执行这 8 个远程构建，并在首个失败处停止。只需重建
+一个模板时，使用对应的单模板 target。
 
 标准和 large 构建目标分别通过已追踪的 TOML 设置 20,480 MiB 和 81,920 MiB
 磁盘容量下限，但 qshell 不会在同名 rebuild 请求中发送该值。先调整

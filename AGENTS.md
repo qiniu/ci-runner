@@ -71,6 +71,7 @@ task build
 task docker-check
 task release-check
 task template-check-all
+task template-build-all
 ```
 
 Use `task dev` for local development. It defaults to `RUNNERD_CONFIG=runnerd.local.yaml`, starts Vite on the first available localhost port at or after `5173`, and starts smee forwarding when `.smee-url` exists.
@@ -112,6 +113,8 @@ reports the status-only inspection command when the build remains active, and
 preserves the last qshell error when exact status queries remain unavailable.
 Release evidence then still requires `task template-smoke` in both supported
 regions.
+`task template-build-all` invokes all eight build targets sequentially and stops
+at the first failure; use it only when the whole regional catalog must be rebuilt.
 
 Use `cd ui && bun run test` for focused UI tests. `task test` rebuilds the UI, runs the Bun UI tests, and then runs Go tests with race detection and coverage.
 

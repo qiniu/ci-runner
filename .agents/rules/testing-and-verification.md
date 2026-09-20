@@ -164,6 +164,9 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   exact expected total. Regional release smoke reads `disk_size_mb` from the
   selected TOML and requires the runtime root disk size to meet that lower
   bound; it remains required before promotion.
+- `task template-build-all` runs all eight remote build targets sequentially
+  and stops at the first failure. Use individual build targets for scoped
+  rebuilds.
 
 ## Deployment Smoke
 

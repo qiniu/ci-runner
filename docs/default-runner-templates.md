@@ -227,6 +227,7 @@ package-index failures; other upstream installers are not retried automatically
 because they may not be idempotent.
 
 ```bash
+task template-build-all
 task template-build-ubuntu-slim
 task template-build-ubuntu-22-04
 task template-build-ubuntu-24-04
@@ -236,6 +237,9 @@ task template-build-ubuntu-22-04-large
 task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
+
+`template-build-all` runs these eight remote builds sequentially and stops at
+the first failure. Use an individual target when rebuilding only one template.
 
 Standard and large build targets set minimum disk sizes of 20,480 MiB and
 81,920 MiB, respectively, in their tracked TOML files. Qshell does not send

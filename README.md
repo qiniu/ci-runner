@@ -386,8 +386,9 @@ The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
 `github-runner-ubuntu-24-04-large` physical template; it does not add another
 source directory or build target.
 
-Run `task template-check-all`, then use the eight
-`task template-build-ubuntu-*` targets for real qshell Sandbox builds. See
+Run `task template-check-all`, then use `task template-build-all` to build all
+eight templates sequentially, or use an individual `task template-build-ubuntu-*`
+target for one real qshell Sandbox build. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and
 smoke commands. Shared setup code and the Actions Runner version pin live in

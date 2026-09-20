@@ -278,6 +278,18 @@ tasks:
     cmds:
       - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh unpublish "{{.PUBLIC_TEMPLATE_CONFIG}}"
 
+  template-build-all:
+    desc: Build all eight public templates sequentially with qshell and wait until ready
+    cmds:
+      - task: template-build-ubuntu-slim
+      - task: template-build-ubuntu-22-04
+      - task: template-build-ubuntu-24-04
+      - task: template-build-ubuntu-26-04
+      - task: template-build-ubuntu-slim-large
+      - task: template-build-ubuntu-22-04-large
+      - task: template-build-ubuntu-24-04-large
+      - task: template-build-ubuntu-26-04-large
+
   template-build-ubuntu-slim:
     desc: Build the Ubuntu Slim template with qshell and wait until ready
     cmds:

@@ -371,8 +371,9 @@ task release-check # 验证发布构建
 对外的 `ubuntu-latest-large` Runner Spec 是映射到
 `github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增源码目录或构建目标。
 
-先运行 `task template-check-all`，再通过 8 个
-`task template-build-ubuntu-*` targets 执行真实 qshell Sandbox 构建。发布与
+先运行 `task template-check-all`，再通过 `task template-build-all` 串行构建全部
+8 个模板，或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
+Sandbox 构建。发布与
 远程构建超时后的缓存续跑、发布与 smoke 命令见
 [公共 Runner 模板](docs/zh/default-runner-templates.md)。公共安装代码和
 Actions Runner 版本固定值位于 `templates/common/`。
