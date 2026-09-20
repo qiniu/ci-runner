@@ -649,7 +649,7 @@ fi
 	output, err := runCommand(
 		t,
 		"bash",
-		[]string{"scripts/run-runner-template-operation.sh", "build", templateDir},
+		[]string{"scripts/run-runner-template-operation.sh", "build", configPath},
 		append(commonEnv, "QSHELL_TEST_MODE=ready")...,
 	)
 	if err != nil {
@@ -683,7 +683,7 @@ fi
 	output, err = runCommand(
 		t,
 		"bash",
-		[]string{"scripts/run-runner-template-operation.sh", "build", templateDir},
+		[]string{"scripts/run-runner-template-operation.sh", "build", configPath},
 		append(commonEnv, "QSHELL_TEST_MODE=failed")...,
 	)
 	if err == nil || !strings.Contains(output, "did not report terminal Status: ready") {
@@ -714,7 +714,7 @@ printf 'Status:       ready\n'
 		"bash",
 		scriptPath,
 		"build",
-		"templates/github-runner-ubuntu-slim",
+		"templates/github-runner-ubuntu-slim/qshell.sandbox.toml",
 	)
 	cmd.Dir = fixture
 	cmd.Env = append(
@@ -738,14 +738,14 @@ printf 'Status:       ready\n'
 	}
 }
 
-func TestRunnerTemplateQshellPublicationRunsFromTemplateDirectory(t *testing.T) {
+func TestRunnerTemplateQshellPublicationUsesResolvedTemplateID(t *testing.T) {
 	fixture := t.TempDir()
 	templateDir := filepath.Join(fixture, "template")
 	if err := os.MkdirAll(templateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(templateDir, "qshell.sandbox.toml"),
+		filepath.Join(templateDir, "qshell.sandbox.large.toml"),
 		[]byte("name = \"fixture-template\"\ndisk_size_mb = 20480\n"),
 		0o644,
 	); err != nil {
@@ -760,7 +760,7 @@ if [ "${1:-}" = version ]; then
   exit 0
 fi
 if [ "$*" = 'sandbox template list --format json' ]; then
-  printf '[{"Aliases":["fixture-template"],"DiskSizeMB":20480}]\n'
+  printf '[{"Aliases":["fixture-template"],"TemplateID":"tmpl-fixture","DiskSizeMB":20480}]\n'
   exit 0
 fi
 printf 'pwd=%s args=%s\n' "$PWD" "$*" >>"$QSHELL_TEST_LOG"
@@ -776,11 +776,12 @@ esac
 		"QINIU_SANDBOX_API_URL=https://sandbox.example.test",
 		"QINIU_API_KEY=test-api-key",
 	}
+	configPath := filepath.Join(templateDir, "qshell.sandbox.large.toml")
 	for _, operation := range []string{"publish", "unpublish"} {
 		output, err := runCommand(
 			t,
 			"bash",
-			[]string{"scripts/run-runner-template-operation.sh", operation, templateDir},
+			[]string{"scripts/run-runner-template-operation.sh", operation, configPath},
 			commonEnv...,
 		)
 		if err != nil {
@@ -793,7 +794,7 @@ esac
 	}
 	log := string(logBytes)
 	for _, operation := range []string{"publish", "unpublish"} {
-		want := "pwd=" + templateDir + " args=sandbox template " + operation + " -y"
+		want := "pwd=" + templateDir + " args=sandbox template " + operation + " tmpl-fixture -y"
 		if !strings.Contains(log, want) {
 			t.Fatalf("missing qshell publication invocation %q:\n%s", want, log)
 		}

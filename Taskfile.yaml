@@ -259,7 +259,7 @@ tasks:
   template-build-dev:
     desc: Build the development Qiniu sandbox template
     cmds:
-      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh build "{{.TEMPLATE_DIR}}" github-runner-ubuntu-24-04-dev
+      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh build "{{.TEMPLATE_DIR}}/qshell.sandbox.toml" github-runner-ubuntu-24-04-dev
 
   template-build-prod:
     desc: Build the production Qiniu sandbox template
@@ -273,176 +273,174 @@ tasks:
       - bash scripts/test-runner-template-disk.sh
       - bash scripts/test-prepare-runner-archive.sh
       - bash scripts/check-runner-image-compatibility.sh
-      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04, github-runner-ubuntu-slim-large, github-runner-ubuntu-22.04-large, github-runner-ubuntu-24.04-large, github-runner-ubuntu-26.04-large]
+      - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04]
         cmd: |
-          template_dir="{{.ITEM}}"
-          base_dir="${template_dir%-large}"
-          docker build --check --platform=linux/amd64 -f "templates/${base_dir}/Dockerfile" templates
+          docker build --check --platform=linux/amd64 -f "templates/{{.ITEM}}/Dockerfile" templates
 
   _template-build:
     internal: true
     requires:
-      vars: [PUBLIC_TEMPLATE_DIR]
+      vars: [PUBLIC_TEMPLATE_CONFIG]
     cmds:
-      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh build "{{.PUBLIC_TEMPLATE_DIR}}"
+      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh build "{{.PUBLIC_TEMPLATE_CONFIG}}"
 
   _template-publish:
     internal: true
     requires:
-      vars: [PUBLIC_TEMPLATE_DIR]
+      vars: [PUBLIC_TEMPLATE_CONFIG]
     cmds:
-      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh publish "{{.PUBLIC_TEMPLATE_DIR}}"
+      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh publish "{{.PUBLIC_TEMPLATE_CONFIG}}"
 
   _template-unpublish:
     internal: true
     requires:
-      vars: [PUBLIC_TEMPLATE_DIR]
+      vars: [PUBLIC_TEMPLATE_CONFIG]
     cmds:
-      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh unpublish "{{.PUBLIC_TEMPLATE_DIR}}"
+      - QSHELL="{{.QSHELL}}" scripts/run-runner-template-operation.sh unpublish "{{.PUBLIC_TEMPLATE_CONFIG}}"
 
   template-build-ubuntu-slim:
     desc: Build the Ubuntu Slim template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.toml}
 
   template-build-ubuntu-22-04:
     desc: Build the Ubuntu 22.04 template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.toml}
 
   template-build-ubuntu-24-04:
     desc: Build the Ubuntu 24.04 template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.toml}
 
   template-build-ubuntu-26-04:
     desc: Build the Ubuntu 26.04 preview template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.toml}
 
   template-build-ubuntu-slim-large:
     desc: Build the large Ubuntu Slim template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.large.toml}
 
   template-build-ubuntu-22-04-large:
     desc: Build the large Ubuntu 22.04 template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.large.toml}
 
   template-build-ubuntu-24-04-large:
     desc: Build the large Ubuntu 24.04 template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.large.toml}
 
   template-build-ubuntu-26-04-large:
     desc: Build the large Ubuntu 26.04 template with qshell and wait until ready
     cmds:
       - task: _template-build
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.large.toml}
 
   template-publish-ubuntu-slim:
     desc: Publish the Ubuntu Slim template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.toml}
 
   template-publish-ubuntu-22-04:
     desc: Publish the Ubuntu 22.04 template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.toml}
 
   template-publish-ubuntu-24-04:
     desc: Publish the Ubuntu 24.04 template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.toml}
 
   template-publish-ubuntu-26-04:
     desc: Publish the Ubuntu 26.04 preview template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.toml}
 
   template-publish-ubuntu-slim-large:
     desc: Publish the large Ubuntu Slim template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.large.toml}
 
   template-publish-ubuntu-22-04-large:
     desc: Publish the large Ubuntu 22.04 template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.large.toml}
 
   template-publish-ubuntu-24-04-large:
     desc: Publish the large Ubuntu 24.04 template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.large.toml}
 
   template-publish-ubuntu-26-04-large:
     desc: Publish the large Ubuntu 26.04 template
     cmds:
       - task: _template-publish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.large.toml}
 
   template-unpublish-ubuntu-slim:
     desc: Roll back publication of the Ubuntu Slim template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.toml}
 
   template-unpublish-ubuntu-22-04:
     desc: Roll back publication of the Ubuntu 22.04 template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.toml}
 
   template-unpublish-ubuntu-24-04:
     desc: Roll back publication of the Ubuntu 24.04 template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.toml}
 
   template-unpublish-ubuntu-26-04:
     desc: Roll back publication of the Ubuntu 26.04 preview template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.toml}
 
   template-unpublish-ubuntu-slim-large:
     desc: Roll back publication of the large Ubuntu Slim template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-slim-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-slim/qshell.sandbox.large.toml}
 
   template-unpublish-ubuntu-22-04-large:
     desc: Roll back publication of the large Ubuntu 22.04 template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-22.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-22.04/qshell.sandbox.large.toml}
 
   template-unpublish-ubuntu-24-04-large:
     desc: Roll back publication of the large Ubuntu 24.04 template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-24.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-24.04/qshell.sandbox.large.toml}
 
   template-unpublish-ubuntu-26-04-large:
     desc: Roll back publication of the large Ubuntu 26.04 template
     cmds:
       - task: _template-unpublish
-        vars: {PUBLIC_TEMPLATE_DIR: templates/github-runner-ubuntu-26.04-large}
+        vars: {PUBLIC_TEMPLATE_CONFIG: templates/github-runner-ubuntu-26.04/qshell.sandbox.large.toml}
 
   template-defaults-check:
     desc: Verify the eight public templates in the current Sandbox region catalog

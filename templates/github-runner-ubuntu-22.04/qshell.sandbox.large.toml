@@ -1,6 +1,6 @@
 # Development large Ubuntu 22.04 runner template.
 name = "github-runner-ubuntu-22-04-large"
-dockerfile = "../github-runner-ubuntu-22.04/Dockerfile"
+dockerfile = "./Dockerfile"
 path = ".."
 cpu_count = 8
 memory_mb = 8192

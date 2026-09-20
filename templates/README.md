@@ -19,7 +19,7 @@ The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-
 [Ubuntu 24.04](github-runner-ubuntu-24.04/software-diff.md), and
 [Ubuntu 26.04](github-runner-ubuntu-26.04/software-diff.md).
 `ubuntu-latest` is a logical mapping to the 24.04 physical template and has no
-fifth physical template directory.
+fifth source directory.
 
 The four standard physical templates were published, catalog-checked, and release-smoke
 verified in `cn-yangzhou-1` and `us-south-1` on 2026-08-03. The regional IDs
@@ -41,9 +41,10 @@ That smoke requires at least 19 GiB of runtime rootfs free space for standard
 templates and 79 GiB for large templates. The 1-GiB allowance covers writes
 after build provisioning; runtime free space does not prove the original request.
 
-The four `-large` variants reuse the standard Dockerfiles and scripts through
-in-repository links, but use distinct provider template names. Their tracked
-`qshell.sandbox.toml` files request `disk_size_mb = 81920` (80 GiB) when
+Each of the four source directories contains a standard
+`qshell.sandbox.toml` and a large `qshell.sandbox.large.toml`. Both configs
+reuse the same Dockerfile and scripts while naming distinct provider templates.
+The large configs request `disk_size_mb = 81920` (80 GiB) when
 creating a new template. This requests build free space, so the final total
 rootfs size may exceed 81,920 MiB. The provider team's `DiskMb` must be at
 least 81,920 MiB before rebuilding an existing name. Qshell does not send the
@@ -56,8 +57,8 @@ pass the same regional catalog and smoke gates.
 All eight builds use `templates/` as their Docker context. The four standard
 Dockerfiles copy shared setup functions and helper programs directly from
 `templates/common/`; each variant keeps its own Ubuntu-specific setup flow,
-base image, and tool pins. The `-large` variants use the same source through
-their standard-template links. Keep the tracked `path = ".."` setting in each
+base image, and tool pins. Each `-large` config is colocated with and uses its
+standard variant's source. Keep the tracked `path = ".."` setting in each
 qshell config so remote builds include `common/`. The single Actions Runner
 version, Linux x64 archive SHA-256, and archive size live in
 `templates/common/actions-runner.env`. Each Dockerfile copies that file after
@@ -275,16 +276,16 @@ regional Docker Hub availability; outbound HTTPS remains a separate check.
 
 Each `template-build-*` target must:
 
-1. copy the tracked template's `qshell.sandbox.toml` to a temporary file;
-2. keep the working directory at that template directory so the relative
+1. select the tracked standard or large TOML file and copy it to a temporary file;
+2. keep the working directory at its source directory so the relative
    Dockerfile and build context continue to resolve;
 3. run `qshell sandbox template build --wait --config <temporary-file>`; and
 4. remove the temporary file on exit.
 
 The temporary copy is required because a first Qiniu template creation writes
 the resulting `template_id` into the configuration file. The tracked
-`qshell.sandbox.toml` remains a stable, reviewable input and must not receive
-that environment-specific identifier.
+standard and large TOML files remain stable, reviewable inputs and must not
+receive that environment-specific identifier.
 
 The underlying Task 7 gates can also be run directly:
 
@@ -309,6 +310,6 @@ Task 8 exposes matching `task template-publish-*` and
 `task template-unpublish-*` commands for the eight physical templates; use
 `task template-defaults-check` before promotion and the matching unpublish
 target for rollback. Qshell publish and unpublish do not support the build-only
-`--config` option. Their Task targets run from the matching template directory,
-read the stable name from its tracked `qshell.sandbox.toml`, and invoke the
-matching operation with `-y`; no Region-specific template ID is committed.
+`--config` option. Their Task targets read the stable name from the selected
+tracked TOML file, resolve exactly one service-catalog template ID, and invoke
+the operation with that ID and `-y`; no region-specific template ID is committed.

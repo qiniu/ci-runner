@@ -377,18 +377,14 @@ loading.
 
 | Template | Description |
 | --- | --- |
-| `templates/github-runner-ubuntu-slim` | Ubuntu Slim x64 runner template requesting 20 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-22.04` | Ubuntu 22.04 x64 runner template requesting 20 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-24.04` | Ubuntu 24.04 x64 runner template requesting 20 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-26.04` | Preview Ubuntu 26.04 x64 runner template requesting 20 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-slim-large` | Ubuntu Slim x64 runner template requesting 80 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-22.04-large` | Ubuntu 22.04 x64 runner template requesting 80 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-24.04-large` | Ubuntu 24.04 x64 runner template requesting 80 GiB of build free space at creation |
-| `templates/github-runner-ubuntu-26.04-large` | Ubuntu 26.04 x64 runner template requesting 80 GiB of build free space at creation |
+| `templates/github-runner-ubuntu-slim` | Ubuntu Slim x64 source with standard 20-GiB and large 80-GiB build configs |
+| `templates/github-runner-ubuntu-22.04` | Ubuntu 22.04 x64 source with standard 20-GiB and large 80-GiB build configs |
+| `templates/github-runner-ubuntu-24.04` | Ubuntu 24.04 x64 source with standard 20-GiB and large 80-GiB build configs |
+| `templates/github-runner-ubuntu-26.04` | Preview Ubuntu 26.04 x64 source with standard 20-GiB and large 80-GiB build configs |
 
 The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
 `github-runner-ubuntu-24-04-large` physical template; it does not add another
-template directory or build target.
+source directory or build target.
 
 Run `task template-check-all`, then use the eight
 `task template-build-ubuntu-*` targets for real qshell Sandbox builds. See

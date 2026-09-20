@@ -86,9 +86,11 @@ live in `templates/common/`; retain per-Ubuntu setup differences and keep the
 Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
 Keep the host-side archive checksum, sixteen small COPY chunks, and remote full
 checksum in the same Docker `RUN` as runtime installation; qshell does not
-restore cached `/tmp` outputs. Keep every qshell `path = ".."` and the `-large`
-source links aligned. Keep `disk_size_mb = 20480` in the four standard TOML
-files and `81920` in the four `-large` files. These are build free-space
+restore cached `/tmp` outputs. Each of the four per-Ubuntu source directories
+contains `qshell.sandbox.toml` and `qshell.sandbox.large.toml`; do not recreate
+separate `-large` directories or source links. Keep every qshell `path = ".."`,
+`disk_size_mb = 20480` in the four standard TOML files, and `81920` in the four
+large TOML files. These are build free-space
 requests, while the template API reports total rootfs size; do not compare
 them for equality. Qshell 2.19.13 sends the request only when creating a new
 name. Before rebuilding an existing name in place, adjust the provider team's

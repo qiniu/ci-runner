@@ -14,7 +14,17 @@ checksum-pinned GitHub Actions runner under `/opt/actions-runner`, and an
 idempotent Docker daemon/socket helper. Runtime runner registration is
 ephemeral.
 
-Build with Task 8's `task template-build-ubuntu-slim`; this tracked file does
-not contain a region-specific template ID. See
+Build the standard template with `task template-build-ubuntu-slim`, using
+`qshell.sandbox.toml`. Build the large variant with
+`task template-build-ubuntu-slim-large`, using
+`qshell.sandbox.large.toml`. Both configs use this directory's Dockerfile and
+request 8 vCPUs and 8192 MiB of memory; their build free-space requests are
+20 GiB and 80 GiB, respectively.
+
+Before rebuilding the large name in place, set the provider team's `DiskMb` to
+the required effective allocation. Qshell does not send `disk_size_mb` during
+same-name rebuilds, so the build helper permits the rebuild and the publish and
+catalog gates verify its resulting total capacity. Neither tracked config
+contains a region-specific template ID. See
 [`software-diff.md`](software-diff.md) and the repository-level compatibility
 manifest for the verified contract.

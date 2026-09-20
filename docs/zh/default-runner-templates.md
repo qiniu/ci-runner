@@ -24,18 +24,19 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 原地重建，不检查重建前的旧总容量。发布与 catalog 检查要求重建后的总容量至少为
 20,480 MiB，之后仍需运行 Sandbox smoke。
 
-4 个 `-large` 变体通过仓库软链复用标准 Dockerfile 和脚本，并使用不同的物理
-模板名称。它们是已文档化的 operator 配置 Runner Spec：operator 通过自定义
+每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`
+变体使用。标准和 large 配置复用同一份 Dockerfile 与脚本，但使用不同的物理模板
+名称。large 变体是已文档化的 operator 配置 Runner Spec：operator 通过自定义
 spec 路径在 Admin 中创建并启用带显式 template ID 的条目。它们不属于 runnerd
 managed defaults，但对应 spec 启用后，所有允许的 workflow 都可以使用文档中的
-labels。每份 large 模板的 `qshell.sandbox.toml` 都设置了
+labels。每份 `qshell.sandbox.large.toml` 都设置了
 `disk_size_mb = 81920`，用于创建新模板时请求 80 GiB 构建可用空间；原地重建前，
 provider 团队的 `DiskMb` 必须至少为 81,920 MiB。qshell 重建同名模板时不会发送
 此字段，因此构建脚本允许旧总容量较小的模板进入 rebuild；发布与 catalog 检查
 会在重建后验证容量下界。
 [qshell v2.19.13 文档说明了磁盘参数仅在创建时生效](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48)。
 
-8 份 qshell 配置均以 `templates/` 为构建上下文。Dockerfile 从
+4 个源码目录中的 8 份 qshell 配置均以 `templates/` 为构建上下文。Dockerfile 从
 `templates/common/` 复制共用的安装函数和辅助脚本；各标准模板仍保留对应
 Ubuntu 版本的安装步骤。`templates/common/actions-runner.env` 统一固定
 Actions Runner 版本、Linux x64 归档校验和及归档大小，仅在 `runtime` 阶段前
@@ -166,9 +167,9 @@ Runner、用于 installer 验证的固定版本 Pester，以及 Runner 文件系
 task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 ```
 
-任一凭据变量为空时，所有远端任务都会直接失败。仓库中的
-`qshell.sandbox.toml` 只保存稳定名称和资源设置；构建任务让 qshell 使用临时
-副本，因此不会提交区域相关的 template ID。
+任一凭据变量为空时，所有远端任务都会直接失败。仓库中的标准与 large TOML 文件
+只保存稳定名称和资源设置；构建任务让 qshell 使用所选文件的临时副本，因此不会
+提交区域相关的 template ID。
 
 ## 在单个区域构建与验证
 

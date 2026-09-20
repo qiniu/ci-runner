@@ -1,1 +1,0 @@
-../github-runner-ubuntu-slim/software-diff.md

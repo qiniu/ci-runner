@@ -28,12 +28,14 @@ the build helper rebuilds the existing name and ID without checking its stale
 total. Publish and catalog checks require the rebuilt total to be at least
 20,480 MiB. Runtime Sandbox smoke remains required.
 
-The four `-large` variants reuse the standard Dockerfiles and scripts through
-repository links and use distinct physical template names. They are documented
+Each standard source directory also contains a
+`qshell.sandbox.large.toml` for its `-large` variant. Standard and large configs
+reuse the same Dockerfile and scripts while using distinct physical template
+names. The large variants are documented
 operator-configured Runner Specs: operators enable them through the
 custom-spec path with explicit template IDs. They are not runnerd-managed
 defaults, but all allowed workflows may use their documented labels when the
-corresponding specs are enabled. Each large `qshell.sandbox.toml` requests an
+corresponding specs are enabled. Each `qshell.sandbox.large.toml` requests an
 80-GiB build free-space target with `disk_size_mb = 81920` when creating a new template; the
 provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
 Qshell does not send this setting when rebuilding an existing same-name
@@ -41,7 +43,8 @@ template. The build helper therefore allows the rebuild despite a stale lower
 total; publish and catalog checks enforce the lower bound after the rebuild.
 [Qshell v2.19.13 documents the create-only disk option](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48).
 
-All eight qshell configurations use `templates/` as the build context. The
+All eight qshell configurations across the four source directories use
+`templates/` as the build context. The
 Dockerfiles copy shared setup functions and helper scripts from
 `templates/common/`, while each standard image retains its Ubuntu-specific
 steps. `templates/common/actions-runner.env` is the single source for the
@@ -191,9 +194,9 @@ task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 ```
 
 Every remote target fails closed when either credential variable is empty.
-The tracked `qshell.sandbox.toml` files contain stable names and resource
-settings only; qshell builds from temporary copies so region-specific template
-IDs are never committed.
+The tracked standard and large TOML files contain stable names and resource
+settings only; qshell builds from temporary copies of the selected files so
+region-specific template IDs are never committed.
 
 ## Build and verify one region
 
@@ -204,8 +207,9 @@ task template-check-all
 ```
 
 Then build the actual Sandbox templates with qshell. Each target waits for
-qshell to report terminal `Status: ready`; a zero process exit without that
-status is treated as a failed build.
+qshell to report terminal `Status: ready`; if its wait stream exits early, the
+helper accepts only the same build ID reaching catalog status `uploaded` during
+bounded reconciliation.
 
 The source gate rejects Actions Runner versions below `2.337.0`. Release smoke
 checks the exact common-pinned Runner version and the template name/version

@@ -59,7 +59,7 @@ case "$image_key" in
     expected_release=24.04
     support_channel=development
     template_name=github-runner-ubuntu-slim
-    template_directory=github-runner-ubuntu-slim-large
+    template_directory=github-runner-ubuntu-slim
     manifest_image_key=ubuntu-slim
     ;;
   ubuntu-24.04)
@@ -73,7 +73,7 @@ case "$image_key" in
     expected_release=24.04
     support_channel=development
     template_name=github-runner-ubuntu-24-04
-    template_directory=github-runner-ubuntu-24.04-large
+    template_directory=github-runner-ubuntu-24.04
     manifest_image_key=ubuntu-24.04
     ;;
   ubuntu-22.04)
@@ -87,7 +87,7 @@ case "$image_key" in
     expected_release=22.04
     support_channel=development
     template_name=github-runner-ubuntu-22-04
-    template_directory=github-runner-ubuntu-22.04-large
+    template_directory=github-runner-ubuntu-22.04
     manifest_image_key=ubuntu-22.04
     ;;
   ubuntu-26.04)
@@ -101,7 +101,7 @@ case "$image_key" in
     expected_release=26.04
     support_channel=development
     template_name=github-runner-ubuntu-26-04
-    template_directory=github-runner-ubuntu-26.04-large
+    template_directory=github-runner-ubuntu-26.04
     manifest_image_key=ubuntu-26.04
     ;;
   *)

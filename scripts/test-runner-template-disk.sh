@@ -13,12 +13,16 @@ case "$*" in
     printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.19.13}"
     ;;
   'sandbox template list --format json')
+    if [ -n "${MOCK_TEMPLATE_LIST_JSON:-}" ]; then
+      printf '%s\n' "$MOCK_TEMPLATE_LIST_JSON"
+      exit 0
+    fi
     jq -n --arg alias "${MOCK_ALIAS:-github-runner-ubuntu-24-04-large}" --argjson disk "$MOCK_DISK" \
       --arg build_status "${MOCK_BUILD_STATUS:-uploaded}" \
       '[{Aliases: [$alias], TemplateID: "existing-template-id", BuildID: "fixture-build-id",
          BuildStatus: $build_status, DiskSizeMB: $disk}]'
     ;;
-  'sandbox template publish -y')
+  'sandbox template publish existing-template-id -y')
     echo 'Template fixture published'
     ;;
   sandbox\ template\ build\ --wait\ --config\ *)
@@ -84,43 +88,49 @@ expect_failure() {
   }
 }
 
-large_template_dir="$repository_root/templates/github-runner-ubuntu-24.04-large"
-standard_template_dir="$repository_root/templates/github-runner-ubuntu-24.04"
+template_dir="$repository_root/templates/github-runner-ubuntu-24.04"
+large_template_config="$template_dir/qshell.sandbox.large.toml"
+standard_template_config="$template_dir/qshell.sandbox.toml"
 operation_script="$repository_root/scripts/run-runner-template-operation.sh"
 export QINIU_SANDBOX_API_URL=https://sandbox.invalid QINIU_API_KEY=fixture
 export QSHELL="$workdir/qshell"
 export MOCK_DISK=22222
 expect_failure 'qshell >= 2.19.13 is required' \
-  env MOCK_QSHELL_VERSION=2.19.12 bash "$operation_script" build "$large_template_dir"
-BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_dir" >"$workdir/output"
+  env MOCK_QSHELL_VERSION=2.19.12 bash "$operation_script" build "$large_template_config"
+BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config" >"$workdir/output"
 grep -Fq 'Template ID: existing-template-id' "$workdir/output"
 grep -Fq 'Status: ready' "$workdir/output"
 MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
-  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_dir" >"$workdir/output"
+  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config" >"$workdir/output"
 grep -Fq 'service catalog reports build fixture-build-id as uploaded' "$workdir/output"
 expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
-  bash "$operation_script" publish "$large_template_dir"
+  bash "$operation_script" publish "$large_template_config"
 
-MOCK_DISK=83662 bash "$operation_script" publish "$large_template_dir" >"$workdir/output"
+MOCK_DISK=83662 bash "$operation_script" publish "$large_template_config" >"$workdir/output"
 grep -Fq 'Template fixture published' "$workdir/output"
 MOCK_DISK=83662 MOCK_QSHELL_VERSION=2.19.12 \
-  bash "$operation_script" publish "$large_template_dir" >"$workdir/output"
+  bash "$operation_script" publish "$large_template_config" >"$workdir/output"
+expect_failure 'is missing from the service catalog' \
+  env MOCK_TEMPLATE_LIST_JSON='[]' bash "$operation_script" publish "$large_template_config"
+expect_failure 'is duplicated in the service catalog' \
+  env MOCK_TEMPLATE_LIST_JSON='[{"Aliases":["github-runner-ubuntu-24-04-large"]},{"Aliases":["github-runner-ubuntu-24-04-large"]}]' \
+  bash "$operation_script" publish "$large_template_config"
 
 MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=22222 \
-  bash "$operation_script" publish "$standard_template_dir" >"$workdir/output"
+  bash "$operation_script" publish "$standard_template_config" >"$workdir/output"
 expect_failure 'total disk size 19000 MiB is below the requested 20480 MiB' \
-  env MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=19000 bash "$operation_script" publish "$standard_template_dir"
+  env MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=19000 bash "$operation_script" publish "$standard_template_config"
 
 mkdir "$workdir/missing-disk" "$workdir/invalid-disk"
-sed '/^disk_size_mb[[:space:]]*=/d' "$standard_template_dir/qshell.sandbox.toml" \
-  >"$workdir/missing-disk/qshell.sandbox.toml"
+sed '/^disk_size_mb[[:space:]]*=/d' "$standard_template_config" \
+  >"$workdir/missing-disk/fixture.toml"
 sed 's/^disk_size_mb[[:space:]]*=.*/disk_size_mb = "20480"/' \
-  "$standard_template_dir/qshell.sandbox.toml" \
-  >"$workdir/invalid-disk/qshell.sandbox.toml"
+  "$standard_template_config" \
+  >"$workdir/invalid-disk/fixture.toml"
 expect_failure 'template config has no valid disk_size_mb' \
-  bash "$operation_script" publish "$workdir/missing-disk"
+  bash "$operation_script" publish "$workdir/missing-disk/fixture.toml"
 expect_failure 'template config has no valid disk_size_mb' \
-  bash "$operation_script" publish "$workdir/invalid-disk"
+  bash "$operation_script" publish "$workdir/invalid-disk/fixture.toml"
 
 write_catalog() {
   local standard_disk="$1"

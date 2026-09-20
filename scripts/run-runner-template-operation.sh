@@ -2,29 +2,27 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-  echo "usage: scripts/run-runner-template-operation.sh build|publish|unpublish TEMPLATE_DIR [BUILD_NAME]" >&2
+  echo "usage: scripts/run-runner-template-operation.sh build|publish|unpublish TEMPLATE_CONFIG [BUILD_NAME]" >&2
   exit 64
 fi
 
 operation="$1"
-template_dir="$2"
+template_config="$2"
 build_name="${3:-}"
 qshell_bin="${QSHELL:-qshell}"
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-if [[ "$template_dir" != /* ]]; then
-  template_dir="$script_root/$template_dir"
+if [[ "$template_config" != /* ]]; then
+  template_config="$script_root/$template_config"
 fi
 
 : "${QINIU_SANDBOX_API_URL:?QINIU_SANDBOX_API_URL is required}"
 : "${QINIU_API_KEY:?QINIU_API_KEY is required}"
-test -d "$template_dir" || {
-  echo "template directory does not exist: $template_dir" >&2
+test -f "$template_config" || {
+  echo "template config does not exist: $template_config" >&2
   exit 66
 }
-test -f "$template_dir/qshell.sandbox.toml" || {
-  echo "template config does not exist: $template_dir/qshell.sandbox.toml" >&2
-  exit 66
-}
+template_dir="$(dirname "$template_config")"
+template_config="$template_dir/$(basename "$template_config")"
 command -v "$qshell_bin" >/dev/null 2>&1 || {
   echo "qshell executable not found: $qshell_bin" >&2
   exit 69
@@ -54,35 +52,45 @@ if ! awk -v actual="$qshell_version" -v minimum="$minimum_qshell_version" '
   exit 69
 fi
 
+resolve_template_record() {
+  local template_name="$1"
+  local matches
+  command -v jq >/dev/null 2>&1 || {
+    echo "jq is required to resolve template $template_name" >&2
+    return 69
+  }
+  matches="$(
+    "$qshell_bin" sandbox template list --format json |
+      jq -c --arg name "$template_name" '[ .[] | select((.Aliases // []) | index($name)) ]'
+  )"
+  case "$(jq 'length' <<<"$matches")" in
+    0)
+      echo "template $template_name is missing from the service catalog" >&2
+      return 1
+      ;;
+    1)
+      jq -c '.[0]' <<<"$matches"
+      ;;
+    *)
+      echo "template $template_name is duplicated in the service catalog" >&2
+      return 1
+      ;;
+  esac
+}
+
 check_template_disk() {
   local template_name="$1"
   local expected_size="$2"
-  local allow_missing="$3"
+  local template_record="$3"
   local disk_size
-  command -v jq >/dev/null 2>&1 || {
-    echo "jq is required to verify template disk size" >&2
-    exit 69
-  }
-  disk_size="$(
-    "$qshell_bin" sandbox template list --format json |
-      jq -r --arg name "$template_name" '
-        [ .[] | select((.Aliases // []) | index($name)) ] |
-        if length == 0 then "missing"
-        elif length == 1 then (.[0].DiskSizeMB | tostring)
-        else "duplicate"
-        end
-      '
-  )"
-  if [ "$disk_size" = missing ] && [ "$allow_missing" = true ]; then
-    return
-  fi
+  disk_size="$(jq -r '.DiskSizeMB | tostring' <<<"$template_record")"
   if [[ ! "$disk_size" =~ ^[0-9]+$ ]]; then
     echo "template $template_name has invalid total disk size $disk_size MiB" >&2
-    exit 1
+    return 1
   fi
   if [ "$disk_size" -lt "$expected_size" ]; then
     echo "template $template_name total disk size $disk_size MiB is below the requested $expected_size MiB of build free space" >&2
-    exit 1
+    return 1
   fi
 }
 
@@ -137,25 +145,18 @@ reconcile_build_status() {
   done
 }
 
-expected_disk_size="$(sed -nE 's/^[[:space:]]*disk_size_mb[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$template_dir/qshell.sandbox.toml" | head -n 1)"
+expected_disk_size="$(sed -nE 's/^[[:space:]]*disk_size_mb[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$template_config" | head -n 1)"
 test -n "$expected_disk_size" || {
-  echo "template config has no valid disk_size_mb: $template_dir/qshell.sandbox.toml" >&2
+  echo "template config has no valid disk_size_mb: $template_config" >&2
   exit 65
 }
-template_name="$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$template_dir/qshell.sandbox.toml" | head -n 1)"
+template_name="$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$template_config" | head -n 1)"
 test -n "$template_name" || {
-  echo "template config has no name: $template_dir/qshell.sandbox.toml" >&2
+  echo "template config has no name: $template_config" >&2
   exit 65
 }
 if [ -n "$build_name" ]; then
   template_name="$build_name"
-fi
-
-# A named standard development build can keep using its existing template.
-# The API reports total rootfs size, while the config requests free build space.
-check_disk_size=false
-if [ -z "$build_name" ] || [[ "$(basename "$template_dir")" == *-large ]]; then
-  check_disk_size=true
 fi
 
 output_file="$(mktemp)"
@@ -172,7 +173,7 @@ case "$operation" in
       cd "$template_dir"
       tmp_config="$(mktemp .qshell-sandbox.XXXXXX)"
       trap 'rm -f "$tmp_config"' EXIT
-      cp qshell.sandbox.toml "$tmp_config"
+      cp "$template_config" "$tmp_config"
       build_args=(sandbox template build --wait --config "$tmp_config")
       if [ -n "$build_name" ]; then
         build_args+=(--name "$build_name")
@@ -193,12 +194,18 @@ case "$operation" in
       echo "BUILD_NAME is only valid for build" >&2
       exit 64
     }
-    if [ "$operation" = publish ] && [ "$check_disk_size" = true ]; then
-      check_template_disk "$template_name" "$expected_disk_size" false
+    template_record="$(resolve_template_record "$template_name")"
+    template_id="$(jq -r '.TemplateID // empty' <<<"$template_record")"
+    test -n "$template_id" || {
+      echo "template $template_name has no template ID in the service catalog" >&2
+      exit 1
+    }
+    if [ "$operation" = publish ]; then
+      check_template_disk "$template_name" "$expected_disk_size" "$template_record"
     fi
     (
       cd "$template_dir"
-      "$qshell_bin" sandbox template "$operation" -y 2>&1 | tee "$output_file"
+      "$qshell_bin" sandbox template "$operation" "$template_id" -y 2>&1 | tee "$output_file"
     )
     grep -Eq "^Template .+ ${operation/publish/published}$" "$output_file" || {
       if [ "$operation" = unpublish ]; then

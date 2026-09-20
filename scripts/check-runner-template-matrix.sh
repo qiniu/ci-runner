@@ -103,12 +103,16 @@ cleanup() {
 }
 trap cleanup EXIT
 for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-large ubuntu-22.04-large ubuntu-24.04-large ubuntu-26.04-large; do
-  directory="templates/github-runner-${image_key}"
   base_key="$(base_image_key "$image_key")"
-  base_directory="templates/github-runner-${base_key}"
+  directory="templates/github-runner-${base_key}"
   base_dir_name="github-runner-${base_key}"
+  config_name=qshell.sandbox.toml
+  if [[ "$image_key" == *-large ]]; then
+    config_name=qshell.sandbox.large.toml
+  fi
+  config_path="$directory/$config_name"
   test -d "$directory" || fail "missing directory $directory"
-  for required_file in Dockerfile qshell.sandbox.toml README.md software-diff.md scripts/setup-template.sh scripts/ensure-docker scripts/download-checked-range; do
+  for required_file in Dockerfile "$config_name" README.md software-diff.md scripts/setup-template.sh scripts/ensure-docker scripts/download-checked-range; do
     test -f "$directory/$required_file" || fail "missing $directory/$required_file"
   done
 
@@ -136,7 +140,7 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   done
   grep -Fq "COPY $base_dir_name/scripts/setup-template.sh " "$directory/Dockerfile" ||
     fail "$image_key must copy its variant setup script from the shared context"
-  grep -Fq 'path = ".."' "$directory/qshell.sandbox.toml" ||
+  grep -Fq 'path = ".."' "$config_path" ||
     fail "$image_key build context must include templates/common"
 
   template_name="$(
@@ -145,7 +149,7 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
       gsub(/[[:space:]"]/, "", value)
       print value
       exit
-    }' "$directory/qshell.sandbox.toml"
+    }' "$config_path"
   )"
   wanted_name="$(expected_name "$image_key")"
   test "$template_name" = "$wanted_name" ||
@@ -155,11 +159,11 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   fi
   echo "$template_name" >>"$seen_names_file"
 
-  cpu_count="$(awk -F= '/^[[:space:]]*cpu_count[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$directory/qshell.sandbox.toml")"
-  memory_mb="$(awk -F= '/^[[:space:]]*memory_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$directory/qshell.sandbox.toml")"
+  cpu_count="$(awk -F= '/^[[:space:]]*cpu_count[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$config_path")"
+  memory_mb="$(awk -F= '/^[[:space:]]*memory_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$config_path")"
   test "$cpu_count" = 8 || fail "$image_key cpu_count is $cpu_count, want 8"
   test "$memory_mb" = 8192 || fail "$image_key memory_mb is $memory_mb, want 8192"
-  disk_size_mb="$(awk -F= '/^[[:space:]]*disk_size_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$directory/qshell.sandbox.toml")"
+  disk_size_mb="$(awk -F= '/^[[:space:]]*disk_size_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$config_path")"
   if [[ "$image_key" == *-large ]]; then
     test "$disk_size_mb" = 81920 ||
       fail "$image_key disk_size_mb is $disk_size_mb, want 81920"
@@ -295,23 +299,16 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
 
   if [[ "$image_key" == *-large ]]; then
     large_build_target="$(expected_build_target "$image_key")"
-    test -f "$directory/README.md" || fail "$image_key must provide README.md"
-    test ! -L "$directory/README.md" || fail "$image_key README.md must document its large build target"
     grep -Fq "task $large_build_target" "$directory/README.md" ||
       fail "$image_key README must use the exact task $large_build_target build command"
-    for shared_entry in Dockerfile software-diff.md scripts; do
-      test -L "$directory/$shared_entry" || fail "$image_key must symlink $shared_entry"
-      test "$(readlink "$directory/$shared_entry")" = "../$base_dir_name/$shared_entry" ||
-        fail "$image_key $shared_entry must point to $base_dir_name/$shared_entry"
-    done
-    expected_dockerfile="../$base_dir_name/Dockerfile"
-    expected_path=".."
-    grep -Fq "dockerfile = \"$expected_dockerfile\"" "$directory/qshell.sandbox.toml" ||
-      fail "$image_key qshell config must use the in-context Dockerfile $expected_dockerfile"
-    grep -Fq "path = \"$expected_path\"" "$directory/qshell.sandbox.toml" ||
-      fail "$image_key qshell config must use the in-context path $expected_path"
   fi
+  grep -Fq 'dockerfile = "./Dockerfile"' "$config_path" ||
+    fail "$image_key qshell config must use the colocated Dockerfile"
 done
+
+if find templates -mindepth 1 -maxdepth 1 -type d -name 'github-runner-ubuntu-*-large' | grep -q .; then
+  fail "large variants must use colocated qshell.sandbox.large.toml files"
+fi
 
 if grep -En 'runner-template-build-all|qshell sandbox template (publish|unpublish).*--config' \
   "$templates_readme" templates/github-runner-*/README.md >/dev/null; then
@@ -319,7 +316,8 @@ if grep -En 'runner-template-build-all|qshell sandbox template (publish|unpublis
 fi
 grep -Fq 'Qshell publish and unpublish do not support the build-only' "$templates_readme" ||
   fail "templates README must state that publish/unpublish do not support build-only --config"
-grep -Fq 'read the stable name from its tracked `qshell.sandbox.toml`' "$templates_readme" ||
+grep -Fq 'read the stable name from the selected' "$templates_readme" &&
+  grep -Fq 'tracked TOML file' "$templates_readme" ||
   fail "templates README must use the tracked stable name for publish/unpublish"
 
 readme_catalog="$(

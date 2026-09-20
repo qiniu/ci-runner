@@ -1,1 +1,0 @@
-../github-runner-ubuntu-26.04/Dockerfile

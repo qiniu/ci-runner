@@ -363,17 +363,13 @@ task release-check # 验证发布构建
 
 | 模板                                   | 说明                                          |
 | -------------------------------------- | --------------------------------------------- |
-| `templates/github-runner-ubuntu-slim`  | 创建时请求 20 GiB 构建可用空间的 Ubuntu Slim x64 Runner 模板 |
-| `templates/github-runner-ubuntu-22.04` | 创建时请求 20 GiB 构建可用空间的 Ubuntu 22.04 x64 Runner 模板 |
-| `templates/github-runner-ubuntu-24.04` | 创建时请求 20 GiB 构建可用空间的 Ubuntu 24.04 x64 Runner 模板 |
-| `templates/github-runner-ubuntu-26.04` | 创建时请求 20 GiB 构建可用空间的预览版 Ubuntu 26.04 x64 Runner 模板 |
-| `templates/github-runner-ubuntu-slim-large` | 创建时请求 80 GiB 构建可用空间的 Ubuntu Slim x64 Runner 模板 |
-| `templates/github-runner-ubuntu-22.04-large` | 创建时请求 80 GiB 构建可用空间的 Ubuntu 22.04 x64 Runner 模板 |
-| `templates/github-runner-ubuntu-24.04-large` | 创建时请求 80 GiB 构建可用空间的 Ubuntu 24.04 x64 Runner 模板 |
-| `templates/github-runner-ubuntu-26.04-large` | 创建时请求 80 GiB 构建可用空间的 Ubuntu 26.04 x64 Runner 模板 |
+| `templates/github-runner-ubuntu-slim`  | 同时提供标准 20 GiB 与 large 80 GiB 构建配置的 Ubuntu Slim x64 源码 |
+| `templates/github-runner-ubuntu-22.04` | 同时提供标准 20 GiB 与 large 80 GiB 构建配置的 Ubuntu 22.04 x64 源码 |
+| `templates/github-runner-ubuntu-24.04` | 同时提供标准 20 GiB 与 large 80 GiB 构建配置的 Ubuntu 24.04 x64 源码 |
+| `templates/github-runner-ubuntu-26.04` | 同时提供标准 20 GiB 与 large 80 GiB 构建配置的预览版 Ubuntu 26.04 x64 源码 |
 
 对外的 `ubuntu-latest-large` Runner Spec 是映射到
-`github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增模板目录或构建目标。
+`github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增源码目录或构建目标。
 
 先运行 `task template-check-all`，再通过 8 个
 `task template-build-ubuntu-*` targets 执行真实 qshell Sandbox 构建。发布与

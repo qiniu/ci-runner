@@ -144,7 +144,8 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 - GoReleaser config: `task release-check`.
 - Snapshot release behavior: `task release-snapshot`.
 - Template changes may require the relevant `template-*` task.
-- `task template-check-all` validates all eight public template inputs and runs
+- `task template-check-all` validates all eight public template configs across
+  four source directories and runs
   an offline archive split/reassembly, checksum, reuse, and concurrent preparation
   test. Real template proof requires qshell `Status: ready`, or the same build
   ID reaching catalog status `uploaded` during bounded reconciliation, plus the

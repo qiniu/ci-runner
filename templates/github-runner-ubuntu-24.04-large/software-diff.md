@@ -1,1 +1,0 @@
-../github-runner-ubuntu-24.04/software-diff.md
