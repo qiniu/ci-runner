@@ -22,6 +22,18 @@ case "$*" in
       '[{Aliases: [$alias], TemplateID: "existing-template-id", BuildID: "fixture-build-id",
          BuildStatus: $build_status, DiskSizeMB: $disk}]'
     ;;
+  'sandbox template builds existing-template-id fixture-build-id')
+    if [ -n "${MOCK_EXACT_BUILD_ERROR:-}" ]; then
+      echo "$MOCK_EXACT_BUILD_ERROR" >&2
+      exit "${MOCK_EXACT_BUILD_EXIT_STATUS:-0}"
+    fi
+    echo 'Template ID:  existing-template-id'
+    echo 'Build ID:     fixture-build-id'
+    echo "Status:       ${MOCK_EXACT_BUILD_STATUS:-ready}"
+    echo
+    echo 'Build Logs:'
+    echo '  fixture build log'
+    ;;
   'sandbox template publish existing-template-id -y')
     echo 'Template fixture published'
     ;;
@@ -101,8 +113,23 @@ BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_con
 grep -Fq 'Template ID: existing-template-id' "$workdir/output"
 grep -Fq 'Status: ready' "$workdir/output"
 MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
+  MOCK_TEMPLATE_LIST_JSON='[]' TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
   BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config" >"$workdir/output"
-grep -Fq 'service catalog reports build fixture-build-id as uploaded' "$workdir/output"
+grep -Fq 'template build fixture-build-id reached ready during reconciliation' "$workdir/output"
+expect_failure 'template build fixture-build-id failed' \
+  env MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
+  MOCK_EXACT_BUILD_STATUS=failed TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
+  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config"
+expect_failure 'template build fixture-build-id remains building after 0s' \
+  env MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
+  MOCK_EXACT_BUILD_STATUS=building TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
+  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config"
+expect_failure 'Error: fixture exact-build query failed' \
+  env MOCK_QSHELL_TERMINAL_STATUS=error MOCK_QSHELL_EXIT_STATUS=201 \
+  MOCK_EXACT_BUILD_ERROR='Error: fixture exact-build query failed' \
+  TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
+  BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config"
+grep -Fq 'could not query template build fixture-build-id after 0s of reconciliation' "$workdir/output"
 expect_failure 'total disk size 22222 MiB is below the requested 81920 MiB' \
   bash "$operation_script" publish "$large_template_config"
 

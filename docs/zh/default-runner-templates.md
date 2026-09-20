@@ -180,7 +180,12 @@ task template-check-all
 ```
 
 然后使用 qshell 构建真正的 Sandbox 模板。每个任务都会等待 qshell 输出终态
-`Status: ready`；如果进程退出码为 0，却没有出现该状态，任务仍会判定构建失败。
+`Status: ready`；如果等待流提前结束，helper 会继续查询精确的 Template ID 和
+Build ID，最多等待 5 分钟。只有该 Build 达到 `ready` 或 `uploaded` 才会成功，
+精确状态进入终态错误时立即失败。如果协调窗口结束时 Build 仍在运行，请使用输出的
+`qshell sandbox template builds <template-id> <build-id>` 命令继续查看，不要启动
+另一次 rebuild。如果精确状态始终无法查询，helper 会先输出最后一次 qshell 错误，
+再给出该检查命令。
 
 源码门槛会拒绝低于 `2.337.0` 的 Actions Runner。Release smoke 会检查
 common 文件固定的 Runner 精确版本，以及持久化到 Sandbox 运行时环境中的模板名和

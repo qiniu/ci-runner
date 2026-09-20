@@ -107,9 +107,12 @@ parallel qshell uploads read stable files. Never commit the archive or chunks.
 requires `QINIU_SANDBOX_API_URL` plus `QINIU_API_KEY`. A local Docker build is
 diagnostic only and does not prove that a Sandbox template exists or is
 usable. If qshell's wait stream ends without `Status: ready`, the build helper
-may accept only the same build ID reaching `uploaded` in the service catalog
-within its bounded reconciliation window. Release evidence then still requires
-`task template-smoke` in both supported regions.
+queries that exact template/build pair for five minutes. It succeeds only when
+the build reaches `ready` or `uploaded`, fails immediately on a terminal error,
+reports the status-only inspection command when the build remains active, and
+preserves the last qshell error when exact status queries remain unavailable.
+Release evidence then still requires `task template-smoke` in both supported
+regions.
 
 Use `cd ui && bun run test` for focused UI tests. `task test` rebuilds the UI, runs the Bun UI tests, and then runs Go tests with race detection and coverage.
 

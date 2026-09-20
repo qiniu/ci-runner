@@ -149,8 +149,12 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   four source directories and runs
   an offline archive split/reassembly, checksum, reuse, and concurrent preparation
   test. Real template proof requires qshell `Status: ready`, or the same build
-  ID reaching catalog status `uploaded` during bounded reconciliation, plus the
-  regional `template-smoke` gates.
+  ID reaching exact build status `ready` or `uploaded` during bounded
+  reconciliation, plus the regional `template-smoke` gates. A reconciliation
+  timeout may leave the remote build active; inspect that exact template/build
+  pair before starting another rebuild. If exact status queries remain
+  unavailable, retain the last qshell error instead of describing the build as
+  active.
 - Template builds require qshell 2.19.13 or newer. Standard and large TOML files
   request 20,480 and 81,920 MiB of free space during new-template build
   provisioning; qshell does not send the setting on same-name rebuilds. Adjust

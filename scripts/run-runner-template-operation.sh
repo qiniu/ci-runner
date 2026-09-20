@@ -95,16 +95,13 @@ check_template_disk() {
 }
 
 reconcile_build_status() {
-  local template_name="$1"
+  local template_id="$1"
   local build_id="$2"
   local timeout_seconds="${TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS:-300}"
-  local interval_seconds="${TEMPLATE_BUILD_RECONCILE_INTERVAL_SECONDS:-5}"
-  local deadline status catalog_json
+  local interval_seconds="${TEMPLATE_BUILD_RECONCILE_INTERVAL_SECONDS:-15}"
+  local deadline status=unknown build_output last_query_output=
+  local query_failed=0
 
-  command -v jq >/dev/null 2>&1 || {
-    echo "jq is required to reconcile template build status" >&2
-    return 1
-  }
   [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || {
     echo "TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS must be a non-negative integer" >&2
     return 1
@@ -116,29 +113,46 @@ reconcile_build_status() {
 
   deadline=$((SECONDS + timeout_seconds))
   while true; do
-    if catalog_json="$("$qshell_bin" sandbox template list --format json)"; then
+    if build_output="$("$qshell_bin" sandbox template builds "$template_id" "$build_id" 2>&1)"; then
       status="$(
-        jq -r --arg name "$template_name" --arg build_id "$build_id" '
-          [ .[] |
-            select(((.Aliases // []) | index($name)) and .BuildID == $build_id)
-          ] |
-          if length == 1 then (.[0].BuildStatus // "unknown") else "unknown" end
-        ' <<<"$catalog_json"
+        sed -nE 's/^Status:[[:space:]]+([^[:space:]]+).*/\1/p' <<<"$build_output" |
+          head -n 1 |
+          tr '[:upper:]' '[:lower:]'
       )"
+      if [ -z "$status" ]; then
+        status=unavailable
+        query_failed=1
+        last_query_output="$build_output"
+      else
+        query_failed=0
+        last_query_output=
+      fi
       case "$status" in
         ready | uploaded)
-          echo "service catalog reports build $build_id as $status"
+          echo "template build $build_id reached $status during reconciliation"
           return 0
           ;;
         error | failed)
-          echo "service catalog reports build $build_id as $status" >&2
+          printf '%s\n' "$build_output" >&2
+          echo "template build $build_id failed with status $status" >&2
           return 1
           ;;
       esac
+    else
+      status=unavailable
+      query_failed=1
+      last_query_output="$build_output"
     fi
 
     if ((SECONDS >= deadline)); then
-      echo "qshell did not report terminal Status: ready and service catalog did not confirm build $build_id within ${timeout_seconds}s" >&2
+      if [ "$query_failed" -eq 1 ]; then
+        test -z "$last_query_output" || printf '%s\n' "$last_query_output" >&2
+        echo "could not query template build $build_id after ${timeout_seconds}s of reconciliation" >&2
+      else
+        echo "template build $build_id remains $status after ${timeout_seconds}s of reconciliation" >&2
+      fi
+      printf 'inspect without starting another rebuild: %q sandbox template builds %q %q\n' \
+        "$qshell_bin" "$template_id" "$build_id" >&2
       return 1
     fi
     sleep "$interval_seconds"
@@ -181,12 +195,13 @@ case "$operation" in
       "$qshell_bin" "${build_args[@]}" 2>&1 | tee "$output_file"
     ) || build_command_status=$?
     if ! grep -Eq '^Status:[[:space:]]+ready[[:space:]]*$' "$output_file"; then
+      template_id="$(sed -nE 's/^Template ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
       build_id="$(sed -nE 's/^Build ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
-      test -n "$build_id" || {
-        echo "qshell did not report terminal Status: ready or a build ID (exit status $build_command_status)" >&2
+      if [ -z "$template_id" ] || [ -z "$build_id" ]; then
+        echo "qshell did not report terminal Status: ready or a template/build ID (exit status $build_command_status)" >&2
         exit 1
-      }
-      reconcile_build_status "$template_name" "$build_id"
+      fi
+      reconcile_build_status "$template_id" "$build_id"
     fi
     ;;
   publish | unpublish)

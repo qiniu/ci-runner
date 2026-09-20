@@ -208,8 +208,13 @@ task template-check-all
 
 Then build the actual Sandbox templates with qshell. Each target waits for
 qshell to report terminal `Status: ready`; if its wait stream exits early, the
-helper accepts only the same build ID reaching catalog status `uploaded` during
-bounded reconciliation.
+helper queries the exact Template ID and Build ID for up to five more minutes.
+It succeeds only when that build reaches `ready` or `uploaded`, and fails
+immediately when the exact build reaches a terminal error. If reconciliation
+ends while the build is still active, use the printed `qshell sandbox template
+builds <template-id> <build-id>` command to inspect it without starting another
+rebuild. If exact status queries remain unavailable, the helper prints the last
+qshell error before that inspection command.
 
 The source gate rejects Actions Runner versions below `2.337.0`. Release smoke
 checks the exact common-pinned Runner version and the template name/version

@@ -218,9 +218,12 @@ task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<published-template-id>
 ```
 
 The formal template gate is a qshell build reaching terminal `Status: ready`,
-or the exact build ID reaching service catalog status `uploaded` during the
+or the exact Template ID and Build ID reaching `ready` or `uploaded` during the
 helper's bounded reconciliation window, followed by release smoke inside a real
-Sandbox created from that template.
+Sandbox created from that template. A reconciliation timeout can leave the
+remote build active; inspect the printed exact-build command before rebuilding.
+When exact status queries remain unavailable, the helper preserves the last
+qshell error instead of describing the build as active.
 The Slim Dockerfile divides setup into four cacheable qshell-compatible phases:
 `bootstrap`, `platform`, `toolchain`, and `runtime`. The versioned templates add
 a dedicated `node` phase between `platform` and `toolchain`, keeping their large
@@ -244,7 +247,8 @@ common pin. If the remote builder hits its hard
 time limit after one or more phases finish, rerun the same
 `template-build-*` task with cache enabled; completed phases are reused. Do not
 use `--no-cache` for that recovery, and do not publish until one build reaches
-terminal `Status: ready` or its exact build ID is reconciled as `uploaded`.
+terminal `Status: ready` or its exact build status is reconciled as `ready` or
+`uploaded`.
 Template version metadata and the runner-owned NVM copy are applied only after
 the heavy provisioning layers, so a release identity bump or NVM ownership fix
 does not invalidate otherwise reusable installer caches.
