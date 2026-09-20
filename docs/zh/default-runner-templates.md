@@ -34,6 +34,12 @@ labels。每份 large 模板的 `qshell.sandbox.toml` 都设置了
 总容量低于请求值的模板，发布前的 catalog 检查也会再次验证这一容量下界。
 [qshell v2.19.13 文档说明了磁盘参数仅在创建时生效](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48)。
 
+此前不带后缀的 large 物理名称已经对应约 22 GiB 的根文件系统。仓库现改用
+`*-large-80g` 作为替换物理名称，因此原有 large 构建任务会创建新模板并应用
+81,920 MiB 请求。每个已配置的自定义 Runner Spec 都应先使用替换 ID 完成 smoke，
+再切换 template ID；在全部引用完成迁移前保留旧模板。构建步骤不会删除或取消
+发布旧模板。
+
 8 份 qshell 配置均以 `templates/` 为构建上下文。Dockerfile 从
 `templates/common/` 复制共用的安装函数和辅助脚本；各标准模板仍保留对应
 Ubuntu 版本的安装步骤。`templates/common/actions-runner.env` 统一固定
@@ -114,11 +120,11 @@ jobs:
 
 | Workflow label | 物理模板 | 构建可用空间请求 |
 | --- | --- | --- |
-| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
-| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
-| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
-| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
-| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
 
 `ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。这些 large spec 已在公共文档中列出；只要 operator 在 Admin 中启用对应条目，所有允许的 workflow 都可以使用，虽然它们不会出现在 runnerd-owned managed-template API 中。
 

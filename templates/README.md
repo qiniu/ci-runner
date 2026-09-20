@@ -8,10 +8,10 @@
 | `ubuntu-22.04` | `github-runner-ubuntu-22-04` | Ubuntu 22.04 x64 | follows upstream deprecation | verified |
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
-| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB build free-space request) | follows upstream deprecation | development |
-| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB build free-space request) | large | development |
-| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB build free-space request) | preview | development |
+| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large-80g` | Ubuntu Slim x64 (80 GiB build free-space request) | large | development |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large-80g` | Ubuntu 22.04 x64 (80 GiB build free-space request) | follows upstream deprecation | development |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large-80g` | Ubuntu 24.04 x64 (80 GiB build free-space request) | large | development |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large-80g` | Ubuntu 26.04 x64 (80 GiB build free-space request) | preview | development |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
@@ -46,9 +46,11 @@ The four `-large` variants reuse the standard Dockerfiles and scripts through
 in-repository links, but use distinct provider template names. Their tracked
 `qshell.sandbox.toml` files request `disk_size_mb = 81920` (80 GiB) when
 creating a new template. This requests build free space, so the final total
-rootfs size may exceed 81,920 MiB. The provider must accept this allocation.
-Qshell ignores the field when rebuilding an existing same-name template, so
-one whose total disk is below 81,920 MiB needs a planned ID/name migration.
+rootfs size may exceed 81,920 MiB. The provider team disk limit must be at
+least 81,920 MiB. Qshell ignores the field when rebuilding an existing
+same-name template. The unsuffixed names already identify smaller legacy
+templates, so the tracked replacements use `*-large-80g`; retain the old IDs
+until every configured custom Runner Spec has migrated after smoke.
 The build and publish helpers check the total-size lower bound, and these
 variants remain in `development` until they
 pass the same regional catalog and smoke gates.

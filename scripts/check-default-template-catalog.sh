@@ -32,10 +32,10 @@ template_names=(
   github-runner-ubuntu-22-04
   github-runner-ubuntu-24-04
   github-runner-ubuntu-26-04
-  github-runner-ubuntu-slim-large
-  github-runner-ubuntu-22-04-large
-  github-runner-ubuntu-24-04-large
-  github-runner-ubuntu-26-04-large
+  github-runner-ubuntu-slim-large-80g
+  github-runner-ubuntu-22-04-large-80g
+  github-runner-ubuntu-24-04-large-80g
+  github-runner-ubuntu-26-04-large-80g
 )
 
 for template_name in "${template_names[@]}"; do
@@ -67,7 +67,7 @@ for template_name in "${template_names[@]}"; do
     exit 1
   fi
   expected_disk_size=20480
-  if [[ "$template_name" == *-large ]]; then
+  if [[ "$template_name" == *-large-80g ]]; then
     expected_disk_size=81920
   fi
   if ! jq -e --argjson expected "$expected_disk_size" '.[0].diskSizeMB | type == "number" and . >= $expected' <<<"$matches" >/dev/null; then

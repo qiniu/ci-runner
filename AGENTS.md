@@ -93,6 +93,8 @@ requests, while the template API reports total rootfs size; do not compare
 them for equality. Qshell 2.19.13 applies the request only when creating a new
 name. An existing same-name template whose total disk is below the request or
 whose runtime free-space smoke fails needs a planned physical-template migration.
+The four tracked large configs use `*-large-80g` physical names so they can be
+created alongside the retained, undersized, unsuffixed legacy templates.
 Release smoke also checks at least
 19 GiB or 79 GiB of runtime rootfs free space for standard and `-large`
 templates, leaving 1 GiB for writes after provisioning. Build tasks

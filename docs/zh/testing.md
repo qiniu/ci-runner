@@ -637,7 +637,9 @@ curl -fsS -b "$COOKIE_JAR" \
 - `template-smoke` 报告运行时根文件系统可用空间不足：检查新建 Sandbox 的标准模板
   至少有 19 GiB、`-large` 模板至少有 79 GiB 可用空间。Catalog 的总容量
   `diskSizeMB` 无法证明这一点；若现有同名模板达不到运行时下界，按
-  [物理模板迁移步骤](default-runner-templates.md)处理。
+  [物理模板迁移步骤](default-runner-templates.md)处理。仓库使用
+  `*-large-80g` 名称在保留容量不足的旧无后缀 ID 的同时创建替换模板；只有
+  smoke 通过后才切换自定义 Runner Spec。
 - registration token 失败：检查 [GitHub App 权限表](../../README.zh.md#所需权限)。未配置 `runner_group` 的 spec 需要 repository `Administration`；配置了 `runner_group` 的 spec 需要 organization `Self-hosted runners`。
 
 ## 9. GitHub Actions 日志怎么看

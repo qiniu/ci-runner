@@ -13,7 +13,7 @@ case "$*" in
     printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.19.13}"
     ;;
   'sandbox template list --format json')
-    jq -n --arg alias "${MOCK_ALIAS:-github-runner-ubuntu-24-04-large}" --argjson disk "$MOCK_DISK" \
+    jq -n --arg alias "${MOCK_ALIAS:-github-runner-ubuntu-24-04-large-80g}" --argjson disk "$MOCK_DISK" \
       '[{Aliases: [$alias], DiskSizeMB: $disk}]'
     ;;
   'sandbox template publish -y')
@@ -106,10 +106,10 @@ write_catalog() {
   jq -n --argjson standard_disk "$standard_disk" --argjson large_disk "$large_disk" '
     ["github-runner-ubuntu-slim", "github-runner-ubuntu-22-04",
      "github-runner-ubuntu-24-04", "github-runner-ubuntu-26-04",
-     "github-runner-ubuntu-slim-large", "github-runner-ubuntu-22-04-large",
-     "github-runner-ubuntu-24-04-large", "github-runner-ubuntu-26-04-large"] |
+     "github-runner-ubuntu-slim-large-80g", "github-runner-ubuntu-22-04-large-80g",
+     "github-runner-ubuntu-24-04-large-80g", "github-runner-ubuntu-26-04-large-80g"] |
     map({names: [.], templateID: ., buildStatus: "ready", public: true,
-         diskSizeMB: (if endswith("-large") then $large_disk else $standard_disk end)})
+         diskSizeMB: (if endswith("-large-80g") then $large_disk else $standard_disk end)})
   ' >"$workdir/catalog.json"
 }
 export MOCK_CATALOG="$workdir/catalog.json"

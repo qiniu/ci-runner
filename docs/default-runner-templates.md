@@ -41,6 +41,13 @@ reject a template whose total disk is below the request, and the catalog check
 repeats that lower-bound verification before release.
 [Qshell v2.19.13 documents the create-only disk option](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48).
 
+The previous unsuffixed large names already exist with roughly 22 GiB root
+filesystems. The tracked `*-large-80g` names are replacement physical
+templates, so the normal large build tasks create new templates and apply the
+81,920-MiB request. Keep the old template IDs available until each configured
+custom Runner Spec has passed smoke with, and switched to, its replacement ID.
+Do not delete or unpublish the old templates as part of the build step.
+
 All eight qshell configurations use `templates/` as the build context. The
 Dockerfiles copy shared setup functions and helper scripts from
 `templates/common/`, while each standard image retains its Ubuntu-specific
@@ -130,11 +137,11 @@ build free-space request:
 
 | Workflow label | Physical template | Build free-space request |
 | --- | --- | --- |
-| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
-| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
-| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
-| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
-| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
+| `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-24.04-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large-80g` | 80 GiB |
+| `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large-80g` | 80 GiB |
 
 `ubuntu-latest-large` is a logical public label mapped to the Ubuntu 24.04
 large physical template; it does not add a fifth physical large image. These

@@ -153,7 +153,9 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   provisioning; qshell ignores the setting on same-name rebuilds. The API
   reports total rootfs size, so build/publish/catalog checks use the request
   only as a lower bound, never as an exact expected total. An insufficient
-  existing template needs a planned physical-template migration. Regional
+  existing template needs a planned physical-template migration. The tracked
+  large configs use `*-large-80g` replacement names; retain the old unsuffixed
+  IDs until every configured custom Runner Spec has migrated. Regional
   release smoke checks runtime rootfs free space of at least 19 GiB for
   standard templates and 79 GiB for `-large` templates, allowing 1 GiB for
   startup writes; it remains required before promotion.
