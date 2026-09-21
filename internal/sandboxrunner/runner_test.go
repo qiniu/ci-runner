@@ -537,13 +537,15 @@ fi
 		if goBinIndex < 0 || systemBinIndex < 0 || goBinIndex >= systemBinIndex {
 			t.Fatalf("Go binary directory must precede /usr/local/bin in PATH: %q", pathValue)
 		}
-		for _, want := range []string{
-			"RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0",
-			"RUNNERD_JOB_STARTED",
-		} {
-			if !strings.Contains(string(output), want) {
-				t.Fatalf("runner command output missing hook evidence %q:\n%s", want, output)
-			}
+		versionMarker := "RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0"
+		jobStartedMarker := "RUNNERD_JOB_STARTED"
+		versionIndex := strings.Index(string(output), versionMarker)
+		jobStartedIndex := strings.Index(string(output), jobStartedMarker)
+		if versionIndex < 0 || jobStartedIndex < 0 {
+			t.Fatalf("runner command output missing ordered hook evidence:\n%s", output)
+		}
+		if versionIndex >= jobStartedIndex {
+			t.Fatalf("runner command output crossed the job-start boundary before version evidence:\n%s", output)
 		}
 		jobLog, err := os.ReadFile(jobLogPath)
 		if err != nil {
@@ -551,6 +553,9 @@ fi
 		}
 		if !strings.Contains(string(jobLog), "Qiniu sandbox id: sandbox-1") {
 			t.Fatalf("job-start hook output missing from job log:\n%s", jobLog)
+		}
+		if strings.Contains(string(jobLog), jobStartedMarker) {
+			t.Fatalf("job log must not duplicate the outer job-start control marker:\n%s", jobLog)
 		}
 		if _, err := os.Stat(filepath.Join(hookRoot, "job-started.signal")); !os.IsNotExist(err) {
 			t.Fatalf("job-start hook left its one-shot evidence channel behind: %v", err)

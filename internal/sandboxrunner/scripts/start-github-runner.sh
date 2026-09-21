@@ -173,7 +173,6 @@ if [ -n "${RUNNERD_HOOK_SIGNAL_PATH:-}" ] && [ -p "$RUNNERD_HOOK_SIGNAL_PATH" ];
   } >"$RUNNERD_HOOK_SIGNAL_PATH"
   rm -f "$RUNNERD_HOOK_SIGNAL_PATH"
 fi
-echo "RUNNERD_JOB_STARTED"
 echo "::notice title=Qiniu sandbox::sandbox_id=${RUNNERD_SANDBOX_ID} runner_request_id=${RUNNERD_REQUEST_ID} runner_name=${RUNNERD_RUNNER_NAME}"
 echo "Qiniu sandbox id: ${RUNNERD_SANDBOX_ID}"
 echo "Runner request id: ${RUNNERD_REQUEST_ID}"
