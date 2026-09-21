@@ -774,6 +774,160 @@ func TestStartScriptRejectsRunnerUpdateMissingTool(t *testing.T) {
 	})
 }
 
+func TestStartScriptRestoresRunnerWorkdirWhenReplacementIsInterrupted(t *testing.T) {
+	fixture := newRunnerUpdateFailureFixture(t, "2.337.0")
+	writeExecutable(t, filepath.Join(fixture.mockBin, "mv"), `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [ -f "$RUNNER_MV_COUNT" ]; then
+  count="$(cat "$RUNNER_MV_COUNT")"
+fi
+count=$((count + 1))
+printf '%s' "$count" >"$RUNNER_MV_COUNT"
+/bin/mv "$@"
+if [ "$count" -eq 1 ]; then
+  kill -TERM "$PPID"
+  sleep 1
+fi
+`)
+
+	output, err := fixture.run(t)
+	if err == nil {
+		t.Fatalf("start script unexpectedly survived replacement interruption:\n%s", output)
+	}
+	listener := exec.Command(filepath.Join(fixture.workdir, "bin", "Runner.Listener"), "--version")
+	version, versionErr := listener.CombinedOutput()
+	if versionErr != nil {
+		t.Fatalf("restored Runner is unavailable: %v\n%s\nscript output:\n%s", versionErr, version, output)
+	}
+	if got := strings.TrimSpace(string(version)); got != "2.336.0" {
+		t.Fatalf("restored Runner version = %q, want 2.336.0", got)
+	}
+	previous, globErr := filepath.Glob(fixture.workdir + ".previous.*")
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(previous) != 0 {
+		t.Fatalf("replacement interruption left previous work directories: %v", previous)
+	}
+}
+
+func TestStartScriptReportsObservedRunnerUpdateVersionMismatch(t *testing.T) {
+	fixture := newRunnerUpdateFailureFixture(t, "2.338.0")
+
+	output, err := fixture.run(t)
+	if err == nil {
+		t.Fatalf("start script unexpectedly accepted mismatched Runner version:\n%s", output)
+	}
+	if !strings.Contains(output, "got 2.338.0, want 2.337.0") {
+		t.Fatalf("version mismatch output omitted observed and target versions:\n%s", output)
+	}
+}
+
+type runnerUpdateFailureFixture struct {
+	scriptPath  string
+	actionsRoot string
+	workdir     string
+	runnerHome  string
+	mockBin     string
+	archivePath string
+	mvCountPath string
+	fixtureRoot string
+}
+
+func newRunnerUpdateFailureFixture(t *testing.T, candidateVersion string) runnerUpdateFailureFixture {
+	t.Helper()
+	fixtureRoot := t.TempDir()
+	actionsRoot := filepath.Join(fixtureRoot, "actions-runner")
+	workdir := filepath.Join(fixtureRoot, "workdir")
+	runnerHome := filepath.Join(fixtureRoot, "home")
+	mockBin := filepath.Join(runnerHome, "go", "bin")
+	if err := os.MkdirAll(filepath.Join(actionsRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mockBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(actionsRoot, "config.sh"), "#!/usr/bin/env bash\nexit 97\n")
+	writeExecutable(t, filepath.Join(actionsRoot, "run.sh"), "#!/usr/bin/env bash\nexit 98\n")
+	writeExecutable(t, filepath.Join(actionsRoot, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '2.336.0\\n'\n")
+
+	candidate := filepath.Join(fixtureRoot, "candidate-runner")
+	if err := os.MkdirAll(filepath.Join(candidate, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(candidate, "config.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	writeExecutable(t, filepath.Join(candidate, "run.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	writeExecutable(t, filepath.Join(candidate, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '"+candidateVersion+"\\n'\n")
+	archivePath := filepath.Join(fixtureRoot, "runner.tar.gz")
+	if output, err := exec.Command("tar", "-czf", archivePath, "-C", candidate, ".").CombinedOutput(); err != nil {
+		t.Fatalf("create Runner fixture archive: %v\n%s", err, output)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := fmt.Sprintf("%x", sha256.Sum256(archive))
+
+	writeExecutable(t, filepath.Join(mockBin, "curl"), `#!/usr/bin/env bash
+set -euo pipefail
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then output="$2"; shift 2; continue; fi
+  shift
+done
+cp "$RUNNER_UPDATE_ARCHIVE" "$output"
+`)
+	writeExecutable(t, filepath.Join(mockBin, "uname"), "#!/usr/bin/env bash\nprintf 'x86_64\\n'\n")
+
+	script := startScript(StartInput{
+		RequestID:         "request-1",
+		RepositoryURL:     "https://github.com/o/r",
+		RegistrationToken: "token",
+		RunnerName:        "runner",
+		Labels:            []string{"self-hosted", "linux", "x64"},
+		RunnerApplications: []RunnerApplication{{
+			Architecture:   "x64",
+			Version:        "2.337.0",
+			DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
+			SHA256Checksum: checksum,
+		}},
+	}, "sandbox-1")
+	scriptPath := filepath.Join(fixtureRoot, "start-runner.sh")
+	writeExecutable(t, scriptPath, script)
+
+	return runnerUpdateFailureFixture{
+		scriptPath:  scriptPath,
+		actionsRoot: actionsRoot,
+		workdir:     workdir,
+		runnerHome:  runnerHome,
+		mockBin:     mockBin,
+		archivePath: archivePath,
+		mvCountPath: filepath.Join(fixtureRoot, "mv-count"),
+		fixtureRoot: fixtureRoot,
+	}
+}
+
+func (fixture runnerUpdateFailureFixture) run(t *testing.T) (string, error) {
+	t.Helper()
+	return runCommand(
+		t,
+		"bash",
+		[]string{fixture.scriptPath},
+		"ACTIONS_RUNNER_ROOT="+fixture.actionsRoot,
+		"RUNNER_WORKDIR="+fixture.workdir,
+		"RUNNER_JOB_WORK="+filepath.Join(fixture.fixtureRoot, "job-work"),
+		"RUNNER_HOME="+fixture.runnerHome,
+		"RUNNER_HOOK_ROOT="+filepath.Join(fixture.fixtureRoot, "hooks"),
+		"RUNNER_ENVIRONMENT_FILE="+filepath.Join(fixture.fixtureRoot, "missing-environment"),
+		"RUNNER_UPDATE_ARCHIVE="+fixture.archivePath,
+		"RUNNER_MV_COUNT="+fixture.mvCountPath,
+		"RUNNERD_AS_RUNNER=1",
+		"ENSURE_DOCKER=/bin/true",
+		"GOPATH="+filepath.Join(fixture.runnerHome, "go"),
+	)
+}
+
 type runnerUpdateGuardCase struct {
 	currentVersion string
 	targetVersion  string

@@ -2,10 +2,8 @@ package sandboxrunner
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -19,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/runnerapplication"
 	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
 
@@ -47,12 +46,7 @@ type StartInput struct {
 	OnExit              func(ExitResult, error)
 }
 
-type RunnerApplication struct {
-	Architecture   string
-	Version        string
-	DownloadURL    string
-	SHA256Checksum string
-}
+type RunnerApplication = runnerapplication.Application
 
 type StartResult struct {
 	SandboxID          string
@@ -985,54 +979,19 @@ func runnerApplicationsManifest(applications []RunnerApplication) string {
 	const maxApplications = 3
 	lines := make([]string, 0, min(len(applications), maxApplications))
 	for _, application := range applications {
-		if len(lines) == maxApplications || !safeRunnerApplication(application) {
+		if len(lines) == maxApplications {
+			break
+		}
+		normalized, err := runnerapplication.Normalize(application)
+		if err != nil {
 			continue
 		}
 		lines = append(lines, strings.Join([]string{
-			application.Architecture,
-			application.Version,
-			application.DownloadURL,
-			strings.ToLower(application.SHA256Checksum),
+			normalized.Architecture,
+			normalized.Version,
+			normalized.DownloadURL,
+			normalized.SHA256Checksum,
 		}, "\t"))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func safeRunnerApplication(application RunnerApplication) bool {
-	switch application.Architecture {
-	case "x64", "arm64", "arm":
-	default:
-		return false
-	}
-	if !validRunnerApplicationVersion(application.Version) {
-		return false
-	}
-	filename := "actions-runner-linux-" + application.Architecture + "-" + application.Version + ".tar.gz"
-	if application.DownloadURL != "https://github.com/actions/runner/releases/download/v"+application.Version+"/"+filename {
-		return false
-	}
-	checksum := strings.ToLower(application.SHA256Checksum)
-	if len(checksum) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(checksum)
-	return err == nil
-}
-
-func validRunnerApplicationVersion(version string) bool {
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-		for _, char := range part {
-			if char < '0' || char > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }

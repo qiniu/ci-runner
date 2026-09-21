@@ -103,12 +103,26 @@ if [ -n "$runner_applications_manifest" ]; then
     runner_update_root="$(mktemp -d "${workdir}.update.XXXXXX")"
     runner_update_archive="$runner_update_root/runner.tar.gz"
     runner_update_candidate="$runner_update_root/candidate"
+    runner_previous_workdir=""
     cleanup_runner_update() {
+      if [ -n "${runner_previous_workdir:-}" ] && [ -e "$runner_previous_workdir" ]; then
+        if [ ! -e "$workdir" ]; then
+          if ! mv "$runner_previous_workdir" "$workdir"; then
+            echo "GitHub Actions runner work directory rollback failed: $runner_previous_workdir" >&2
+          fi
+        else
+          rm -rf "$runner_previous_workdir"
+        fi
+      fi
       if [ -n "${runner_update_root:-}" ]; then
         rm -rf "$runner_update_root"
       fi
     }
+    interrupt_runner_update() {
+      exit 1
+    }
     trap cleanup_runner_update EXIT
+    trap interrupt_runner_update HUP INT TERM
     mkdir -p "$runner_update_candidate"
     echo "downloading GitHub Actions runner $runner_target_version for $runner_architecture"
     if ! (
@@ -140,7 +154,7 @@ if [ -n "$runner_applications_manifest" ]; then
     fi
     candidate_runner_version="$("$runner_update_candidate/bin/Runner.Listener" --version 2>/dev/null || true)"
     if [ "$candidate_runner_version" != "$runner_target_version" ]; then
-      echo "GitHub Actions runner archive version verification failed" >&2
+      echo "GitHub Actions runner archive version verification failed: got ${candidate_runner_version:-unknown}, want $runner_target_version" >&2
       exit 1
     fi
 
@@ -151,14 +165,13 @@ if [ -n "$runner_applications_manifest" ]; then
       exit 1
     fi
     if ! mv "$runner_update_candidate" "$workdir"; then
-      mv "$runner_previous_workdir" "$workdir" || true
       echo "GitHub Actions runner work directory replacement failed" >&2
       exit 1
     fi
-    rm -rf "$runner_previous_workdir"
     cleanup_runner_update
+    runner_previous_workdir=""
     runner_update_root=""
-    trap - EXIT
+    trap - EXIT HUP INT TERM
     cd "$workdir"
     echo "updated GitHub Actions runner from ${current_runner_version:-unknown} to $runner_target_version"
   fi

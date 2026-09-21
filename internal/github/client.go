@@ -21,6 +21,7 @@ import (
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/qiniu/ci-runner/internal/labelutil"
 	"github.com/qiniu/ci-runner/internal/metrics"
+	"github.com/qiniu/ci-runner/internal/runnerapplication"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -121,12 +122,7 @@ type RegistrationToken struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-type RunnerApplication struct {
-	Architecture   string
-	Version        string
-	DownloadURL    string
-	SHA256Checksum string
-}
+type RunnerApplication = runnerapplication.Application
 
 type OrganizationMembership struct {
 	OrganizationID    int64
@@ -707,7 +703,7 @@ func (c *Client) fetchRunnerApplications(ctx context.Context, target runnerTarge
 		if descriptor.OS != "linux" {
 			continue
 		}
-		application, err := validateRunnerApplication(
+		application, err := runnerapplication.FromDescriptor(
 			descriptor.Architecture,
 			descriptor.Filename,
 			descriptor.DownloadURL,
@@ -752,58 +748,6 @@ func (c *Client) storeRunnerApplications(key string, applications []RunnerApplic
 
 func cloneRunnerApplications(applications []RunnerApplication) []RunnerApplication {
 	return append([]RunnerApplication(nil), applications...)
-}
-
-func validateRunnerApplication(architecture, filename, downloadURL, checksum string) (RunnerApplication, error) {
-	switch architecture {
-	case "x64", "arm64", "arm":
-	default:
-		return RunnerApplication{}, fmt.Errorf("github runner application has unsupported Linux architecture %q", architecture)
-	}
-	prefix := "actions-runner-linux-" + architecture + "-"
-	const suffix = ".tar.gz"
-	if !strings.HasPrefix(filename, prefix) || !strings.HasSuffix(filename, suffix) {
-		return RunnerApplication{}, fmt.Errorf("github runner application has invalid filename %q", filename)
-	}
-	version := strings.TrimSuffix(strings.TrimPrefix(filename, prefix), suffix)
-	if !validRunnerVersion(version) {
-		return RunnerApplication{}, fmt.Errorf("github runner application has invalid version in filename %q", filename)
-	}
-	wantURL := "https://github.com/actions/runner/releases/download/v" + version + "/" + filename
-	if downloadURL != wantURL {
-		return RunnerApplication{}, fmt.Errorf("github runner application has invalid download URL %q", downloadURL)
-	}
-	checksum = strings.ToLower(strings.TrimSpace(checksum))
-	if len(checksum) != sha256.Size*2 {
-		return RunnerApplication{}, fmt.Errorf("github runner application has invalid SHA-256 checksum")
-	}
-	if _, err := hex.DecodeString(checksum); err != nil {
-		return RunnerApplication{}, fmt.Errorf("github runner application has invalid SHA-256 checksum: %w", err)
-	}
-	return RunnerApplication{
-		Architecture:   architecture,
-		Version:        version,
-		DownloadURL:    downloadURL,
-		SHA256Checksum: checksum,
-	}, nil
-}
-
-func validRunnerVersion(version string) bool {
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-		for _, char := range part {
-			if char < '0' || char > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (c *Client) ListRunners(ctx context.Context, repositoryFullName, runnerGroup string) ([]Runner, error) {

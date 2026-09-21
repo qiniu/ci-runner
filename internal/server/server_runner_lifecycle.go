@@ -489,15 +489,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			s.failStart(id, st, "github_runner_downloads", err)
 			return
 		}
-		runnerApplications = make([]sandboxrunner.RunnerApplication, 0, len(applications))
-		for _, application := range applications {
-			runnerApplications = append(runnerApplications, sandboxrunner.RunnerApplication{
-				Architecture:   application.Architecture,
-				Version:        application.Version,
-				DownloadURL:    application.DownloadURL,
-				SHA256Checksum: application.SHA256Checksum,
-			})
-		}
+		runnerApplications = append([]sandboxrunner.RunnerApplication(nil), applications...)
 	}
 
 	s.logger.Info("creating github registration token", "id", id)
