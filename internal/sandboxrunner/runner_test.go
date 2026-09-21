@@ -526,6 +526,9 @@ fi
 			t.Fatalf("runner execution log missing %q:\n%s", want, log)
 		}
 	}
+	versionMarker := "RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0"
+	jobStartedMarker := "RUNNERD_JOB_STARTED"
+	foundPath := false
 	for _, line := range strings.Split(log, "\n") {
 		pathValue, ok := strings.CutPrefix(line, "go PATH=")
 		if !ok {
@@ -537,8 +540,6 @@ fi
 		if goBinIndex < 0 || systemBinIndex < 0 || goBinIndex >= systemBinIndex {
 			t.Fatalf("Go binary directory must precede /usr/local/bin in PATH: %q", pathValue)
 		}
-		versionMarker := "RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0"
-		jobStartedMarker := "RUNNERD_JOB_STARTED"
 		versionIndex := strings.Index(string(output), versionMarker)
 		jobStartedIndex := strings.Index(string(output), jobStartedMarker)
 		if versionIndex < 0 || jobStartedIndex < 0 {
@@ -560,9 +561,48 @@ fi
 		if _, err := os.Stat(filepath.Join(hookRoot, "job-started.signal")); !os.IsNotExist(err) {
 			t.Fatalf("job-start hook left its one-shot evidence channel behind: %v", err)
 		}
-		return
+		foundPath = true
+		break
 	}
-	t.Fatalf("runner execution log missing Go PATH: %s", log)
+	if !foundPath {
+		t.Fatalf("runner execution log missing Go PATH: %s", log)
+	}
+
+	mockBin := filepath.Join(runnerHome, "go", "bin")
+	if err := os.MkdirAll(mockBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(mockBin, "mkfifo"), `#!/usr/bin/env bash
+exit 1
+`)
+	fallbackOutput, err := runCommand(
+		t,
+		"bash",
+		[]string{scriptPath},
+		"ACTIONS_RUNNER_ROOT="+actionsRunnerRoot,
+		"RUNNER_WORKDIR="+workdir,
+		"RUNNER_JOB_WORK="+runnerJobWork,
+		"RUNNER_HOME="+runnerHome,
+		"RUNNER_HOOK_ROOT="+hookRoot,
+		"RUNNER_TEST_LOG="+logPath,
+		"RUNNER_TEST_JOB_LOG="+jobLogPath,
+		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
+		"ENSURE_DOCKER=/bin/true",
+		"GOPATH=",
+		"GOBIN=",
+	)
+	if err != nil {
+		t.Fatalf("start script failed without FIFO support: %v\n%s", err, fallbackOutput)
+	}
+	if strings.Count(fallbackOutput, jobStartedMarker) != 1 {
+		t.Fatalf("runner command output lost the job-start marker without FIFO support:\n%s", fallbackOutput)
+	}
+	if strings.Contains(fallbackOutput, versionMarker) {
+		t.Fatalf("fallback channel must not forward effective-version evidence:\n%s", fallbackOutput)
+	}
+	if _, err := os.Stat(filepath.Join(hookRoot, "job-started.signal.fallback")); !os.IsNotExist(err) {
+		t.Fatalf("job-start hook left its fallback evidence channel behind: %v", err)
+	}
 }
 
 func TestStartScriptDockerBootstrapPolicy(t *testing.T) {

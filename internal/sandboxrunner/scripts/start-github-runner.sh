@@ -140,24 +140,40 @@ export RUNNERD_REQUEST_ID="$runner_request_id"
 export RUNNERD_RUNNER_NAME="$runner_name"
 export RUNNERD_RUNNER_LISTENER="$workdir/bin/Runner.Listener"
 hook_signal_path="$hook_root/job-started.signal"
+hook_signal_fallback_path="$hook_root/job-started.signal.fallback"
 hook_signal_pid=""
+hook_signal_mode=""
 cleanup_hook_signal() {
   if [ -n "$hook_signal_pid" ]; then
-    if [ -p "$hook_signal_path" ]; then
+    if [ "$hook_signal_mode" = fifo ] && [ -p "$hook_signal_path" ]; then
+      kill "$hook_signal_pid" 2>/dev/null || true
+    elif [ "$hook_signal_mode" = fallback ] && [ ! -f "$hook_signal_fallback_path" ]; then
       kill "$hook_signal_pid" 2>/dev/null || true
     fi
     wait "$hook_signal_pid" 2>/dev/null || true
   fi
-  rm -f "$hook_signal_path"
+  rm -f "$hook_signal_path" "$hook_signal_fallback_path"
 }
 trap cleanup_hook_signal EXIT
-if rm -f "$hook_signal_path" && mkfifo -m 600 "$hook_signal_path"; then
+if rm -f "$hook_signal_path" "$hook_signal_fallback_path" && mkfifo -m 600 "$hook_signal_path"; then
   cat "$hook_signal_path" &
   hook_signal_pid="$!"
+  hook_signal_mode="fifo"
   export RUNNERD_HOOK_SIGNAL_PATH="$hook_signal_path"
+  unset RUNNERD_HOOK_SIGNAL_FALLBACK_PATH
 else
   unset RUNNERD_HOOK_SIGNAL_PATH
-  echo "effective Runner version channel is unavailable; continuing" >&2
+  (
+    while [ ! -f "$hook_signal_fallback_path" ]; do
+      sleep 0.05
+    done
+    cat "$hook_signal_fallback_path"
+    rm -f "$hook_signal_fallback_path"
+  ) &
+  hook_signal_pid="$!"
+  hook_signal_mode="fallback"
+  export RUNNERD_HOOK_SIGNAL_FALLBACK_PATH="$hook_signal_fallback_path"
+  echo "effective Runner version channel is unavailable; using job-start marker fallback" >&2
 fi
 cat >"$hook_root/job-started.sh" <<'HOOK'
 #!/usr/bin/env bash
@@ -172,6 +188,14 @@ if [ -n "${RUNNERD_HOOK_SIGNAL_PATH:-}" ] && [ -p "$RUNNERD_HOOK_SIGNAL_PATH" ];
     echo "RUNNERD_JOB_STARTED"
   } >"$RUNNERD_HOOK_SIGNAL_PATH"
   rm -f "$RUNNERD_HOOK_SIGNAL_PATH"
+elif [ -n "${RUNNERD_HOOK_SIGNAL_FALLBACK_PATH:-}" ]; then
+  fallback_tmp="${RUNNERD_HOOK_SIGNAL_FALLBACK_PATH}.tmp.$$"
+  umask 077
+  if printf 'RUNNERD_JOB_STARTED\n' >"$fallback_tmp"; then
+    mv -f "$fallback_tmp" "$RUNNERD_HOOK_SIGNAL_FALLBACK_PATH"
+  else
+    rm -f "$fallback_tmp"
+  fi
 fi
 echo "::notice title=Qiniu sandbox::sandbox_id=${RUNNERD_SANDBOX_ID} runner_request_id=${RUNNERD_REQUEST_ID} runner_name=${RUNNERD_RUNNER_NAME}"
 echo "Qiniu sandbox id: ${RUNNERD_SANDBOX_ID}"
