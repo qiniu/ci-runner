@@ -1620,7 +1620,7 @@ esac
 	runtimeMetadataChecked := false
 	nvmHomeChecked := false
 	cloudflareDNSChecked := false
-	runtimeRootfsFreeSpaceChecked := false
+	runtimeRootDiskSizeChecked := false
 	for _, check := range result.Results {
 		if check.Category != "Release smoke" {
 			t.Fatalf("release smoke unexpectedly ran full inventory check %#v", check)
@@ -1661,9 +1661,10 @@ esac
 				strings.Contains(check.Command, `test -w "$HOME/.nvm"`) &&
 				strings.Contains(check.Command, `nvm --version`)
 		}
-		if check.Name == "runtime rootfs free space" {
-			runtimeRootfsFreeSpaceChecked = strings.Contains(check.Command, `df -Pm /`) &&
-				strings.Contains(check.Command, `-lt 19456`)
+		if check.Name == "runtime root disk size" {
+			runtimeRootDiskSizeChecked = strings.Contains(check.Command, `findmnt -nro SOURCE /`) &&
+				strings.Contains(check.Command, `lsblk -bndo SIZE`) &&
+				strings.Contains(check.Command, `-lt 20480`)
 		}
 		if check.Name == "Docker daemon" {
 			if !strings.Contains(check.Command, "sudo -H -u runner") {
@@ -1689,8 +1690,8 @@ esac
 	if !cloudflareDNSChecked {
 		t.Fatalf("release smoke did not verify Cloudflare DNS: %#v", result.Results)
 	}
-	if !runtimeRootfsFreeSpaceChecked {
-		t.Fatalf("release smoke did not verify the standard template rootfs free-space floor: %#v", result.Results)
+	if !runtimeRootDiskSizeChecked {
+		t.Fatalf("release smoke did not verify the standard template root-disk size floor: %#v", result.Results)
 	}
 }
 
