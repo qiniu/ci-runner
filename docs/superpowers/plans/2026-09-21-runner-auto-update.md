@@ -1,5 +1,14 @@
 # GitHub Actions Runner Auto-update Implementation Plan
 
+> **Historical scope:** This completed plan records PR #107, which enabled the
+> official updater and effective-version evidence. Its original constraint
+> against a custom downloader was superseded by the later
+> [registration preflight design](../specs/2026-09-21-runner-preflight-update.md)
+> after production proved that official self-update could arrive only after an
+> ephemeral Runner had already accepted its Job. Follow the current design and
+> repository rules for the shipped behavior; do not reuse this checklist as a
+> current prohibition on the bounded pre-registration downloader.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Enable GitHub's official Runner self-update for managed and user-supplied templates while retaining the managed template baseline and exposing preinstalled versus effective Runner versions.
@@ -10,9 +19,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-21-runner-auto-update.md`
 
-## Global Constraints
+## Historical PR #107 Constraints
 
-- Do not add a custom Runner downloader or a per-Spec update toggle.
+- For PR #107 itself, do not add a custom Runner downloader or a per-Spec
+  update toggle. The later preflight design supersedes only the downloader part;
+  there is still no per-Spec update toggle.
 - Keep the exact managed-template Runner archive pin, checksum, size, source gate, and release smoke checks.
 - Preserve `runner_version` as the compatible preinstalled-template value; add `effective_runner_version` rather than changing its JSON meaning.
 - Effective-version collection is best effort, limited to 256 bytes, and never blocks Runner completion or cleanup.

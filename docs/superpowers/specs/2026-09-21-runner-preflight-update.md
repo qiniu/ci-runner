@@ -42,7 +42,8 @@ expected to repeat the refresh from the template baseline.
    physical Sandbox template as today.
 2. For a custom Spec, runnerd queries GitHub's
    `/{repos|orgs}/.../actions/runners/downloads` endpoint. Results are cached
-   briefly and concurrent misses for one target are coalesced.
+   for ten minutes, returned as cloned slices, and concurrent misses for one
+   target are coalesced.
 3. runnerd creates the Sandbox and retains the existing preinstalled template
    snapshot.
 4. The startup script copies `/opt/actions-runner` into the writable work
@@ -53,10 +54,14 @@ expected to repeat the refresh from the template baseline.
    total-time, retry, and size limits; validates the GitHub-provided SHA-256;
    extracts into a fresh directory; and verifies the candidate
    `Runner.Listener --version` exactly matches the selected version.
-7. Only after successful verification does the script run `config.sh`, expose
+7. The script keeps the previous work directory until the verified candidate
+   is in place. A catchable HUP, INT, or TERM during the swap, or a failed
+   candidate move, restores the previous directory before exit. If restoration
+   fails, the backup is preserved and its path is reported.
+8. Only after successful verification does the script run `config.sh`, expose
    the real Job labels, and start `run.sh`. The queued Job is therefore claimed
    by the refreshed Runner.
-8. Existing hook evidence persists the version that actually reaches the Job.
+9. Existing hook evidence persists the version that actually reaches the Job.
    The Sandbox is destroyed after the Job, so a future Sandbox repeats the
    process from its template baseline.
 
@@ -69,9 +74,9 @@ expected to repeat the refresh from the template baseline.
   512-MiB transfer cap.
 - Never send an API token, installation token, or full GitHub API response to
   the Sandbox.
-- Custom templates must provide `curl`, `tar`, `sha256sum`, and the runtime
-  dependencies required by the selected Runner release. Missing dependencies
-  fail before registration with actionable stderr.
+- Custom templates must provide `curl`, `tar`, `sha256sum`, `mktemp`, and the
+  runtime dependencies required by the selected Runner release. Missing
+  dependencies fail before registration with actionable stderr.
 - The compressed archive limit is 512 MiB. Download time is bounded to five
   minutes.
 - GitHub Enterprise Server remains unsupported by runnerd configuration, so
@@ -85,7 +90,9 @@ expected to repeat the refresh from the template baseline.
   validation, cache reuse, concurrent request coalescing, and error responses.
 - Startup-script execution tests prove same-version bypass, successful
   `2.336.0` to `2.337.0` replacement before `config.sh`, checksum rejection,
-  unsupported architecture rejection, and missing-tool rejection.
+  unsupported architecture rejection, missing-tool rejection, rollback after a
+  catchable interruption between the two directory moves, and observed/target
+  diagnostics for a candidate-version mismatch.
 - Lifecycle tests prove managed Specs do not query preflight metadata, custom
   Specs fail before registration on metadata errors, and valid metadata reaches
   the Sandbox input without credentials.

@@ -93,7 +93,11 @@ filename, architecture, version, and SHA-256 in runnerd, then pass only those
 credential-free descriptors into the Sandbox. A stale writable copy must be
 downloaded with fixed time and 512-MiB bounds, checksum-verified, extracted and
 version-verified before `config.sh`; matching versions skip all downloader-tool
-requirements. Failure is closed before registration. Every fresh Sandbox may
+requirements. Replace the writable directory through a sibling candidate and
+previous-directory backup. On HUP, INT, TERM, or a failed second move, restore
+the previous directory before exiting; if restoration itself fails, keep the
+backup path and report it instead of deleting the last recoverable copy.
+Failure is closed before registration. Every fresh Sandbox may
 repeat this update when its immutable custom template remains stale. Keep
 GitHub's official Runner self-update enabled after registration for both managed
 and custom templates, and never restore `--disableupdate`.
