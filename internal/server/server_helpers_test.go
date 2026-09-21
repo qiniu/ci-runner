@@ -2290,6 +2290,49 @@ func TestRunnerExitedForAttemptPersistsExitCodeAfterExplicitStop(t *testing.T) {
 	}
 }
 
+func TestRunnerExitedForAttemptPersistsEffectiveVersionWithoutProviderResult(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+
+	_, st, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "late-version-without-result",
+		Source:     "test",
+		Labels:     []string{"self-hosted"},
+		RunnerName: "e2b-late-version-without-result",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status = state.StatusCompleted
+	st.SandboxID = "sb-late-version-without-result"
+	st.ProcessPID = 42
+	st.TerminationSource = state.TerminationSourceWorkflowJobWebhook
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.runnerExitedForAttempt(
+		st.ID,
+		runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID},
+		sandboxrunner.ExitResult{EffectiveRunnerVersion: "2.338.0"},
+		errors.New("provider stream closed without a command result"),
+	)
+
+	got, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectiveRunnerVersion != "2.338.0" {
+		t.Fatalf("late effective Runner version = %q, want 2.338.0", got.EffectiveRunnerVersion)
+	}
+	if got.RunnerExitCode != nil {
+		t.Fatalf("provider error unexpectedly created exit-code evidence: %#v", got.RunnerExitCode)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceWorkflowJobWebhook {
+		t.Fatalf("late version evidence changed terminal ownership: %#v", got)
+	}
+}
+
 func TestRunnerExitedForAttemptRejectsStaleAttemptEvidence(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

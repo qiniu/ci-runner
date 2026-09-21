@@ -949,7 +949,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 }
 
 func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
-	if !attempt.matches(*st) || err != nil ||
+	if !attempt.matches(*st) ||
 		(st.Status != state.StatusStopping && !isTerminalRunnerStatus(st.Status)) {
 		return
 	}
@@ -960,7 +960,7 @@ func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, 
 			versionChanged = true
 		}
 	}
-	if st.RunnerExitCode != nil {
+	if err != nil || st.RunnerExitCode != nil {
 		if !versionChanged {
 			return
 		}
