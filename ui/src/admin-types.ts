@@ -15,6 +15,7 @@ export type RunnerState = {
   resolved_template_id?: string
   template_version?: string
   runner_version?: string
+  effective_runner_version?: string
   process_pid?: number
   workflow_job_id?: number
   workflow_run_id?: number

@@ -32,6 +32,8 @@ A compatible image must provide executable GitHub Actions runner scripts at:
 
 It should also provide a writable `/home/runner` and allow outbound HTTPS access to GitHub. A `runner` user, `/opt/hostedtoolcache`, and `/usr/local/bin/ensure-docker` follow the maintained image convention. Docker startup is best-effort for custom specs, so omit it only when workflows do not need containers or service containers.
 
+The preinstalled Runner is a bootstrap baseline. runnerd registers managed and custom-template Runners without `--disableupdate`, so GitHub may update the writable Runner copy before it accepts a job. Keep outbound GitHub access available and periodically refresh the preinstalled version so Sandbox startup does not depend on a large update.
+
 runnerd injects a Bash startup script into the Sandbox. The image must provide `bash`, `base64`, `install`, `cp`, `mkdir`, and `id`. If the conventional `runner` user exists, it must also provide `sudo` so the startup script can switch to that user without interaction.
 
 A locally successful `docker build` is useful diagnostics, but it does not prove that a remote Sandbox template exists or can start in the target region.

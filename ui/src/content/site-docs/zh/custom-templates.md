@@ -32,6 +32,8 @@
 
 镜像还应提供可写的 `/home/runner`，并允许通过 HTTPS 访问 GitHub。`runner` 用户、`/opt/hostedtoolcache` 和 `/usr/local/bin/ensure-docker` 属于已维护镜像的约定。对于自定义 spec，Docker 启动是尽力而为；只有在 workflow 不使用容器或 service container 时才应省略 Docker。
 
+预装 Runner 是启动基线。runnerd 注册托管模板和自定义模板 Runner 时都不会传入 `--disableupdate`，因此 GitHub 可以在 Runner 接受 Job 前更新工作目录中的可写副本。请保持到 GitHub 的出站网络可用，并定期更新模板的预装版本，避免 Sandbox 启动时需要执行跨度过大的升级。
+
 runnerd 会向 Sandbox 注入一段 Bash 启动脚本。镜像必须提供 `bash`、`base64`、`install`、`cp`、`mkdir` 和 `id`。如果镜像包含约定的 `runner` 用户，还必须提供 `sudo`，使启动脚本可以无交互地切换到该用户。
 
 本地 `docker build` 成功只能作为诊断依据，不能证明远端 Sandbox 模板已存在，也不能证明它能在目标区域中启动。

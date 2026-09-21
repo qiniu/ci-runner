@@ -44,6 +44,7 @@ type runnerRequestRecord struct {
 	ResolvedTemplateID      string     `gorm:"column:resolved_template_id"`
 	TemplateVersion         string     `gorm:"column:template_version"`
 	RunnerVersion           string     `gorm:"column:runner_version"`
+	EffectiveRunnerVersion  string     `gorm:"column:effective_runner_version"`
 	ProcessPID              uint32     `gorm:"column:process_pid"`
 	AssignedJobID           int64      `gorm:"column:assigned_job_id"`
 	AssignedJobName         string     `gorm:"column:assigned_job_name"`

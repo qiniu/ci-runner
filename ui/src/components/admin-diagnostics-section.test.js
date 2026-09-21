@@ -524,6 +524,7 @@ describe("admin diagnostics", () => {
             resolved_template_id: "tpl-us-south-1-ubuntu-24-04",
             template_version: "20260915.1",
             runner_version: "2.336.0",
+            effective_runner_version: "2.338.0",
             head_branch: "codex/test-sync-concurrent-wait-20260905",
             retry_count: 2,
             termination_source: "process_exit",
@@ -575,8 +576,10 @@ describe("admin diagnostics", () => {
       expect(html).toContain("tpl-us-south-1-ubuntu-24-04")
       expect(html).toContain("模板版本")
       expect(html).toContain("20260915.1")
-      expect(html).toContain("Runner 版本")
+      expect(html).toContain("预装 Runner 版本")
       expect(html).toContain("2.336.0")
+      expect(html).toContain("实际运行 Runner 版本")
+      expect(html).toContain("2.338.0")
       expect(html).toContain("codex/test-sync-concurrent-wait-20260905")
       expect(html).toContain("runner communication lost")
       expect(html).toContain("开始时间")
@@ -608,7 +611,7 @@ describe("admin diagnostics", () => {
     }))
     const container = document.createElement("div")
     container.innerHTML = html
-    for (const label of ["Sandbox region", "Resolved template ID", "Template version", "Runner version"]) {
+    for (const label of ["Sandbox region", "Resolved template ID", "Template version", "Preinstalled Runner version", "Effective Runner version"]) {
       const labelElement = Array.from(container.querySelectorAll(".text-muted-foreground")).find((element) => element.textContent === label)
       expect(labelElement).toBeDefined()
       expect(labelElement?.nextElementSibling?.textContent).toBe("-")

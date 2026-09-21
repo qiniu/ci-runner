@@ -2546,6 +2546,7 @@ func TestRunnerStatePersistsDiagnosticEvidence(t *testing.T) {
 	st.ResolvedTemplateID = "tpl-us-south-1-ubuntu-24-04"
 	st.TemplateVersion = "20260915.1"
 	st.RunnerVersion = "2.336.0"
+	st.EffectiveRunnerVersion = "2.338.0"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -2566,7 +2567,8 @@ func TestRunnerStatePersistsDiagnosticEvidence(t *testing.T) {
 		!got.GitHubJobObservedAt.Equal(observedAt) || got.TerminationSource != TerminationSourceProcessExit ||
 		got.RunnerExitCode == nil || *got.RunnerExitCode != exitCode ||
 		got.SandboxRegion != "us-south-1" || got.ResolvedTemplateID != "tpl-us-south-1-ubuntu-24-04" ||
-		got.TemplateVersion != "20260915.1" || got.RunnerVersion != "2.336.0" {
+		got.TemplateVersion != "20260915.1" || got.RunnerVersion != "2.336.0" ||
+		got.EffectiveRunnerVersion != "2.338.0" {
 		t.Fatalf("unexpected retained GitHub Job result after restart: %#v", got)
 	}
 	states, err := restarted.ListStates()
@@ -4519,6 +4521,7 @@ func TestRetryRequestClearsFailureFields(t *testing.T) {
 	st.ResolvedTemplateID = "tpl-old-attempt"
 	st.TemplateVersion = "20260915.1"
 	st.RunnerVersion = "2.336.0"
+	st.EffectiveRunnerVersion = "2.338.0"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -4529,7 +4532,8 @@ func TestRetryRequestClearsFailureFields(t *testing.T) {
 	}
 	if retried.Status != StatusQueued || retried.FailureStage != "" || retried.LastErrorCode != "" || !retried.NextRetryAt.IsZero() ||
 		retried.TerminationSource != "" || retried.RunnerExitCode != nil || retried.SandboxRegion != "" ||
-		retried.ResolvedTemplateID != "" || retried.TemplateVersion != "" || retried.RunnerVersion != "" {
+		retried.ResolvedTemplateID != "" || retried.TemplateVersion != "" || retried.RunnerVersion != "" ||
+		retried.EffectiveRunnerVersion != "" {
 		t.Fatalf("unexpected retried state: %#v", retried)
 	}
 }
@@ -5206,6 +5210,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"resolved_template_id",
 		"template_version",
 		"runner_version",
+		"effective_runner_version",
 	} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
 			t.Fatalf("expected additive runner request column %s after migration", column)

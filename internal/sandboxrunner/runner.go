@@ -10,8 +10,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -139,10 +141,11 @@ type PtySize struct {
 }
 
 type ExitResult struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-	Error    string
+	ExitCode               int
+	Stdout                 string
+	Stderr                 string
+	Error                  string
+	EffectiveRunnerVersion string
 }
 
 type CatalogTemplate struct {
@@ -212,6 +215,14 @@ type E2BService struct {
 }
 
 const runnerBootstrapUser = "root"
+
+const (
+	effectiveRunnerVersionLimit  = 256
+	effectiveRunnerVersionMarker = "RUNNERD_EFFECTIVE_RUNNER_VERSION="
+	runnerJobStartedMarker       = "RUNNERD_JOB_STARTED"
+)
+
+var effectiveRunnerVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$`)
 
 //go:embed scripts/start-github-runner.sh
 var startRunnerScriptTemplate string
@@ -366,11 +377,17 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		commandCtx = context.Background()
 	}
 	cmd := "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
+	effectiveVersion := &effectiveRunnerVersionCapture{}
 	handle, err := sb.Commands().Start(
 		commandCtx, cmd,
 		qnsandbox.WithCommandUser(runnerBootstrapUser),
 		qnsandbox.WithTag("github-runner"),
-		qnsandbox.WithOnStdout(input.OnStdout),
+		qnsandbox.WithOnStdout(func(data []byte) {
+			effectiveVersion.Observe(data)
+			if input.OnStdout != nil {
+				input.OnStdout(data)
+			}
+		}),
 		qnsandbox.WithOnStderr(input.OnStderr),
 	)
 	if err != nil {
@@ -386,14 +403,15 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		go func() {
 			result, err := handle.Wait()
 			if result == nil {
-				input.OnExit(ExitResult{}, err)
+				input.OnExit(ExitResult{EffectiveRunnerVersion: effectiveVersion.Version()}, err)
 				return
 			}
 			input.OnExit(ExitResult{
-				ExitCode: result.ExitCode,
-				Stdout:   result.Stdout,
-				Stderr:   result.Stderr,
-				Error:    result.Error,
+				ExitCode:               result.ExitCode,
+				Stdout:                 result.Stdout,
+				Stderr:                 result.Stderr,
+				Error:                  result.Error,
+				EffectiveRunnerVersion: effectiveVersion.Version(),
 			}, err)
 		}()
 	}
@@ -465,6 +483,81 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 		TemplateVersion:    runtimeEnvironment.TemplateVersion,
 		RunnerVersion:      runtimeEnvironment.RunnerVersion,
 	}, nil
+}
+
+func parseEffectiveRunnerVersion(content []byte) string {
+	if len(content) > effectiveRunnerVersionLimit {
+		return ""
+	}
+	value := strings.TrimSpace(string(content))
+	if value == "" || len(value) > effectiveRunnerVersionLimit || strings.ContainsAny(value, "\r\n") {
+		return ""
+	}
+	if !effectiveRunnerVersionPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+type effectiveRunnerVersionCapture struct {
+	mu       sync.Mutex
+	line     []byte
+	dropping bool
+	closed   bool
+	version  string
+}
+
+func (c *effectiveRunnerVersionCapture) Observe(data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+
+	const maxControlLineLength = len(effectiveRunnerVersionMarker) + effectiveRunnerVersionLimit
+	for _, value := range data {
+		if value == '\n' {
+			if !c.dropping {
+				c.observeLineLocked(strings.TrimSuffix(string(c.line), "\r"))
+			}
+			c.line = c.line[:0]
+			c.dropping = false
+			if c.closed {
+				return
+			}
+			continue
+		}
+		if c.dropping {
+			continue
+		}
+		if len(c.line) >= maxControlLineLength {
+			c.line = c.line[:0]
+			c.dropping = true
+			continue
+		}
+		c.line = append(c.line, value)
+	}
+}
+
+func (c *effectiveRunnerVersionCapture) observeLineLocked(line string) {
+	if line == runnerJobStartedMarker {
+		c.closed = true
+		return
+	}
+	if c.version != "" {
+		return
+	}
+	value, ok := strings.CutPrefix(line, effectiveRunnerVersionMarker)
+	if !ok {
+		return
+	}
+	c.version = parseEffectiveRunnerVersion([]byte(value))
+}
+
+func (c *effectiveRunnerVersionCapture) Version() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.version
 }
 
 func readRuntimeEnvironment(ctx context.Context, sb *qnsandbox.Sandbox) runtimeEnvironment {

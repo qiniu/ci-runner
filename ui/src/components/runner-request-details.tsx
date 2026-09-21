@@ -21,6 +21,7 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
       <Detail label={t("admin.resolvedTemplateID")} value={runner.resolved_template_id || "-"} />
       <Detail label={t("admin.templateVersion")} value={runner.template_version || "-"} />
       <Detail label={t("admin.runnerVersion")} value={runner.runner_version || "-"} />
+      <Detail label={t("admin.effectiveRunnerVersion")} value={runner.effective_runner_version || "-"} />
       <Detail label="PID" value={runner.process_pid || "-"} />
       <Detail label={t("user.jobName")} value={runner.assigned_job_name || runner.assigned_job_id || "-"} />
       <Detail

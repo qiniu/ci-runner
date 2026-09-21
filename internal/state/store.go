@@ -81,6 +81,7 @@ type RunnerState struct {
 	ResolvedTemplateID     string    `json:"resolved_template_id,omitempty"`
 	TemplateVersion        string    `json:"template_version,omitempty"`
 	RunnerVersion          string    `json:"runner_version,omitempty"`
+	EffectiveRunnerVersion string    `json:"effective_runner_version,omitempty"`
 	ProcessPID             uint32    `json:"process_pid,omitempty"`
 	WorkflowJobID          int64     `json:"workflow_job_id,omitempty"`
 	WorkflowRunID          int64     `json:"workflow_run_id,omitempty"`

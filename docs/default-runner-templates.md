@@ -56,6 +56,11 @@ reassembles them and verifies the complete SHA-256 in the same `RUN` as runtime
 installation, including cache-resumed builds. The checked local archive is
 cached under `.build/`; the chunks under `templates/common/.build/` are ignored
 by Git.
+The pin is the preinstalled bootstrap baseline. At runtime, runnerd registers
+both managed and custom-template Runners without `--disableupdate`; GitHub's
+official updater may therefore replace the writable Runner copy before the job
+starts. Managed templates must still advance the pin periodically to keep
+startup predictable and preserve a recently verified fallback.
 The 2.337.0 branch candidate has one ready Ubuntu 24.04 development build and
 smoke in the configured Sandbox environment; the full two-region, eight-template
 promotion gate remains open.
@@ -216,8 +221,10 @@ rebuild. If exact status queries remain unavailable, the helper prints the last
 qshell error before that inspection command.
 
 The source gate rejects Actions Runner versions below `2.337.0`. Release smoke
-checks the exact common-pinned Runner version and the template name/version
-persisted into the Sandbox runtime environment. It also loads NVM as the
+checks the exact common-pinned preinstalled Runner version and the template
+name/version persisted into the Sandbox runtime environment. The effective
+Runner version may be newer after GitHub's official self-update and is verified
+separately from the immutable template baseline. Release smoke also loads NVM as the
 `runner` user and requires `/home/runner/.nvm` to be writable, preventing a
 root-owned build skeleton from passing the release gate. Full runtime
 conformance also checks the exact pinned Azure CLI version, so Dockerfile

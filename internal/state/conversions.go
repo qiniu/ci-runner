@@ -66,6 +66,7 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		ResolvedTemplateID:     record.ResolvedTemplateID,
 		TemplateVersion:        record.TemplateVersion,
 		RunnerVersion:          record.RunnerVersion,
+		EffectiveRunnerVersion: record.EffectiveRunnerVersion,
 		ProcessPID:             record.ProcessPID,
 		WorkflowJobID:          pointerToInt64(record.WorkflowJobID),
 		WorkflowRunID:          githubLinks.workflowRunID,

@@ -238,6 +238,7 @@ func (s *DBStore) WriteState(st RunnerState) error {
 		"resolved_template_id":      strings.TrimSpace(st.ResolvedTemplateID),
 		"template_version":          strings.TrimSpace(st.TemplateVersion),
 		"runner_version":            strings.TrimSpace(st.RunnerVersion),
+		"effective_runner_version":  strings.TrimSpace(st.EffectiveRunnerVersion),
 		"process_pid":               st.ProcessPID,
 		"assigned_job_id":           st.AssignedJobID,
 		"assigned_job_name":         st.AssignedJobName,
@@ -736,6 +737,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		record.ResolvedTemplateID = ""
 		record.TemplateVersion = ""
 		record.RunnerVersion = ""
+		record.EffectiveRunnerVersion = ""
 		record.ProcessPID = 0
 		record.AssignedJobID = 0
 		record.AssignedJobName = ""
@@ -769,6 +771,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 				"resolved_template_id":      record.ResolvedTemplateID,
 				"template_version":          record.TemplateVersion,
 				"runner_version":            record.RunnerVersion,
+				"effective_runner_version":  record.EffectiveRunnerVersion,
 				"process_pid":               record.ProcessPID,
 				"assigned_job_id":           record.AssignedJobID,
 				"assigned_job_name":         record.AssignedJobName,

@@ -806,6 +806,9 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		unlock()
 		return
 	}
+	if st.EffectiveRunnerVersion == "" {
+		st.EffectiveRunnerVersion = strings.TrimSpace(result.EffectiveRunnerVersion)
+	}
 	if shouldCheckGitHubBusyAfterRunnerExit(result, err) {
 		unlock()
 		busy, busyErr := s.githubRunnerBusy(context.Background(), st)
@@ -824,6 +827,9 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			s.recordLateRunnerExitEvidence(id, &st, attempt, result, err)
 			unlock()
 			return
+		}
+		if st.EffectiveRunnerVersion == "" {
+			st.EffectiveRunnerVersion = strings.TrimSpace(result.EffectiveRunnerVersion)
 		}
 		if busyErr != nil {
 			s.logger.Warn("could not verify github runner busy state after runner exit", "id", id, "runner_name", st.RunnerName, "error", busyErr)
@@ -943,8 +949,24 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 }
 
 func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
-	if !attempt.matches(*st) || err != nil || st.RunnerExitCode != nil ||
+	if !attempt.matches(*st) || err != nil ||
 		(st.Status != state.StatusStopping && !isTerminalRunnerStatus(st.Status)) {
+		return
+	}
+	versionChanged := false
+	if st.EffectiveRunnerVersion == "" {
+		if effectiveVersion := strings.TrimSpace(result.EffectiveRunnerVersion); effectiveVersion != "" {
+			st.EffectiveRunnerVersion = effectiveVersion
+			versionChanged = true
+		}
+	}
+	if st.RunnerExitCode != nil {
+		if !versionChanged {
+			return
+		}
+		if writeErr := s.store.WriteState(*st); writeErr != nil {
+			s.logger.Error("write late effective runner version", "id", id, "error", writeErr)
+		}
 		return
 	}
 	exitCode := result.ExitCode
@@ -1627,6 +1649,7 @@ func clearRunnerEnvironmentSnapshot(st *state.RunnerState) {
 	st.ResolvedTemplateID = ""
 	st.TemplateVersion = ""
 	st.RunnerVersion = ""
+	st.EffectiveRunnerVersion = ""
 }
 
 func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, allowRetry bool) failureResult {

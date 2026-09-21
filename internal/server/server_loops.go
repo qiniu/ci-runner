@@ -299,6 +299,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	next.ResolvedTemplateID = ""
 	next.TemplateVersion = ""
 	next.RunnerVersion = ""
+	next.EffectiveRunnerVersion = ""
 	next.ProcessPID = 0
 	next.AssignedJobID = 0
 	next.AssignedJobName = ""

@@ -138,8 +138,15 @@ fi
 export RUNNERD_SANDBOX_ID="$sandbox_id"
 export RUNNERD_REQUEST_ID="$runner_request_id"
 export RUNNERD_RUNNER_NAME="$runner_name"
+export RUNNERD_RUNNER_LISTENER="$workdir/bin/Runner.Listener"
 cat >"$hook_root/job-started.sh" <<'HOOK'
 #!/usr/bin/env bash
+effective_runner_version="$("$RUNNERD_RUNNER_LISTENER" --version 2>/dev/null || true)"
+if [ -n "$effective_runner_version" ] && \
+  [ "${#effective_runner_version}" -le 256 ] && \
+  [[ "$effective_runner_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+  printf 'RUNNERD_EFFECTIVE_RUNNER_VERSION=%%s\n' "$effective_runner_version"
+fi
 echo "RUNNERD_JOB_STARTED"
 echo "::notice title=Qiniu sandbox::sandbox_id=${RUNNERD_SANDBOX_ID} runner_request_id=${RUNNERD_REQUEST_ID} runner_name=${RUNNERD_RUNNER_NAME}"
 echo "Qiniu sandbox id: ${RUNNERD_SANDBOX_ID}"
@@ -154,7 +161,7 @@ chmod +x "$hook_root/job-started.sh" "$hook_root/job-completed.sh"
 export ACTIONS_RUNNER_HOOK_JOB_STARTED="$hook_root/job-started.sh"
 export ACTIONS_RUNNER_HOOK_JOB_COMPLETED="$hook_root/job-completed.sh"
 
-config_args=(--url "$runner_url" --token "$registration_token" --name "$runner_name" --labels "$runner_labels" --work "$runner_job_work" --ephemeral --unattended --replace --disableupdate)
+config_args=(--url "$runner_url" --token "$registration_token" --name "$runner_name" --labels "$runner_labels" --work "$runner_job_work" --ephemeral --unattended --replace)
 if [ -n "$runner_group" ]; then
   config_args+=(--runnergroup "$runner_group")
 fi

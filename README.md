@@ -316,7 +316,7 @@ The built-in web UI provides:
 | `/admin/` | Dashboard with runnerd runtime diagnostics and metrics |
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
-| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and Runner version), typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
+| `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and preinstalled Runner version), a best-effort effective Runner version captured after official self-update, typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or owner-manageable Organization |
@@ -394,6 +394,8 @@ cache-resume guidance after a remote build time limit, plus publication and
 smoke commands. Shared setup code and the Actions Runner version pin live in
 `templates/common/`. Build tasks verify the official Runner archive locally,
 upload it as small COPY chunks, and verify it again before installation.
+The pin remains the tested preinstalled baseline; runtime registration leaves
+GitHub's official Runner self-update enabled for managed and custom templates.
 Template builds require qshell 2.19.13 or newer. Standard configs request
 `disk_size_mb = 20480`, while large configs request `81920` for new templates.
 This setting is the minimum root disk size; the reported total can be larger.

@@ -247,8 +247,10 @@ jobs:
 - 每个 job 都启动请求的操作系统；26.04 job 记录为预览验收。
 - Job 的 `Set up runner` log 包含 Qiniu sandbox id、runner request id 和 runner name。
 - 规范的 Admin Runner Request 详情页展示所选 Sandbox 区域、解析后的物理模板
-  ID，以及可取得时的镜像模板版本和 GitHub Actions Runner 版本。刷新详情页后这些
-  值保持一致；升级前的历史请求对不可用快照字段显示 `-`，浏览器控制台没有报错。
+  ID，以及可取得时的镜像模板版本、预装 GitHub Actions Runner 版本和固定 hook 在
+  Job 开始前冻结、匹配 Runner 进程退出后持久化的实际运行版本。由于启用了官方自更新，
+  实际运行版本可能更新。刷新详情页后这些值保持一致；升级前的历史请求或从未开始 Job 的请求对
+  不可用证据显示 `-`，浏览器控制台没有报错。
 - 任一请求仍为 `running` 时，在详情页执行 Ubuntu 软件源网络诊断，或调用：
 
   ```bash
@@ -283,8 +285,10 @@ run 不能替代对实际部署的 webhook secret 与 GitHub webhook 配置是�
 - 活跃请求通过有界并发恢复，不再串行等待所有更早的请求；每个 worker 开始恢复时，根据剩余启动恢复总预算和剩余 worker 波次数确定单请求超时，父 context 的 deadline 仍是硬上限。
 - runnerd 完成启动恢复后才启动 worker loops 并处理新的排队任务。
 - `running` request 保持 `running`，sandbox ID 和 runner PID 不变，并记录成功重连事件；可恢复的 `creating` request 可能会发现并补写重启前尚未持久化的 sandbox ID 和 runner PID。
-- 恢复流程只能为同一 Sandbox/PID execution attempt 补齐缺失的模板版本或 Runner
-  版本；空探测结果不能覆盖已有快照，也不能附加来自旧 attempt 的元数据。
+- 恢复流程只能为同一 Sandbox/PID execution attempt 补齐缺失的模板版本或预装
+  Runner 版本。它会保留已持久化的实际运行 Runner 版本，但不会在重启后从 Workflow
+  输出重建缺失的 Job 前标记证据；空探测结果不能覆盖已有证据，也不能附加来自旧
+  attempt 的元数据。
 - GitHub Actions job 持续运行，不会重新排队或丢失 runner。
 - 由旧进程持有 lease 的 `queued` 请求能够被新 worker 继续处理。
 - GitHub 或沙箱状态查询暂时失败时只记录错误，不会停止已有沙箱。

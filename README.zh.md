@@ -303,7 +303,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/runner_requests` | Runner Request 历史、筛选、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
-| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与 Runner 版本）、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）、运行中 Sandbox 的有界按需网络探测和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
+| `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与预装 Runner 版本）、官方自更新后的尽力而为实际运行 Runner 版本、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）、运行中 Sandbox 的有界按需网络探测和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
 | `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
 | `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |
@@ -379,6 +379,8 @@ Sandbox 构建。发布与
 Actions Runner 版本固定值位于 `templates/common/`。
 构建命令先在本机下载并校验官方 Runner 归档，再以较小的 COPY 分片上传，
 远端拼接后会再次校验完整归档。
+该固定版本仍是经过测试的预装基线；托管模板与自定义模板在运行时注册 Runner
+时都保留 GitHub 官方自更新能力。
 模板构建要求 qshell 2.19.13 或更高版本。标准配置为新模板请求
 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，
 实际总容量可以更大。qshell 在同名 rebuild 时不会发送该配置。先调整 provider 团队的 `DiskMb`，构建任务会保留现有名称和 ID
