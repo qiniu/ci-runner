@@ -457,6 +457,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		}
 	}
 	templateID := profile.TemplateID
+	var runnerApplications []sandboxrunner.RunnerApplication
 	if strings.TrimSpace(profile.ManagedBy) != "" {
 		catalog, ok := sandboxService.(sandboxrunner.DefaultTemplateCatalog)
 		if !ok {
@@ -479,6 +480,23 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		if err != nil {
 			s.failStart(id, st, "template_resolution", err)
 			return
+		}
+	} else {
+		s.logger.Info("resolving github runner applications", "id", id)
+		s.store.AppendLog(id, "control.log", []byte("resolving github runner applications for preflight update\n"))
+		applications, err := s.gh.ListRunnerApplications(ctx, req.RepositoryFullName, req.RunnerGroup)
+		if err != nil {
+			s.failStart(id, st, "github_runner_downloads", err)
+			return
+		}
+		runnerApplications = make([]sandboxrunner.RunnerApplication, 0, len(applications))
+		for _, application := range applications {
+			runnerApplications = append(runnerApplications, sandboxrunner.RunnerApplication{
+				Architecture:   application.Architecture,
+				Version:        application.Version,
+				DownloadURL:    application.DownloadURL,
+				SHA256Checksum: application.SHA256Checksum,
+			})
 		}
 	}
 
@@ -506,18 +524,19 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 
 		// Generate cache STS credentials for this repository if cache is configured.
 		input := sandboxrunner.StartInput{
-			RequestID:         req.ID,
-			RunnerName:        req.RunnerName,
-			RepositoryURL:     repositoryURL,
-			RegistrationToken: token.Token,
-			Labels:            req.Labels,
-			RunnerGroup:       strings.TrimSpace(req.RunnerGroup),
-			TemplateID:        templateID,
-			RequireDocker:     strings.TrimSpace(profile.ManagedBy) != "",
-			Timeout:           s.cfg.SandboxTimeout,
-			CommandContext:    ctx,
-			OnStdout:          func(data []byte) { s.appendRunnerStdout(id, data) },
-			OnStderr:          func(data []byte) { s.store.AppendLog(id, "stderr.log", data) },
+			RequestID:          req.ID,
+			RunnerName:         req.RunnerName,
+			RepositoryURL:      repositoryURL,
+			RegistrationToken:  token.Token,
+			Labels:             req.Labels,
+			RunnerGroup:        strings.TrimSpace(req.RunnerGroup),
+			RunnerApplications: runnerApplications,
+			TemplateID:         templateID,
+			RequireDocker:      strings.TrimSpace(profile.ManagedBy) != "",
+			Timeout:            s.cfg.SandboxTimeout,
+			CommandContext:     ctx,
+			OnStdout:           func(data []byte) { s.appendRunnerStdout(id, data) },
+			OnStderr:           func(data []byte) { s.store.AppendLog(id, "stderr.log", data) },
 			OnExit: func(result sandboxrunner.ExitResult, err error) {
 				defer close(exitCh)
 				attempt := <-exitWatchAttempt

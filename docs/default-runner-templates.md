@@ -56,11 +56,14 @@ reassembles them and verifies the complete SHA-256 in the same `RUN` as runtime
 installation, including cache-resumed builds. The checked local archive is
 cached under `.build/`; the chunks under `templates/common/.build/` are ignored
 by Git.
-The pin is the preinstalled bootstrap baseline. At runtime, runnerd registers
-both managed and custom-template Runners without `--disableupdate`; GitHub's
-official updater may therefore replace the writable Runner copy before the job
-starts. Managed templates must still advance the pin periodically to keep
-startup predictable and preserve a recently verified fallback.
+The pin is the managed template's preinstalled bootstrap baseline. Managed
+templates use that copy directly, while runnerd periodically advances the pin
+to keep startup predictable and preserve a recently verified fallback. Custom
+Runner Specs use a separate registration preflight: runnerd resolves and
+validates GitHub's official Linux application descriptors, and a stale Sandbox
+downloads, checksum-verifies, extracts, and version-verifies the selected
+archive before `config.sh`. Both paths leave GitHub's official self-update
+enabled after registration.
 The 2.337.0 branch candidate has one ready Ubuntu 24.04 development build and
 smoke in the configured Sandbox environment; the full two-region, eight-template
 promotion gate remains open.
@@ -224,7 +227,10 @@ The source gate rejects Actions Runner versions below `2.337.0`. Release smoke
 checks the exact common-pinned preinstalled Runner version and the template
 name/version persisted into the Sandbox runtime environment. The effective
 Runner version may be newer after GitHub's official self-update and is verified
-separately from the immutable template baseline. Release smoke also loads NVM as the
+separately from the immutable template baseline. This release smoke covers
+managed templates; custom-template acceptance instead expects the preinstalled
+and effective versions to differ when registration preflight upgrades a stale
+baseline. Release smoke also loads NVM as the
 `runner` user and requires `/home/runner/.nvm` to be writable, preventing a
 root-owned build skeleton from passing the release gate. Full runtime
 conformance also checks the exact pinned Azure CLI version, so Dockerfile

@@ -61,6 +61,109 @@ if [ ! -x ./config.sh ]; then
   cp -a "$actions_runner_root"/. "$workdir"/
 fi
 
+runner_applications_manifest="$(printf '%%s' "%[17]s" | base64 -d)"
+if [ -n "$runner_applications_manifest" ]; then
+  case "$(uname -m)" in
+    x86_64) runner_architecture="x64" ;;
+    aarch64|arm64) runner_architecture="arm64" ;;
+    armv7l|armv8l) runner_architecture="arm" ;;
+    *)
+      echo "unsupported architecture for GitHub Actions runner preflight update: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  runner_target_version=""
+  runner_download_url=""
+  runner_sha256_checksum=""
+  while IFS=$'\t' read -r application_architecture application_version application_url application_checksum; do
+    if [ "$application_architecture" = "$runner_architecture" ]; then
+      runner_target_version="$application_version"
+      runner_download_url="$application_url"
+      runner_sha256_checksum="$application_checksum"
+      break
+    fi
+  done <<<"$runner_applications_manifest"
+  if [ -z "$runner_target_version" ] || [ -z "$runner_download_url" ] || [ -z "$runner_sha256_checksum" ]; then
+    echo "GitHub Actions runner preflight update has no application for architecture $runner_architecture" >&2
+    exit 1
+  fi
+
+  current_runner_version="$("$workdir/bin/Runner.Listener" --version 2>/dev/null || true)"
+  if [ "$current_runner_version" = "$runner_target_version" ]; then
+    echo "GitHub Actions runner $runner_target_version is already installed"
+  else
+    for runner_update_tool in curl tar sha256sum mktemp; do
+      if ! command -v "$runner_update_tool" >/dev/null 2>&1; then
+        echo "missing required GitHub Actions runner update tool: $runner_update_tool" >&2
+        exit 1
+      fi
+    done
+
+    runner_update_root="$(mktemp -d "${workdir}.update.XXXXXX")"
+    runner_update_archive="$runner_update_root/runner.tar.gz"
+    runner_update_candidate="$runner_update_root/candidate"
+    cleanup_runner_update() {
+      if [ -n "${runner_update_root:-}" ]; then
+        rm -rf "$runner_update_root"
+      fi
+    }
+    trap cleanup_runner_update EXIT
+    mkdir -p "$runner_update_candidate"
+    echo "downloading GitHub Actions runner $runner_target_version for $runner_architecture"
+    if ! (
+      # Bash expresses RLIMIT_FSIZE in KiB. Keep the archive bounded even when
+      # an older curl cannot apply --max-filesize without Content-Length.
+      ulimit -f 524288
+      curl \
+        --fail \
+        --location \
+        --retry 3 \
+        --retry-delay 1 \
+        --retry-max-time 300 \
+        --connect-timeout 10 \
+        --max-time 300 \
+        --max-filesize 536870912 \
+        --output "$runner_update_archive" \
+        "$runner_download_url"
+    ); then
+      echo "GitHub Actions runner download failed" >&2
+      exit 1
+    fi
+    if ! printf '%%s  %%s\n' "$runner_sha256_checksum" "$runner_update_archive" | sha256sum -c - >/dev/null 2>&1; then
+      echo "GitHub Actions runner archive checksum verification failed" >&2
+      exit 1
+    fi
+    if ! tar -xzf "$runner_update_archive" -C "$runner_update_candidate"; then
+      echo "GitHub Actions runner archive extraction failed" >&2
+      exit 1
+    fi
+    candidate_runner_version="$("$runner_update_candidate/bin/Runner.Listener" --version 2>/dev/null || true)"
+    if [ "$candidate_runner_version" != "$runner_target_version" ]; then
+      echo "GitHub Actions runner archive version verification failed" >&2
+      exit 1
+    fi
+
+    runner_previous_workdir="${workdir}.previous.$$"
+    cd "$(dirname "$workdir")"
+    if ! mv "$workdir" "$runner_previous_workdir"; then
+      echo "GitHub Actions runner work directory replacement failed" >&2
+      exit 1
+    fi
+    if ! mv "$runner_update_candidate" "$workdir"; then
+      mv "$runner_previous_workdir" "$workdir" || true
+      echo "GitHub Actions runner work directory replacement failed" >&2
+      exit 1
+    fi
+    rm -rf "$runner_previous_workdir"
+    cleanup_runner_update
+    runner_update_root=""
+    trap - EXIT
+    cd "$workdir"
+    echo "updated GitHub Actions runner from ${current_runner_version:-unknown} to $runner_target_version"
+  fi
+fi
+
 if [ ! -x "$ensure_docker" ]; then
   if [ "$require_docker" = 1 ]; then
     echo "missing required Docker bootstrap helper at $ensure_docker" >&2

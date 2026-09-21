@@ -394,8 +394,12 @@ cache-resume guidance after a remote build time limit, plus publication and
 smoke commands. Shared setup code and the Actions Runner version pin live in
 `templates/common/`. Build tasks verify the official Runner archive locally,
 upload it as small COPY chunks, and verify it again before installation.
-The pin remains the tested preinstalled baseline; runtime registration leaves
-GitHub's official Runner self-update enabled for managed and custom templates.
+The pin remains the tested preinstalled baseline. Managed templates run that
+baseline and continue to follow the regular rebuild cadence. For custom
+templates, runnerd resolves and verifies GitHub's official Runner archive before
+registration and replaces a stale writable copy before the current Job can be
+accepted. Official self-update remains enabled after registration for both
+paths.
 Template builds require qshell 2.19.13 or newer. Standard configs request
 `disk_size_mb = 20480`, while large configs request `81920` for new templates.
 This setting is the minimum root disk size; the reported total can be larger.

@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -126,6 +128,189 @@ func TestCreateRegistrationTokenUsesRequestRepository(t *testing.T) {
 	if got, err := client.RunnerURL("other/repo", ""); err != nil || got != "https://github.com/other/repo" {
 		t.Fatalf("unexpected runner url %q err=%v", got, err)
 	}
+}
+
+func TestListRunnerApplicationsRepository(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[
+			{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"},
+			{"os":"linux","architecture":"arm64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-arm64-2.337.0.tar.gz","filename":"actions-runner-linux-arm64-2.337.0.tar.gz","sha256_checksum":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+			{"os":"linux","architecture":"arm","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-arm-2.337.0.tar.gz","filename":"actions-runner-linux-arm-2.337.0.tar.gz","sha256_checksum":"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"},
+			{"os":"win","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip","filename":"actions-runner-win-x64-2.337.0.zip","sha256_checksum":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+		]`)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	applications, err := client.ListRunnerApplications(t.Context(), "o/r", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/repos/o/r/actions/runners/downloads" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if len(applications) != 3 {
+		t.Fatalf("expected 3 Linux applications, got %#v", applications)
+	}
+	want := RunnerApplication{
+		Architecture:   "x64",
+		Version:        "2.337.0",
+		DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
+		SHA256Checksum: "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613",
+	}
+	if applications[0] != want {
+		t.Fatalf("unexpected x64 application: %#v", applications[0])
+	}
+}
+
+func TestListRunnerApplicationsOrganization(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[
+			{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"},
+			{"os":"linux","architecture":"arm64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-arm64-2.337.0.tar.gz","filename":"actions-runner-linux-arm64-2.337.0.tar.gz","sha256_checksum":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+			{"os":"linux","architecture":"arm","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-arm-2.337.0.tar.gz","filename":"actions-runner-linux-arm-2.337.0.tar.gz","sha256_checksum":"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}
+		]`)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	applications, err := client.ListRunnerApplications(t.Context(), "o/r", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/orgs/o/actions/runners/downloads" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if len(applications) != 3 {
+		t.Fatalf("expected 3 Linux applications, got %#v", applications)
+	}
+}
+
+func TestListRunnerApplicationsRejectsInvalidResponses(t *testing.T) {
+	const validChecksum = "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "HTTP failure", status: http.StatusForbidden, body: `{"message":"forbidden"}`},
+		{name: "non GitHub URL", status: http.StatusOK, body: `[{"os":"linux","architecture":"x64","download_url":"https://example.com/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"` + validChecksum + `"}]`},
+		{name: "bad digest", status: http.StatusOK, body: `[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"not-a-digest"}]`},
+		{name: "unsupported architecture", status: http.StatusOK, body: `[{"os":"linux","architecture":"riscv64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-riscv64-2.337.0.tar.gz","filename":"actions-runner-linux-riscv64-2.337.0.tar.gz","sha256_checksum":"` + validChecksum + `"}]`},
+		{name: "mismatched URL version", status: http.StatusOK, body: `[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.336.0/actions-runner-linux-x64-2.336.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"` + validChecksum + `"}]`},
+		{name: "empty Linux set", status: http.StatusOK, body: `[{"os":"win","architecture":"x64","download_url":"https://example.invalid/runner.zip","filename":"runner.zip","sha256_checksum":"` + validChecksum + `"}]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer ts.Close()
+			client := NewClient(ts.URL, ts.Client())
+			if _, err := client.ListRunnerApplications(t.Context(), "o/r", ""); err == nil {
+				t.Fatal("expected invalid response to fail")
+			}
+		})
+	}
+}
+
+func TestListRunnerApplicationsCachesValidatedResponse(t *testing.T) {
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, validRunnerApplicationsResponse())
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	first, err := client.ListRunnerApplications(t.Context(), "o/r", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first[0].Version = "mutated"
+	second, err := client.ListRunnerApplications(t.Context(), "o/r", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("expected one upstream request, got %d", got)
+	}
+	if second[0].Version != "2.337.0" {
+		t.Fatalf("cached response was mutated: %#v", second[0])
+	}
+}
+
+func TestStoreRunnerApplicationsEvictsExpiredEntries(t *testing.T) {
+	client := NewClient("https://api.github.test", nil)
+	client.applications["repo:expired"] = runnerApplicationsCacheEntry{
+		applications: []RunnerApplication{{Architecture: "x64", Version: "2.336.0"}},
+		expiresAt:    time.Now().Add(-time.Minute),
+	}
+
+	client.storeRunnerApplications("repo:active", []RunnerApplication{{Architecture: "x64", Version: "2.337.0"}})
+
+	if _, ok := client.applications["repo:expired"]; ok {
+		t.Fatal("expired Runner applications cache entry was retained")
+	}
+	if _, ok := client.applications["repo:active"]; !ok {
+		t.Fatal("active Runner applications cache entry was not stored")
+	}
+}
+
+func TestListRunnerApplicationsCoalescesConcurrentRequests(t *testing.T) {
+	var requests atomic.Int32
+	release := make(chan struct{})
+	firstRequest := make(chan struct{})
+	var signalFirst sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		signalFirst.Do(func() { close(firstRequest) })
+		<-release
+		_, _ = io.WriteString(w, validRunnerApplicationsResponse())
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	start := make(chan struct{})
+	errs := make(chan error, 20)
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := client.ListRunnerApplications(t.Context(), "o/r", "")
+			errs <- err
+		}()
+	}
+	close(start)
+	<-firstRequest
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for requests.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("expected one coalesced upstream request, got %d", got)
+	}
+}
+
+func validRunnerApplicationsResponse() string {
+	return `[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"}]`
 }
 
 func TestNewAppClientUsesConfiguredBaseURLForInstallationTransport(t *testing.T) {

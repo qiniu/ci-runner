@@ -605,6 +605,282 @@ exit 1
 	}
 }
 
+func TestStartScriptPreflightRunnerUpdate(t *testing.T) {
+	fixture := t.TempDir()
+	actionsRunnerRoot := filepath.Join(fixture, "actions-runner")
+	workdir := filepath.Join(fixture, "workdir")
+	runnerHome := filepath.Join(fixture, "home")
+	hookRoot := filepath.Join(fixture, "hooks")
+	logPath := filepath.Join(fixture, "runner.log")
+	if err := os.MkdirAll(filepath.Join(actionsRunnerRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "config.sh"), "#!/usr/bin/env bash\nexit 97\n")
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "run.sh"), "#!/usr/bin/env bash\nexit 98\n")
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '2.336.0\\n'\n")
+
+	updatedRunner := filepath.Join(fixture, "updated-runner")
+	if err := os.MkdirAll(filepath.Join(updatedRunner, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(updatedRunner, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '2.337.0\\n'\n")
+	writeExecutable(t, filepath.Join(updatedRunner, "config.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'config version=%s\n' "$(./bin/Runner.Listener --version)" >>"$RUNNER_TEST_LOG"
+printf 'RUNNER_TEST_CONFIG_VERSION=%s\n' "$(./bin/Runner.Listener --version)"
+`)
+	writeExecutable(t, filepath.Join(updatedRunner, "run.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'run version=%s\n' "$(./bin/Runner.Listener --version)" >>"$RUNNER_TEST_LOG"
+"$ACTIONS_RUNNER_HOOK_JOB_STARTED"
+`)
+	archivePath := filepath.Join(fixture, "actions-runner-linux-x64-2.337.0.tar.gz")
+	if output, err := exec.Command("tar", "-czf", archivePath, "-C", updatedRunner, ".").CombinedOutput(); err != nil {
+		t.Fatalf("create runner fixture archive: %v\n%s", err, output)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := fmt.Sprintf("%x", sha256.Sum256(archive))
+
+	mockBin := filepath.Join(runnerHome, "go", "bin")
+	if err := os.MkdirAll(mockBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(mockBin, "curl"), `#!/usr/bin/env bash
+set -euo pipefail
+output=""
+retry_max_time=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    output="$2"
+    shift 2
+    continue
+  fi
+  if [ "$1" = "--retry-max-time" ]; then
+    retry_max_time="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+if [ "$retry_max_time" != 300 ]; then
+  echo "missing overall retry deadline" >&2
+  exit 81
+fi
+file_limit="$(ulimit -f)"
+if [ "$file_limit" = unlimited ] || [ "$file_limit" -gt 524288 ]; then
+  echo "missing inherited archive file-size limit: $file_limit" >&2
+  exit 82
+fi
+cp "$RUNNER_UPDATE_ARCHIVE" "$output"
+`)
+	writeExecutable(t, filepath.Join(mockBin, "uname"), "#!/usr/bin/env bash\nprintf 'x86_64\\n'\n")
+
+	script := startScript(StartInput{
+		RequestID:         "request-1",
+		RepositoryURL:     "https://github.com/o/r",
+		RegistrationToken: "token",
+		RunnerName:        "runner",
+		Labels:            []string{"self-hosted", "linux", "x64"},
+		RunnerApplications: []RunnerApplication{{
+			Architecture:   "x64",
+			Version:        "2.337.0",
+			DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
+			SHA256Checksum: checksum,
+		}},
+	}, "sandbox-1")
+	scriptPath := filepath.Join(fixture, "start-runner.sh")
+	writeExecutable(t, scriptPath, script)
+
+	output, err := runCommand(
+		t,
+		"bash",
+		[]string{scriptPath},
+		"ACTIONS_RUNNER_ROOT="+actionsRunnerRoot,
+		"RUNNER_WORKDIR="+workdir,
+		"RUNNER_JOB_WORK="+filepath.Join(fixture, "job-work"),
+		"RUNNER_HOME="+runnerHome,
+		"RUNNER_HOOK_ROOT="+hookRoot,
+		"RUNNER_ENVIRONMENT_FILE="+filepath.Join(fixture, "missing-environment"),
+		"RUNNER_TEST_LOG="+logPath,
+		"RUNNER_UPDATE_ARCHIVE="+archivePath,
+		"RUNNERD_AS_RUNNER=1",
+		"ENSURE_DOCKER=/bin/true",
+		"GOPATH="+filepath.Join(runnerHome, "go"),
+	)
+	if err != nil {
+		t.Fatalf("start script failed: %v\n%s", err, output)
+	}
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(logBytes)
+	if !strings.HasPrefix(log, "config version=2.337.0\n") || !strings.Contains(log, "run version=2.337.0\n") {
+		t.Fatalf("updated runner was not configured before execution:\n%s", log)
+	}
+	if !strings.Contains(output, "RUNNERD_EFFECTIVE_RUNNER_VERSION=2.337.0") {
+		t.Fatalf("updated effective Runner version was not emitted:\n%s", output)
+	}
+	updatedIndex := strings.Index(output, "updated GitHub Actions runner from 2.336.0 to 2.337.0")
+	configIndex := strings.Index(output, "RUNNER_TEST_CONFIG_VERSION=2.337.0")
+	if updatedIndex < 0 || configIndex < 0 || updatedIndex >= configIndex {
+		t.Fatalf("Runner update did not complete before configuration:\n%s", output)
+	}
+}
+
+func TestStartScriptSkipsMatchingRunnerUpdate(t *testing.T) {
+	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+		currentVersion: "2.337.0",
+		targetVersion:  "2.337.0",
+		uname:          "x86_64",
+		checksum:       strings.Repeat("0", 64),
+		wantSuccess:    true,
+		wantConfig:     true,
+		forbidCurl:     true,
+	})
+}
+
+func TestStartScriptRejectsRunnerUpdateChecksumMismatch(t *testing.T) {
+	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+		currentVersion: "2.336.0",
+		targetVersion:  "2.337.0",
+		uname:          "x86_64",
+		checksum:       strings.Repeat("0", 64),
+		wantOutput:     "checksum verification failed",
+	})
+}
+
+func TestStartScriptRejectsRunnerUpdateUnsupportedArchitecture(t *testing.T) {
+	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+		currentVersion: "2.336.0",
+		targetVersion:  "2.337.0",
+		uname:          "riscv64",
+		checksum:       strings.Repeat("0", 64),
+		wantOutput:     "unsupported architecture",
+	})
+}
+
+func TestStartScriptRejectsRunnerUpdateMissingTool(t *testing.T) {
+	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+		currentVersion: "2.336.0",
+		targetVersion:  "2.337.0",
+		uname:          "x86_64",
+		checksum:       strings.Repeat("0", 64),
+		missingTool:    "curl",
+		wantOutput:     "missing required GitHub Actions runner update tool: curl",
+	})
+}
+
+type runnerUpdateGuardCase struct {
+	currentVersion string
+	targetVersion  string
+	uname          string
+	checksum       string
+	missingTool    string
+	wantOutput     string
+	wantSuccess    bool
+	wantConfig     bool
+	forbidCurl     bool
+}
+
+func runRunnerUpdateGuardCase(t *testing.T, tt runnerUpdateGuardCase) {
+	t.Helper()
+	fixture := t.TempDir()
+	actionsRunnerRoot := filepath.Join(fixture, "actions-runner")
+	runnerHome := filepath.Join(fixture, "home")
+	mockBin := filepath.Join(runnerHome, "go", "bin")
+	logPath := filepath.Join(fixture, "runner.log")
+	curlMarker := filepath.Join(fixture, "curl-called")
+	archivePath := filepath.Join(fixture, "runner.tar.gz")
+	if err := os.MkdirAll(filepath.Join(actionsRunnerRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mockBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "bin", "Runner.Listener"), "#!/usr/bin/env bash\nprintf '"+tt.currentVersion+"\\n'\n")
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "config.sh"), "#!/usr/bin/env bash\nprintf 'config\\n' >>\"$RUNNER_TEST_LOG\"\n")
+	writeExecutable(t, filepath.Join(actionsRunnerRoot, "run.sh"), "#!/usr/bin/env bash\n\"$ACTIONS_RUNNER_HOOK_JOB_STARTED\"\n")
+	writeExecutable(t, filepath.Join(mockBin, "uname"), "#!/usr/bin/env bash\nprintf '"+tt.uname+"\\n'\n")
+	writeExecutable(t, filepath.Join(mockBin, "curl"), `#!/usr/bin/env bash
+set -euo pipefail
+touch "$RUNNER_CURL_MARKER"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then output="$2"; shift 2; continue; fi
+  shift
+done
+cp "$RUNNER_UPDATE_ARCHIVE" "$output"
+`)
+	if err := os.WriteFile(archivePath, []byte("not the expected archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bashEnv := ""
+	if tt.missingTool != "" {
+		bashEnv = filepath.Join(fixture, "bash-env")
+		contents := "command() {\n  if [ \"${1:-}\" = -v ] && [ \"${2:-}\" = \"" + tt.missingTool + "\" ]; then return 1; fi\n  builtin command \"$@\"\n}\n"
+		if err := os.WriteFile(bashEnv, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	script := startScript(StartInput{
+		RequestID:         "request-1",
+		RepositoryURL:     "https://github.com/o/r",
+		RegistrationToken: "token",
+		RunnerName:        "runner",
+		Labels:            []string{"self-hosted", "linux", "x64"},
+		RunnerApplications: []RunnerApplication{{
+			Architecture:   "x64",
+			Version:        tt.targetVersion,
+			DownloadURL:    "https://github.com/actions/runner/releases/download/v" + tt.targetVersion + "/actions-runner-linux-x64-" + tt.targetVersion + ".tar.gz",
+			SHA256Checksum: tt.checksum,
+		}},
+	}, "sandbox-1")
+	scriptPath := filepath.Join(fixture, "start-runner.sh")
+	writeExecutable(t, scriptPath, script)
+	output, err := runCommand(
+		t,
+		"bash",
+		[]string{scriptPath},
+		"ACTIONS_RUNNER_ROOT="+actionsRunnerRoot,
+		"RUNNER_WORKDIR="+filepath.Join(fixture, "workdir"),
+		"RUNNER_JOB_WORK="+filepath.Join(fixture, "job-work"),
+		"RUNNER_HOME="+runnerHome,
+		"RUNNER_HOOK_ROOT="+filepath.Join(fixture, "hooks"),
+		"RUNNER_ENVIRONMENT_FILE="+filepath.Join(fixture, "missing-environment"),
+		"RUNNER_TEST_LOG="+logPath,
+		"RUNNER_UPDATE_ARCHIVE="+archivePath,
+		"RUNNER_CURL_MARKER="+curlMarker,
+		"RUNNERD_AS_RUNNER=1",
+		"ENSURE_DOCKER=/bin/true",
+		"GOPATH="+filepath.Join(runnerHome, "go"),
+		"BASH_ENV="+bashEnv,
+	)
+	if tt.wantSuccess && err != nil {
+		t.Fatalf("start script failed: %v\n%s", err, output)
+	}
+	if !tt.wantSuccess && err == nil {
+		t.Fatalf("start script unexpectedly succeeded:\n%s", output)
+	}
+	if tt.wantOutput != "" && !strings.Contains(output, tt.wantOutput) {
+		t.Fatalf("output missing %q:\n%s", tt.wantOutput, output)
+	}
+	logBytes, readErr := os.ReadFile(logPath)
+	configured := readErr == nil && strings.Contains(string(logBytes), "config\n")
+	if configured != tt.wantConfig {
+		t.Fatalf("configured = %v, want %v; output:\n%s", configured, tt.wantConfig, output)
+	}
+	if tt.forbidCurl {
+		if _, statErr := os.Stat(curlMarker); !os.IsNotExist(statErr) {
+			t.Fatalf("matching version invoked curl: %v", statErr)
+		}
+	}
+}
+
 func TestStartScriptDockerBootstrapPolicy(t *testing.T) {
 	tests := []struct {
 		name                string

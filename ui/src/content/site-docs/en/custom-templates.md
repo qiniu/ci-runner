@@ -32,9 +32,11 @@ A compatible image must provide executable GitHub Actions runner scripts at:
 
 It should also provide a writable `/home/runner` and allow outbound HTTPS access to GitHub. A `runner` user, `/opt/hostedtoolcache`, and `/usr/local/bin/ensure-docker` follow the maintained image convention. Docker startup is best-effort for custom specs, so omit it only when workflows do not need containers or service containers.
 
-The preinstalled Runner is a bootstrap baseline. runnerd registers managed and custom-template Runners without `--disableupdate`, so GitHub may update the writable Runner copy before it accepts a job. Keep outbound GitHub access available and periodically refresh the preinstalled version so Sandbox startup does not depend on a large update.
+The preinstalled Runner is a bootstrap baseline. Before requesting a registration token for a custom Runner Spec, runnerd resolves GitHub's official Linux Runner applications and strictly validates their release URL, filename, architecture, version, and SHA-256. Inside the Sandbox, a matching version registers immediately; a stale writable copy is downloaded with fixed time and 512-MiB bounds, checksum-verified, extracted, and version-verified before `config.sh` runs. Any lookup, tool, download, checksum, extraction, or version failure stops before registration, so the queued Job cannot start on the stale Runner.
 
-runnerd injects a Bash startup script into the Sandbox. The image must provide `bash`, `base64`, `install`, `cp`, `mkdir`, and `id`. If the conventional `runner` user exists, it must also provide `sudo` so the startup script can switch to that user without interaction.
+This update is intentionally ephemeral. If the immutable template remains old, every fresh Sandbox downloads the current Runner again. Periodically rebuild the custom template to reduce startup time and upstream download dependence. runnerd still leaves GitHub's official self-update enabled after registration.
+
+runnerd injects a Bash startup script into the Sandbox. The image must provide `bash`, `base64`, `install`, `cp`, `mkdir`, and `id`. A stale Runner also requires `curl`, `tar`, `sha256sum`, and `mktemp`; an already-current Runner skips those four requirements. If the conventional `runner` user exists, it must also provide `sudo` so the startup script can switch to that user without interaction. Only the validated public URL, version, architecture, and checksum enter the Sandbox; GitHub API credentials do not.
 
 A locally successful `docker build` is useful diagnostics, but it does not prove that a remote Sandbox template exists or can start in the target region.
 
@@ -84,7 +86,7 @@ qshell sandbox create <template-id-or-name> --timeout 300
 In the Sandbox terminal, verify the runner contract and the tools your workflow needs:
 
 ```bash
-command -v bash base64 install cp mkdir id
+command -v bash base64 install cp mkdir id curl tar sha256sum mktemp
 test -x /opt/actions-runner/config.sh
 test -x /opt/actions-runner/run.sh
 test -w /home/runner

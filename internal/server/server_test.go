@@ -400,6 +400,8 @@ func TestManualCreateAndDeleteRunner(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
+			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
@@ -470,6 +472,8 @@ func TestOrgRunnerPassesMatchedRunnerGroupToSandbox(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads":
+			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/orgs/o/actions/runners/registration-token":
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
@@ -4828,6 +4832,8 @@ func TestWorkflowRunInProgressBackfillsQueuedJobs(t *testing.T) {
 			w.Write([]byte(`{"jobs":[{"id":1001,"name":"test","status":"queued","labels":["self-hosted","e2b"]},{"id":1002,"name":"done","status":"completed","labels":["self-hosted","e2b"]}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001":
 			w.Write([]byte(`{"id":1001,"name":"test","status":"queued","labels":["self-hosted","e2b"]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
+			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
@@ -5014,6 +5020,8 @@ func TestWebhookQueuedUsesEventRepositoryForRepoRunner(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/other/repo/actions/jobs/1001":
 			w.Write([]byte(`{"id":1001,"name":"test","status":"queued","labels":["self-hosted","e2b"]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/other/repo/actions/runners/downloads":
+			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/other/repo/actions/runners/registration-token":
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
@@ -5642,6 +5650,10 @@ func TestWebhookCompletedWithoutLocalRunnerIsIgnored(t *testing.T) {
 func TestStopDuringCreateCleansStartedSandbox(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads" {
+			writeRunnerApplicationsResponse(w)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
 	}))
@@ -7967,6 +7979,10 @@ func TestRetryRunnerRequeuesFailedRequestWithPersistedAdmissionAndWritesAuditEve
 func TestRetryRunnerRejectsRunningRequest(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads" {
+			writeRunnerApplicationsResponse(w)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
 	}))
@@ -8443,6 +8459,10 @@ func TestSweeperKeepsRunnerAfterJobStarted(t *testing.T) {
 func TestProfileConcurrencyLimitAppliesBeforeCreate(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads" {
+			writeRunnerApplicationsResponse(w)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
 	}))
@@ -9326,6 +9346,8 @@ func githubRunnerAPI(t *testing.T) http.HandlerFunc {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/o/r/actions/jobs/"):
 			id := strings.TrimPrefix(r.URL.Path, "/repos/o/r/actions/jobs/")
 			w.Write([]byte(`{"id":` + id + `,"name":"test","status":"queued","labels":["self-hosted","e2b"]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
+			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"token":"runner-token","expires_at":"2026-05-18T10:00:00Z"}`))
@@ -9337,4 +9359,8 @@ func githubRunnerAPI(t *testing.T) http.HandlerFunc {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
 	}
+}
+
+func writeRunnerApplicationsResponse(w http.ResponseWriter) {
+	_, _ = w.Write([]byte(`[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"}]`))
 }

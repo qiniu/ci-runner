@@ -2,8 +2,10 @@ package sandboxrunner
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -27,6 +29,7 @@ type StartInput struct {
 	RegistrationToken   string
 	Labels              []string
 	RunnerGroup         string
+	RunnerApplications  []RunnerApplication
 	TemplateID          string
 	RequireDocker       bool
 	Timeout             time.Duration
@@ -42,6 +45,13 @@ type StartInput struct {
 	OnStdout            func([]byte)
 	OnStderr            func([]byte)
 	OnExit              func(ExitResult, error)
+}
+
+type RunnerApplication struct {
+	Architecture   string
+	Version        string
+	DownloadURL    string
+	SHA256Checksum string
 }
 
 type StartResult struct {
@@ -967,5 +977,62 @@ func startScript(input StartInput, sandboxID string) string {
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3AccessKeyID)),
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SecretKey)),
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SessionToken)),
+		base64.StdEncoding.EncodeToString([]byte(runnerApplicationsManifest(input.RunnerApplications))),
 	)
+}
+
+func runnerApplicationsManifest(applications []RunnerApplication) string {
+	const maxApplications = 3
+	lines := make([]string, 0, min(len(applications), maxApplications))
+	for _, application := range applications {
+		if len(lines) == maxApplications || !safeRunnerApplication(application) {
+			continue
+		}
+		lines = append(lines, strings.Join([]string{
+			application.Architecture,
+			application.Version,
+			application.DownloadURL,
+			strings.ToLower(application.SHA256Checksum),
+		}, "\t"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func safeRunnerApplication(application RunnerApplication) bool {
+	switch application.Architecture {
+	case "x64", "arm64", "arm":
+	default:
+		return false
+	}
+	if !validRunnerApplicationVersion(application.Version) {
+		return false
+	}
+	filename := "actions-runner-linux-" + application.Architecture + "-" + application.Version + ".tar.gz"
+	if application.DownloadURL != "https://github.com/actions/runner/releases/download/v"+application.Version+"/"+filename {
+		return false
+	}
+	checksum := strings.ToLower(application.SHA256Checksum)
+	if len(checksum) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(checksum)
+	return err == nil
+}
+
+func validRunnerApplicationVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }

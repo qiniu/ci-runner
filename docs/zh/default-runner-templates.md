@@ -45,10 +45,11 @@ Actions Runner 版本、Linux x64 归档校验和及归档大小，仅在 `runti
 安装，缓存续跑无需恢复 `/tmp` 中间文件。本机已校验的归档缓存在 `.build/`，
 分片位于被 Git 忽略的 `templates/common/.build/`。`common/` 是共享源码目录，并非新的
 Sandbox 物理模板。
-该固定版本是预装启动基线。运行时，runnerd 为托管模板和自定义模板注册 Runner
-时都不会传入 `--disableupdate`；GitHub 官方更新器可以在 Job 开始前替换工作目录
-中的可写 Runner 副本。托管模板仍需定期推进固定版本，以保持启动耗时可预测，并
-保留近期完成验证的回退基线。
+该固定版本是托管模板的预装启动基线。托管模板直接使用该副本；runnerd 仍需定期
+推进固定版本，以保持启动耗时可预测，并保留近期完成验证的回退基线。自定义 Runner
+Spec 使用独立的注册前预检：runnerd 解析并严格校验 GitHub 官方 Linux 应用描述，
+过期的 Sandbox 会在 `config.sh` 前下载归档、校验 SHA-256、解包并再次核对版本。
+两条路径在注册后都继续保留 GitHub 官方自更新能力。
 2.337.0 分支候选版已有一份就绪的 Ubuntu 24.04 开发模板，并在当前配置的
 Sandbox 环境通过 smoke；双区域、8 个模板的完整发布门槛仍未完成。
 
@@ -193,7 +194,8 @@ Build ID，最多等待 5 分钟。只有该 Build 达到 `ready` 或 `uploaded`
 源码门槛会拒绝低于 `2.337.0` 的 Actions Runner。Release smoke 会检查
 common 文件固定的预装 Runner 精确版本，以及持久化到 Sandbox 运行时环境中的模板名和
 模板版本。GitHub 官方自更新后的实际运行 Runner 版本可能更新，并与不可变模板基线
-分开验证。Release smoke 还会以 `runner` 用户加载 NVM，并要求 `/home/runner/.nvm` 可写，
+分开验证。该 release smoke 覆盖托管模板；自定义模板的生产验收则应在注册前升级
+过期基线时观察到预装版本与实际运行版本不同。Release smoke 还会以 `runner` 用户加载 NVM，并要求 `/home/runner/.nvm` 可写，
 防止 root 所有的构建 skeleton 错误通过发布门禁。完整 runtime conformance 还会
 检查固定的 Azure CLI 精确版本，因此 Dockerfile 中的版本、官方校验和与
 compatibility verification 必须同步更新。Python 和 pipx 安装会对软件包索引的

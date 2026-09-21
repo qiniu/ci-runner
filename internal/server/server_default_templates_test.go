@@ -265,6 +265,133 @@ func TestRunnerLifecycleCustomTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
 	}
 }
 
+func TestStartRunnerManagedRunnerApplicationsSkipsDownloadLookup(t *testing.T) {
+	var tokenCalls int
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runners/downloads"):
+			t.Errorf("managed Runner Spec requested Runner applications: %s", r.URL.Path)
+			http.Error(w, "downloads forbidden", http.StatusForbidden)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
+			tokenCalls++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-token","expires_at":"2026-09-21T18:00:00Z"}`))
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	upsertLifecycleProfile(t, store, lifecycleManagedProfile("catalog-bootstrap-id"))
+	sandbox := &managedLifecycleSandboxService{
+		lifecycleSandboxService: &lifecycleSandboxService{},
+		templates: []sandboxrunner.CatalogTemplate{{
+			TemplateID: "resolved-template-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildStatus: "ready", Public: true,
+		}},
+	}
+	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
+	createLifecycleRequest(t, store, "managed-applications", "managed", 987)
+
+	go srv.startRunner(context.Background(), "managed-applications", "worker-test")
+	waitForState(t, store, "managed-applications", state.StatusRunning)
+	got, err := store.ReadState("managed-applications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusRunning || tokenCalls != 1 {
+		t.Fatalf("state=%#v token calls=%d, want running with one token request", got, tokenCalls)
+	}
+	inputs := sandbox.startInputs()
+	if len(inputs) != 1 || len(inputs[0].RunnerApplications) != 0 {
+		t.Fatalf("managed StartRunner inputs = %#v, want no preflight applications", inputs)
+	}
+}
+
+func TestStartRunnerCustomRunnerApplicationsMapsValidatedDownload(t *testing.T) {
+	const applicationsResponse = `[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"}]`
+	var downloadsCalls int
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
+			downloadsCalls++
+			_, _ = w.Write([]byte(applicationsResponse))
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-token","expires_at":"2026-09-21T18:00:00Z"}`))
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	upsertLifecycleProfile(t, store, state.RunnerProfile{
+		Name: "custom", Labels: []string{"self-hosted", "custom"}, TemplateID: "custom-template-id", MaxConcurrency: 10, Enabled: true,
+	})
+	sandbox := &lifecycleSandboxService{}
+	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
+	createLifecycleRequest(t, store, "custom-applications", "custom", 987)
+
+	go srv.startRunner(context.Background(), "custom-applications", "worker-test")
+	waitForState(t, store, "custom-applications", state.StatusRunning)
+	got, err := store.ReadState("custom-applications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusRunning || downloadsCalls != 1 {
+		t.Fatalf("state=%#v downloads calls=%d, want running with one lookup", got, downloadsCalls)
+	}
+	inputs := sandbox.startInputs()
+	want := sandboxrunner.RunnerApplication{
+		Architecture:   "x64",
+		Version:        "2.337.0",
+		DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
+		SHA256Checksum: "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613",
+	}
+	if len(inputs) != 1 || len(inputs[0].RunnerApplications) != 1 || inputs[0].RunnerApplications[0] != want {
+		t.Fatalf("custom StartRunner applications = %#v, want %#v", inputs, want)
+	}
+}
+
+func TestStartRunnerCustomRunnerApplicationsFailsBeforeRegistration(t *testing.T) {
+	var tokenCalls int
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/registration-token":
+			tokenCalls++
+			http.Error(w, "token must not be requested", http.StatusInternalServerError)
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	upsertLifecycleProfile(t, store, state.RunnerProfile{
+		Name: "custom", Labels: []string{"self-hosted", "custom"}, TemplateID: "custom-template-id", MaxConcurrency: 10, Enabled: true,
+	})
+	sandbox := &lifecycleSandboxService{}
+	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
+	createLifecycleRequest(t, store, "custom-applications-error", "custom", 987)
+
+	srv.startRunner(context.Background(), "custom-applications-error", "worker-test")
+	got, err := store.ReadState("custom-applications-error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FailureStage != "github_runner_downloads" {
+		t.Fatalf("state = %#v, want github_runner_downloads failure", got)
+	}
+	if tokenCalls != 0 || len(sandbox.startInputs()) != 0 {
+		t.Fatalf("token calls=%d StartRunner inputs=%#v, want neither", tokenCalls, sandbox.startInputs())
+	}
+}
+
 func TestRunnerLifecycleRevalidatesGlobalProfileBeforeStarting(t *testing.T) {
 	store := state.New(t.TempDir())
 	profile := lifecycleManagedProfile("managed-template-id")
@@ -471,6 +598,10 @@ func TestRunnerLifecycleRetryUsesPersistedSpecWithoutPolicyOrGroupReads(t *testi
 	}
 
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads" {
+			writeRunnerApplicationsResponse(w)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/orgs/o/actions/runners/registration-token" {
 			t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusNotFound)
@@ -1007,6 +1138,12 @@ func newRunnerLifecycleTestServer(t *testing.T, store state.Store, ghURL string,
 func newLifecycleGitHubServer(t *testing.T, events *lifecycleEventRecorder) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads" {
+			events.add("downloads")
+			w.Header().Set("Content-Type", "application/json")
+			writeRunnerApplicationsResponse(w)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/r/actions/runners/registration-token" {
 			t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusNotFound)
