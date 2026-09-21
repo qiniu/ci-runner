@@ -44,7 +44,7 @@
 
 - [x] **Step 1: Write failing startup-script tests**
 
-Add assertions that the rendered script does not contain `--disableupdate`, invokes the writable `Runner.Listener --version` from the job-start hook, validates a one-line version value no longer than 256 bytes, and emits only the accepted value before `RUNNERD_JOB_STARTED`.
+Add assertions that the rendered script does not contain `--disableupdate`, invokes the writable `Runner.Listener --version` from the job-start hook, validates a one-line version value no longer than 256 bytes, and delivers only the accepted value before `RUNNERD_JOB_STARTED`. The execution fixture must route hook stdout to a separate Job log, matching the official Runner, while asserting that the outer startup command still receives the evidence through its one-shot channel.
 
 - [x] **Step 2: Run the focused tests and confirm the new assertions fail**
 
@@ -64,7 +64,7 @@ Expected: FAIL because `parseEffectiveRunnerVersion` does not exist.
 
 - [x] **Step 5: Implement the minimal script and typed exit evidence**
 
-Remove `--disableupdate`. In the fixed job-start hook, read `"$workdir/bin/Runner.Listener" --version`, validate it, and emit a bounded internal marker before `RUNNERD_JOB_STARTED`. Add `EffectiveRunnerVersion` to `ExitResult`; the start watcher accepts only the first valid pre-job marker, freezes it in memory, ignores later Workflow markers, and includes the frozen value even when the provider returns no command result. Recovery leaves uncaptured evidence empty rather than trusting post-start output.
+Remove `--disableupdate`. In the fixed job-start hook, read `"$workdir/bin/Runner.Listener" --version`, validate it, and send a bounded internal marker plus `RUNNERD_JOB_STARTED` through a permission-restricted one-shot FIFO to the outer startup process; do not rely on hook stdout because the official Runner routes it to the Job log. Add `EffectiveRunnerVersion` to `ExitResult`; the start watcher accepts only the first valid pre-job marker forwarded by the outer process, freezes it in memory, ignores later Workflow markers, and includes the frozen value even when the provider returns no command result. Recovery leaves uncaptured evidence empty rather than trusting post-start output.
 
 - [x] **Step 6: Run the Sandbox Runner tests**
 
@@ -245,12 +245,13 @@ Check completed items and append a short `Verification Results` section with exa
 
 ## Verification Results
 
-- `go test ./internal/sandboxrunner -run 'Test(EffectiveRunnerVersionCapture|StartScriptUsesHostedRunnerFilesystemContract|ParseEffectiveRunnerVersion)' -count=1 -v`: passed after the new execution test first failed against the mutable evidence-file implementation; coverage includes split control markers, post-start Workflow-marker rejection, and generated-hook capture of `2.338.0` with a custom `RUNNER_HOOK_ROOT`.
+- `go test ./internal/sandboxrunner -run TestStartScriptUsesHostedRunnerFilesystemContract -count=1 -v`: review follow-up first failed because official Runner hook stdout was simulated as a separate Job log, then passed after the generated hook delivered `2.338.0` and the job-start boundary through the one-shot FIFO to the outer command stdout.
+- `go test ./internal/sandboxrunner -run 'Test(EffectiveRunnerVersionCapture|StartScriptUsesHostedRunnerFilesystemContract|ParseEffectiveRunnerVersion)' -count=1 -v`: passed; coverage includes split control markers, post-start Workflow-marker rejection, official Job-log routing, and generated-hook capture of `2.338.0` with a custom `RUNNER_HOOK_ROOT`.
 - `go test ./internal/sandboxrunner ./internal/server ./internal/state -count=1`: passed; the production SQLite snapshot test and credentialed PostgreSQL/MySQL tests skipped behind their documented environment guards.
 - `cd ui && bun test`: 233 passed, 0 failed.
 - `task ui-i18n-check`: 9 passed, 0 failed, TypeScript build passed.
-- `GOTOOLCHAIN=go1.26.3 task lint`: passed staticcheck, gofmt, gofumpt, goimports, and go vet. ESLint reported one pre-existing warning in `ui/src/components/sandbox-catalog-sections.tsx:150` and no errors.
-- `GOTOOLCHAIN=go1.26.3 task test`: exited 0 after rebuilding the production UI and running UI plus Go race/coverage tests.
+- `GOTOOLCHAIN=go1.26.3 task lint`: passed after the review follow-up, covering staticcheck, gofmt, gofumpt, goimports, and go vet. ESLint reported one pre-existing warning in `ui/src/components/sandbox-catalog-sections.tsx:150` and no errors.
+- `task test`: exited 0 after the review follow-up, rebuilding the production UI, passing all 233 UI tests, and passing the Go race/coverage suite. Environment-gated production SQLite and credentialed PostgreSQL/MySQL tests remained skipped.
 - `rg -n --glob '!internal/server/ui/**' -- '--disableupdate' ...`: no production invocation remains; matches are limited to documentation and the negative regression assertion.
 - Real Qiniu Sandbox template build/smoke was not run because this change does not alter a template image and that gate requires provider credentials. A deployed workflow run remains the required end-to-end proof of GitHub-directed self-update.
 - The verified implementation is committed and pushed only under the user's separate explicit authorization.

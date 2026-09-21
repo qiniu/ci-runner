@@ -139,13 +139,39 @@ export RUNNERD_SANDBOX_ID="$sandbox_id"
 export RUNNERD_REQUEST_ID="$runner_request_id"
 export RUNNERD_RUNNER_NAME="$runner_name"
 export RUNNERD_RUNNER_LISTENER="$workdir/bin/Runner.Listener"
+hook_signal_path="$hook_root/job-started.signal"
+hook_signal_pid=""
+cleanup_hook_signal() {
+  if [ -n "$hook_signal_pid" ]; then
+    if [ -p "$hook_signal_path" ]; then
+      kill "$hook_signal_pid" 2>/dev/null || true
+    fi
+    wait "$hook_signal_pid" 2>/dev/null || true
+  fi
+  rm -f "$hook_signal_path"
+}
+trap cleanup_hook_signal EXIT
+if rm -f "$hook_signal_path" && mkfifo -m 600 "$hook_signal_path"; then
+  cat "$hook_signal_path" &
+  hook_signal_pid="$!"
+  export RUNNERD_HOOK_SIGNAL_PATH="$hook_signal_path"
+else
+  unset RUNNERD_HOOK_SIGNAL_PATH
+  echo "effective Runner version channel is unavailable; continuing" >&2
+fi
 cat >"$hook_root/job-started.sh" <<'HOOK'
 #!/usr/bin/env bash
 effective_runner_version="$("$RUNNERD_RUNNER_LISTENER" --version 2>/dev/null || true)"
-if [ -n "$effective_runner_version" ] && \
-  [ "${#effective_runner_version}" -le 256 ] && \
-  [[ "$effective_runner_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  printf 'RUNNERD_EFFECTIVE_RUNNER_VERSION=%%s\n' "$effective_runner_version"
+if [ -n "${RUNNERD_HOOK_SIGNAL_PATH:-}" ] && [ -p "$RUNNERD_HOOK_SIGNAL_PATH" ]; then
+  {
+    if [ -n "$effective_runner_version" ] && \
+      [ "${#effective_runner_version}" -le 256 ] && \
+      [[ "$effective_runner_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+      printf 'RUNNERD_EFFECTIVE_RUNNER_VERSION=%%s\n' "$effective_runner_version"
+    fi
+    echo "RUNNERD_JOB_STARTED"
+  } >"$RUNNERD_HOOK_SIGNAL_PATH"
+  rm -f "$RUNNERD_HOOK_SIGNAL_PATH"
 fi
 echo "RUNNERD_JOB_STARTED"
 echo "::notice title=Qiniu sandbox::sandbox_id=${RUNNERD_SANDBOX_ID} runner_request_id=${RUNNERD_REQUEST_ID} runner_name=${RUNNERD_RUNNER_NAME}"
@@ -181,6 +207,7 @@ while [ "$retries_left" -gt 0 ]; do
   sleep 1
 done
 cleanup() {
+  cleanup_hook_signal
   ./config.sh remove --token "$registration_token" || true
 }
 trap cleanup EXIT

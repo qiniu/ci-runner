@@ -247,8 +247,8 @@ jobs:
 - 每个 job 都启动请求的操作系统；26.04 job 记录为预览验收。
 - Job 的 `Set up runner` log 包含 Qiniu sandbox id、runner request id 和 runner name。
 - 规范的 Admin Runner Request 详情页展示所选 Sandbox 区域、解析后的物理模板
-  ID，以及可取得时的镜像模板版本、预装 GitHub Actions Runner 版本和固定 hook 在
-  Job 开始前冻结、匹配 Runner 进程退出后持久化的实际运行版本。由于启用了官方自更新，
+  ID，以及可取得时的镜像模板版本、预装 GitHub Actions Runner 版本和固定 hook 通过
+  一次性通道在 Job 开始前冻结、匹配 Runner 进程退出后持久化的实际运行版本。由于启用了官方自更新，
   实际运行版本可能更新。刷新详情页后这些值保持一致；升级前的历史请求或从未开始 Job 的请求对
   不可用证据显示 `-`，浏览器控制台没有报错。
 - 任一请求仍为 `running` 时，在详情页执行 Ubuntu 软件源网络诊断，或调用：

@@ -19,11 +19,11 @@ GitHub Actions Runner already owns a signed, hash-verified self-update flow. For
 1. runnerd copies the template's `/opt/actions-runner` installation into the writable Runner work directory.
 2. runnerd configures the ephemeral Runner without `--disableupdate` and starts the official `run.sh` wrapper.
 3. GitHub may direct the Runner to update. The official updater downloads and validates the server-selected package, and `run.sh` restarts the listener.
-4. Immediately before the first job starts, runnerd's fixed job-start hook runs the writable work directory's `Runner.Listener --version` command. It accepts only one valid value of at most 256 bytes and emits it as an internal control marker before `RUNNERD_JOB_STARTED`.
-5. The Sandbox service accepts only the first valid effective-version marker observed before the job-start boundary, freezes it in memory, and ignores every later Workflow output marker. No mutable evidence file remains for a Workflow step to replace.
+4. Immediately before the first job starts, runnerd's fixed job-start hook runs the writable work directory's `Runner.Listener --version` command. It accepts only one valid value of at most 256 bytes and writes it with `RUNNERD_JOB_STARTED` to a permission-restricted one-shot FIFO consumed by the outer startup process. Official hook stdout remains in the GitHub Job log and is not used as evidence.
+5. The outer startup process forwards the FIFO payload through the Sandbox command stdout observed by runnerd. The Sandbox service accepts only the first valid effective-version marker observed before the job-start boundary, freezes it in memory, and ignores every later Workflow output marker. The hook removes the FIFO before Workflow steps begin, so no mutable evidence channel remains for a step to replace.
 6. The exit callback carries the frozen effective version as typed evidence even when provider cleanup returns no command result. The lifecycle layer persists it only for the matching Sandbox ID and PID attempt and only fills an empty value.
 
-The evidence is diagnostic, not an authorization or execution input. Only the fixed hook's first valid marker before `RUNNERD_JOB_STARTED` is eligible; Workflow step output is never parsed for the version. Historical rows may keep the field empty.
+The evidence is diagnostic, not an authorization or execution input. Only the fixed hook's first valid marker forwarded by the outer startup process before `RUNNERD_JOB_STARTED` is eligible; hook and Workflow Job-log output is never parsed for the version. Historical rows may keep the field empty.
 
 ## State compatibility
 
@@ -48,7 +48,7 @@ Managed-template documentation continues to describe the exact pinned version ch
 
 ## Verification
 
-- Focused startup-script tests prove `--disableupdate` is absent and the hook emits only a bounded valid pre-job marker.
+- Focused startup-script tests emulate the official Runner's Job-log routing and prove `--disableupdate` is absent while the hook's bounded pre-job evidence still reaches the outer command stdout through the one-shot FIFO.
 - Sandbox Runner tests prove effective-version parsing bounds, chunked marker handling, and rejection of Workflow-only markers after `RUNNERD_JOB_STARTED`.
 - Lifecycle tests prove matching-attempt persistence and stale-attempt rejection.
 - State tests prove persistence, clearing, and additive SQLite migration.

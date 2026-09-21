@@ -448,6 +448,7 @@ func TestStartScriptUsesHostedRunnerFilesystemContract(t *testing.T) {
 	runnerHome := filepath.Join(fixture, "home", "runner")
 	hookRoot := filepath.Join(fixture, "hooks")
 	logPath := filepath.Join(fixture, "runner.log")
+	jobLogPath := filepath.Join(fixture, "job.log")
 	environmentPath := filepath.Join(fixture, "environment")
 	if err := os.MkdirAll(actionsRunnerRoot, 0o755); err != nil {
 		t.Fatal(err)
@@ -468,7 +469,7 @@ printf 'config args=%s\n' "$*" >>"$RUNNER_TEST_LOG"
 	writeExecutable(t, filepath.Join(actionsRunnerRoot, "run.sh"), `#!/usr/bin/env bash
 set -euo pipefail
 printf 'run HOME=%s PWD=%s RUNASROOT=%s\n' "$HOME" "$PWD" "${RUNNER_ALLOW_RUNASROOT:-}" >>"$RUNNER_TEST_LOG"
-"$ACTIONS_RUNNER_HOOK_JOB_STARTED" >>"$RUNNER_TEST_LOG"
+"$ACTIONS_RUNNER_HOOK_JOB_STARTED" >>"$RUNNER_TEST_JOB_LOG"
 `)
 	writeExecutable(t, filepath.Join(actionsRunnerRoot, "bin", "Runner.Listener"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -497,6 +498,7 @@ fi
 		"RUNNER_HOME="+runnerHome,
 		"RUNNER_HOOK_ROOT="+hookRoot,
 		"RUNNER_TEST_LOG="+logPath,
+		"RUNNER_TEST_JOB_LOG="+jobLogPath,
 		"RUNNER_ENVIRONMENT_FILE="+environmentPath,
 		"ENSURE_DOCKER=/bin/true",
 		"GOPATH=",
@@ -519,8 +521,6 @@ fi
 		"IMAGE_VERSION= CUSTOM_RUNNER_ENV=" + runnerHome + "/from-environment",
 		"go GOPATH=" + filepath.Join(runnerHome, "go") + " GOBIN=" + filepath.Join(runnerHome, "go", "bin"),
 		"run HOME=" + runnerHome + " PWD=" + workdir + " RUNASROOT=",
-		"RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0",
-		"RUNNERD_JOB_STARTED",
 	} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("runner execution log missing %q:\n%s", want, log)
@@ -537,8 +537,23 @@ fi
 		if goBinIndex < 0 || systemBinIndex < 0 || goBinIndex >= systemBinIndex {
 			t.Fatalf("Go binary directory must precede /usr/local/bin in PATH: %q", pathValue)
 		}
-		if _, err := os.Stat(filepath.Join(hookRoot, "effective-runner-version")); !os.IsNotExist(err) {
-			t.Fatalf("job-start hook left mutable effective Runner version evidence: %v", err)
+		for _, want := range []string{
+			"RUNNERD_EFFECTIVE_RUNNER_VERSION=2.338.0",
+			"RUNNERD_JOB_STARTED",
+		} {
+			if !strings.Contains(string(output), want) {
+				t.Fatalf("runner command output missing hook evidence %q:\n%s", want, output)
+			}
+		}
+		jobLog, err := os.ReadFile(jobLogPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(jobLog), "Qiniu sandbox id: sandbox-1") {
+			t.Fatalf("job-start hook output missing from job log:\n%s", jobLog)
+		}
+		if _, err := os.Stat(filepath.Join(hookRoot, "job-started.signal")); !os.IsNotExist(err) {
+			t.Fatalf("job-start hook left its one-shot evidence channel behind: %v", err)
 		}
 		return
 	}

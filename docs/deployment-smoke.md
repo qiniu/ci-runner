@@ -259,8 +259,8 @@ Expected result:
 - The canonical Admin Runner Request detail shows the selected Sandbox region,
   the resolved physical template ID, the image template version when available,
   the preinstalled GitHub Actions Runner version when available, and the effective
-  Runner version frozen by the fixed hook immediately before a job starts and
-  persisted when the matching process exit is observed. The effective version may
+  Runner version frozen from the fixed hook's one-shot channel immediately before
+  a job starts and persisted when the matching process exit is observed. The effective version may
   be newer because official self-update is enabled. Reloading
   the detail page preserves the same values; a pre-upgrade historical request or a
   job that never started renders `-` for unavailable evidence and produces no browser
