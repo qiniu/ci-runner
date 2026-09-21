@@ -986,6 +986,8 @@ func runnerApplicationsManifest(applications []RunnerApplication) string {
 		if err != nil {
 			continue
 		}
+		// Normalize guarantees these TSV fields cannot contain tabs or newlines.
+		// Preserve that invariant if the manifest gains more fields.
 		lines = append(lines, strings.Join([]string{
 			normalized.Architecture,
 			normalized.Version,

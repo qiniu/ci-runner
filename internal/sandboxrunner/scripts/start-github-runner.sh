@@ -89,9 +89,45 @@ if [ -n "$runner_applications_manifest" ]; then
     exit 1
   fi
 
+  normalize_runner_version_component() {
+    local component="$1"
+    while [ "${#component}" -gt 1 ] && [ "${component#0}" != "$component" ]; do
+      component="${component#0}"
+    done
+    printf '%%s' "$component"
+  }
+  runner_version_at_least() {
+    local current="$1"
+    local target="$2"
+    local current_component target_component index
+    local -a current_components target_components
+    [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    IFS=. read -r -a current_components <<<"$current"
+    IFS=. read -r -a target_components <<<"$target"
+    for index in 0 1 2; do
+      current_component="$(normalize_runner_version_component "${current_components[$index]}")"
+      target_component="$(normalize_runner_version_component "${target_components[$index]}")"
+      if [ "${#current_component}" -gt "${#target_component}" ]; then
+        return 0
+      fi
+      if [ "${#current_component}" -lt "${#target_component}" ]; then
+        return 1
+      fi
+      if [[ "$current_component" > "$target_component" ]]; then
+        return 0
+      fi
+      if [[ "$current_component" < "$target_component" ]]; then
+        return 1
+      fi
+    done
+    return 0
+  }
+
   current_runner_version="$("$workdir/bin/Runner.Listener" --version 2>/dev/null || true)"
   if [ "$current_runner_version" = "$runner_target_version" ]; then
     echo "GitHub Actions runner $runner_target_version is already installed"
+  elif runner_version_at_least "$current_runner_version" "$runner_target_version"; then
+    echo "GitHub Actions runner $current_runner_version is newer than target $runner_target_version; keeping installed version"
   else
     for runner_update_tool in curl tar sha256sum mktemp; do
       if ! command -v "$runner_update_tool" >/dev/null 2>&1; then
@@ -109,6 +145,9 @@ if [ -n "$runner_applications_manifest" ]; then
         if [ ! -e "$workdir" ]; then
           if ! mv "$runner_previous_workdir" "$workdir"; then
             echo "GitHub Actions runner work directory rollback failed: $runner_previous_workdir" >&2
+            # The previous Runner is the last recoverable copy. Keep the
+            # random update root instead of deleting it below.
+            runner_update_root=""
           fi
         else
           rm -rf "$runner_previous_workdir"
@@ -158,8 +197,10 @@ if [ -n "$runner_applications_manifest" ]; then
       exit 1
     fi
 
-    runner_previous_workdir="${workdir}.previous.$$"
+    runner_previous_workdir="$runner_update_root/previous"
     cd "$(dirname "$workdir")"
+    # The EXIT trap restores this backup if the candidate move fails or a
+    # catchable signal arrives between the two moves.
     if ! mv "$workdir" "$runner_previous_workdir"; then
       echo "GitHub Actions runner work directory replacement failed" >&2
       exit 1

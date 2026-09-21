@@ -32,11 +32,11 @@
 
 镜像还应提供可写的 `/home/runner`，并允许通过 HTTPS 访问 GitHub。`runner` 用户、`/opt/hostedtoolcache` 和 `/usr/local/bin/ensure-docker` 属于已维护镜像的约定。对于自定义 spec，Docker 启动是尽力而为；只有在 workflow 不使用容器或 service container 时才应省略 Docker。
 
-预装 Runner 是启动基线。runnerd 会在为自定义 Runner Spec 申请注册令牌前解析 GitHub 官方 Linux Runner 应用，并严格校验 release URL、文件名、架构、版本和 SHA-256。Sandbox 内版本一致时会直接注册；可写副本过期时，会在固定超时和 512 MiB 大小限制下下载归档，并在 `config.sh` 前完成校验和、解包及版本二次核对。查询、工具、下载、校验和、解包或版本核对任一步骤失败都会在注册前终止，因此排队中的 Job 不会由旧 Runner 领取。
+预装 Runner 是启动基线。runnerd 会在为自定义 Runner Spec 申请注册令牌前解析 GitHub 官方 Linux Runner 应用，并严格校验 release URL、文件名、架构、版本和 SHA-256。Sandbox 内已安装版本与目标一致或更新时会直接注册，绝不会降级；可写副本过期时，会在固定超时和 512 MiB 大小限制下下载归档，并在 `config.sh` 前完成校验和、解包及版本二次核对。查询、工具、下载、校验和、解包或版本核对任一步骤失败都会在注册前终止，因此排队中的 Job 不会由旧 Runner 领取。
 
 此次更新有意只作用于当前 Sandbox。如果不可变模板仍是旧版本，每个新 Sandbox 都会再次下载当前 Runner。请定期重建自定义模板，以缩短启动时间并降低对上游下载的依赖。runnerd 在注册后仍会保留 GitHub 官方自更新能力。
 
-runnerd 会向 Sandbox 注入一段 Bash 启动脚本。镜像必须提供 `bash`、`base64`、`install`、`cp`、`mkdir` 和 `id`。旧版 Runner 还需要 `curl`、`tar`、`sha256sum` 和 `mktemp`；版本已经一致时不会要求这 4 个工具。如果镜像包含约定的 `runner` 用户，还必须提供 `sudo`，使启动脚本可以无交互地切换到该用户。只有经过验证的公开 URL、版本、架构和校验和会进入 Sandbox；GitHub API 凭证不会传入。
+runnerd 会向 Sandbox 注入一段 Bash 启动脚本。镜像必须提供 `bash`、`base64`、`install`、`cp`、`mkdir` 和 `id`。旧版 Runner 还需要 `curl`、`tar`、`sha256sum` 和 `mktemp`；已安装版本与目标一致或更新时不会要求这 4 个工具。如果镜像包含约定的 `runner` 用户，还必须提供 `sudo`，使启动脚本可以无交互地切换到该用户。只有经过验证的公开 URL、版本、架构和校验和会进入 Sandbox；GitHub API 凭证不会传入。
 
 本地 `docker build` 成功只能作为诊断依据，不能证明远端 Sandbox 模板已存在，也不能证明它能在目标区域中启动。
 

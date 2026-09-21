@@ -743,6 +743,30 @@ func TestStartScriptSkipsMatchingRunnerUpdate(t *testing.T) {
 	})
 }
 
+func TestStartScriptDoesNotDowngradeNewerRunner(t *testing.T) {
+	for _, versions := range []struct {
+		name    string
+		current string
+		target  string
+	}{
+		{name: "newer patch", current: "2.338.0", target: "2.337.0"},
+		{name: "multi-digit minor", current: "2.100.0", target: "2.99.0"},
+	} {
+		t.Run(versions.name, func(t *testing.T) {
+			runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+				currentVersion: versions.current,
+				targetVersion:  versions.target,
+				uname:          "x86_64",
+				checksum:       strings.Repeat("0", 64),
+				wantOutput:     "GitHub Actions runner " + versions.current + " is newer than target " + versions.target + "; keeping installed version",
+				wantSuccess:    true,
+				wantConfig:     true,
+				forbidCurl:     true,
+			})
+		})
+	}
+}
+
 func TestStartScriptRejectsRunnerUpdateChecksumMismatch(t *testing.T) {
 	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
 		currentVersion: "2.336.0",
@@ -784,6 +808,12 @@ if [ -f "$RUNNER_MV_COUNT" ]; then
 fi
 count=$((count + 1))
 printf '%s' "$count" >"$RUNNER_MV_COUNT"
+if [ "$count" -eq 1 ]; then
+  case "$2" in
+    "$RUNNER_WORKDIR".update.*/previous) ;;
+    *) echo "runner backup is not inside the random update root: $2" >&2; exit 83 ;;
+  esac
+fi
 /bin/mv "$@"
 if [ "$count" -eq 1 ]; then
   kill -TERM "$PPID"
@@ -794,6 +824,9 @@ fi
 	output, err := fixture.run(t)
 	if err == nil {
 		t.Fatalf("start script unexpectedly survived replacement interruption:\n%s", output)
+	}
+	if strings.Contains(output, "runner backup is not inside the random update root") {
+		t.Fatalf("start script used a predictable Runner backup path:\n%s", output)
 	}
 	listener := exec.Command(filepath.Join(fixture.workdir, "bin", "Runner.Listener"), "--version")
 	version, versionErr := listener.CombinedOutput()
@@ -809,6 +842,46 @@ fi
 	}
 	if len(previous) != 0 {
 		t.Fatalf("replacement interruption left previous work directories: %v", previous)
+	}
+}
+
+func TestStartScriptPreservesRunnerBackupWhenRollbackFails(t *testing.T) {
+	fixture := newRunnerUpdateFailureFixture(t, "2.337.0")
+	writeExecutable(t, filepath.Join(fixture.mockBin, "mv"), `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [ -f "$RUNNER_MV_COUNT" ]; then
+  count="$(cat "$RUNNER_MV_COUNT")"
+fi
+count=$((count + 1))
+printf '%s' "$count" >"$RUNNER_MV_COUNT"
+if [ "$count" -gt 1 ]; then
+  exit 84
+fi
+/bin/mv "$@"
+`)
+
+	output, err := fixture.run(t)
+	if err == nil {
+		t.Fatalf("start script unexpectedly survived replacement and rollback failures:\n%s", output)
+	}
+	if !strings.Contains(output, "GitHub Actions runner work directory rollback failed:") {
+		t.Fatalf("start script did not report the preserved backup path:\n%s", output)
+	}
+	backups, globErr := filepath.Glob(fixture.workdir + ".update.*/previous")
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("preserved Runner backups = %v, want one", backups)
+	}
+	listener := exec.Command(filepath.Join(backups[0], "bin", "Runner.Listener"), "--version")
+	version, versionErr := listener.CombinedOutput()
+	if versionErr != nil {
+		t.Fatalf("preserved Runner backup is unavailable: %v\n%s\nscript output:\n%s", versionErr, version, output)
+	}
+	if got := strings.TrimSpace(string(version)); got != "2.336.0" {
+		t.Fatalf("preserved Runner backup version = %q, want 2.336.0", got)
 	}
 }
 
