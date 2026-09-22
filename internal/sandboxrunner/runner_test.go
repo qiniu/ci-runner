@@ -650,6 +650,10 @@ printf 'run version=%s\n' "$(./bin/Runner.Listener --version)" >>"$RUNNER_TEST_L
 	}
 	writeExecutable(t, filepath.Join(mockBin, "curl"), `#!/usr/bin/env bash
 set -euo pipefail
+if [ "${RUNNER_HARD_DEADLINE_ACTIVE:-}" != 1 ]; then
+  echo "missing hard download deadline" >&2
+  exit 83
+fi
 output=""
 retry_max_time=""
 while [ "$#" -gt 0 ]; do
@@ -675,6 +679,16 @@ if [ "$file_limit" = unlimited ] || [ "$file_limit" -gt 524288 ]; then
   exit 82
 fi
 cp "$RUNNER_UPDATE_ARCHIVE" "$output"
+`)
+	writeExecutable(t, filepath.Join(mockBin, "timeout"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" != "--signal=KILL" ] || [ "$2" != "300s" ]; then
+  echo "invalid hard download deadline: $*" >&2
+  exit 84
+fi
+shift 2
+export RUNNER_HARD_DEADLINE_ACTIVE=1
+exec "$@"
 `)
 	writeExecutable(t, filepath.Join(mockBin, "uname"), "#!/usr/bin/env bash\nprintf 'x86_64\\n'\n")
 
@@ -795,6 +809,17 @@ func TestStartScriptRejectsRunnerUpdateMissingTool(t *testing.T) {
 		checksum:       strings.Repeat("0", 64),
 		missingTool:    "curl",
 		wantOutput:     "missing required GitHub Actions runner update tool: curl",
+	})
+}
+
+func TestStartScriptRejectsRunnerUpdateMissingDeadlineTool(t *testing.T) {
+	runRunnerUpdateGuardCase(t, runnerUpdateGuardCase{
+		currentVersion: "2.336.0",
+		targetVersion:  "2.337.0",
+		uname:          "x86_64",
+		checksum:       strings.Repeat("0", 64),
+		missingTool:    "timeout",
+		wantOutput:     "missing required GitHub Actions runner update tool: timeout",
 	})
 }
 
@@ -951,6 +976,7 @@ while [ "$#" -gt 0 ]; do
 done
 cp "$RUNNER_UPDATE_ARCHIVE" "$output"
 `)
+	writeExecutable(t, filepath.Join(mockBin, "timeout"), "#!/usr/bin/env bash\nset -euo pipefail\nshift 2\nexec \"$@\"\n")
 	writeExecutable(t, filepath.Join(mockBin, "uname"), "#!/usr/bin/env bash\nprintf 'x86_64\\n'\n")
 
 	script := startScript(StartInput{
@@ -1042,6 +1068,7 @@ while [ "$#" -gt 0 ]; do
 done
 cp "$RUNNER_UPDATE_ARCHIVE" "$output"
 `)
+	writeExecutable(t, filepath.Join(mockBin, "timeout"), "#!/usr/bin/env bash\nset -euo pipefail\nshift 2\nexec \"$@\"\n")
 	if err := os.WriteFile(archivePath, []byte("not the expected archive"), 0o644); err != nil {
 		t.Fatal(err)
 	}

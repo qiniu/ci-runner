@@ -91,9 +91,10 @@ Before registering a custom-template Runner, runnerd must resolve GitHub's
 official Linux Runner applications, validate the GitHub-owned release URL,
 filename, architecture, version, and SHA-256 in runnerd, then pass only those
 credential-free descriptors into the Sandbox. A stale writable copy must be
-downloaded with fixed time and 512-MiB bounds, checksum-verified, extracted and
-version-verified before `config.sh`; matching or newer installed versions skip
-all downloader-tool requirements and must never be downgraded. Replace the
+downloaded with a hard five-minute total deadline and 512-MiB bound using
+`timeout`, checksum-verified, extracted and version-verified before `config.sh`;
+matching or newer installed versions skip all downloader-tool requirements and
+must never be downgraded. Replace the
 writable directory through a sibling random update root containing the candidate
 and previous-directory backup. On HUP, INT, TERM, or a failed second move, restore
 the previous directory before exiting; if restoration itself fails, keep the

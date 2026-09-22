@@ -129,7 +129,7 @@ if [ -n "$runner_applications_manifest" ]; then
   elif runner_version_at_least "$current_runner_version" "$runner_target_version"; then
     echo "GitHub Actions runner $current_runner_version is newer than target $runner_target_version; keeping installed version"
   else
-    for runner_update_tool in curl tar sha256sum mktemp; do
+    for runner_update_tool in curl tar sha256sum mktemp timeout; do
       if ! command -v "$runner_update_tool" >/dev/null 2>&1; then
         echo "missing required GitHub Actions runner update tool: $runner_update_tool" >&2
         exit 1
@@ -166,9 +166,10 @@ if [ -n "$runner_applications_manifest" ]; then
     echo "downloading GitHub Actions runner $runner_target_version for $runner_architecture"
     if ! (
       # Bash expresses RLIMIT_FSIZE in KiB. Keep the archive bounded even when
-      # an older curl cannot apply --max-filesize without Content-Length.
+      # an older curl cannot apply --max-filesize without Content-Length. The
+      # outer timeout caps all curl retries, including the final active transfer.
       ulimit -f 524288
-      curl \
+      timeout --signal=KILL 300s curl \
         --fail \
         --location \
         --retry 3 \
