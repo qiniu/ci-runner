@@ -58,7 +58,10 @@ describe("public site documentation catalog", () => {
       expect(markdown).toContain("qshell sandbox template build --wait")
       expect(markdown).toContain("Status: ready")
       expect(markdown).toContain("/opt/actions-runner/config.sh")
-      expect(markdown).toContain("command -v bash base64 install cp mkdir id")
+      expect(markdown).toContain(
+        "command -v bash base64 install cp mkdir id curl tar sha256sum mktemp timeout",
+      )
+      expect(markdown).toContain("timeout --signal=KILL 1s true")
       expect(markdown).toContain("sudo -E -u runner")
       expect(markdown).toContain("enabled")
       expect(markdown).toContain("required labels")

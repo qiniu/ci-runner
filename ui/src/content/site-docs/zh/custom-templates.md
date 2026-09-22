@@ -86,7 +86,8 @@ qshell sandbox create <template-id-or-name> --timeout 300
 在 Sandbox 终端中验证 Runner 契约和 workflow 所需工具：
 
 ```bash
-command -v bash base64 install cp mkdir id curl tar sha256sum mktemp
+command -v bash base64 install cp mkdir id curl tar sha256sum mktemp timeout
+timeout --signal=KILL 1s true
 test -x /opt/actions-runner/config.sh
 test -x /opt/actions-runner/run.sh
 test -w /home/runner

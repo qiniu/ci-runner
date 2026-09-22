@@ -86,7 +86,8 @@ qshell sandbox create <template-id-or-name> --timeout 300
 In the Sandbox terminal, verify the runner contract and the tools your workflow needs:
 
 ```bash
-command -v bash base64 install cp mkdir id curl tar sha256sum mktemp
+command -v bash base64 install cp mkdir id curl tar sha256sum mktemp timeout
+timeout --signal=KILL 1s true
 test -x /opt/actions-runner/config.sh
 test -x /opt/actions-runner/run.sh
 test -w /home/runner
