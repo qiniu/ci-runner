@@ -249,6 +249,7 @@ tasks:
   template-check-all:
     desc: Check the public runner template matrix, compatibility manifest, and Dockerfiles
     cmds:
+      - task: template-runner-update-test
       - bash scripts/check-runner-template-matrix.sh
       - bash scripts/test-runner-template-disk.sh
       - bash scripts/test-prepare-runner-archive.sh
@@ -256,6 +257,11 @@ tasks:
       - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04]
         cmd: |
           docker build --check --platform=linux/amd64 -f "templates/{{.ITEM}}/Dockerfile" templates
+
+  template-runner-update-test:
+    desc: Test the verified Actions Runner pin updater
+    cmds:
+      - node --test scripts/test-update-actions-runner-pin.mjs
 
   _template-build:
     internal: true

@@ -70,6 +70,7 @@ task test
 task build
 task docker-check
 task release-check
+task template-runner-update-test
 task template-check-all
 task template-build-all
 ```
@@ -87,6 +88,16 @@ live in `templates/common/`; retain per-Ubuntu setup differences and keep the
 Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
 The pin is the managed template's preinstalled baseline. Managed templates use
 that baseline directly and continue to follow the regular rebuild process.
+The weekly/manual `Actions Runner Update` workflow may update only this shared
+pin and `templates/runner-images-compatibility.json` after validating the
+latest stable release, canonical Linux x64 asset metadata, downloaded size and
+SHA-256, the sixteen-chunk archive-size ceiling, and downgrade protection. It
+must stop reading as soon as downloaded bytes exceed release metadata, use
+Node.js 24, and pass `task template-check-all`. It may update only the dedicated
+automation branch with `--force-with-lease`, create
+or refresh one PR, and explicitly dispatch `check.yaml` for that PR head. Keep
+this source-only workflow free of Sandbox credentials and build/publish steps;
+regional template promotion belongs to a separately protected manual workflow.
 Before registering a custom-template Runner, runnerd must resolve GitHub's
 official Linux Runner applications, validate the GitHub-owned release URL,
 filename, architecture, version, and SHA-256 in runnerd, then pass only those

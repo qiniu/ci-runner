@@ -141,6 +141,16 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 
 - Service Dockerfile-only validation: `task docker-check`; use
   `task template-check-all` for the public template Dockerfiles.
+- Actions Runner pin updater changes require
+  `task template-runner-update-test`, workflow syntax validation with
+  `actionlint`, and `task template-check-all` under Node.js 24. Tests must
+  execute the real CLI against fixture release/archive files and prove that
+  draft/prerelease, downgrade, noncanonical/duplicate asset, malformed
+  metadata, downloaded size/SHA-256 mismatch, and same-version no-op paths
+  never corrupt the pin.
+  A live API no-op may use a temporary authenticated `GITHUB_TOKEN`; never log
+  the token. Workflow verification does not authorize a Sandbox build or
+  publication.
 - Local binary and embedded UI: `task build`.
 - Production UI bundle execution: `task ui-production-smoke`.
 - GoReleaser config: `task release-check`.

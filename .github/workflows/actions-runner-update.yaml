@@ -1,0 +1,192 @@
+name: Actions Runner Update
+
+on:
+  schedule:
+    - cron: "23 2 * * 2"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: actions-runner-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Verify and propose latest stable Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.53.1
+
+      - name: Resolve and verify latest stable Runner
+        id: runner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/update-actions-runner-pin.mjs
+
+      - name: Record no-op result
+        if: steps.runner.outputs.changed != 'true'
+        env:
+          VERSION: ${{ steps.runner.outputs.version }}
+        run: |
+          {
+            echo "## Actions Runner update"
+            echo
+            echo "The managed template pin is already current at \`${VERSION}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Regenerate Runner compatibility assertions
+        if: steps.runner.outputs.changed == 'true'
+        run: node scripts/generate-runner-image-compatibility.mjs
+
+      - name: Validate all public template sources
+        if: steps.runner.outputs.changed == 'true'
+        run: |
+          "$(go env GOPATH)/bin/task" template-check-all
+
+      - name: Commit verified update branch
+        if: steps.runner.outputs.changed == 'true'
+        id: branch
+        env:
+          VERSION: ${{ steps.runner.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="automation/actions-runner-update"
+          remote_sha="$(git ls-remote --heads origin "refs/heads/${branch}" | awk '{print $1}')"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git add \
+            templates/common/actions-runner.env \
+            templates/runner-images-compatibility.json
+          git diff --cached --quiet && {
+            echo "verified Runner ${VERSION} produced no tracked update" >&2
+            exit 1
+          }
+          git commit -m "chore(templates): update Actions Runner to ${VERSION}"
+
+          if [ -n "$remote_sha" ]; then
+            git push \
+              --force-with-lease="refs/heads/${branch}:${remote_sha}" \
+              origin "HEAD:refs/heads/${branch}"
+          else
+            git push origin "HEAD:refs/heads/${branch}"
+          fi
+          echo "name=${branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update upgrade pull request
+        if: steps.runner.outputs.changed == 'true'
+        id: pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ steps.runner.outputs.version }}
+          RELEASE_URL: ${{ steps.runner.outputs.release_url }}
+          PUBLISHED_AT: ${{ steps.runner.outputs.published_at }}
+        run: |
+          set -euo pipefail
+          title="chore(templates): update Actions Runner to ${VERSION}"
+          body_file="$(mktemp)"
+          trap 'rm -f "$body_file"' EXIT
+          cat > "$body_file" <<EOF
+          This automated PR updates the managed Sandbox template baseline to
+          [Actions Runner ${VERSION}](${RELEASE_URL}), published at
+          \`${PUBLISHED_AT}\`.
+
+          The workflow verified the official Linux x64 asset's release metadata,
+          downloaded byte count, and SHA-256 digest before updating the shared pin.
+          It also regenerated the compatibility assertions and passed
+          \`task template-check-all\` before pushing this branch.
+
+          This PR intentionally does not build, publish, or unpublish Sandbox
+          templates. Promotion remains a separate protected operation.
+
+          Related to #68.
+          EOF
+
+          pull_requests="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$BASE_BRANCH" \
+              --head "$BRANCH" \
+              --state open \
+              --json number,url
+          )"
+          count="$(jq 'length' <<< "$pull_requests")"
+          if [ "$count" -gt 1 ]; then
+            echo "found ${count} open update PRs for ${BRANCH}" >&2
+            exit 1
+          fi
+          if [ "$count" -eq 1 ]; then
+            number="$(jq -r '.[0].number' <<< "$pull_requests")"
+            gh pr edit "$number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file "$body_file"
+            url="$(jq -r '.[0].url' <<< "$pull_requests")"
+          else
+            url="$(
+              gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
+                --base "$BASE_BRANCH" \
+                --head "$BRANCH" \
+                --title "$title" \
+                --body-file "$body_file"
+            )"
+          fi
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch full Check workflow for the PR head
+        if: steps.runner.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: gh workflow run check.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+
+      - name: Record pull request result
+        if: steps.runner.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.runner.outputs.version }}
+          PR_URL: ${{ steps.pull_request.outputs.url }}
+        run: |
+          {
+            echo "## Actions Runner update"
+            echo
+            echo "Created or refreshed the verified \`${VERSION}\` update: ${PR_URL}"
+            echo
+            echo "The full Check workflow was dispatched explicitly for the PR head."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record failure visibility
+        if: failure()
+        run: |
+          {
+            echo "## Actions Runner update failed"
+            echo
+            echo "The weekly update check did not produce a verified PR."
+            echo "Inspect this run before the seven-day detection window expires."
+          } >> "$GITHUB_STEP_SUMMARY"

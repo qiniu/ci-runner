@@ -17,6 +17,10 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 上游版本来源、兼容性契约和各镜像差异见
 [`templates/README.md`](../../templates/README.md)。
 
+2.337.0 刷新已于 2026-09-21 在两个区域完成 8 个物理模板重建，并验证标准与
+large workflow 矩阵；catalog 和生产证据保留在
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
+
 4 份标准模板的构建配置设置 `disk_size_mb = 20480`，表示新模板的根磁盘容量下限为
 20 GiB。provider 展示的实际总容量可以更大。qshell 同名重建时不会
 发送该配置。先调整 provider 团队的 `DiskMb`，构建脚本会保留现有名称和 ID
@@ -50,8 +54,32 @@ Sandbox 物理模板。
 Spec 使用独立的注册前预检：runnerd 解析并严格校验 GitHub 官方 Linux 应用描述，
 过期的 Sandbox 会在 `config.sh` 前下载归档、校验 SHA-256、解包并再次核对版本。
 两条路径在注册后都继续保留 GitHub 官方自更新能力。
-2.337.0 分支候选版已有一份就绪的 Ubuntu 24.04 开发模板，并在当前配置的
-Sandbox 环境通过 smoke；双区域、8 个模板的完整发布门槛仍未完成。
+2.337.0 基线已完成双区域、8 模板重建、catalog、标准 workflow 与 large
+workflow 门槛，证据保留在
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
+
+## 自动创建 Runner 基线更新 PR
+
+`.github/workflows/actions-runner-update.yaml` 每周二 02:23 UTC 运行，也支持
+`workflow_dispatch`。它读取 GitHub 最新稳定的 `actions/runner` release；如果发现
+draft、prerelease、降级、非规范或重复的 Linux x64 资产、格式错误的元数据，或下载
+归档超过 16 个分块、256 MiB 上限，或内容的字节数/SHA-256 与 release 元数据不一致，
+就会直接失败；响应一旦超过声明字节数会立即停止读取。仓库已固定同一版本时是幂等
+no-op，不下载归档，也不创建重复 PR。
+
+发现经过校验的新版本后，工作流更新 `templates/common/actions-runner.env`，重新生成
+`templates/runner-images-compatibility.json`，并运行 `task template-check-all`。只有门槛
+通过后，才使用 `--force-with-lease` 更新专用的
+`automation/actions-runner-update` 分支，并创建或刷新唯一的升级 PR。仓库
+`GITHUB_TOKEN` 具有 `contents`、`pull-requests` 和 `actions` 写权限。由于该 token
+创建的事件不会递归触发普通 `push` 或 `pull_request` 工作流，更新流程会显式在 PR
+head 上调度 `check.yaml`。每周检查失败会在 Actions 及 run summary 中保持可见；
+检查成功时，稳定版发布后最迟 7 天会被发现。
+
+这套自动化只修改源码，不接收 Sandbox 凭据，不能构建、发布或取消发布模板。升级
+PR 经过审查并合并后，单独的受保护推广流程仍需在两个区域重建 8 个模板、核对
+catalog、执行真实 Sandbox smoke、保留证据，并在结果不确定时停止交由 operator
+处理。
 
 ## 公共 Catalog API
 
@@ -161,7 +189,7 @@ Runner、用于 installer 验证的固定版本 Pester，以及 Runner 文件系
 ## 环境要求
 
 - `qiniu/qshell` 2.19.13 或更高版本；
-- 构建机器上的 `task`、`jq`、`curl`、`sha256sum` 和 `split`；
+- 构建机器上的 Node.js 24、`task`、`jq`、`curl`、`sha256sum` 和 `split`；
 - 当前 Sandbox 区域的 `QINIU_API_KEY`；
 - 指向当前区域端点的 `QINIU_SANDBOX_API_URL`。
 
@@ -180,6 +208,7 @@ task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 先运行无需凭据的快速源码检查：
 
 ```bash
+task template-runner-update-test
 task template-check-all
 ```
 

@@ -19,6 +19,11 @@ registration remained. See
 [`templates/README.md`](../templates/README.md) for pinned upstream provenance,
 the compatibility contract, and per-image differences.
 
+The 2.337.0 refresh rebuilt all eight physical templates in both regions and
+verified both the standard and large workflow matrices on 2026-09-21. The
+catalog and production evidence are retained in
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93).
+
 The four standard build configs set `disk_size_mb = 20480`, a 20-GiB minimum
 root disk size for new templates. The provider may report a larger total.
 Qshell does not send the setting when
@@ -64,10 +69,39 @@ validates GitHub's official Linux application descriptors, and a stale Sandbox
 downloads, checksum-verifies, extracts, and version-verifies the selected
 archive before `config.sh`. Both paths leave GitHub's official self-update
 enabled after registration.
-The 2.337.0 branch candidate has one ready Ubuntu 24.04 development build and
-smoke in the configured Sandbox environment; the full two-region, eight-template
-promotion gate remains open.
+The 2.337.0 baseline completed the two-region, eight-template rebuild, catalog,
+standard workflow, and large workflow gates recorded in
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 `common/` is source code, not a physical Sandbox template.
+
+## Automated Runner baseline update PRs
+
+`.github/workflows/actions-runner-update.yaml` runs every Tuesday at 02:23 UTC
+and through `workflow_dispatch`. It reads GitHub's latest stable
+`actions/runner` release and fails closed for drafts, prereleases, downgrades,
+noncanonical Linux x64 assets, duplicate assets, malformed metadata, or any
+archive larger than the sixteen-chunk 256-MiB limit, or any downloaded
+size/SHA-256 mismatch. A response that exceeds its declared size is stopped
+immediately. An already pinned release is a no-op and does not download the
+archive or create another PR.
+
+For a verified upgrade, the workflow updates
+`templates/common/actions-runner.env`, regenerates
+`templates/runner-images-compatibility.json`, and runs
+`task template-check-all`. Only then does it replace the dedicated
+`automation/actions-runner-update` branch with `--force-with-lease` and create
+or refresh its one PR against the default branch. The repository
+`GITHUB_TOKEN` has `contents`, `pull-requests`, and `actions` write permission.
+Since events created by that token do not recursively run ordinary `push` or
+`pull_request` workflows, the updater explicitly dispatches `check.yaml` on the
+PR head. Any failed weekly run remains visible in Actions and its run summary;
+the successful weekly cadence detects a stable release within seven days.
+
+This automation changes source only. It receives no Sandbox credentials and
+cannot build, publish, or unpublish a template. After the PR is reviewed and
+merged, the separate protected promotion process must rebuild all eight
+templates in both regions, verify catalogs and real Sandbox smoke, retain the
+evidence, and stop for operator review on uncertainty.
 
 ## Public catalog API
 
@@ -190,7 +224,8 @@ dependency, but workflows must not rely on it.
 ## Requirements
 
 - `qiniu/qshell` 2.19.13 or newer;
-- `task`, `jq`, `curl`, `sha256sum`, and `split` on the build host;
+- Node.js 24, plus `task`, `jq`, `curl`, `sha256sum`, and `split` on the
+  build host;
 - a `QINIU_API_KEY` for the selected Sandbox region;
 - `QINIU_SANDBOX_API_URL` set to that region's endpoint.
 
@@ -210,6 +245,7 @@ region-specific template IDs are never committed.
 Run the fast, credential-free source checks first:
 
 ```bash
+task template-runner-update-test
 task template-check-all
 ```
 

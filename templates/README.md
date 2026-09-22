@@ -8,10 +8,10 @@
 | `ubuntu-22.04` | `github-runner-ubuntu-22-04` | Ubuntu 22.04 x64 | follows upstream deprecation | verified |
 | `ubuntu-24.04` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable | verified |
 | `ubuntu-26.04` | `github-runner-ubuntu-26-04` | Ubuntu 26.04 x64 | preview | verified |
-| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB minimum disk size) | large | development |
-| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB minimum disk size) | follows upstream deprecation | development |
-| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB minimum disk size) | large | development |
-| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB minimum disk size) | preview | development |
+| `ubuntu-slim-large` | `github-runner-ubuntu-slim-large` | Ubuntu Slim x64 (80 GiB minimum disk size) | large | verified |
+| `ubuntu-22.04-large` | `github-runner-ubuntu-22-04-large` | Ubuntu 22.04 x64 (80 GiB minimum disk size) | follows upstream deprecation | verified |
+| `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB minimum disk size) | large | verified |
+| `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB minimum disk size) | preview | verified |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
@@ -47,9 +47,9 @@ The provider team's `DiskMb` must be at
 least 81,920 MiB before rebuilding an existing name. Qshell does not send the
 field on a same-name rebuild, so the build helper allows the in-place rebuild
 without checking the stale total. Publish and catalog checks enforce the
-total-size lower bound after the rebuild. These
-variants remain in `development` until they
-pass the same regional catalog and smoke gates.
+total-size lower bound after the rebuild. All four large variants completed
+the two-region catalog and production workflow gates for Runner 2.337.0; the
+evidence is retained in [Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 
 All eight builds use `templates/` as their Docker context. The four standard
 Dockerfiles copy shared setup functions and helper programs directly from
@@ -63,6 +63,15 @@ provisioning and before cached archive downloads and runtime installation, so
 a Runner upgrade retains the earlier provisioned layers. This is a shared
 source directory, not another physical Sandbox
 template or provider-side inheritance layer.
+
+The weekly/manual `Actions Runner Update` workflow validates GitHub's latest
+stable Linux x64 release metadata and downloaded bytes, enforces the
+sixteen-chunk 256-MiB archive limit, updates this shared pin, regenerates
+`runner-images-compatibility.json`, and passes
+`task template-check-all` before creating or refreshing the one automation PR.
+It explicitly dispatches the full `Check` workflow on that PR branch. The
+workflow has no Sandbox credentials and never performs a remote build or
+publication; those remain protected post-merge promotion steps.
 
 Publication state is restricted to `development`, `published`, or `verified`.
 `published` means the physical template is public in both supported regions.
@@ -195,12 +204,14 @@ Sandbox conformance runs it in the actual Qiniu template runtime.
 
 Qiniu Sandbox templates are officially built and published with
 `qiniu/qshell` 2.19.13 or newer.
+The source validation commands require Node.js 24.
 Docker builds are local conformance inputs only: a successful Docker build does
 not create, rebuild, or publish a Qiniu Sandbox template.
 
 The build and verification commands are:
 
 ```bash
+task template-runner-update-test
 task template-check-all
 task template-build-all
 task template-build-ubuntu-slim

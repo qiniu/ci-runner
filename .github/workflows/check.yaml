@@ -5,6 +5,7 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   i18n:
@@ -247,7 +248,12 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - run: cd ui && bun install --frozen-lockfile && bun run build
+      - name: Test Actions Runner pin updater
+        run: node --test scripts/test-update-actions-runner-pin.mjs
       - name: Check service Dockerfile
         run: docker build --check -f Dockerfile .
       - name: Check public runner template matrix

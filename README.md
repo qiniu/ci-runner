@@ -400,7 +400,21 @@ templates, runnerd resolves and verifies GitHub's official Runner archive before
 registration and replaces a stale writable copy before the current Job can be
 accepted. Official self-update remains enabled after registration for both
 paths.
-Template builds require qshell 2.19.13 or newer. Standard configs request
+
+The `Actions Runner Update` workflow checks GitHub's latest stable Runner every
+Tuesday at 02:23 UTC and also supports manual dispatch. It accepts only the
+canonical Linux x64 asset within the sixteen-chunk 256-MiB limit, verifies
+GitHub's digest and byte count against the downloaded archive, updates the
+shared pin and generated compatibility assertions, and passes
+`task template-check-all` before creating or refreshing the single
+`automation/actions-runner-update` pull request. Because a PR created with
+`GITHUB_TOKEN` does not recursively trigger `pull_request`, the updater
+explicitly dispatches the full `Check` workflow for that branch. This workflow
+never builds, publishes, or unpublishes Sandbox templates; promotion remains a
+separate protected operation after merge.
+
+Template source validation requires Node.js 24, and template builds require
+qshell 2.19.13 or newer. Standard configs request
 `disk_size_mb = 20480`, while large configs request `81920` for new templates.
 This setting is the minimum root disk size; the reported total can be larger.
 Qshell does not send the setting on same-name
@@ -410,8 +424,9 @@ totals. Publish and catalog checks require the rebuilt totals to meet the
 configured lower bounds; a larger total is not a mismatch by itself.
 Release smoke reads the corresponding TOML and requires the runtime root disk
 size to meet its `disk_size_mb` lower bound.
-The 2.337.0 candidate passed an earlier development Sandbox build and smoke;
-the full two-region release gate remains open.
+The 2.337.0 baseline completed the two-region, eight-template rebuild, catalog,
+standard workflow, and large workflow gates recorded in
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 
 ## Documentation
 

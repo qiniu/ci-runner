@@ -383,14 +383,25 @@ Actions Runner 版本固定值位于 `templates/common/`。
 重建。对于自定义模板，runnerd 会在注册前解析并校验 GitHub 官方 Runner 归档，
 在当前 Job 能被领取前替换过期的可写副本。两条路径在注册后都继续保留 GitHub
 官方自更新能力。
-模板构建要求 qshell 2.19.13 或更高版本。标准配置为新模板请求
-`disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，
+
+`Actions Runner Update` 工作流每周二 02:23 UTC 检查 GitHub 最新稳定版，也支持
+手动触发。它只接受规范的 Linux x64 资产，对下载归档重新计算并核对 GitHub 提供的
+SHA-256 与字节数，并拒绝超过 16 个分块、256 MiB 上限的归档，再更新公共 pin 和
+生成的 compatibility 断言；只有
+`task template-check-all` 通过后，才会创建或刷新唯一的
+`automation/actions-runner-update` PR。由于 `GITHUB_TOKEN` 创建的 PR 不会递归触发
+普通 `pull_request` 事件，更新工作流会显式为该分支调度完整 `Check` 工作流。它绝不
+构建、发布或取消发布 Sandbox 模板；合并后的推广仍是单独的受保护操作。
+
+模板源码验证要求 Node.js 24，模板构建要求 qshell 2.19.13 或更高版本。标准配置为
+新模板请求 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，
 实际总容量可以更大。qshell 在同名 rebuild 时不会发送该配置。先调整 provider 团队的 `DiskMb`，构建任务会保留现有名称和 ID
 并原地重建，不会用重建前的旧总容量拦截构建。发布与 catalog 检查仍要求重建后的
 总容量达到配置下界；总容量较大本身不能说明配置不符。
 发布 smoke 会读取对应 TOML，并要求运行时根磁盘容量达到其中的
-`disk_size_mb` 下限。2.337.0 候选版已通过此前的一次开发模板构建与 Sandbox
-smoke；完整的双区域 release gate 仍待执行。
+`disk_size_mb` 下限。2.337.0 基线已完成双区域、8 模板重建、catalog、标准
+workflow 与 large workflow 门槛，证据保留在
+[Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 
 ## 文档
 
