@@ -385,13 +385,16 @@ Actions Runner 版本固定值位于 `templates/common/`。
 官方自更新能力。
 
 `Actions Runner Update` 工作流每周二 02:23 UTC 检查 GitHub 最新稳定版，也支持
-手动触发。它只接受规范的 Linux x64 资产，对下载归档重新计算并核对 GitHub 提供的
-SHA-256 与字节数，并拒绝超过 16 个分块、256 MiB 上限的归档，再更新公共 pin 和
-生成的 compatibility 断言；只有
+手动触发。它只接受规范的 Linux x64 资产，对下载归档重新计算 SHA-256 与字节数，
+并与 GitHub release 元数据核对；超过 16 个分块、256 MiB 上限的归档会被拒绝。随后
+工作流再更新公共 pin 和生成的 compatibility 断言；只有
 `task template-check-all` 通过后，才会创建或刷新唯一的
 `automation/actions-runner-update` PR。由于 `GITHUB_TOKEN` 创建的 PR 不会递归触发
 普通 `pull_request` 事件，更新工作流会显式为该分支调度完整 `Check` 工作流。它绝不
 构建、发布或取消发布 Sandbox 模板；合并后的推广仍是单独的受保护操作。
+`latest` 低于当前 pin 时会作为降级异常失败，而不是静默 no-op。同版本只有在 GitHub
+提供的大小和 digest 仍与 pin 一致时才是 no-op；元数据漂移会失败关闭。由于 digest
+与资产元数据来自同一个 GitHub release，人工 review 仍是来源可信边界。
 
 模板源码验证要求 Node.js 24，模板构建要求 qshell 2.19.13 或更高版本。标准配置为
 新模板请求 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，

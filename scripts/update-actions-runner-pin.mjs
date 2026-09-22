@@ -3,18 +3,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFile,
-  mkdtemp,
   readFile,
   rename,
-  rm,
   stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { createReadStream, createWriteStream } from "node:fs";
-import { tmpdir } from "node:os";
+import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { Readable, Transform } from "node:stream";
+import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
@@ -202,8 +199,6 @@ async function archiveSource(assetFile, assetUrl) {
 }
 
 async function downloadAndVerify(assetFile, release) {
-  const directory = await mkdtemp(join(tmpdir(), "actions-runner-update-"));
-  const archivePath = join(directory, `actions-runner-linux-x64-${release.version}.tar.gz`);
   const hash = createHash("sha256");
   let size = 0;
   const verifier = new Transform({
@@ -219,20 +214,21 @@ async function downloadAndVerify(assetFile, release) {
       callback(null, chunk);
     },
   });
-  try {
-    const source = await archiveSource(assetFile, release.assetUrl);
-    await pipeline(source, verifier, createWriteStream(archivePath, { flags: "wx" }));
-    const digest = hash.digest("hex");
-    if (size !== release.size) {
-      fail(`downloaded archive size ${size} does not match release metadata ${release.size}`);
-    }
-    if (digest !== release.digest) {
-      fail(`downloaded archive SHA-256 ${digest} does not match release metadata ${release.digest}`);
-    }
-    return { digest, size };
-  } finally {
-    await rm(directory, { recursive: true, force: true });
+  const discard = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const source = await archiveSource(assetFile, release.assetUrl);
+  await pipeline(source, verifier, discard);
+  const digest = hash.digest("hex");
+  if (size !== release.size) {
+    fail(`downloaded archive size ${size} does not match release metadata ${release.size}`);
   }
+  if (digest !== release.digest) {
+    fail(`downloaded archive SHA-256 ${digest} does not match release metadata ${release.digest}`);
+  }
+  return { digest, size };
 }
 
 function pinContents(version, digest, size) {

@@ -69,6 +69,11 @@ stable Linux x64 release metadata and downloaded bytes, enforces the
 sixteen-chunk 256-MiB archive limit, updates this shared pin, regenerates
 `runner-images-compatibility.json`, and passes
 `task template-check-all` before creating or refreshing the one automation PR.
+Lower versions and equal-version metadata drift fail closed; only an exact
+version/size/digest match is a no-op. The digest verifies consistency with the
+same GitHub release metadata, while human review remains the provenance trust
+boundary.
+
 It explicitly dispatches the full `Check` workflow on that PR branch. The
 workflow has no Sandbox credentials and never performs a remote build or
 publication; those remain protected post-merge promotion steps.

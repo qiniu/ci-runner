@@ -82,8 +82,15 @@ and through `workflow_dispatch`. It reads GitHub's latest stable
 noncanonical Linux x64 assets, duplicate assets, malformed metadata, or any
 archive larger than the sixteen-chunk 256-MiB limit, or any downloaded
 size/SHA-256 mismatch. A response that exceeds its declared size is stopped
-immediately. An already pinned release is a no-op and does not download the
-archive or create another PR.
+immediately. A lower latest release remains a visible downgrade failure rather
+than becoming a silent no-op. An already pinned release is a no-op only when
+its GitHub-provided size and digest still match the pin; metadata drift fails
+closed. The no-op path does not download the archive or create another PR.
+
+The digest comparison establishes consistency between the downloaded bytes and
+GitHub's release metadata; it is not independent provenance because both the
+asset and digest come from the same release. Human PR review remains the trust
+boundary before a source update is merged or promoted.
 
 For a verified upgrade, the workflow updates
 `templates/common/actions-runner.env`, regenerates

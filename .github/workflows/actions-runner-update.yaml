@@ -117,8 +117,8 @@ jobs:
           [Actions Runner ${VERSION}](${RELEASE_URL}), published at
           \`${PUBLISHED_AT}\`.
 
-          The workflow verified the official Linux x64 asset's release metadata,
-          downloaded byte count, and SHA-256 digest before updating the shared pin.
+          The workflow matched the downloaded byte count and SHA-256 to GitHub's
+          official Linux x64 release metadata before updating the shared pin.
           It also regenerated the compatibility assertions and passed
           \`task template-check-all\` before pushing this branch.
 

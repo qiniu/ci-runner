@@ -59,7 +59,12 @@ async function fixture(t, { currentVersion = "2.336.0", currentContents = Buffer
   return { directory, pinPath, releasePath, archivePath, outputPath };
 }
 
-async function runCli(paths, release, archive, { includeArchive = true } = {}) {
+async function runCli(
+  paths,
+  release,
+  archive,
+  { includeArchive = true, environment = {} } = {},
+) {
   await writeFile(paths.releasePath, `${JSON.stringify(release)}\n`);
   if (includeArchive) {
     await writeFile(paths.archivePath, archive);
@@ -79,6 +84,7 @@ async function runCli(paths, release, archive, { includeArchive = true } = {}) {
   return spawnSync(process.execPath, args, {
     cwd: repositoryRoot,
     encoding: "utf8",
+    env: { ...process.env, ...environment },
   });
 }
 
@@ -115,6 +121,23 @@ test("verified upgrade atomically rewrites the pin and emits Actions outputs", a
       "",
     ].join("\n"),
   );
+});
+
+test("verified upgrade does not require temporary archive storage", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("verified-runner-without-temp-storage");
+  const missingTempDirectory = join(paths.directory, "missing-temp-directory");
+
+  const result = await runCli(paths, stableRelease("2.337.0", archive), archive, {
+    environment: {
+      TMPDIR: missingTempDirectory,
+      TMP: missingTempDirectory,
+      TEMP: missingTempDirectory,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(paths.pinPath, "utf8"), pin("2.337.0", archive));
 });
 
 test("already pinned release is a no-op and does not download an archive", async (t) => {

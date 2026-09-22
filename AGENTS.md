@@ -98,6 +98,9 @@ automation branch with `--force-with-lease`, create
 or refresh one PR, and explicitly dispatch `check.yaml` for that PR head. Keep
 this source-only workflow free of Sandbox credentials and build/publish steps;
 regional template promotion belongs to a separately protected manual workflow.
+Treat a lower latest version and equal-version size/digest drift as visible hard
+failures. The digest proves consistency with GitHub's release metadata, not
+independent provenance; human review remains the merge trust boundary.
 Before registering a custom-template Runner, runnerd must resolve GitHub's
 official Linux Runner applications, validate the GitHub-owned release URL,
 filename, architecture, version, and SHA-256 in runnerd, then pass only those

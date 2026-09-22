@@ -65,7 +65,13 @@ workflow 门槛，证据保留在
 draft、prerelease、降级、非规范或重复的 Linux x64 资产、格式错误的元数据，或下载
 归档超过 16 个分块、256 MiB 上限，或内容的字节数/SHA-256 与 release 元数据不一致，
 就会直接失败；响应一旦超过声明字节数会立即停止读取。仓库已固定同一版本时是幂等
-no-op，不下载归档，也不创建重复 PR。
+no-op 的前提是 GitHub 提供的大小和 digest 仍与 pin 一致；元数据漂移会失败关闭。
+`latest` 低于当前 pin 时也会保留为可见的降级失败，而不是静默 no-op。no-op 路径不
+下载归档，也不创建重复 PR。
+
+digest 对比证明下载字节与 GitHub release 元数据一致，但资产与 digest 来自同一个
+release，因此它不提供独立的来源认证。源码更新在合并或推广前仍以人工 PR review
+作为可信边界。
 
 发现经过校验的新版本后，工作流更新 `templates/common/actions-runner.env`，重新生成
 `templates/runner-images-compatibility.json`，并运行 `task template-check-all`。只有门槛

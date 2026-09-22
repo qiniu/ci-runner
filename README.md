@@ -404,14 +404,19 @@ paths.
 The `Actions Runner Update` workflow checks GitHub's latest stable Runner every
 Tuesday at 02:23 UTC and also supports manual dispatch. It accepts only the
 canonical Linux x64 asset within the sixteen-chunk 256-MiB limit, verifies
-GitHub's digest and byte count against the downloaded archive, updates the
-shared pin and generated compatibility assertions, and passes
+the downloaded digest and byte count against GitHub's release metadata, updates
+the shared pin and generated compatibility assertions, and passes
 `task template-check-all` before creating or refreshing the single
 `automation/actions-runner-update` pull request. Because a PR created with
 `GITHUB_TOKEN` does not recursively trigger `pull_request`, the updater
 explicitly dispatches the full `Check` workflow for that branch. This workflow
 never builds, publishes, or unpublishes Sandbox templates; promotion remains a
 separate protected operation after merge.
+A lower latest release is treated as a downgrade alert rather than a no-op. An
+equal version is a no-op only when its GitHub-provided size and digest still
+match the pin; metadata drift fails closed. Human review remains the provenance
+boundary because the digest and asset metadata come from the same GitHub
+release.
 
 Template source validation requires Node.js 24, and template builds require
 qshell 2.19.13 or newer. Standard configs request
