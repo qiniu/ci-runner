@@ -38,6 +38,7 @@ function parseArguments(argv) {
     ["--pin-file", "pinFile"],
     ["--github-output", "githubOutput"],
   ]);
+  const seen = new Set();
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];
     const key = names.get(name);
@@ -45,9 +46,10 @@ function parseArguments(argv) {
     if (!key || value === undefined || value.startsWith("--")) {
       fail(`usage: ${basename(process.argv[1])} [--release-json PATH] [--asset-file PATH] [--pin-file PATH] [--github-output PATH]`);
     }
-    if (options[key] !== undefined && key !== "pinFile" && key !== "githubOutput") {
+    if (seen.has(name)) {
       fail(`duplicate option ${name}`);
     }
+    seen.add(name);
     options[key] = resolve(value);
   }
   return options;
@@ -241,6 +243,7 @@ async function writePinAtomically(pinFile, contents) {
     dirname(pinFile),
     `.${basename(pinFile)}.${process.pid}.${randomUUID()}.tmp`,
   );
+  let writeError;
   try {
     const current = await stat(pinFile);
     await writeFile(temporaryPath, contents, {
@@ -249,9 +252,16 @@ async function writePinAtomically(pinFile, contents) {
       mode: current.mode & 0o777,
     });
     await rename(temporaryPath, pinFile);
+  } catch (error) {
+    writeError = error;
+    throw error;
   } finally {
     await unlink(temporaryPath).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
+      if (error.code === "ENOENT") return;
+      if (!writeError) throw error;
+      process.stderr.write(
+        `actions runner update: cleanup failed after write error: ${error.message}\n`,
+      );
     });
   }
 }

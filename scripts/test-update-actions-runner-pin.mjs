@@ -11,6 +11,14 @@ import test from "node:test";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const scriptPath = join(repositoryRoot, "scripts", "update-actions-runner-pin.mjs");
 
+function spawnCli(args, { environment = {}, nodeArguments = [] } = {}) {
+  return spawnSync(process.execPath, [...nodeArguments, scriptPath, ...args], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: { ...process.env, ...environment },
+  });
+}
+
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -63,14 +71,18 @@ async function runCli(
   paths,
   release,
   archive,
-  { includeArchive = true, environment = {} } = {},
+  {
+    additionalArgs = [],
+    includeArchive = true,
+    environment = {},
+    nodeArguments = [],
+  } = {},
 ) {
   await writeFile(paths.releasePath, `${JSON.stringify(release)}\n`);
   if (includeArchive) {
     await writeFile(paths.archivePath, archive);
   }
   const args = [
-    scriptPath,
     "--release-json",
     paths.releasePath,
     "--pin-file",
@@ -81,11 +93,8 @@ async function runCli(
   if (includeArchive) {
     args.push("--asset-file", paths.archivePath);
   }
-  return spawnSync(process.execPath, args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    env: { ...process.env, ...environment },
-  });
+  args.push(...additionalArgs);
+  return spawnCli(args, { environment, nodeArguments });
 }
 
 async function assertRejectedWithoutMutation(paths, release, archive, message, options) {
@@ -95,6 +104,48 @@ async function assertRejectedWithoutMutation(paths, release, archive, message, o
   assert.deepEqual(await readFile(paths.pinPath), before);
   assert.match(result.stderr, message);
 }
+
+for (const [option, value] of [
+  ["--release-json", "releasePath"],
+  ["--asset-file", "archivePath"],
+  ["--pin-file", "pinPath"],
+  ["--github-output", "outputPath"],
+]) {
+  test(`duplicate ${option} is rejected`, async (t) => {
+    const archive = Buffer.from("current-runner");
+    const paths = await fixture(t, {
+      currentVersion: "2.337.0",
+      currentContents: archive,
+    });
+
+    const result = await runCli(paths, stableRelease("2.337.0", archive), archive, {
+      additionalArgs: [option, paths[value]],
+    });
+
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, new RegExp(`duplicate option ${option}`));
+  });
+}
+
+test("atomic pin write preserves its primary error when cleanup also fails", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("verified-runner-2.337.0");
+  const preload = `data:text/javascript,${encodeURIComponent(`
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    fs.promises.rename = async () => { throw new Error("primary rename failure"); };
+    fs.promises.unlink = async () => { throw new Error("cleanup unlink failure"); };
+    syncBuiltinESMExports();
+  `)}`;
+
+  const result = await runCli(paths, stableRelease("2.337.0", archive), archive, {
+    nodeArguments: ["--import", preload],
+  });
+
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /cleanup failed after write error: cleanup unlink failure/);
+  assert.match(result.stderr, /actions runner update: primary rename failure/);
+});
 
 test("verified upgrade atomically rewrites the pin and emits Actions outputs", async (t) => {
   const paths = await fixture(t);
