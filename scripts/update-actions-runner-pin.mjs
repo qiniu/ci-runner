@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { Readable, Transform, Writable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
@@ -21,7 +21,7 @@ const requiredPinKeys = [
   "RUNNER_ARCHIVE_SHA256",
   "RUNNER_ARCHIVE_SIZE",
 ];
-const maxRunnerArchiveSize = 16 * 16 * 1024 * 1024;
+const maxRunnerArchiveSize = 256 * 1024 * 1024;
 
 function fail(message) {
   throw new Error(message);
@@ -127,6 +127,7 @@ async function loadLatestRelease(path) {
 }
 
 function validateRelease(release) {
+  // Fail closed unless GitHub explicitly identifies the release as stable.
   if (release?.draft !== false || release?.prerelease !== false) {
     fail("latest release must be stable, not a draft or prerelease");
   }
@@ -201,8 +202,8 @@ async function archiveSource(assetFile, assetUrl) {
 async function downloadAndVerify(assetFile, release) {
   const hash = createHash("sha256");
   let size = 0;
-  const verifier = new Transform({
-    transform(chunk, _encoding, callback) {
+  const verifier = new Writable({
+    write(chunk, _encoding, callback) {
       size += chunk.length;
       if (size > release.size) {
         callback(
@@ -211,16 +212,11 @@ async function downloadAndVerify(assetFile, release) {
         return;
       }
       hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  const discard = new Writable({
-    write(_chunk, _encoding, callback) {
       callback();
     },
   });
   const source = await archiveSource(assetFile, release.assetUrl);
-  await pipeline(source, verifier, discard);
+  await pipeline(source, verifier);
   const digest = hash.digest("hex");
   if (size !== release.size) {
     fail(`downloaded archive size ${size} does not match release metadata ${release.size}`);

@@ -192,6 +192,19 @@ test("malformed published timestamp is rejected before changing the pin", async 
   );
 });
 
+test("noncanonical release URL is rejected without changing the pin", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  await assertRejectedWithoutMutation(
+    paths,
+    stableRelease("2.337.0", archive, {
+      html_url: "https://example.com/actions-runner-v2.337.0",
+    }),
+    archive,
+    /release URL is not canonical for actions\/runner/,
+  );
+});
+
 test("missing Linux x64 asset is rejected without changing the pin", async (t) => {
   const paths = await fixture(t);
   const archive = Buffer.from("runner");
