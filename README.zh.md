@@ -393,7 +393,10 @@ Linux x64 资产，对下载归档重新计算 SHA-256 与字节数，并与 Git
 `task template-check-all` 通过后，才会创建或刷新唯一的
 `automation/actions-runner-update` PR。由于 `GITHUB_TOKEN` 创建的 PR 不会递归触发
 普通 `pull_request` 事件，更新工作流会显式为该分支调度完整 `Check` 工作流。它绝不
-构建、发布或取消发布 Sandbox 模板；合并后的推广仍是单独的受保护操作。
+构建、发布或取消发布 Sandbox 模板。升级 PR 合并后，operator 使用现有的本地
+`template-build-*`、`template-publish-*`、`template-defaults-check` 和
+`template-smoke` Task 完成双区域推广，便于排查耗时较长的远程构建，也避免将生产
+Sandbox 凭据放入 GitHub Actions。
 `latest` 低于当前 pin 时会作为降级异常失败，而不是静默 no-op。由于 digest 与资产
 元数据来自同一个 GitHub release，人工 review 仍是来源可信边界。
 

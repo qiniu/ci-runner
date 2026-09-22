@@ -106,9 +106,11 @@ the successful weekly cadence detects a stable release within seven days.
 
 This automation changes source only. It receives no Sandbox credentials and
 cannot build, publish, or unpublish a template. After the PR is reviewed and
-merged, the separate protected promotion process must rebuild all eight
-templates in both regions, verify catalogs and real Sandbox smoke, retain the
-evidence, and stop for operator review on uncertainty.
+merged, an operator uses the existing local Task targets to rebuild all eight
+templates in both regions, publish them, verify the catalogs and real Sandbox
+smoke, and retain the evidence. Keep the production Sandbox credentials in the
+operator's current shell rather than GitHub Actions, and stop for operator
+review instead of attempting an uncertain automatic rollback.
 
 ## Public catalog API
 

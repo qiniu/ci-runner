@@ -76,7 +76,10 @@ boundary.
 
 It explicitly dispatches the full `Check` workflow on that PR branch. The
 workflow has no Sandbox credentials and never performs a remote build or
-publication; those remain protected post-merge promotion steps.
+publication. After merge, an operator performs the two-region build,
+publication, catalog checks, and real Sandbox smoke locally with the existing
+Task targets. This keeps long remote builds inspectable without placing
+production Sandbox credentials in GitHub Actions.
 
 Publication state is restricted to `development`, `published`, or `verified`.
 `published` means the physical template is public in both supported regions.

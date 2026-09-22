@@ -83,9 +83,10 @@ head 上调度 `check.yaml`。每周检查失败会在 Actions 及 run summary �
 检查成功时，稳定版发布后最迟 7 天会被发现。
 
 这套自动化只修改源码，不接收 Sandbox 凭据，不能构建、发布或取消发布模板。升级
-PR 经过审查并合并后，单独的受保护推广流程仍需在两个区域重建 8 个模板、核对
-catalog、执行真实 Sandbox smoke、保留证据，并在结果不确定时停止交由 operator
-处理。
+PR 经过审查并合并后，operator 使用现有的本地 Task 在两个区域重建并发布 8 个
+模板、核对 catalog、执行真实 Sandbox smoke 并保留证据。生产 Sandbox 凭据只放在
+operator 当前 shell 中，不进入 GitHub Actions；结果不确定时停止并交由 operator
+处理，不执行不确定的自动回滚。
 
 ## 公共 Catalog API
 

@@ -410,8 +410,11 @@ the shared pin and generated compatibility assertions, and passes
 `automation/actions-runner-update` pull request. Because a PR created with
 `GITHUB_TOKEN` does not recursively trigger `pull_request`, the updater
 explicitly dispatches the full `Check` workflow for that branch. This workflow
-never builds, publishes, or unpublishes Sandbox templates; promotion remains a
-separate protected operation after merge.
+never builds, publishes, or unpublishes Sandbox templates. After merge, an
+operator uses the existing local `template-build-*`, `template-publish-*`,
+`template-defaults-check`, and `template-smoke` tasks for the two-region
+promotion so long remote builds remain easy to inspect and production Sandbox
+credentials never enter GitHub Actions.
 A lower latest release is treated as a downgrade alert rather than a no-op. An
 equal version is a no-op only when its GitHub-provided size and digest still
 match the pin; metadata drift fails closed. Human review remains the provenance

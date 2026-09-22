@@ -14,13 +14,15 @@ This file tracks active project work. Completed behavior should move into `READM
 - Decide whether expvar diagnostics need a Prometheus/export adapter or histogram-style latency views for deployment observability.
 - After the `ui-production-smoke` check has reported on `main`, enable it as a required status check in branch protection; the repository currently has no required status checks.
 - Define a privacy-safe documentation activation funnel for `/docs` (guide entry, hosted/deploy path selection, and first successful job) before adding analytics; do not collect repository names, workflow names, credentials, or log content.
-- Complete [Issue #68](https://github.com/qiniu/ci-runner/issues/68) PR B only
-  after deciding production Sandbox credential ownership, approval, and
-  rotation: add a protected manual promotion workflow that accepts an exact
-  merged commit/version, sequentially rebuilds all eight templates in both
-  regions, publishes and checks the catalogs, runs real Sandbox smoke, retains
-  build/catalog/smoke evidence, and stops for operator review instead of making
-  an uncertain automatic rollback.
+- Complete [Issue #68](https://github.com/qiniu/ci-runner/issues/68) and
+  [Issue #112](https://github.com/qiniu/ci-runner/issues/112) through the next
+  real Actions Runner release: after the automated source PR merges, use the
+  existing local Task targets to sequentially rebuild and publish all eight
+  templates in both regions, check both catalogs, run real Sandbox smoke, and
+  retain the build/catalog/smoke evidence in Issue #68 and
+  [qbox/sandbox#485](https://github.com/qbox/sandbox/issues/485). Keep production
+  Sandbox credentials out of GitHub Actions and stop for operator review rather
+  than attempting an uncertain automatic rollback.
 - Keep old-schema upgrade coverage whenever state records or GORM tags change; the current migration path is a narrow legacy compatibility pass followed by `AutoMigrate`, with additive-only handling for existing SQLite `runner_requests` and `runner_profiles`, not a full handwritten migration history.
 - Run the scoped Runner Specs release gates when dedicated environments are available: PostgreSQL/MySQL audited-mutation and fresh-schema tests, a production SQLite snapshot migration, and the SQLite down-version startup check against the documented baseline.
 - Extend fixture-backed production UI smoke to cover `/runner-specs`, `/account/runner-specs`, and one Organization scope, including stale-scope response isolation; the current four-test smoke covers public pages and the Jobs layout only.
