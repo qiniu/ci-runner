@@ -257,6 +257,9 @@ func (c *Client) ListInstallations(ctx context.Context) ([]Installation, error) 
 			return nil, err
 		}
 		for _, item := range page {
+			if item.ID <= 0 {
+				continue
+			}
 			installations = append(installations, Installation{
 				ID:            item.ID,
 				AccountID:     item.Account.ID,

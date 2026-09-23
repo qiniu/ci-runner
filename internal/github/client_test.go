@@ -380,7 +380,11 @@ func TestListInstallationsFollowsPagination(t *testing.T) {
 			return
 		}
 		w.Header().Set("Link", `<`+serverURL+`/app/installations?per_page=100&page=2>; rel="next"`)
-		_, _ = io.WriteString(w, `[{"id":456,"account":{"id":9001,"login":"octo-org","type":"Organization","name":"Octo Org","avatar_url":"https://avatars.example/o.png"}}]`)
+		_, _ = io.WriteString(w, `[
+			{"id":0,"account":{"id":8999,"login":"invalid-zero","type":"User"}},
+			{"id":-1,"account":{"id":8998,"login":"invalid-negative","type":"User"}},
+			{"id":456,"account":{"id":9001,"login":"octo-org","type":"Organization","name":"Octo Org","avatar_url":"https://avatars.example/o.png"}}
+		]`)
 	}))
 	serverURL = ts.URL
 	defer ts.Close()
