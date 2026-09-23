@@ -121,6 +121,21 @@ type RunnerState struct {
 	Version                int64     `json:"version"`
 }
 
+// RunnerRequestListOptions controls admin Runner request filtering and pagination.
+type RunnerRequestListOptions struct {
+	RepositoryFullName string
+	ProfileName        string
+	DisplayStatus      string
+	Limit              int
+	Offset             int
+}
+
+// RunnerRequestRepositoryListOptions controls repository option search.
+type RunnerRequestRepositoryListOptions struct {
+	Query string
+	Limit int
+}
+
 // RunnerEvent is a bounded, read-only lifecycle or process log event attached
 // to a runner request. PayloadJSON stays private because diagnostics only need
 // the operator-safe event metadata and message.
@@ -353,7 +368,8 @@ type RunnerRequestStore interface {
 	ListActiveStates() ([]RunnerState, error)
 	ListMismatchedCompletedStates(limit int) ([]RunnerState, error)
 	ListFailedWorkflowJobStates(limit int) ([]RunnerState, error)
-	ListStatesPage(limit, offset int) ([]RunnerState, int64, error)
+	ListStatesPage(options RunnerRequestListOptions) ([]RunnerState, int64, error)
+	ListRunnerRequestRepositories(options RunnerRequestRepositoryListOptions) ([]string, bool, error)
 	ListStatesForRepositories(repositories []string, limit int) ([]RunnerState, error)
 	ListStatesForGitHubInstallations(installationIDs []int64, limit int) ([]RunnerState, error)
 	ListStatesForGitHubInstallationRepositories(access []GitHubInstallationRepositoryAccess, limit, offset int) ([]RunnerState, int64, error)

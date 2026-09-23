@@ -109,13 +109,66 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	states, total, err := s.store.ListStatesPage(limit, offset)
+	displayStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	if !validRunnerRequestDisplayStatus(displayStatus) {
+		writeError(w, http.StatusBadRequest, "invalid Runner request status")
+		return
+	}
+	states, total, err := s.store.ListStatesPage(state.RunnerRequestListOptions{
+		RepositoryFullName: r.URL.Query().Get("repository_full_name"),
+		ProfileName:        r.URL.Query().Get("runner_spec_name"),
+		DisplayStatus:      displayStatus,
+		Limit:              limit,
+		Offset:             offset,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writePaginationHeaders(w, r, total, limit, offset)
 	writeJSON(w, http.StatusOK, states)
+}
+
+func validRunnerRequestDisplayStatus(status string) bool {
+	switch status {
+	case "", state.StatusQueued, state.StatusCreating, state.StatusRunning, state.StatusStopping, state.StatusCompleted, state.StatusFailed, "unmatched":
+		return true
+	default:
+		return false
+	}
+}
+
+type runnerRequestRepositoriesResponse struct {
+	Repositories []string `json:"repositories"`
+	HasMore      bool     `json:"has_more"`
+}
+
+func (s *Server) handleListRunnerRequestRepositories(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	limit, _, err := parsePagination(r, 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(query) > 256 {
+		writeError(w, http.StatusBadRequest, "repository query is too long")
+		return
+	}
+	repositories, hasMore, err := s.store.ListRunnerRequestRepositories(state.RunnerRequestRepositoryListOptions{
+		Query: query,
+		Limit: limit,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runnerRequestRepositoriesResponse{
+		Repositories: repositories,
+		HasMore:      hasMore,
+	})
 }
 
 func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {

@@ -1,8 +1,28 @@
-import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerState } from "@/admin-types"
+import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
 export const userRunnerInitialPageSize = 100
 export const userRunnerHistoryWindow = 500
+export const adminRunnerRequestPageSize = 100
+
+export interface AdminRunnerRequestListOptions {
+  status: RunnerDisplayStatus | "all"
+  repository: string
+  runnerSpec: string
+  limit?: number
+  offset?: number
+}
+
+export function adminRunnerRequestsPath(options: AdminRunnerRequestListOptions): string {
+  const query = new URLSearchParams({
+    limit: String(options.limit ?? adminRunnerRequestPageSize),
+    offset: String(options.offset ?? 0),
+  })
+  if (options.status !== "all") query.set("status", options.status)
+  if (options.repository !== "all") query.set("repository_full_name", options.repository)
+  if (options.runnerSpec !== "all") query.set("runner_spec_name", options.runnerSpec)
+  return `/runner_requests?${query.toString()}`
+}
 
 export type AdminDataResource =
   | "runner_requests"

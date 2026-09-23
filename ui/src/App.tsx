@@ -47,6 +47,8 @@ import {
 import {
   adminDataResources,
   adminPollingResources,
+  adminRunnerRequestPageSize,
+  adminRunnerRequestsPath,
   appRouteAccess,
   authRouteViewState,
   createLatestUserLoadGate,
@@ -65,7 +67,7 @@ import {
   type AuthSessionCheckStatus,
 } from "@/app-load-policy"
 import { useRunnerCatalog } from "@/hooks/use-runner-catalog"
-import { runnerDisplayStatus, runnerMetrics } from "@/admin-format"
+import { runnerMetrics } from "@/admin-format"
 import appI18n from "@/i18n"
 import {
   repositoryAccountLogin,
@@ -96,8 +98,18 @@ type UserRunnerPage = {
   total: number
 }
 
+type AdminRunnerPage = {
+  items: RunnerState[]
+  total: number
+}
+
+type RunnerRepositorySearchResult = {
+  repositories: string[]
+  hasMore: boolean
+}
+
 const adminResourcePaths: Record<AdminDataResource, string> = {
-  runner_requests: "/runner_requests?limit=100&offset=0",
+  runner_requests: adminRunnerRequestsPath({ status: "all", repository: "all", runnerSpec: "all" }),
   runner_specs: "/runner_specs",
   audit_events: "/audit-events",
 }
@@ -137,6 +149,8 @@ function App() {
   const [locationSearch, setLocationSearch] = useState(() => window.location.search)
   const [section, setSectionState] = useState<AdminSection>(() => sectionFromPath())
   const [runners, setRunners] = useState<RunnerState[]>([])
+  const [runnerRequestTotal, setRunnerRequestTotal] = useState(0)
+  const [runnerRequestOffset, setRunnerRequestOffset] = useState(0)
   const [runnerSpecs, setRunnerSpecs] = useState<RunnerSpec[]>([])
   const [loading, setLoading] = useState(false)
   const [createID, setCreateID] = useState("")
@@ -169,6 +183,7 @@ function App() {
   const [beginGitHubReauthentication] = useState(createGitHubReauthenticationGate)
   const userLoadGate = useRef(createLatestUserLoadGate()).current
   const runnerRequestLookupGeneration = useRef(0)
+  const adminLoadGeneration = useRef(0)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
   const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
@@ -274,12 +289,6 @@ function App() {
     setLocationSearch(window.location.search)
   }, [])
 
-  const runnerRepositories = useMemo(
-    () =>
-      Array.from(new Set(runners.map((runner) => runner.repository_full_name).filter(Boolean) as string[])).sort(),
-    [runners]
-  )
-
   const runnerSpecNames = useMemo(
     () =>
       Array.from(
@@ -291,17 +300,6 @@ function App() {
         )
       ).sort(),
     [runnerSpecs, runners]
-  )
-
-  const filteredRunners = useMemo(
-    () =>
-      runners.filter((runner) => {
-        if (runnerStatusFilter !== "all" && runnerDisplayStatus(runner) !== runnerStatusFilter) return false
-        if (runnerRepositoryFilter !== "all" && runner.repository_full_name !== runnerRepositoryFilter) return false
-        if (runnerSpecFilter !== "all" && runner.runner_spec_name !== runnerSpecFilter) return false
-        return true
-      }),
-    [runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter, runners]
   )
 
   const hasAccess = authSession.authenticated && authSession.role === "admin"
@@ -410,6 +408,46 @@ function App() {
     [requestResponse]
   )
 
+  const requestAdminRunnerPage = useCallback(
+    async (): Promise<AdminRunnerPage> => {
+      const appliesFilters = section === "runner_requests"
+      const response = await requestResponse(adminRunnerRequestsPath({
+        status: appliesFilters ? runnerStatusFilter : "all",
+        repository: appliesFilters ? runnerRepositoryFilter : "all",
+        runnerSpec: appliesFilters ? runnerSpecFilter : "all",
+        limit: adminRunnerRequestPageSize,
+        offset: appliesFilters ? runnerRequestOffset : 0,
+      }))
+      const data = await response.json()
+      const items = Array.isArray(data) ? (data as RunnerState[]) : []
+      const totalHeader = response.headers.get("X-Total-Count")
+      const parsedTotal = totalHeader === null ? Number.NaN : Number(totalHeader)
+      return {
+        items,
+        total: Number.isSafeInteger(parsedTotal) && parsedTotal >= 0 ? parsedTotal : items.length,
+      }
+    }, [requestResponse, runnerRepositoryFilter, runnerRequestOffset, runnerSpecFilter, runnerStatusFilter, section])
+
+  const searchRunnerRequestRepositories = useCallback(async (query: string): Promise<RunnerRepositorySearchResult> => {
+    const search = new URLSearchParams({ limit: "50" })
+    if (query.trim()) search.set("q", query.trim())
+    const data = await request(`/runner_requests/repositories?${search.toString()}`) as {
+      repositories?: unknown
+      has_more?: unknown
+    }
+    if (
+      !Array.isArray(data.repositories)
+      || !data.repositories.every((repository) => typeof repository === "string")
+      || typeof data.has_more !== "boolean"
+    ) {
+      throw new Error(appI18n.t("admin.loadRunnerRepositoriesFailed"))
+    }
+    return {
+      repositories: data.repositories,
+      hasMore: data.has_more === true,
+    }
+  }, [request])
+
   const parseLabels = (value: string) =>
     value
       .split(",")
@@ -425,12 +463,29 @@ function App() {
     if (!hasAccess || !isAdminRoute || runnerRequestIdentifier) return
     const resources = polling ? adminPollingResources(section) : adminDataResources(section)
     if (resources.length === 0) return
+    const generation = ++adminLoadGeneration.current
     setLoading(true)
     try {
       const entries = await Promise.all(
-        resources.map(async (resource) => [resource, await request(adminResourcePath(resource))] as const)
+        resources.map(async (resource) => [
+          resource,
+          resource === "runner_requests" ? await requestAdminRunnerPage() : await request(adminResourcePath(resource)),
+        ] as const)
       )
+      if (generation !== adminLoadGeneration.current) return
       for (const [resource, data] of entries) {
+        if (resource === "runner_requests") {
+          const page = data as AdminRunnerPage
+          setRunners(page.items)
+          setRunnerRequestTotal(page.total)
+          if (section === "runner_requests" && runnerRequestOffset > 0 && runnerRequestOffset >= page.total) {
+            const lastPageOffset = page.total === 0
+              ? 0
+              : Math.floor((page.total - 1) / adminRunnerRequestPageSize) * adminRunnerRequestPageSize
+            setRunnerRequestOffset(lastPageOffset)
+          }
+          continue
+        }
         updateAdminResource(resource, data, {
           setRunners,
           setRunnerSpecs,
@@ -438,11 +493,12 @@ function App() {
         })
       }
     } catch (error) {
+      if (generation !== adminLoadGeneration.current) return
       toast.error(error instanceof Error ? error.message : appI18n.t("app.controlPlaneLoadFailed"))
     } finally {
-      setLoading(false)
+      if (generation === adminLoadGeneration.current) setLoading(false)
     }
-  }, [hasAccess, isAdminRoute, request, runnerRequestIdentifier, section])
+  }, [hasAccess, isAdminRoute, request, requestAdminRunnerPage, runnerRequestIdentifier, runnerRequestOffset, section])
 
   const loadUserAll = useCallback(async (polling = false) => {
     const loadID = userLoadGate.begin(`${authSession.login ?? ""}:${locationPath}`)
@@ -880,6 +936,8 @@ function App() {
       setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
     })
     setRunners([])
+    setRunnerRequestTotal(0)
+    setRunnerRequestOffset(0)
     setRunnerSpecs([])
     setAuditEvents([])
     setUserRunners([])
@@ -1201,7 +1259,9 @@ function App() {
               hasAccess={hasAccess}
               loading={loading}
               runners={runners}
-              filteredRunners={filteredRunners}
+              total={runnerRequestTotal}
+              offset={runnerRequestOffset}
+              limit={adminRunnerRequestPageSize}
               createID={createID}
               createRepository={createRepository}
               createRunnerSpec={createRunnerSpec}
@@ -1210,7 +1270,6 @@ function App() {
               runnerStatusFilter={runnerStatusFilter}
               runnerRepositoryFilter={runnerRepositoryFilter}
               runnerSpecFilter={runnerSpecFilter}
-              runnerRepositories={runnerRepositories}
               runnerSpecNames={runnerSpecNames}
               onRefresh={() => void loadAll()}
               onResetCreateRunnerForm={resetCreateRunnerForm}
@@ -1220,9 +1279,21 @@ function App() {
               onCreateRepositoryChange={setCreateRepository}
               onCreateRunnerSpecChange={setCreateRunnerSpec}
               onCreateLabelsChange={setCreateLabels}
-              onStatusFilterChange={setRunnerStatusFilter}
-              onRepositoryFilterChange={setRunnerRepositoryFilter}
-              onRunnerSpecFilterChange={setRunnerSpecFilter}
+              onStatusFilterChange={(value) => {
+                setRunnerStatusFilter(value)
+                setRunnerRequestOffset(0)
+              }}
+              onRepositoryFilterChange={(value) => {
+                setRunnerRepositoryFilter(value)
+                setRunnerRequestOffset(0)
+              }}
+              onRunnerSpecFilterChange={(value) => {
+                setRunnerSpecFilter(value)
+                setRunnerRequestOffset(0)
+              }}
+              onSearchRepositories={searchRunnerRequestRepositories}
+              onPreviousPage={() => setRunnerRequestOffset((current) => Math.max(0, current - adminRunnerRequestPageSize))}
+              onNextPage={() => setRunnerRequestOffset((current) => current + adminRunnerRequestPageSize)}
               onLookupRunnerRequest={(identifier) => void lookupRunnerRequest(identifier)}
               onOpenRunnerRequest={openRunnerRequest}
               onRetryRunner={(id) => void retryRunner(id)}

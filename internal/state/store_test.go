@@ -2467,7 +2467,7 @@ func TestListStatesPage(t *testing.T) {
 		}
 	}
 
-	paged, total, err := store.ListStatesPage(2, 1)
+	paged, total, err := store.ListStatesPage(RunnerRequestListOptions{Limit: 2, Offset: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2479,6 +2479,113 @@ func TestListStatesPage(t *testing.T) {
 	}
 	if paged[0].ID != "runner-3" || paged[1].ID != "runner-2" {
 		t.Fatalf("unexpected page order: %#v", []string{paged[0].ID, paged[1].ID})
+	}
+}
+
+func TestListStatesPageFiltersAcrossAllRequests(t *testing.T) {
+	store := New(t.TempDir())
+	requests := []RunnerRequest{
+		{ID: "older-match", Source: "test", RepositoryFullName: "octo/older", ProfileName: "ubuntu", Labels: []string{"self-hosted"}, RunnerName: "older-match", CreatedAt: time.Unix(1, 0).UTC()},
+		{ID: "failed", Source: "test", RepositoryFullName: "octo/current", ProfileName: "ubuntu", Labels: []string{"self-hosted"}, RunnerName: "failed", CreatedAt: time.Unix(2, 0).UTC()},
+		{ID: "unmatched", Source: "test", RepositoryFullName: "octo/current", ProfileName: "large", Labels: []string{"self-hosted"}, RunnerName: "unmatched", CreatedAt: time.Unix(3, 0).UTC()},
+	}
+	for _, request := range requests {
+		if _, _, err := store.CreateRequest(request, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed, err := store.ReadState("failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed.Status = StatusFailed
+	failed.FailureStage = "runner"
+	if err := store.WriteState(failed); err != nil {
+		t.Fatal(err)
+	}
+	unmatched, err := store.ReadState("unmatched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unmatched.Status = StatusFailed
+	unmatched.FailureStage = "admission"
+	unmatched.FailureReason = "profile_labels_not_matched"
+	if err := store.WriteState(unmatched); err != nil {
+		t.Fatal(err)
+	}
+
+	older, total, err := store.ListStatesPage(RunnerRequestListOptions{RepositoryFullName: "octo/older", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(older) != 1 || older[0].ID != "older-match" {
+		t.Fatalf("repository filter = %#v total=%d, want older-match", older, total)
+	}
+	failedOnly, total, err := store.ListStatesPage(RunnerRequestListOptions{DisplayStatus: "failed", ProfileName: "ubuntu", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(failedOnly) != 1 || failedOnly[0].ID != "failed" {
+		t.Fatalf("failed filter = %#v total=%d, want failed", failedOnly, total)
+	}
+	unmatchedOnly, total, err := store.ListStatesPage(RunnerRequestListOptions{DisplayStatus: "unmatched", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(unmatchedOnly) != 1 || unmatchedOnly[0].ID != "unmatched" {
+		t.Fatalf("unmatched filter = %#v total=%d, want unmatched", unmatchedOnly, total)
+	}
+}
+
+func TestListRunnerRequestRepositoriesSearchesAllHistory(t *testing.T) {
+	store := New(t.TempDir())
+	for index, repository := range []string{
+		"zeta/current",
+		"octo/older",
+		"octo/other",
+		"special/foo_bar",
+		"special/fooXbar",
+		"special/percent%repo",
+		"special/percentXrepo",
+		"special/bang!_repo",
+		"special/bang!Xrepo",
+		"",
+	} {
+		if _, _, err := store.CreateRequest(RunnerRequest{
+			ID:                 fmt.Sprintf("runner-%d", index),
+			Source:             "test",
+			RepositoryFullName: repository,
+			Labels:             []string{"self-hosted"},
+			RunnerName:         fmt.Sprintf("runner-%d", index),
+			CreatedAt:          time.Unix(int64(index), 0).UTC(),
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repositories, hasMore, err := store.ListRunnerRequestRepositories(RunnerRequestRepositoryListOptions{Query: "OCTO", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasMore || len(repositories) != 1 || repositories[0] != "octo/older" {
+		t.Fatalf("repositories = %#v hasMore=%v", repositories, hasMore)
+	}
+
+	for _, testCase := range []struct {
+		query string
+		want  string
+	}{
+		{query: "foo_bar", want: "special/foo_bar"},
+		{query: "percent%repo", want: "special/percent%repo"},
+		{query: "bang!_repo", want: "special/bang!_repo"},
+	} {
+		repositories, hasMore, err := store.ListRunnerRequestRepositories(RunnerRequestRepositoryListOptions{Query: testCase.query, Limit: 10})
+		if err != nil {
+			t.Fatalf("search %q: %v", testCase.query, err)
+		}
+		if hasMore || len(repositories) != 1 || repositories[0] != testCase.want {
+			t.Errorf("search %q repositories = %#v hasMore=%v, want %q", testCase.query, repositories, hasMore, testCase.want)
+		}
 	}
 }
 

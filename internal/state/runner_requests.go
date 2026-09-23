@@ -371,27 +371,31 @@ func (s *DBStore) ListFailedWorkflowJobStates(limit int) ([]RunnerState, error) 
 	return states, nil
 }
 
-func (s *DBStore) ListStatesPage(limit, offset int) ([]RunnerState, int64, error) {
+func (s *DBStore) ListStatesPage(options RunnerRequestListOptions) ([]RunnerState, int64, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, 0, err
 	}
-	if limit <= 0 {
-		limit = 100
+	if options.Limit <= 0 {
+		options.Limit = 100
 	}
-	if offset < 0 {
-		offset = 0
+	if options.Offset < 0 {
+		return nil, 0, fmt.Errorf("offset must be a non-negative integer")
+	}
+	query, err := filterRunnerRequestList(db.Model(&runnerRequestRecord{}), options)
+	if err != nil {
+		return nil, 0, err
 	}
 	var total int64
-	if err := db.Model(&runnerRequestRecord{}).Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var records []runnerRequestRecord
-	if err := db.
+	if err := query.
 		Select(runnerRequestListSelectColumns).
 		Order("queued_at DESC, id ASC").
-		Limit(limit).
-		Offset(offset).
+		Limit(options.Limit).
+		Offset(options.Offset).
 		Find(&records).Error; err != nil {
 		return nil, 0, err
 	}
@@ -400,6 +404,58 @@ func (s *DBStore) ListStatesPage(limit, offset int) ([]RunnerState, int64, error
 		states = append(states, recordToState(record))
 	}
 	return states, total, nil
+}
+
+func filterRunnerRequestList(query *gorm.DB, options RunnerRequestListOptions) (*gorm.DB, error) {
+	if repository := strings.TrimSpace(options.RepositoryFullName); repository != "" {
+		query = query.Where("repository_full_name = ?", repository)
+	}
+	if profile := strings.TrimSpace(options.ProfileName); profile != "" {
+		query = query.Where("profile_name = ?", profile)
+	}
+	switch status := strings.ToLower(strings.TrimSpace(options.DisplayStatus)); status {
+	case "":
+	case StatusQueued, StatusCreating, StatusRunning, StatusStopping, StatusCompleted:
+		query = query.Where("status = ?", status)
+	case "unmatched":
+		query = query.
+			Where("status = ?", StatusFailed).
+			Where("failure_stage = ? AND failure_reason = ?", "admission", "profile_labels_not_matched")
+	case StatusFailed:
+		query = query.
+			Where("status = ?", StatusFailed).
+			Where("failure_stage IS NULL OR failure_stage != ? OR failure_reason IS NULL OR failure_reason != ?", "admission", "profile_labels_not_matched")
+	default:
+		return nil, fmt.Errorf("unsupported Runner request display status %q", options.DisplayStatus)
+	}
+	return query, nil
+}
+
+// ListRunnerRequestRepositories returns matching repositories from all persisted Runner requests.
+func (s *DBStore) ListRunnerRequestRepositories(options RunnerRequestRepositoryListOptions) ([]string, bool, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, false, err
+	}
+	if options.Limit <= 0 {
+		options.Limit = 50
+	}
+	query := db.Model(&runnerRequestRecord{}).
+		Distinct("repository_full_name").
+		Where("repository_full_name != ?", "")
+	if search := strings.ToLower(strings.TrimSpace(options.Query)); search != "" {
+		search = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(search)
+		query = query.Where("LOWER(repository_full_name) LIKE ? ESCAPE '!'", "%"+search+"%")
+	}
+	repositories := make([]string, 0, options.Limit+1)
+	if err := query.Order("repository_full_name ASC").Limit(options.Limit+1).Pluck("repository_full_name", &repositories).Error; err != nil {
+		return nil, false, err
+	}
+	hasMore := len(repositories) > options.Limit
+	if hasMore {
+		repositories = repositories[:options.Limit]
+	}
+	return repositories, hasMore, nil
 }
 
 func (s *DBStore) ListStatesForRepositories(repositories []string, limit int) ([]RunnerState, error) {

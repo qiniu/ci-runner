@@ -5,6 +5,7 @@ import * as adminTypes from "./admin-types"
 import {
   adminDataResources,
   adminPollingResources,
+  adminRunnerRequestsPath,
   shouldPollAdminSection,
   shouldPollUserRoute,
   userDataResources,
@@ -36,6 +37,21 @@ describe("app load policy", () => {
     expect(adminPollingResources("overview")).toEqual(["runner_requests"])
     expect(adminPollingResources("runner_requests")).toEqual(["runner_requests"])
     expect(adminPollingResources("runner_specs")).toEqual([])
+  })
+
+  test("builds filtered admin Runner request pages without client-side truncation", () => {
+    expect(adminRunnerRequestsPath({
+      status: "failed",
+      repository: "octo/older repo",
+      runnerSpec: "large",
+      limit: 100,
+      offset: 200,
+    })).toBe("/runner_requests?limit=100&offset=200&status=failed&repository_full_name=octo%2Folder+repo&runner_spec_name=large")
+    expect(adminRunnerRequestsPath({
+      status: "all",
+      repository: "all",
+      runnerSpec: "all",
+    })).toBe("/runner_requests?limit=100&offset=0")
   })
 
   test.each([

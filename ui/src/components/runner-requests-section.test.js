@@ -6,12 +6,14 @@ import i18n from "../i18n"
 import { stickyTableHeaderOffset } from "./runner-request-table"
 import { RunnerRequestsSection } from "./runner-requests-section"
 
-function renderRunnerRequests(runner, runnerStatusFilter = "all") {
+function renderRunnerRequests(runner, runnerStatusFilter = "all", pagination = {}) {
   return renderToStaticMarkup(createElement(RunnerRequestsSection, {
     hasAccess: true,
     loading: false,
     runners: [runner],
-    filteredRunners: [runner],
+    total: pagination.total ?? 1,
+    offset: pagination.offset ?? 0,
+    limit: pagination.limit ?? 100,
     createID: "",
     createRepository: "",
     createRunnerSpec: "",
@@ -20,7 +22,6 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all") {
     runnerStatusFilter,
     runnerRepositoryFilter: "all",
     runnerSpecFilter: "all",
-    runnerRepositories: runner.repository_full_name ? [runner.repository_full_name] : [],
     runnerSpecNames: runner.runner_spec_name ? [runner.runner_spec_name] : [],
     onRefresh() {},
     onResetCreateRunnerForm() {},
@@ -33,6 +34,9 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all") {
     onStatusFilterChange() {},
     onRepositoryFilterChange() {},
     onRunnerSpecFilterChange() {},
+    async onSearchRepositories() { return { repositories: [], hasMore: false } },
+    onPreviousPage() {},
+    onNextPage() {},
     onLookupRunnerRequest() {},
     onOpenRunnerRequest() {},
     onRetryRunner() {},
@@ -138,7 +142,24 @@ describe("RunnerRequestsSection", () => {
       created_at: "2026-09-06T07:04:57Z",
     })
 
-    expect(html.indexOf("Showing 1 of 1 runner requests.")).toBeGreaterThan(html.indexOf("</table>"))
+    expect(html.indexOf("1-1 of 1")).toBeGreaterThan(html.indexOf("</table>"))
+    expect(html).toContain("Page 1 of 1")
+  })
+
+  test("renders the server-side result range and page controls", async () => {
+    await i18n.changeLanguage("en")
+    const html = renderRunnerRequests({
+      id: "older-request",
+      status: "completed",
+      runner_name: "e2b-older-request",
+      updated_at: "2026-09-06T07:25:09Z",
+      created_at: "2026-09-06T07:04:57Z",
+    }, "all", { total: 205, offset: 100 })
+
+    expect(html).toContain("101-101 of 205")
+    expect(html).toContain("Page 2 of 3")
+    expect(html).toContain('aria-label="Previous Runner request page"')
+    expect(html).toContain('aria-label="Next Runner request page"')
   })
 
   test("lets the request table grow with its content", async () => {

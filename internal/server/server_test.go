@@ -4792,12 +4792,20 @@ func TestGitHubOAuthNonJSONErrorsIncludeStatus(t *testing.T) {
 func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	store := state.New(t.TempDir())
 	for i := 0; i < 105; i++ {
+		repository := "octo/current"
+		profile := "ubuntu"
+		if i == 0 {
+			repository = "octo/older"
+			profile = "large"
+		}
 		if _, _, err := store.CreateRequest(state.RunnerRequest{
-			ID:         fmt.Sprintf("runner-%03d", i),
-			Source:     "test",
-			Labels:     []string{"self-hosted"},
-			RunnerName: fmt.Sprintf("e2b-runner-%03d", i),
-			CreatedAt:  time.Unix(int64(i), 0).UTC(),
+			ID:                 fmt.Sprintf("runner-%03d", i),
+			Source:             "test",
+			RepositoryFullName: repository,
+			ProfileName:        profile,
+			Labels:             []string{"self-hosted"},
+			RunnerName:         fmt.Sprintf("e2b-runner-%03d", i),
+			CreatedAt:          time.Unix(int64(i), 0).UTC(),
 		}, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -4842,6 +4850,48 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	}
 	if !strings.Contains(rec.Header().Get("Link"), `rel="prev"`) {
 		t.Fatalf("expected prev link, got %q", rec.Header().Get("Link"))
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests?repository_full_name=octo%2Folder&runner_spec_name=large", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered request status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	states = nil
+	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].ID != "runner-000" || rec.Header().Get("X-Total-Count") != "1" {
+		t.Fatalf("filtered states=%#v total=%q", states, rec.Header().Get("X-Total-Count"))
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests/repositories?q=OLDER&limit=10", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"repositories":["octo/older"]`) {
+		t.Fatalf("repository search status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests/repositories?q=missing&limit=10", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"repositories":[]`) {
+		t.Fatalf("empty repository search status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests?status=unknown", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status filter status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/runner_requests/repositories", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized repository search status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
