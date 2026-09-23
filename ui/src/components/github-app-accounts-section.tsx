@@ -170,13 +170,13 @@ export function GitHubAppAccountsList({
       {error ? <LoadError message={error} onRetry={onRefresh} /> : null}
 
       <div className="overflow-hidden rounded-md border bg-background">
-        <Table>
+        <Table className="table-fixed md:table-auto">
           <TableHeader>
             <TableRow className="bg-muted/40 hover:bg-muted/40">
               <TableHead>{t("admin.installedAccount")}</TableHead>
-              <TableHead>{t("admin.accountType")}</TableHead>
-              <TableHead>{t("admin.githubAccountIdentifier")}</TableHead>
-              <TableHead>{t("admin.installationID")}</TableHead>
+              <TableHead className="hidden md:table-cell">{t("admin.accountType")}</TableHead>
+              <TableHead className="hidden lg:table-cell">{t("admin.githubAccountIdentifier")}</TableHead>
+              <TableHead className="hidden md:table-cell">{t("admin.installationID")}</TableHead>
               <TableHead className="w-10"><span className="sr-only">{t("common.details")}</span></TableHead>
             </TableRow>
           </TableHeader>
@@ -201,26 +201,30 @@ export function GitHubAppAccountsList({
                 <TableCell>
                   <a
                     href={`/admin/github_accounts/${installation.id}`}
-                    className="flex min-w-52 items-center gap-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex min-w-0 items-center gap-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={(event) => handleInternalLink(event, () => onOpen(installation.id))}
                   >
                     <GitHubAccountAvatar installation={installation} />
                     <span className="min-w-0">
-                      <span className="block font-medium">{installation.account_login}</span>
+                      <span className="block truncate font-medium">{installation.account_login}</span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {installation.account_name || t("admin.unnamedGitHubAccount")}
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground md:hidden">
+                        <span>{accountTypeLabel(installation.account_type, t)}</span>
+                        <span>{t("admin.installationNumber", { id: installation.id })}</span>
                       </span>
                     </span>
                   </a>
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <Badge variant="outline" className="gap-1.5">
                     {installation.account_type === "organization" ? <Building2 /> : <UserRound />}
                     {accountTypeLabel(installation.account_type, t)}
                   </Badge>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{installation.account_id}</TableCell>
-                <TableCell className="text-muted-foreground">{t("admin.installationNumber", { id: installation.id })}</TableCell>
+                <TableCell className="hidden font-mono text-xs lg:table-cell">{installation.account_id}</TableCell>
+                <TableCell className="hidden text-muted-foreground md:table-cell">{t("admin.installationNumber", { id: installation.id })}</TableCell>
                 <TableCell>
                   <a
                     href={`/admin/github_accounts/${installation.id}`}
@@ -289,7 +293,7 @@ export function GitHubAppAccountDetail({ detail, loading, error, onBack, onRefre
             </div>
           </div>
 
-          <div className="flex items-end justify-between gap-4">
+          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
             <div>
               <h2 className="font-semibold">{t("admin.authorizedRepositories")}</h2>
               <p className="mt-1 text-sm text-muted-foreground">{t("admin.authorizedRepositoriesDescription")}</p>
@@ -298,7 +302,7 @@ export function GitHubAppAccountDetail({ detail, loading, error, onBack, onRefre
           </div>
 
           <div className="overflow-hidden rounded-md border bg-background">
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
                   <TableHead>{t("common.repository")}</TableHead>
@@ -315,7 +319,7 @@ export function GitHubAppAccountDetail({ detail, loading, error, onBack, onRefre
                   </TableRow>
                 ) : repositories.map((repository) => (
                   <TableRow key={repository}>
-                    <TableCell className="font-medium">{repository}</TableCell>
+                    <TableCell className="break-words whitespace-normal font-medium">{repository}</TableCell>
                     <TableCell>
                       <a
                         href={githubRepositoryURL(repository)}
