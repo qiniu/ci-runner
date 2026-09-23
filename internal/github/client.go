@@ -219,6 +219,58 @@ func (c *Client) GetInstallation(ctx context.Context, installationID int64) (Ins
 	}, nil
 }
 
+func (c *Client) ListInstallations(ctx context.Context) ([]Installation, error) {
+	if c.appAuth == nil {
+		return nil, fmt.Errorf("github app auth is required")
+	}
+	nextURL := fmt.Sprintf("%s/app/installations?per_page=100", c.baseURL)
+	var installations []Installation
+	for nextURL != "" {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		setGitHubHeaders(req)
+		resp, err := c.appAuth.appHTTP.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read github app installations response: %w", readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("github app installations: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var page []struct {
+			ID      int64 `json:"id"`
+			Account struct {
+				ID        int64  `json:"id"`
+				Type      string `json:"type"`
+				Login     string `json:"login"`
+				Name      string `json:"name"`
+				AvatarURL string `json:"avatar_url"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, err
+		}
+		for _, item := range page {
+			installations = append(installations, Installation{
+				ID:            item.ID,
+				AccountID:     item.Account.ID,
+				AccountType:   normalizeGitHubAccountType(item.Account.Type),
+				AccountLogin:  strings.TrimSpace(item.Account.Login),
+				AccountName:   strings.TrimSpace(item.Account.Name),
+				AccountAvatar: strings.TrimSpace(item.Account.AvatarURL),
+			})
+		}
+		nextURL = nextLink(resp.Header.Get("Link"))
+	}
+	return installations, nil
+}
+
 func (c *Client) GetAccount(ctx context.Context, login string) (Account, error) {
 	login = strings.TrimSpace(login)
 	if login == "" {
