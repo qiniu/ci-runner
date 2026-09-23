@@ -102,6 +102,27 @@ describe("GitHubAppAccountsSection", () => {
     expect(detailHTML).toContain("No repositories authorized")
   })
 
+  test("does not present a failed list request as an empty installation catalog", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+
+    await act(async () => root.render(createElement(GitHubAppAccountsSection, {
+      installationID: 0,
+      request: async () => { throw new Error("upstream unavailable") },
+      onOpen() {},
+      onBack() {},
+    })))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(container.textContent).toContain("Failed to load GitHub App accounts")
+    expect(container.textContent).not.toContain("No GitHub App installations")
+  })
+
   test("ignores a delayed repository response after navigating to another installation", async () => {
     const pending = new Map()
     const request = (url) => new Promise((resolve) => pending.set(url, resolve))

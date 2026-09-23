@@ -26,6 +26,9 @@ func (s *Server) handleAdminListGitHubAppInstallations(w http.ResponseWriter, r 
 		writeError(w, http.StatusBadGateway, "failed to list GitHub App installations")
 		return
 	}
+	if installations == nil {
+		installations = []github.Installation{}
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, adminGitHubAppInstallationsResponse{Installations: installations})
 }
@@ -50,6 +53,9 @@ func (s *Server) handleAdminGetGitHubAppInstallationRepositories(w http.Response
 		s.logger.Error("list github app installation repositories", "installation_id", installationID, "error", err)
 		writeError(w, http.StatusBadGateway, "failed to list GitHub App installation repositories")
 		return
+	}
+	if repositories == nil {
+		repositories = []string{}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, adminGitHubAppInstallationDetailResponse{

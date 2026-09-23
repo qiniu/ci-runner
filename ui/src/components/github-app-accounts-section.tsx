@@ -188,7 +188,7 @@ export function GitHubAppAccountsList({
                   {t("admin.loadingGitHubAppAccounts")}
                 </TableCell>
               </TableRow>
-            ) : installations.length === 0 ? (
+            ) : !error && installations.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-40 text-center">
                   <Github className="mx-auto mb-3 size-6 text-muted-foreground" />

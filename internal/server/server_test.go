@@ -3436,6 +3436,54 @@ func TestAdminGitHubAppInstallationsAndRepositories(t *testing.T) {
 	}
 }
 
+func TestAdminGitHubAppEmptyCollectionsAreJSONArrays(t *testing.T) {
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			_, _ = io.WriteString(w, `[]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/987":
+			_, _ = io.WriteString(w, `{"id":987,"account":{"id":9001,"login":"octo-org","type":"Organization"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/987/access_tokens":
+			_, _ = io.WriteString(w, `{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+			_, _ = io.WriteString(w, `{"repositories":[]}`)
+		default:
+			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	gh, err := github.NewAppClient(githubAPI.URL, github.AppAuth{
+		AppID:          123,
+		PrivateKeyFile: testServerPrivateKeyFile(t),
+	}, githubAPI.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.gh = gh
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/admin/api/github-app/installations", want: `"installations":[]`},
+		{path: "/admin/api/github-app/installations/987/repositories", want: `"repositories":[]`},
+	} {
+		req := adminRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("GET %s did not return an empty JSON array: %s", tc.path, rec.Body.String())
+		}
+	}
+}
+
 func TestAdminGitHubAppRepositoriesRejectInvalidInstallationID(t *testing.T) {
 	store := state.New(t.TempDir())
 	var githubRequests atomic.Int32
