@@ -3317,6 +3317,145 @@ func TestAdminAccountsRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestAdminGitHubAppEndpointsRequireAdmin(t *testing.T) {
+	store := state.New(t.TempDir())
+	var githubRequests atomic.Int32
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		githubRequests.Add(1)
+	}))
+	defer githubAPI.Close()
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	gh, err := github.NewAppClient(githubAPI.URL, github.AppAuth{
+		AppID:          123,
+		PrivateKeyFile: testServerPrivateKeyFile(t),
+	}, githubAPI.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.gh = gh
+
+	for _, path := range []string{
+		"/admin/api/github-app/installations",
+		"/admin/api/github-app/installations/987/repositories",
+	} {
+		t.Run(path+" signed out", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("GET %s signed out: status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		})
+		t.Run(path+" ordinary user", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("GET %s as user: status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if githubRequests.Load() != 0 {
+		t.Fatalf("unauthorized requests reached GitHub: %d", githubRequests.Load())
+	}
+}
+
+func TestAdminGitHubAppInstallationsAndRepositories(t *testing.T) {
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			if r.Header.Get("Authorization") == "" {
+				t.Fatal("expected app JWT authorization for installation list")
+			}
+			_, _ = io.WriteString(w, `[{"id":987,"account":{"id":9001,"login":"octo-org","type":"Organization","name":"Octo Org","avatar_url":"https://avatars.example/o.png"}}]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/987":
+			if r.Header.Get("Authorization") == "" {
+				t.Fatal("expected app JWT authorization for installation detail")
+			}
+			_, _ = io.WriteString(w, `{"id":987,"account":{"id":9001,"login":"octo-org","type":"Organization","name":"Octo Org","avatar_url":"https://avatars.example/o.png"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/987/access_tokens":
+			_, _ = io.WriteString(w, `{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+			if r.Header.Get("Authorization") != "token installation-token" {
+				t.Fatalf("unexpected installation authorization: %q", r.Header.Get("Authorization"))
+			}
+			_, _ = io.WriteString(w, `{"repositories":[{"full_name":"octo-org/runner"},{"full_name":"octo-org/api"}]}`)
+		default:
+			t.Fatalf("unexpected GitHub request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer githubAPI.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+	gh, err := github.NewAppClient(githubAPI.URL, github.AppAuth{
+		AppID:          123,
+		PrivateKeyFile: testServerPrivateKeyFile(t),
+	}, githubAPI.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.gh = gh
+
+	req := adminRequest(http.MethodGet, "/admin/api/github-app/installations", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET installations: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var list struct {
+		Installations []github.Installation `json:"installations"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Installations) != 1 || list.Installations[0].ID != 987 || list.Installations[0].AccountLogin != "octo-org" || list.Installations[0].AccountType != "organization" {
+		t.Fatalf("unexpected installations response: %#v", list)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected cache control: %q", rec.Header().Get("Cache-Control"))
+	}
+
+	req = adminRequest(http.MethodGet, "/admin/api/github-app/installations/987/repositories", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET installation repositories: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var detail struct {
+		Installation github.Installation `json:"installation"`
+		Repositories []string            `json:"repositories"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Installation.ID != 987 || detail.Installation.AccountID != 9001 || !reflect.DeepEqual(detail.Repositories, []string{"octo-org/runner", "octo-org/api"}) {
+		t.Fatalf("unexpected installation detail response: %#v", detail)
+	}
+}
+
+func TestAdminGitHubAppRepositoriesRejectInvalidInstallationID(t *testing.T) {
+	store := state.New(t.TempDir())
+	var githubRequests atomic.Int32
+	githubAPI := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		githubRequests.Add(1)
+	}))
+	defer githubAPI.Close()
+	srv := newTestServer(t, store, githubAPI.URL, &fakeSandbox{})
+
+	req := adminRequest(http.MethodGet, "/admin/api/github-app/installations/not-a-number/repositories", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "positive integer") {
+		t.Fatalf("GET invalid installation: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if githubRequests.Load() != 0 {
+		t.Fatalf("invalid installation reached GitHub: %d", githubRequests.Load())
+	}
+}
+
 func TestAdminAccountsSearchFilterAndPagination(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "", &fakeSandbox{})
