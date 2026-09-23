@@ -1,11 +1,35 @@
-import { describe, expect, test } from "bun:test"
-import { createElement } from "react"
+import { afterAll, afterEach, describe, expect, test } from "bun:test"
+import { Window } from "happy-dom"
+import { act, createElement } from "react"
+import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 
 import {
   GitHubAppAccountDetail,
   GitHubAppAccountsList,
+  GitHubAppAccountsSection,
 } from "./github-app-accounts-section"
+
+const window = new Window({ url: "http://localhost/" })
+const domGlobals = { window, document: window.document, navigator: window.navigator, HTMLElement: window.HTMLElement, SVGElement: window.SVGElement, Node: window.Node, DocumentFragment: window.DocumentFragment, Event: window.Event, MouseEvent: window.MouseEvent, KeyboardEvent: window.KeyboardEvent, getComputedStyle: window.getComputedStyle.bind(window), requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), IS_REACT_ACT_ENVIRONMENT: true }
+const originalGlobalDescriptors = new Map(Object.keys(domGlobals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+for (const [key, value] of Object.entries(domGlobals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value })
+const mountedRoots = []
+
+afterEach(async () => {
+  for (const { root, container } of mountedRoots.splice(0)) {
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
+afterAll(() => {
+  for (const [key, descriptor] of originalGlobalDescriptors) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+    else Reflect.deleteProperty(globalThis, key)
+  }
+  window.close()
+})
 
 const installation = {
   id: 987,
@@ -76,5 +100,45 @@ describe("GitHubAppAccountsSection", () => {
 
     expect(listHTML).toContain("No GitHub App installations")
     expect(detailHTML).toContain("No repositories authorized")
+  })
+
+  test("ignores a delayed repository response after navigating to another installation", async () => {
+    const pending = new Map()
+    const request = (url) => new Promise((resolve) => pending.set(url, resolve))
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    const props = {
+      request,
+      onOpen() {},
+      onBack() {},
+    }
+
+    await act(async () => root.render(createElement(GitHubAppAccountsSection, { ...props, installationID: 1 })))
+    expect(pending.has("/admin/api/github-app/installations/1/repositories")).toBe(true)
+
+    await act(async () => root.render(createElement(GitHubAppAccountsSection, { ...props, installationID: 2 })))
+    expect(pending.has("/admin/api/github-app/installations/2/repositories")).toBe(true)
+
+    await act(async () => {
+      pending.get("/admin/api/github-app/installations/2/repositories")({
+        installation: { ...installation, id: 2, account_login: "second-org" },
+        repositories: ["second-org/api"],
+      })
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain("second-org")
+    expect(container.textContent).toContain("second-org/api")
+
+    await act(async () => {
+      pending.get("/admin/api/github-app/installations/1/repositories")({
+        installation: { ...installation, id: 1, account_login: "first-org" },
+        repositories: ["first-org/runner"],
+      })
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain("second-org")
+    expect(container.textContent).not.toContain("first-org")
   })
 })

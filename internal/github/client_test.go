@@ -429,6 +429,52 @@ func TestListInstallationsRejectsGitHubFailure(t *testing.T) {
 	}
 }
 
+func TestListInstallationRepositoriesFollowsPagination(t *testing.T) {
+	privateKey := testPrivateKeyFile(t)
+	var serverURL string
+	var repositoryRequests []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/987/access_tokens":
+			if r.Header.Get("Authorization") == "" {
+				t.Fatal("expected app JWT authorization for installation token")
+			}
+			_, _ = io.WriteString(w, `{"token":"installation-token","expires_at":"`+time.Now().Add(time.Hour).Format(time.RFC3339)+`"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+			if got := r.Header.Get("Authorization"); got != "token installation-token" {
+				t.Fatalf("unexpected installation authorization: %q", got)
+			}
+			repositoryRequests = append(repositoryRequests, r.URL.RawQuery)
+			if r.URL.Query().Get("page") == "2" {
+				_, _ = io.WriteString(w, `{"repositories":[{"full_name":"octo-org/api"}]}`)
+				return
+			}
+			w.Header().Set("Link", `<`+serverURL+`/installation/repositories?per_page=100&page=2>; rel="next"`)
+			_, _ = io.WriteString(w, `{"repositories":[{"full_name":"octo-org/runner"}]}`)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	serverURL = ts.URL
+	defer ts.Close()
+
+	client, err := NewAppClient(ts.URL, AppAuth{AppID: 123, PrivateKeyFile: privateKey}, ts.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := client.ListInstallationRepositories(t.Context(), 987)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"octo-org/runner", "octo-org/api"}; !reflect.DeepEqual(repositories, want) {
+		t.Fatalf("unexpected repositories: got=%#v want=%#v", repositories, want)
+	}
+	if want := []string{"per_page=100", "per_page=100&page=2"}; !reflect.DeepEqual(repositoryRequests, want) {
+		t.Fatalf("unexpected repository requests: got=%#v want=%#v", repositoryRequests, want)
+	}
+}
+
 func TestGetAccountReturnsCanonicalStableIdentity(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/users/OCTO-ORG" {
