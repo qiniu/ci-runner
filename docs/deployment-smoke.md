@@ -97,6 +97,19 @@ Check:
 - With exactly two administrators and two signed-in sessions, concurrent cross-demotion attempts cannot both succeed; at least one administrator remains.
 - After all role checks, use the surviving administrator to restore the original administrator if needed, then use the intended administrator to restore the secondary account's role.
 
+Open the GitHub App accounts page with at least one active installation:
+
+```text
+https://<runnerd-host>/admin/github_accounts
+```
+
+Check:
+
+- The list matches the active installations shown by GitHub for this App, including account login, type, stable account ID, and installation ID.
+- Selecting an account opens `/admin/github_accounts/<installation-id>` and shows the repositories currently authorized to that installation.
+- A renamed account remains reachable through the same numeric installation-ID deep link after refresh.
+- Signed-out and `role: user` sessions are rejected by both read-only APIs, and responses never expose tokens, permissions, or credentials.
+
 ## 2. Diagnostics
 
 Open the diagnostics page in the admin console, or call:

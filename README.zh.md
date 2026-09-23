@@ -302,6 +302,8 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | ------------------------ | ------------------------------ |
 | `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
+| `/admin/github_accounts` | GitHub 实时返回的 GitHub App 安装账号 |
+| `/admin/github_accounts/{installation_id}` | 单个 GitHub App 安装及其当前授权仓库 |
 | `/admin/runner_requests` | Runner Request 历史、筛选、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
 | `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与预装 Runner 版本）、经过自定义模板预检或官方自更新后的尽力而为实际运行 Runner 版本、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）、运行中 Sandbox 的有界按需网络探测和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |

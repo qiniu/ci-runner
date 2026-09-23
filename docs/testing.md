@@ -353,6 +353,21 @@ curl -fsS -X PATCH -b "$COOKIE_JAR" -H 'content-type: application/json' \
   -d '{"role":"admin"}' | jq
 ```
 
+The separate GitHub App accounts page is read-only and uses App authentication to query GitHub's current installation catalog rather than the local OAuth-account table:
+
+```text
+http://127.0.0.1:25500/admin/github_accounts
+```
+
+Select an account to open `/admin/github_accounts/<installation-id>` and load that installation's current repository scope. The numeric installation ID is the route identity so a GitHub login rename does not invalidate the deep link. These APIs return account display identity and repository full names only; they do not return installation tokens, permissions, credentials, or locally observed repository rows.
+
+```bash
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/admin/api/github-app/installations | jq
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/admin/api/github-app/installations/<installation-id>/repositories | jq
+```
+
 Admins manage the platform fallback through explicit role-gated APIs. Omitting `api_key` preserves the saved encrypted key; omitting `audience_mode` preserves the current mode; the response never returns the key. `selected` with no audience entries matches nobody. Audience additions accept `login` or `@login`; runnerd queries GitHub for the canonical login, stable numeric ID, and user/organization type before saving. Existing synchronized or cached owners are optional suggestions, not a prerequisite. When the first workflow for a selected owner has no local installation row, GitHub App auth resolves the installation owner and runnerd caches that stable identity.
 
 ```bash

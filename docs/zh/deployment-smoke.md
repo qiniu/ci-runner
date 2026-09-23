@@ -93,6 +93,19 @@ https://<runnerd-host>/admin/accounts
 - 准备两名管理员和两个已登录 session，并发执行相互降级时不能同时成功；至少保留一名管理员。
 - 完成全部角色检查后，如有需要，先由存活的管理员恢复原管理员，再由预期管理员恢复次要 account 的 role。
 
+准备至少一个有效 installation，并打开 GitHub App 账号页面：
+
+```text
+https://<runnerd-host>/admin/github_accounts
+```
+
+检查：
+
+- 列表与 GitHub 为此 App 展示的有效 installations 一致，包括账号 login、类型、稳定账号 ID 和 installation ID。
+- 选择账号后打开 `/admin/github_accounts/<installation-id>`，并展示该 installation 当前授权的仓库。
+- 账号改名后刷新页面，原数字 installation-ID 深链仍然有效。
+- 未登录和 `role: user` session 调用两条只读 API 都会被拒绝，响应不会暴露 token、permissions 或凭据。
+
 ## 2. Diagnostics
 
 打开 admin console 的 diagnostics 页面，或调用：

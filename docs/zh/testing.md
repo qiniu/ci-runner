@@ -342,6 +342,21 @@ curl -fsS -X PATCH -b "$COOKIE_JAR" -H 'content-type: application/json' \
   -d '{"role":"admin"}' | jq
 ```
 
+独立的 GitHub App 账号页面是只读管理面。它使用 App authentication 查询 GitHub 当前 installation 目录，不读取本地 OAuth account 表：
+
+```text
+http://127.0.0.1:25500/admin/github_accounts
+```
+
+选择账号后会打开 `/admin/github_accounts/<installation-id>`，并加载该 installation 当前授权的仓库范围。路由使用数字 installation ID 作为标识，因此 GitHub login 改名不会让深链失效。这些 API 只返回账号展示身份和仓库全名，不返回 installation token、permissions、凭据或本地观测到的 repository rows。
+
+```bash
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/admin/api/github-app/installations | jq
+curl -fsS -b "$COOKIE_JAR" \
+  http://127.0.0.1:25500/admin/api/github-app/installations/<installation-id>/repositories | jq
+```
+
 管理员通过显式的 role-gated API 管理平台回退。省略 `api_key` 会保留已有密文，省略 `audience_mode` 会保留当前模式，响应永远不会返回 API Key。`selected` 模式没有 audience entries 时不会匹配任何 account。添加 audience 时可提交 `login` 或 `@login`；runnerd 会先向 GitHub 查询 canonical login、stable numeric ID 和 user/organization type，再保存稳定身份。已同步或已缓存的 owner 只作为可选建议，不是添加前提。selected owner 的第一个 workflow 如果没有本地 installation row，runnerd 会通过 GitHub App auth 查询 installation owner 并缓存该稳定身份。
 
 ```bash
