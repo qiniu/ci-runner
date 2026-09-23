@@ -20,6 +20,7 @@ describe("app load policy", () => {
     ["runner_specs", ["runner_specs"]],
     ["audit", ["audit_events"]],
     ["accounts", []],
+    ["github_accounts", []],
     ["sandbox_service", []],
     ["match", []],
     ["diagnostics", []],
@@ -106,6 +107,8 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/account/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/admin/runner_specs")).toBe("admin")
+    expect(appPolicy.appRouteAccess?.("/admin/github_accounts")).toBe("admin")
+    expect(appPolicy.appRouteAccess?.("/admin/github_accounts/987")).toBe("admin")
     expect(appPolicy.appRouteAccess?.("/admin/runner_requests/101445685709")).toBe("admin")
     expect(appPolicy.appRouteAccess?.("/admin/not-a-section")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/docs/not-a-guide")).toBe("not-found")
@@ -118,6 +121,15 @@ describe("app load policy", () => {
     expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/request%2Fextra")).toBe("")
     expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/%20")).toBe("")
     expect(adminTypes.runnerRequestIdentifierFromAdminPath?.("/admin/runner_requests/request/extra")).toBe("")
+  })
+
+  test("resolves only positive numeric GitHub App installation detail paths", () => {
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/987")).toBe(987)
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/0")).toBe(0)
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/-1")).toBe(0)
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/not-a-number")).toBe(0)
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/987/extra")).toBe(0)
+    expect(adminTypes.githubInstallationIDFromAdminPath?.("/admin/github_accounts/987%2Frepositories")).toBe(0)
   })
 
   test("rejects incomplete legacy Jobs routes", () => {

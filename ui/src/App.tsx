@@ -7,6 +7,7 @@ import { AccountsSection } from "@/components/accounts-section"
 import { AuditSection, DiagnosticsSection, MatchSection, OverviewSection, RunnerRequestSection } from "@/components/admin-sections"
 import { AccessDeniedPage, NotFoundPage, SessionErrorPage, SessionLoadingPage, SignInPage } from "@/components/auth-pages"
 import { LandingPage } from "@/components/landing-page"
+import { GitHubAppAccountsSection } from "@/components/github-app-accounts-section"
 import { RunnerJobDetail } from "@/components/runner-job-detail"
 import { RunnerRequestsSection } from "@/components/runner-requests-section"
 import { RunnerSpecsSection } from "@/components/runner-specs-section"
@@ -25,6 +26,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import {
   adminSections,
+  githubInstallationIDFromAdminPath,
   runnerRequestIdentifierFromAdminPath,
   sectionFromPath,
   type AdminSection,
@@ -169,6 +171,7 @@ function App() {
   const runnerRequestLookupGeneration = useRef(0)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
+  const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
   const currentAccount = authSession.login ?? ""
   const currentGithubApp = githubAppLoad?.account === currentAccount ? githubApp : null
   const userPreferences = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.value : null
@@ -199,6 +202,16 @@ function App() {
       window.history.pushState(null, "", nextPath)
     }
     setSectionState("runner_requests")
+    setLocationPath(window.location.pathname)
+    setLocationSearch(window.location.search)
+  }, [])
+
+  const openGitHubAppAccount = useCallback((installationID: number) => {
+    const nextPath = `/admin/github_accounts/${installationID}`
+    if (window.location.pathname + window.location.search !== nextPath) {
+      window.history.pushState(null, "", nextPath)
+    }
+    setSectionState("github_accounts")
     setLocationPath(window.location.pathname)
     setLocationSearch(window.location.search)
   }, [])
@@ -1161,6 +1174,15 @@ function App() {
           ) : null}
 
           {section === "accounts" ? <AccountsSection request={request} /> : null}
+
+          {section === "github_accounts" ? (
+            <GitHubAppAccountsSection
+              installationID={githubInstallationID}
+              request={request}
+              onOpen={openGitHubAppAccount}
+              onBack={() => setSection("github_accounts")}
+            />
+          ) : null}
 
           {section === "runner_requests" && runnerRequestIdentifier ? (
             <RunnerRequestSection

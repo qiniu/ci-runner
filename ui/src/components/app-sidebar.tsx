@@ -1,4 +1,4 @@
-import { Activity, ClipboardList, CloudCog, ListTree, ScrollText, Settings2, Stethoscope, UsersRound } from "lucide-react"
+import { Activity, ClipboardList, CloudCog, Github, ListTree, ScrollText, Settings2, Stethoscope, UsersRound } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { QiniuRunnerLogo } from "@/components/qiniu-runner-logo"
@@ -26,6 +26,7 @@ export function AppSidebar({
   const items = [
     { id: "overview", label: t("sidebar.overview"), icon: Activity },
     { id: "accounts", label: t("sidebar.accounts"), icon: UsersRound },
+    { id: "github_accounts", label: t("sidebar.githubAppAccounts"), icon: Github },
     { id: "runner_requests", label: t("sidebar.runnerRequests"), icon: ListTree },
     { id: "runner_specs", label: t("sidebar.runnerSpecs"), icon: Settings2 },
     { id: "sandbox_service", label: t("sidebar.sandboxService"), icon: CloudCog },

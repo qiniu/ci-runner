@@ -1,4 +1,4 @@
-import { adminSections, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerState } from "@/admin-types"
+import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
 export const userRunnerInitialPageSize = 100
@@ -64,6 +64,7 @@ export function mergeUserRunnerPages(primary: RunnerState[], existing: RunnerSta
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {
   overview: ["runner_requests", "runner_specs"],
   accounts: [],
+  github_accounts: [],
   runner_requests: ["runner_requests", "runner_specs"],
   runner_specs: ["runner_specs"],
   sandbox_service: [],
@@ -177,6 +178,7 @@ function isSandboxSettingsRoute(path: string): boolean {
 function isAdminRoute(path: string): boolean {
   if (path === "/admin" || path === "/admin/") return true
   if (runnerRequestIdentifierFromAdminPath(path)) return true
+  if (githubInstallationIDFromAdminPath(path)) return true
   const match = path.match(/^\/admin\/([^/]+)$/)
   return Boolean(match && adminSections.includes(match[1] as AdminSection))
 }

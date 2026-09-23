@@ -230,6 +230,24 @@ export type AdminAccountsResponse = {
   offset: number
 }
 
+export type AdminGitHubInstallation = {
+  id: number
+  account_id: number
+  account_type: string
+  account_login: string
+  account_name?: string
+  account_avatar?: string
+}
+
+export type AdminGitHubInstallationsResponse = {
+  installations: AdminGitHubInstallation[]
+}
+
+export type AdminGitHubInstallationDetail = {
+  installation: AdminGitHubInstallation
+  repositories: string[]
+}
+
 export type GitHubInstallation = {
   id: number
   account_id: number
@@ -361,6 +379,7 @@ export const logNames = ["control.log", "stdout.log", "stderr.log"] as const
 export const adminSections = [
   "overview",
   "accounts",
+  "github_accounts",
   "runner_requests",
   "runner_specs",
   "sandbox_service",
@@ -382,8 +401,16 @@ export function runnerRequestIdentifierFromAdminPath(path: string): string {
   }
 }
 
+export function githubInstallationIDFromAdminPath(path: string): number {
+  const match = path.match(/^\/admin\/github_accounts\/([1-9]\d*)$/)
+  if (!match) return 0
+  const installationID = Number(match[1])
+  return Number.isSafeInteger(installationID) ? installationID : 0
+}
+
 export function sectionFromPath(): AdminSection {
   if (runnerRequestIdentifierFromAdminPath(window.location.pathname)) return "runner_requests"
+  if (githubInstallationIDFromAdminPath(window.location.pathname)) return "github_accounts"
   const slug = window.location.pathname.replace(/^\/admin\/?/, "") || "overview"
   return adminSections.includes(slug as AdminSection) ? (slug as AdminSection) : "overview"
 }
