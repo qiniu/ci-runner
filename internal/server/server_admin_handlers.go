@@ -15,7 +15,7 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
-const maxRunnerRequestFilterLength = 256
+const maxRunnerRequestRepositoryFilterLength = 256
 
 func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminAuth(w, r) {
@@ -117,15 +117,11 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repositoryFullName := strings.TrimSpace(r.URL.Query().Get("repository_full_name"))
-	if len(repositoryFullName) > maxRunnerRequestFilterLength {
+	if len(repositoryFullName) > maxRunnerRequestRepositoryFilterLength {
 		writeError(w, http.StatusBadRequest, "repository_full_name is too long")
 		return
 	}
 	runnerSpecName := strings.TrimSpace(r.URL.Query().Get("runner_spec_name"))
-	if len(runnerSpecName) > maxRunnerRequestFilterLength {
-		writeError(w, http.StatusBadRequest, "runner_spec_name is too long")
-		return
-	}
 	states, total, err := s.store.ListStatesPage(state.RunnerRequestListOptions{
 		RepositoryFullName: repositoryFullName,
 		ProfileName:        runnerSpecName,
@@ -165,7 +161,7 @@ func (s *Server) handleListRunnerRequestRepositories(w http.ResponseWriter, r *h
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if len(query) > maxRunnerRequestFilterLength {
+	if len(query) > maxRunnerRequestRepositoryFilterLength {
 		writeError(w, http.StatusBadRequest, "repository query is too long")
 		return
 	}

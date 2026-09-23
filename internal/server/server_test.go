@@ -4866,14 +4866,40 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 		t.Fatalf("filtered states=%#v total=%q", states, rec.Header().Get("X-Total-Count"))
 	}
 
-	req = adminRequest(http.MethodGet, "/runner_requests/repositories?q=OLDER&limit=10", nil)
+	longSpecName := strings.Repeat("x", 257)
+	if _, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "long-spec-request",
+		Source:             "test",
+		RepositoryFullName: "octo/current",
+		ProfileName:        longSpecName,
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-long-spec-request",
+		CreatedAt:          time.Unix(106, 0).UTC(),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	req = adminRequest(http.MethodGet, "/runner_requests?runner_spec_name="+url.QueryEscape(longSpecName), nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("long Runner Spec filter status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	states = nil
+	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].ID != "long-spec-request" || rec.Header().Get("X-Total-Count") != "1" {
+		t.Fatalf("long Runner Spec filter states=%#v total=%q", states, rec.Header().Get("X-Total-Count"))
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_request_repositories?q=OLDER&limit=10", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"repositories":["octo/older"]`) {
 		t.Fatalf("repository search status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = adminRequest(http.MethodGet, "/runner_requests/repositories?q=missing&limit=10", nil)
+	req = adminRequest(http.MethodGet, "/runner_request_repositories?q=missing&limit=10", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"repositories":[]`) {
@@ -4887,20 +4913,43 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 		t.Fatalf("invalid status filter status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	for _, parameter := range []string{"repository_full_name", "runner_spec_name"} {
-		req = adminRequest(http.MethodGet, "/runner_requests?"+parameter+"="+strings.Repeat("x", maxRunnerRequestFilterLength+1), nil)
-		rec = httptest.NewRecorder()
-		srv.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), parameter+" is too long") {
-			t.Fatalf("oversized %s filter status=%d body=%s", parameter, rec.Code, rec.Body.String())
-		}
+	req = adminRequest(http.MethodGet, "/runner_requests?repository_full_name="+strings.Repeat("x", maxRunnerRequestRepositoryFilterLength+1), nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "repository_full_name is too long") {
+		t.Fatalf("oversized repository_full_name filter status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/runner_requests/repositories", nil)
+	req = httptest.NewRequest(http.MethodGet, "/runner_request_repositories", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized repository search status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if _, _, err := store.CreateRequest(state.RunnerRequest{
+		ID:                 "repositories",
+		Source:             "test",
+		RepositoryFullName: "octo/reserved-word",
+		ProfileName:        "large",
+		Labels:             []string{"self-hosted"},
+		RunnerName:         "e2b-repositories",
+		CreatedAt:          time.Unix(107, 0).UTC(),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	req = adminRequest(http.MethodGet, "/runner_requests/repositories", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repositories request detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var repositoriesRequest state.RunnerState
+	if err := json.NewDecoder(rec.Body).Decode(&repositoriesRequest); err != nil {
+		t.Fatal(err)
+	}
+	if repositoriesRequest.ID != "repositories" || repositoriesRequest.RepositoryFullName != "octo/reserved-word" {
+		t.Fatalf("repositories request detail=%#v", repositoriesRequest)
 	}
 }
 

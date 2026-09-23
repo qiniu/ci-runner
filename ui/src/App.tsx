@@ -431,7 +431,7 @@ function App() {
   const searchRunnerRequestRepositories = useCallback(async (query: string): Promise<RunnerRepositorySearchResult> => {
     const search = new URLSearchParams({ limit: "50" })
     if (query.trim()) search.set("q", query.trim())
-    const data = await request(`/runner_requests/repositories?${search.toString()}`) as {
+    const data = await request(`/runner_request_repositories?${search.toString()}`) as {
       repositories?: unknown
       has_more?: unknown
     }

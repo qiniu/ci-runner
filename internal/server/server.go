@@ -440,7 +440,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)
-	s.mux.HandleFunc("GET /runner_requests/repositories", s.handleListRunnerRequestRepositories)
+	s.mux.HandleFunc("GET /runner_request_repositories", s.handleListRunnerRequestRepositories)
 	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/diagnostics", s.handleDiagnosticsRunnerRequest)
