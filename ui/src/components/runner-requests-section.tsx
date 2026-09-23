@@ -146,7 +146,10 @@ export function RunnerRequestsSection({
           setRepositoryHasMore(result.hasMore)
         })
         .catch(() => {
-          if (generation === repositorySearchGeneration.current) setRepositorySearchFailed(true)
+          if (generation !== repositorySearchGeneration.current) return
+          setRepositoryOptions([])
+          setRepositoryHasMore(false)
+          setRepositorySearchFailed(true)
         })
         .finally(() => {
           if (generation === repositorySearchGeneration.current) setRepositoryLoading(false)

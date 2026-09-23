@@ -2120,6 +2120,44 @@ func TestRunnerRequestProfileListIndexSupportsNewestPageOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerRequestRepositoryListIndexSupportsNewestPageOrder(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const indexName = "idx_runner_requests_repository_queued_id"
+	if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
+		t.Fatalf("expected runner request repository ordering index %s", indexName)
+	}
+
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	if err := db.Raw(`
+		EXPLAIN QUERY PLAN
+		SELECT id, queued_at
+		FROM runner_requests
+		WHERE repository_full_name = ?
+		ORDER BY queued_at DESC, id ASC
+		LIMIT 100
+	`, "octo/repository").Scan(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	var details []string
+	for _, step := range plan {
+		details = append(details, step.Detail)
+	}
+	joined := strings.Join(details, "\n")
+	if !strings.Contains(joined, indexName) {
+		t.Fatalf("expected repository list query to use ordering index, plan:\n%s", joined)
+	}
+	if strings.Contains(joined, "USE TEMP B-TREE FOR ORDER BY") {
+		t.Fatalf("repository list query still sorts through a temporary B-tree, plan:\n%s", joined)
+	}
+}
+
 func TestRunnerRequestAuthorizedListIndexSupportsNewestPageOrder(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	db, err := store.dbOrEnsure()
@@ -3823,6 +3861,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				{model: &accountSecretRecord{}, name: "idx_account_secrets_scope_type"},
 				{model: &accountPreferenceRecord{}, name: "idx_account_preferences_scope_key"},
 				{model: &sandboxServiceDefaultAudienceRecord{}, name: "idx_sandbox_default_audience_identity"},
+				{model: &runnerRequestRecord{}, name: "idx_runner_requests_repository_queued_id"},
 			} {
 				if !migratedDB.Migrator().HasIndex(index.model, index.name) {
 					t.Fatalf("fresh %s migration did not create %s", backend.name, index.name)
@@ -5327,6 +5366,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"idx_runner_requests_queued_id",
 		"idx_runner_requests_github_installation_queued_id",
 		"idx_runner_requests_profile_queued_id",
+		"idx_runner_requests_repository_queued_id",
 	} {
 		if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
 			t.Fatalf("expected runner request list ordering index %s after additive migration", indexName)

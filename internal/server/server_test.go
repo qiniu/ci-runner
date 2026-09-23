@@ -4887,6 +4887,15 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 		t.Fatalf("invalid status filter status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
+	for _, parameter := range []string{"repository_full_name", "runner_spec_name"} {
+		req = adminRequest(http.MethodGet, "/runner_requests?"+parameter+"="+strings.Repeat("x", maxRunnerRequestFilterLength+1), nil)
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), parameter+" is too long") {
+			t.Fatalf("oversized %s filter status=%d body=%s", parameter, rec.Code, rec.Body.String())
+		}
+	}
+
 	req = httptest.NewRequest(http.MethodGet, "/runner_requests/repositories", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
