@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
 import { activeStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
+import { createAutomaticPageLoadGate } from "@/app-load-policy"
 import { StatusBadge } from "@/components/admin-shared"
 import { stickyTableHeaderOffset } from "@/components/runner-request-table"
 import { Button } from "@/components/ui/button"
@@ -112,7 +113,7 @@ export function RunnerRequestsSection({
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
   onSearchRepositories: (query: string) => Promise<{ repositories: string[]; hasMore: boolean }>
-  onLoadMore: () => void
+  onLoadMore: () => Promise<boolean>
   onLookupRunnerRequest: (identifier: string) => void
   onOpenRunnerRequest: (identifier: string) => void
   onRetryRunner: (id: string) => void
@@ -129,6 +130,19 @@ export function RunnerRequestsSection({
   const repositorySearchGeneration = useRef(0)
   const tableHeaderRef = useRef<HTMLTableSectionElement>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const automaticPageLoadGate = useRef(createAutomaticPageLoadGate()).current
+
+  const triggerLoadMore = (manual = false) => {
+    if (!automaticPageLoadGate.begin(manual)) return
+    void onLoadMore().then(
+      (succeeded) => automaticPageLoadGate.finish(succeeded),
+      () => automaticPageLoadGate.finish(false),
+    )
+  }
+
+  useEffect(() => {
+    if (!hasMore || runners.length === 0) automaticPageLoadGate.reset()
+  }, [automaticPageLoadGate, hasMore, runners.length])
 
   useEffect(() => {
     if (!repositoryOpen) return
@@ -197,13 +211,13 @@ export function RunnerRequestsSection({
     const root = verticalScrollContainer(sentinel)
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && !loadingMore) onLoadMore()
+        if (entries.some((entry) => entry.isIntersecting) && !loadingMore) triggerLoadMore()
       },
       { root, rootMargin: "320px 0px" },
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [hasMore, loadingMore, onLoadMore, runners.length])
+  }, [automaticPageLoadGate, hasMore, loadingMore, onLoadMore, runners.length])
 
   const openRunnerRequest = (event: MouseEvent<HTMLAnchorElement>, runner: RunnerState) => {
     event.stopPropagation()
@@ -549,7 +563,7 @@ export function RunnerRequestsSection({
                 {t("admin.loadingMoreRequests")}
               </span>
             ) : hasMore ? (
-              <Button type="button" variant="ghost" size="sm" onClick={onLoadMore} disabled={loading}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => triggerLoadMore(true)} disabled={loading}>
                 {t("admin.loadMoreRequests")}
               </Button>
             ) : runners.length > 0 ? (

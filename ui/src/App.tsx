@@ -52,10 +52,11 @@ import {
   adminRunnerRequestsPath,
   appRouteAccess,
   authRouteViewState,
+  collectAdminRunnerPoll,
   createLatestUserLoadGate,
   createScopedRequestGate,
   loadOptionalUserResource,
-  mergeAdminRunnerPages,
+  reconcileAdminRunnerPages,
   mergeUserRunnerPages,
   shouldPollAdminSection,
   shouldPollUserRoute,
@@ -66,6 +67,7 @@ import {
   userRunnerRequestLimit,
   userRunnerRequestsPath,
   type AdminDataResource,
+  type AdminRunnerPage,
   type AuthSessionCheckStatus,
 } from "@/app-load-policy"
 import { useRunnerCatalog } from "@/hooks/use-runner-catalog"
@@ -98,12 +100,6 @@ type AccountSettingsRoute = {
 type UserRunnerPage = {
   items: RunnerState[]
   total: number
-}
-
-type AdminRunnerPage = {
-  items: RunnerState[]
-  nextCursor: string | null
-  hasMore: boolean
 }
 
 type RunnerRepositorySearchResult = {
@@ -204,6 +200,10 @@ function App() {
   const runnerRequestLookupGeneration = useRef(0)
   const adminLoadGeneration = useRef(0)
   const runnerRequestPageGeneration = useRef(0)
+  const runnerRequestPageLoadingRef = useRef(false)
+  const runnersRef = useRef<RunnerState[]>([])
+  const runnerRequestCursorRef = useRef<string | null>(null)
+  const runnerRequestHasMoreRef = useRef(true)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
   const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
@@ -215,8 +215,21 @@ function App() {
 
   const invalidateRunnerRequestPage = useCallback(() => {
     runnerRequestPageGeneration.current += 1
+    runnerRequestPageLoadingRef.current = false
     setLoadingMoreRunnerRequests(false)
   }, [])
+
+  useEffect(() => {
+    runnersRef.current = runners
+  }, [runners])
+
+  useEffect(() => {
+    runnerRequestCursorRef.current = runnerRequestCursor
+  }, [runnerRequestCursor])
+
+  useEffect(() => {
+    runnerRequestHasMoreRef.current = runnerRequestHasMore
+  }, [runnerRequestHasMore])
 
   useEffect(() => {
     void fetchSandboxRegions().then((regions) => {
@@ -459,6 +472,12 @@ function App() {
       }
     }, [requestResponse, runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter, section])
 
+  const requestAdminRunnerPoll = useCallback(() => collectAdminRunnerPoll(requestAdminRunnerPage, {
+    items: runnersRef.current,
+    nextCursor: runnerRequestCursorRef.current,
+    hasMore: runnerRequestHasMoreRef.current,
+  }), [requestAdminRunnerPage])
+
   const searchRunnerRequestRepositories = useCallback(async (query: string): Promise<RunnerRepositorySearchResult> => {
     const search = new URLSearchParams({ limit: "50" })
     if (query.trim()) search.set("q", query.trim())
@@ -494,21 +513,31 @@ function App() {
     if (!hasAccess || !isAdminRoute || runnerRequestIdentifier) return
     const resources = polling ? adminPollingResources(section) : adminDataResources(section)
     if (resources.length === 0) return
+    if (polling && resources.includes("runner_requests")) invalidateRunnerRequestPage()
     const generation = ++adminLoadGeneration.current
     setLoading(true)
     try {
       const entries = await Promise.all(
         resources.map(async (resource) => [
           resource,
-          resource === "runner_requests" ? await requestAdminRunnerPage() : await request(adminResourcePath(resource)),
+          resource === "runner_requests"
+            ? await (polling ? requestAdminRunnerPoll() : requestAdminRunnerPage())
+            : await request(adminResourcePath(resource)),
         ] as const)
       )
       if (generation !== adminLoadGeneration.current) return
       for (const [resource, data] of entries) {
         if (resource === "runner_requests") {
-          const page = data as AdminRunnerPage
+          const page = data as AdminRunnerPage & {
+            preservePagination?: boolean
+            nextCursor?: string | null
+          }
           if (polling) {
-            setRunners((current) => mergeAdminRunnerPages(page.items, current))
+            setRunners(reconcileAdminRunnerPages(page.items, runnersRef.current, page.preservePagination !== true))
+            if (page.preservePagination !== true) {
+              setRunnerRequestCursor(page.nextCursor ?? null)
+              setRunnerRequestHasMore((data as { hasMore?: boolean }).hasMore === true)
+            }
             continue
           }
           setRunners(page.items)
@@ -529,23 +558,32 @@ function App() {
     } finally {
       if (generation === adminLoadGeneration.current) setLoading(false)
     }
-  }, [hasAccess, isAdminRoute, request, requestAdminRunnerPage, runnerRequestIdentifier, section])
+  }, [hasAccess, invalidateRunnerRequestPage, isAdminRoute, request, requestAdminRunnerPage, requestAdminRunnerPoll, runnerRequestIdentifier, section])
 
-  const refreshAdminRunnerRequests = useCallback(() => {
+  const resetAdminRunnerRequestList = useCallback(() => {
     invalidateRunnerRequestPage()
     setRunners([])
     setRunnerRequestCursor(null)
     setRunnerRequestHasMore(true)
-    void loadAll()
-  }, [invalidateRunnerRequestPage, loadAll])
+  }, [invalidateRunnerRequestPage])
 
-  const loadMoreAdminRunnerRequests = useCallback(async () => {
-    if (loadingMoreRunnerRequests || !runnerRequestHasMore || !runnerRequestCursor) return
+  const reloadAdminRunnerRequests = useCallback(async () => {
+    resetAdminRunnerRequestList()
+    await loadAll()
+  }, [loadAll, resetAdminRunnerRequestList])
+
+  const refreshAdminRunnerRequests = useCallback(() => {
+    void reloadAdminRunnerRequests()
+  }, [reloadAdminRunnerRequests])
+
+  const loadMoreAdminRunnerRequests = useCallback(async (): Promise<boolean> => {
+    if (loading || runnerRequestPageLoadingRef.current || !runnerRequestHasMore || !runnerRequestCursor) return true
     const generation = runnerRequestPageGeneration.current
+    runnerRequestPageLoadingRef.current = true
     setLoadingMoreRunnerRequests(true)
     try {
       const page = await requestAdminRunnerPage(runnerRequestCursor)
-      if (generation !== runnerRequestPageGeneration.current) return
+      if (generation !== runnerRequestPageGeneration.current) return true
       setRunners((current) => {
         const seen = new Set<string>()
         return [...current, ...page.items].filter((runner) => {
@@ -556,14 +594,19 @@ function App() {
       })
       setRunnerRequestCursor(page.nextCursor)
       setRunnerRequestHasMore(page.hasMore)
+      return true
     } catch (error) {
       if (generation === runnerRequestPageGeneration.current) {
         toast.error(error instanceof Error ? error.message : appI18n.t("app.controlPlaneLoadFailed"))
       }
+      return generation !== runnerRequestPageGeneration.current
     } finally {
-      if (generation === runnerRequestPageGeneration.current) setLoadingMoreRunnerRequests(false)
+      if (generation === runnerRequestPageGeneration.current) {
+        runnerRequestPageLoadingRef.current = false
+        setLoadingMoreRunnerRequests(false)
+      }
     }
-  }, [loadingMoreRunnerRequests, requestAdminRunnerPage, runnerRequestCursor, runnerRequestHasMore])
+  }, [loading, requestAdminRunnerPage, runnerRequestCursor, runnerRequestHasMore])
 
   useEffect(() => {
     invalidateRunnerRequestPage()
@@ -1074,7 +1117,7 @@ function App() {
       resetCreateRunnerForm()
       setCreateRunnerOpen(false)
       toast.success(t("app.runnerQueued", { id: runner.id }))
-      await loadAll()
+      await reloadAdminRunnerRequests()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("app.createRunnerFailed"))
     }
@@ -1086,7 +1129,7 @@ function App() {
         method: "DELETE",
       })) as RunnerState
       toast.success(t("app.runnerCompleted", { id: runner.id }))
-      await loadAll()
+      await reloadAdminRunnerRequests()
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("app.stopRunnerFailed"))
@@ -1100,7 +1143,7 @@ function App() {
         method: "POST",
       })) as RunnerState
       toast.success(t("app.runnerRequeued", { id: runner.id }))
-      await loadAll()
+      await reloadAdminRunnerRequests()
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("app.retryRunnerFailed"))
@@ -1363,27 +1406,18 @@ function App() {
               onCreateLabelsChange={setCreateLabels}
               onStatusFilterChange={(value) => {
                 setRunnerStatusFilter(value)
-                invalidateRunnerRequestPage()
-                setRunners([])
-                setRunnerRequestCursor(null)
-                setRunnerRequestHasMore(true)
+                resetAdminRunnerRequestList()
               }}
               onRepositoryFilterChange={(value) => {
                 setRunnerRepositoryFilter(value)
-                invalidateRunnerRequestPage()
-                setRunners([])
-                setRunnerRequestCursor(null)
-                setRunnerRequestHasMore(true)
+                resetAdminRunnerRequestList()
               }}
               onRunnerSpecFilterChange={(value) => {
                 setRunnerSpecFilter(value)
-                invalidateRunnerRequestPage()
-                setRunners([])
-                setRunnerRequestCursor(null)
-                setRunnerRequestHasMore(true)
+                resetAdminRunnerRequestList()
               }}
               onSearchRepositories={searchRunnerRequestRepositories}
-              onLoadMore={() => void loadMoreAdminRunnerRequests()}
+              onLoadMore={loadMoreAdminRunnerRequests}
               onLookupRunnerRequest={(identifier) => void lookupRunnerRequest(identifier)}
               onOpenRunnerRequest={openRunnerRequest}
               onRetryRunner={(id) => void retryRunner(id)}

@@ -13,6 +13,16 @@ export interface AdminRunnerRequestListOptions {
   cursor?: string | null
 }
 
+export interface AdminRunnerPage {
+  items: RunnerState[]
+  nextCursor: string | null
+  hasMore: boolean
+}
+
+export interface AdminRunnerPollResult extends AdminRunnerPage {
+  preservePagination: boolean
+}
+
 export function adminRunnerRequestsPath(options: AdminRunnerRequestListOptions): string {
   const query = new URLSearchParams({
     limit: String(options.limit ?? adminRunnerRequestPageSize),
@@ -91,6 +101,66 @@ export function mergeAdminRunnerPages(primary: RunnerState[], existing: RunnerSt
     merged.push(runner)
   }
   return merged
+}
+
+export function reconcileAdminRunnerPages(
+  primary: RunnerState[],
+  existing: RunnerState[],
+  completeWindow: boolean,
+): RunnerState[] {
+  if (!completeWindow) return mergeAdminRunnerPages(primary, existing)
+  return mergeAdminRunnerPages(primary, [])
+}
+
+export async function collectAdminRunnerPoll(
+  requestPage: (cursor?: string | null) => Promise<AdminRunnerPage>,
+  current: AdminRunnerPage,
+): Promise<AdminRunnerPollResult> {
+  const oldestLoadedID = current.items[current.items.length - 1]?.id
+  const items: RunnerState[] = []
+  let cursor: string | null = null
+
+  for (;;) {
+    const page = await requestPage(cursor)
+    items.push(...page.items)
+    const oldestIndex = oldestLoadedID ? items.findIndex((runner) => runner.id === oldestLoadedID) : -1
+    if (oldestIndex >= 0) {
+      if (!page.hasMore) {
+        return { items, preservePagination: false, nextCursor: null, hasMore: false }
+      }
+      return {
+        items: items.slice(0, oldestIndex + 1),
+        preservePagination: true,
+        nextCursor: current.nextCursor,
+        hasMore: current.hasMore,
+      }
+    }
+    if (!page.hasMore || !page.nextCursor) {
+      return { items, preservePagination: false, nextCursor: null, hasMore: false }
+    }
+    cursor = page.nextCursor
+  }
+}
+
+export function createAutomaticPageLoadGate() {
+  let inFlight = false
+  let suspended = false
+  return {
+    begin(manual = false) {
+      if (inFlight || (suspended && !manual)) return false
+      if (manual) suspended = false
+      inFlight = true
+      return true
+    },
+    finish(succeeded: boolean) {
+      inFlight = false
+      if (!succeeded) suspended = true
+    },
+    reset() {
+      inFlight = false
+      suspended = false
+    },
+  }
 }
 
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {

@@ -34,7 +34,7 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all", pagination = {
     onRepositoryFilterChange() {},
     onRunnerSpecFilterChange() {},
     async onSearchRepositories() { return { repositories: [], hasMore: false } },
-    onLoadMore() {},
+    async onLoadMore() { return true },
     onLookupRunnerRequest() {},
     onOpenRunnerRequest() {},
     onRetryRunner() {},
