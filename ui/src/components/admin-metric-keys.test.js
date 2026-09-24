@@ -88,7 +88,6 @@ describe("translated admin metrics", () => {
       "stopping",
       "completed",
       "failed",
-      "runner-specs",
     ])
     expect(chineseRunnerMetrics.map((metric) => metric.id)).toEqual(
       englishRunnerMetrics.map((metric) => metric.id),

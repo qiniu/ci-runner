@@ -74,12 +74,6 @@ export function runnerMetrics(
       value: stats.failed,
       description: t("admin.failedMetricDescription"),
     },
-    {
-      id: "runner-specs",
-      label: t("sidebar.runnerSpecs"),
-      value: stats.runner_specs,
-      description: t("admin.runnerSpecsMetricDescription"),
-    },
   ]
 }
 
