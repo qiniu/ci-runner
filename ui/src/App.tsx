@@ -40,6 +40,7 @@ import {
   type RunnerSpec,
   type RunnerSpecMatch,
   type RunnerDisplayStatus,
+  type RunnerRequestMetrics,
   type RunnerState,
   type SyncedGitHubInstallations,
   type UserPreferences,
@@ -54,6 +55,7 @@ import {
   createLatestUserLoadGate,
   createScopedRequestGate,
   loadOptionalUserResource,
+  mergeAdminRunnerPages,
   mergeUserRunnerPages,
   shouldPollAdminSection,
   shouldPollUserRoute,
@@ -100,7 +102,8 @@ type UserRunnerPage = {
 
 type AdminRunnerPage = {
   items: RunnerState[]
-  total: number
+  nextCursor: string | null
+  hasMore: boolean
 }
 
 type RunnerRepositorySearchResult = {
@@ -110,6 +113,7 @@ type RunnerRepositorySearchResult = {
 
 const adminResourcePaths: Record<AdminDataResource, string> = {
   runner_requests: adminRunnerRequestsPath({ status: "all", repository: "all", runnerSpec: "all" }),
+  runner_request_metrics: "/runner_request_metrics",
   runner_specs: "/runner_specs",
   audit_events: "/audit-events",
 }
@@ -123,6 +127,7 @@ function updateAdminResource(
   data: unknown,
   setters: {
     setRunners: (value: RunnerState[]) => void
+    setRunnerRequestMetrics: (value: RunnerRequestMetrics) => void
     setRunnerSpecs: (value: RunnerSpec[]) => void
     setAuditEvents: (value: AuditEvent[]) => void
   }
@@ -131,6 +136,9 @@ function updateAdminResource(
   switch (resource) {
     case "runner_requests":
       setters.setRunners(items as RunnerState[])
+      break
+    case "runner_request_metrics":
+      setters.setRunnerRequestMetrics(data as RunnerRequestMetrics)
       break
     case "runner_specs":
       setters.setRunnerSpecs(items as RunnerSpec[])
@@ -149,8 +157,19 @@ function App() {
   const [locationSearch, setLocationSearch] = useState(() => window.location.search)
   const [section, setSectionState] = useState<AdminSection>(() => sectionFromPath())
   const [runners, setRunners] = useState<RunnerState[]>([])
-  const [runnerRequestTotal, setRunnerRequestTotal] = useState(0)
-  const [runnerRequestOffset, setRunnerRequestOffset] = useState(0)
+  const [runnerRequestCursor, setRunnerRequestCursor] = useState<string | null>(null)
+  const [runnerRequestHasMore, setRunnerRequestHasMore] = useState(true)
+  const [loadingMoreRunnerRequests, setLoadingMoreRunnerRequests] = useState(false)
+  const [runnerRequestMetrics, setRunnerRequestMetrics] = useState<RunnerRequestMetrics>({
+    queued: 0,
+    creating: 0,
+    running: 0,
+    stopping: 0,
+    completed: 0,
+    failed: 0,
+    unmatched: 0,
+    runner_specs: 0,
+  })
   const [runnerSpecs, setRunnerSpecs] = useState<RunnerSpec[]>([])
   const [loading, setLoading] = useState(false)
   const [createID, setCreateID] = useState("")
@@ -184,6 +203,7 @@ function App() {
   const userLoadGate = useRef(createLatestUserLoadGate()).current
   const runnerRequestLookupGeneration = useRef(0)
   const adminLoadGeneration = useRef(0)
+  const runnerRequestPageGeneration = useRef(0)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
   const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
@@ -193,6 +213,11 @@ function App() {
   const userPreferencesScope = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.scope : ""
   const productTourOnboarding = scopedProductTourOnboarding?.account === currentAccount ? scopedProductTourOnboarding.value : null
 
+  const invalidateRunnerRequestPage = useCallback(() => {
+    runnerRequestPageGeneration.current += 1
+    setLoadingMoreRunnerRequests(false)
+  }, [])
+
   useEffect(() => {
     void fetchSandboxRegions().then((regions) => {
       if (regions && regions.length > 0) setSandboxRegions(regions)
@@ -201,6 +226,7 @@ function App() {
 
   const setSection = useCallback((next: string) => {
     const section = adminSections.includes(next as AdminSection) ? (next as AdminSection) : "overview"
+    invalidateRunnerRequestPage()
     setSectionState(section)
     const nextPath = section === "overview" ? "/admin/" : `/admin/${section}`
     if (window.location.pathname !== nextPath) {
@@ -208,10 +234,11 @@ function App() {
       setLocationPath(nextPath)
       setLocationSearch("")
     }
-  }, [])
+  }, [invalidateRunnerRequestPage])
 
   const openRunnerRequest = useCallback((identifier: string) => {
     runnerRequestLookupGeneration.current += 1
+    invalidateRunnerRequestPage()
     const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
@@ -219,9 +246,10 @@ function App() {
     setSectionState("runner_requests")
     setLocationPath(window.location.pathname)
     setLocationSearch(window.location.search)
-  }, [])
+  }, [invalidateRunnerRequestPage])
 
   const openGitHubAppAccount = useCallback((installationID: number) => {
+    invalidateRunnerRequestPage()
     const nextPath = `/admin/github_accounts/${installationID}`
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
@@ -229,7 +257,7 @@ function App() {
     setSectionState("github_accounts")
     setLocationPath(window.location.pathname)
     setLocationSearch(window.location.search)
-  }, [])
+  }, [invalidateRunnerRequestPage])
 
   const canonicalizeRunnerRequestID = useCallback((id: string) => {
     const nextPath = `/admin/runner_requests/${encodeURIComponent(id)}`
@@ -329,8 +357,8 @@ function App() {
         : "home"
 
   const metrics = useMemo(
-    () => runnerMetrics(runners, runnerSpecs.length, t),
-    [runnerSpecs.length, runners, t],
+    () => runnerMetrics(runnerRequestMetrics, t),
+    [runnerRequestMetrics, t],
   )
 
   const requestResponse = useCallback(
@@ -409,24 +437,27 @@ function App() {
   )
 
   const requestAdminRunnerPage = useCallback(
-    async (): Promise<AdminRunnerPage> => {
+    async (cursor: string | null = null): Promise<AdminRunnerPage> => {
       const appliesFilters = section === "runner_requests"
       const response = await requestResponse(adminRunnerRequestsPath({
         status: appliesFilters ? runnerStatusFilter : "all",
         repository: appliesFilters ? runnerRepositoryFilter : "all",
         runnerSpec: appliesFilters ? runnerSpecFilter : "all",
         limit: adminRunnerRequestPageSize,
-        offset: appliesFilters ? runnerRequestOffset : 0,
+        cursor,
       }))
-      const data = await response.json()
-      const items = Array.isArray(data) ? (data as RunnerState[]) : []
-      const totalHeader = response.headers.get("X-Total-Count")
-      const parsedTotal = totalHeader === null ? Number.NaN : Number(totalHeader)
+      const data = await response.json() as {
+        items?: unknown
+        next_cursor?: unknown
+        has_more?: unknown
+      }
+      const items = Array.isArray(data.items) ? data.items as RunnerState[] : []
       return {
         items,
-        total: Number.isSafeInteger(parsedTotal) && parsedTotal >= 0 ? parsedTotal : items.length,
+        nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+        hasMore: data.has_more === true,
       }
-    }, [requestResponse, runnerRepositoryFilter, runnerRequestOffset, runnerSpecFilter, runnerStatusFilter, section])
+    }, [requestResponse, runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter, section])
 
   const searchRunnerRequestRepositories = useCallback(async (query: string): Promise<RunnerRepositorySearchResult> => {
     const search = new URLSearchParams({ limit: "50" })
@@ -476,18 +507,18 @@ function App() {
       for (const [resource, data] of entries) {
         if (resource === "runner_requests") {
           const page = data as AdminRunnerPage
-          setRunners(page.items)
-          setRunnerRequestTotal(page.total)
-          if (section === "runner_requests" && runnerRequestOffset > 0 && runnerRequestOffset >= page.total) {
-            const lastPageOffset = page.total === 0
-              ? 0
-              : Math.floor((page.total - 1) / adminRunnerRequestPageSize) * adminRunnerRequestPageSize
-            setRunnerRequestOffset(lastPageOffset)
+          if (polling) {
+            setRunners((current) => mergeAdminRunnerPages(page.items, current))
+            continue
           }
+          setRunners(page.items)
+          setRunnerRequestCursor(page.nextCursor)
+          setRunnerRequestHasMore(page.hasMore)
           continue
         }
         updateAdminResource(resource, data, {
           setRunners,
+          setRunnerRequestMetrics,
           setRunnerSpecs,
           setAuditEvents,
         })
@@ -498,7 +529,45 @@ function App() {
     } finally {
       if (generation === adminLoadGeneration.current) setLoading(false)
     }
-  }, [hasAccess, isAdminRoute, request, requestAdminRunnerPage, runnerRequestIdentifier, runnerRequestOffset, section])
+  }, [hasAccess, isAdminRoute, request, requestAdminRunnerPage, runnerRequestIdentifier, section])
+
+  const refreshAdminRunnerRequests = useCallback(() => {
+    invalidateRunnerRequestPage()
+    setRunners([])
+    setRunnerRequestCursor(null)
+    setRunnerRequestHasMore(true)
+    void loadAll()
+  }, [invalidateRunnerRequestPage, loadAll])
+
+  const loadMoreAdminRunnerRequests = useCallback(async () => {
+    if (loadingMoreRunnerRequests || !runnerRequestHasMore || !runnerRequestCursor) return
+    const generation = runnerRequestPageGeneration.current
+    setLoadingMoreRunnerRequests(true)
+    try {
+      const page = await requestAdminRunnerPage(runnerRequestCursor)
+      if (generation !== runnerRequestPageGeneration.current) return
+      setRunners((current) => {
+        const seen = new Set<string>()
+        return [...current, ...page.items].filter((runner) => {
+          if (seen.has(runner.id)) return false
+          seen.add(runner.id)
+          return true
+        })
+      })
+      setRunnerRequestCursor(page.nextCursor)
+      setRunnerRequestHasMore(page.hasMore)
+    } catch (error) {
+      if (generation === runnerRequestPageGeneration.current) {
+        toast.error(error instanceof Error ? error.message : appI18n.t("app.controlPlaneLoadFailed"))
+      }
+    } finally {
+      if (generation === runnerRequestPageGeneration.current) setLoadingMoreRunnerRequests(false)
+    }
+  }, [loadingMoreRunnerRequests, requestAdminRunnerPage, runnerRequestCursor, runnerRequestHasMore])
+
+  useEffect(() => {
+    invalidateRunnerRequestPage()
+  }, [invalidateRunnerRequestPage, runnerRequestIdentifier, runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter, section])
 
   const loadUserAll = useCallback(async (polling = false) => {
     const loadID = userLoadGate.begin(`${authSession.login ?? ""}:${locationPath}`)
@@ -936,8 +1005,20 @@ function App() {
       setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
     })
     setRunners([])
-    setRunnerRequestTotal(0)
-    setRunnerRequestOffset(0)
+    invalidateRunnerRequestPage()
+    setRunnerRequestCursor(null)
+    setRunnerRequestHasMore(true)
+    setLoadingMoreRunnerRequests(false)
+    setRunnerRequestMetrics({
+      queued: 0,
+      creating: 0,
+      running: 0,
+      stopping: 0,
+      completed: 0,
+      failed: 0,
+      unmatched: 0,
+      runner_specs: 0,
+    })
     setRunnerSpecs([])
     setAuditEvents([])
     setUserRunners([])
@@ -1208,18 +1289,20 @@ function App() {
         <SiteHeader authSession={authSession} onSignOut={signOut} />
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
           {section === "overview" || (section === "runner_requests" && !runnerRequestIdentifier) ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {metrics.map((metric) => (
-                <Card key={metric.id} className="gap-3 py-5">
-                  <CardHeader className="px-5">
-                    <CardDescription>{metric.label}</CardDescription>
-                    <CardTitle className="text-3xl">{metric.value}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="px-5 text-xs text-muted-foreground">
-                    {metric.description}
-                  </CardContent>
-                </Card>
-              ))}
+            <div className="overflow-x-auto">
+              <div className="grid min-w-[980px] grid-cols-7 gap-4">
+                {metrics.map((metric) => (
+                  <Card key={metric.id} className="gap-3 py-5">
+                    <CardHeader className="px-5">
+                      <CardDescription>{metric.label}</CardDescription>
+                      <CardTitle className="text-3xl">{metric.value}</CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-5 text-xs text-muted-foreground">
+                      {metric.description}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
           ) : null}
 
@@ -1259,9 +1342,8 @@ function App() {
               hasAccess={hasAccess}
               loading={loading}
               runners={runners}
-              total={runnerRequestTotal}
-              offset={runnerRequestOffset}
-              limit={adminRunnerRequestPageSize}
+              hasMore={runnerRequestHasMore}
+              loadingMore={loadingMoreRunnerRequests}
               createID={createID}
               createRepository={createRepository}
               createRunnerSpec={createRunnerSpec}
@@ -1271,7 +1353,7 @@ function App() {
               runnerRepositoryFilter={runnerRepositoryFilter}
               runnerSpecFilter={runnerSpecFilter}
               runnerSpecNames={runnerSpecNames}
-              onRefresh={() => void loadAll()}
+              onRefresh={refreshAdminRunnerRequests}
               onResetCreateRunnerForm={resetCreateRunnerForm}
               onCreateRunnerOpenChange={setCreateRunnerOpen}
               onCreateRunnerSubmit={createRunner}
@@ -1281,19 +1363,27 @@ function App() {
               onCreateLabelsChange={setCreateLabels}
               onStatusFilterChange={(value) => {
                 setRunnerStatusFilter(value)
-                setRunnerRequestOffset(0)
+                invalidateRunnerRequestPage()
+                setRunners([])
+                setRunnerRequestCursor(null)
+                setRunnerRequestHasMore(true)
               }}
               onRepositoryFilterChange={(value) => {
                 setRunnerRepositoryFilter(value)
-                setRunnerRequestOffset(0)
+                invalidateRunnerRequestPage()
+                setRunners([])
+                setRunnerRequestCursor(null)
+                setRunnerRequestHasMore(true)
               }}
               onRunnerSpecFilterChange={(value) => {
                 setRunnerSpecFilter(value)
-                setRunnerRequestOffset(0)
+                invalidateRunnerRequestPage()
+                setRunners([])
+                setRunnerRequestCursor(null)
+                setRunnerRequestHasMore(true)
               }}
               onSearchRepositories={searchRunnerRequestRepositories}
-              onPreviousPage={() => setRunnerRequestOffset((current) => Math.max(0, current - adminRunnerRequestPageSize))}
-              onNextPage={() => setRunnerRequestOffset((current) => current + adminRunnerRequestPageSize)}
+              onLoadMore={() => void loadMoreAdminRunnerRequests()}
               onLookupRunnerRequest={(identifier) => void lookupRunnerRequest(identifier)}
               onOpenRunnerRequest={openRunnerRequest}
               onRetryRunner={(id) => void retryRunner(id)}

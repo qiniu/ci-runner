@@ -1,7 +1,7 @@
 import {
-  activeStatuses,
   type AdminAccountStats,
   type Metric,
+  type RunnerRequestMetrics,
   type RunnerState,
   type RunnerDisplayStatus,
 } from "@/admin-types"
@@ -34,34 +34,50 @@ export function runnerDisplayStatus(runner: RunnerState): RunnerDisplayStatus {
 }
 
 export function runnerMetrics(
-  runners: RunnerState[],
-  runnerSpecCount: number,
+  stats: RunnerRequestMetrics,
   t: AppTFunction,
 ): Metric[] {
-  const count = (status: RunnerDisplayStatus) => runners.filter((runner) => runnerDisplayStatus(runner) === status).length
   return [
     {
-      id: "active",
-      label: t("admin.activeMetric"),
-      value: runners.filter((runner) => activeStatuses.has(runner.status)).length,
-      description: t("admin.activeMetricDescription"),
+      id: "queued",
+      label: t("common.statusQueued"),
+      value: stats.queued,
+      description: t("admin.queuedMetricDescription"),
+    },
+    {
+      id: "creating",
+      label: t("common.statusCreating"),
+      value: stats.creating,
+      description: t("admin.creatingMetricDescription"),
+    },
+    {
+      id: "running",
+      label: t("common.statusRunning"),
+      value: stats.running,
+      description: t("admin.runningMetricDescription"),
+    },
+    {
+      id: "stopping",
+      label: t("common.statusStopping"),
+      value: stats.stopping,
+      description: t("admin.stoppingMetricDescription"),
     },
     {
       id: "completed",
       label: t("admin.completedMetric"),
-      value: count("completed"),
+      value: stats.completed,
       description: t("admin.completedMetricDescription"),
     },
     {
       id: "failed",
       label: t("admin.failedMetric"),
-      value: count("failed"),
+      value: stats.failed,
       description: t("admin.failedMetricDescription"),
     },
     {
       id: "runner-specs",
       label: t("sidebar.runnerSpecs"),
-      value: runnerSpecCount,
+      value: stats.runner_specs,
       description: t("admin.runnerSpecsMetricDescription"),
     },
   ]

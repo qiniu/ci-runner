@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react"
-import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
+import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
@@ -57,9 +57,8 @@ export function RunnerRequestsSection({
   hasAccess,
   loading,
   runners,
-  total,
-  offset,
-  limit,
+  hasMore,
+  loadingMore,
   createID,
   createRepository,
   createRunnerSpec,
@@ -81,8 +80,7 @@ export function RunnerRequestsSection({
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
   onSearchRepositories,
-  onPreviousPage,
-  onNextPage,
+  onLoadMore,
   onLookupRunnerRequest,
   onOpenRunnerRequest,
   onRetryRunner,
@@ -91,9 +89,8 @@ export function RunnerRequestsSection({
   hasAccess: boolean
   loading: boolean
   runners: RunnerState[]
-  total: number
-  offset: number
-  limit: number
+  hasMore: boolean
+  loadingMore: boolean
   createID: string
   createRepository: string
   createRunnerSpec: string
@@ -115,8 +112,7 @@ export function RunnerRequestsSection({
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
   onSearchRepositories: (query: string) => Promise<{ repositories: string[]; hasMore: boolean }>
-  onPreviousPage: () => void
-  onNextPage: () => void
+  onLoadMore: () => void
   onLookupRunnerRequest: (identifier: string) => void
   onOpenRunnerRequest: (identifier: string) => void
   onRetryRunner: (id: string) => void
@@ -132,6 +128,7 @@ export function RunnerRequestsSection({
   const [repositorySearchFailed, setRepositorySearchFailed] = useState(false)
   const repositorySearchGeneration = useRef(0)
   const tableHeaderRef = useRef<HTMLTableSectionElement>(null)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!repositoryOpen) return
@@ -193,6 +190,20 @@ export function RunnerRequestsSection({
       tableHeader.style.transform = ""
     }
   }, [runners.length])
+
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel || !hasMore) return
+    const root = verticalScrollContainer(sentinel)
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !loadingMore) onLoadMore()
+      },
+      { root, rootMargin: "320px 0px" },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, onLoadMore, runners.length])
 
   const openRunnerRequest = (event: MouseEvent<HTMLAnchorElement>, runner: RunnerState) => {
     event.stopPropagation()
@@ -531,35 +542,20 @@ export function RunnerRequestsSection({
               )}
             </TableBody>
           </Table>
-          <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
-            <div className="text-xs text-muted-foreground tabular-nums">
-              {total === 0 ? t("admin.noRequestsFound") : t("admin.resultRange", { start: offset + 1, end: offset + runners.length, total })}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="min-w-24 text-center text-xs font-medium tabular-nums">
-                {t("admin.pageOf", { page: total === 0 ? 1 : Math.floor(offset / limit) + 1, pages: Math.max(1, Math.ceil(total / limit)) })}
+          <div ref={loadMoreRef} className="flex min-h-12 items-center justify-center border-t px-3 py-3 text-xs text-muted-foreground">
+            {loadingMore ? (
+              <span className="flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin" />
+                {t("admin.loadingMoreRequests")}
               </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                disabled={offset === 0 || loading}
-                onClick={onPreviousPage}
-                aria-label={t("admin.previousRunnerRequestPage")}
-              >
-                <ChevronLeft />
+            ) : hasMore ? (
+              <Button type="button" variant="ghost" size="sm" onClick={onLoadMore} disabled={loading}>
+                {t("admin.loadMoreRequests")}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                disabled={offset + runners.length >= total || loading}
-                onClick={onNextPage}
-                aria-label={t("admin.nextRunnerRequestPage")}
-              >
-                <ChevronRight />
-              </Button>
-            </div>
+            ) : runners.length > 0 ? (
+              t("admin.allRequestsLoaded")
+            ) : null}
+            {runners.length > 0 ? <span className="ml-3 tabular-nums">{t("admin.loadedRequests", { count: runners.length })}</span> : null}
           </div>
         </CardContent>
       </Card>

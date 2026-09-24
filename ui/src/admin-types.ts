@@ -50,6 +50,17 @@ export type RunnerState = {
   failed_at?: string
 }
 
+export type RunnerRequestMetrics = {
+  queued: number
+  creating: number
+  running: number
+  stopping: number
+  completed: number
+  failed: number
+  unmatched: number
+  runner_specs: number
+}
+
 export type RunnerJobGroup = {
   key: string
   group: "pull_request" | "branch" | "workflow_run" | "manual" | "repository"

@@ -406,6 +406,83 @@ func (s *DBStore) ListStatesPage(options RunnerRequestListOptions) ([]RunnerStat
 	return states, total, nil
 }
 
+// ListStatesCursor returns a newest-first page after the exclusive cursor.
+// The extra row determines whether another page exists without counting the
+// entire filtered history.
+func (s *DBStore) ListStatesCursor(options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, false, err
+	}
+	if options.Limit <= 0 {
+		options.Limit = 100
+	}
+	query, err := filterRunnerRequestList(db.Model(&runnerRequestRecord{}), options)
+	if err != nil {
+		return nil, false, err
+	}
+	if after != nil {
+		if after.ID == "" || after.QueuedAt.IsZero() {
+			return nil, false, fmt.Errorf("invalid Runner request cursor")
+		}
+		query = query.Where(
+			"queued_at < ? OR (queued_at = ? AND id > ?)",
+			after.QueuedAt,
+			after.QueuedAt,
+			after.ID,
+		)
+	}
+	var records []runnerRequestRecord
+	if err := query.
+		Select(runnerRequestListSelectColumns).
+		Order("queued_at DESC, id ASC").
+		Limit(options.Limit + 1).
+		Find(&records).Error; err != nil {
+		return nil, false, err
+	}
+	hasMore := len(records) > options.Limit
+	if hasMore {
+		records = records[:options.Limit]
+	}
+	states := make([]RunnerState, 0, len(records))
+	for _, record := range records {
+		states = append(states, recordToState(record))
+	}
+	return states, hasMore, nil
+}
+
+func (s *DBStore) GetRunnerRequestMetrics() (RunnerRequestMetrics, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return RunnerRequestMetrics{}, err
+	}
+	var metrics RunnerRequestMetrics
+	if err := db.Model(&runnerRequestRecord{}).
+		Select(`
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS queued,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS creating,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS running,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS stopping,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS completed,
+			COALESCE(SUM(CASE WHEN status = ? AND (failure_stage IS NULL OR failure_reason IS NULL OR failure_stage != ? OR failure_reason != ?) THEN 1 ELSE 0 END), 0) AS failed,
+			COALESCE(SUM(CASE WHEN status = ? AND failure_stage = ? AND failure_reason = ? THEN 1 ELSE 0 END), 0) AS unmatched`,
+			StatusQueued,
+			StatusCreating,
+			StatusRunning,
+			StatusStopping,
+			StatusCompleted,
+			StatusFailed, "admission", "profile_labels_not_matched",
+			StatusFailed, "admission", "profile_labels_not_matched",
+		).
+		Scan(&metrics).Error; err != nil {
+		return RunnerRequestMetrics{}, err
+	}
+	if err := db.Model(&runnerProfileRecord{}).Count(&metrics.RunnerSpecs).Error; err != nil {
+		return RunnerRequestMetrics{}, err
+	}
+	return metrics, nil
+}
+
 func filterRunnerRequestList(query *gorm.DB, options RunnerRequestListOptions) (*gorm.DB, error) {
 	if repository := strings.TrimSpace(options.RepositoryFullName); repository != "" {
 		query = query.Where("repository_full_name = ?", repository)

@@ -130,6 +130,25 @@ type RunnerRequestListOptions struct {
 	Offset             int
 }
 
+// RunnerRequestCursor identifies the last item in a newest-first request page.
+// queued_at is immutable for a request and id breaks ties between requests
+// created at the same instant.
+type RunnerRequestCursor struct {
+	QueuedAt time.Time
+	ID       string
+}
+
+type RunnerRequestMetrics struct {
+	Queued      int64 `json:"queued"`
+	Creating    int64 `json:"creating"`
+	Running     int64 `json:"running"`
+	Stopping    int64 `json:"stopping"`
+	Completed   int64 `json:"completed"`
+	Failed      int64 `json:"failed"`
+	Unmatched   int64 `json:"unmatched"`
+	RunnerSpecs int64 `json:"runner_specs"`
+}
+
 // RunnerRequestRepositoryListOptions controls repository option search.
 type RunnerRequestRepositoryListOptions struct {
 	Query string
@@ -369,6 +388,8 @@ type RunnerRequestStore interface {
 	ListMismatchedCompletedStates(limit int) ([]RunnerState, error)
 	ListFailedWorkflowJobStates(limit int) ([]RunnerState, error)
 	ListStatesPage(options RunnerRequestListOptions) ([]RunnerState, int64, error)
+	ListStatesCursor(options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error)
+	GetRunnerRequestMetrics() (RunnerRequestMetrics, error)
 	ListRunnerRequestRepositories(options RunnerRequestRepositoryListOptions) ([]string, bool, error)
 	ListStatesForRepositories(repositories []string, limit int) ([]RunnerState, error)
 	ListStatesForGitHubInstallations(installationIDs []int64, limit int) ([]RunnerState, error)

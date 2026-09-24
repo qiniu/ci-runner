@@ -10,14 +10,14 @@ export interface AdminRunnerRequestListOptions {
   repository: string
   runnerSpec: string
   limit?: number
-  offset?: number
+  cursor?: string | null
 }
 
 export function adminRunnerRequestsPath(options: AdminRunnerRequestListOptions): string {
   const query = new URLSearchParams({
     limit: String(options.limit ?? adminRunnerRequestPageSize),
-    offset: String(options.offset ?? 0),
   })
+  if (options.cursor) query.set("cursor", options.cursor)
   if (options.status !== "all") query.set("status", options.status)
   if (options.repository !== "all") query.set("repository_full_name", options.repository)
   if (options.runnerSpec !== "all") query.set("runner_spec_name", options.runnerSpec)
@@ -26,6 +26,7 @@ export function adminRunnerRequestsPath(options: AdminRunnerRequestListOptions):
 
 export type AdminDataResource =
   | "runner_requests"
+  | "runner_request_metrics"
   | "runner_specs"
   | "audit_events"
 
@@ -81,11 +82,22 @@ export function mergeUserRunnerPages(primary: RunnerState[], existing: RunnerSta
   return merged
 }
 
+export function mergeAdminRunnerPages(primary: RunnerState[], existing: RunnerState[]): RunnerState[] {
+  const merged: RunnerState[] = []
+  const seen = new Set<string>()
+  for (const runner of [...primary, ...existing]) {
+    if (seen.has(runner.id)) continue
+    seen.add(runner.id)
+    merged.push(runner)
+  }
+  return merged
+}
+
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {
-  overview: ["runner_requests", "runner_specs"],
+  overview: ["runner_requests", "runner_request_metrics", "runner_specs"],
   accounts: [],
   github_accounts: [],
-  runner_requests: ["runner_requests", "runner_specs"],
+  runner_requests: ["runner_requests", "runner_request_metrics", "runner_specs"],
   runner_specs: ["runner_specs"],
   sandbox_service: [],
   match: [],
@@ -102,7 +114,7 @@ export function shouldPollAdminSection(section: AdminSection): boolean {
 }
 
 export function adminPollingResources(section: AdminSection): AdminDataResource[] {
-  return shouldPollAdminSection(section) ? ["runner_requests"] : []
+  return shouldPollAdminSection(section) ? ["runner_requests", "runner_request_metrics"] : []
 }
 
 export function userDataResources(path: string): UserDataResource[] {

@@ -2575,6 +2575,80 @@ func TestListStatesPageFiltersAcrossAllRequests(t *testing.T) {
 	}
 }
 
+func TestListStatesCursorUsesExclusiveQueuedAtAndIDOrder(t *testing.T) {
+	store := New(t.TempDir())
+	createdAt := time.Unix(100, 123).UTC()
+	for _, id := range []string{"request-c", "request-a", "request-b"} {
+		if _, _, err := store.CreateRequest(RunnerRequest{
+			ID: id, Source: "test", Labels: []string{"self-hosted"}, RunnerName: id, CreatedAt: createdAt,
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, hasMore, err := store.ListStatesCursor(RunnerRequestListOptions{Limit: 2}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasMore || len(first) != 2 || first[0].ID != "request-a" || first[1].ID != "request-b" {
+		t.Fatalf("first cursor page = %#v, has_more=%v", first, hasMore)
+	}
+	second, hasMore, err := store.ListStatesCursor(RunnerRequestListOptions{Limit: 2}, &RunnerRequestCursor{QueuedAt: first[1].CreatedAt, ID: first[1].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMore || len(second) != 1 || second[0].ID != "request-c" {
+		t.Fatalf("second cursor page = %#v, has_more=%v", second, hasMore)
+	}
+}
+
+func TestGetRunnerRequestMetricsUsesGlobalStatusCounts(t *testing.T) {
+	store := New(t.TempDir())
+	statuses := []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping, StatusCompleted}
+	for index, status := range statuses {
+		_, runnerState, err := store.CreateRequest(RunnerRequest{
+			ID: fmt.Sprintf("metric-%s", status), Source: "test", Labels: []string{"self-hosted"}, RunnerName: status,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runnerState.Status = status
+		if index == 0 {
+			runnerState.FailureStage = ""
+		}
+		if err := store.WriteState(runnerState); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"metric-failed", "metric-unmatched"} {
+		_, runnerState, err := store.CreateRequest(RunnerRequest{
+			ID: id, Source: "test", Labels: []string{"self-hosted"}, RunnerName: id,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runnerState.Status = StatusFailed
+		if id == "metric-failed" {
+			runnerState.FailureStage = "runner"
+		} else {
+			runnerState.FailureStage = "admission"
+			runnerState.FailureReason = "profile_labels_not_matched"
+		}
+		if err := store.WriteState(runnerState); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.UpsertProfile(RunnerProfile{Name: "metric-profile", Labels: []string{"self-hosted"}, RequiredLabels: []string{"self-hosted"}, TemplateID: "template", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := store.GetRunnerRequestMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Queued != 1 || metrics.Creating != 1 || metrics.Running != 1 || metrics.Stopping != 1 || metrics.Completed != 1 || metrics.Failed != 1 || metrics.Unmatched != 1 || metrics.RunnerSpecs != 1 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+}
+
 func TestListRunnerRequestRepositoriesSearchesAllHistory(t *testing.T) {
 	store := New(t.TempDir())
 	for index, repository := range []string{

@@ -317,7 +317,8 @@ The built-in web UI provides:
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/github_accounts` | GitHub App installation accounts reported live by GitHub |
 | `/admin/github_accounts/{installation_id}` | One GitHub App installation and its currently authorized repositories |
-| `/admin/runner_requests` | Runner request history, filters, controls, and exact lookup by Runner Name or internal request ID |
+| `/admin/runner_requests` | Runner request history with server-side filters, cursor-based infinite scrolling, global status metrics, controls, and exact lookup by Runner Name or internal request ID |
+| `/runner_request_metrics` | Admin-only global Runner request status and Runner Spec counts; independent of list filters |
 | `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and preinstalled Runner version), a best-effort effective Runner version captured after any custom-template preflight or official self-update, typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |

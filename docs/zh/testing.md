@@ -106,7 +106,7 @@ Sandbox；managed spec 的控制项也不校验模板，继续保持运行时名
 
 新建的已接受和已拒绝 runner request 在内存中从 webhook 解析 workflow 上下文、分支、SHA、Job URL 和 PR 编号，并将 `github_payload_json` 留空。Installation ID 和 Job ID 来自 `RunnerRequest` 字段；这些字段、仓库、标签及解析后的 webhook 上下文仍保存到结构化字段，供运行和展示使用。另一组结构化快照字段只保留原始 Workflow Job 的终态名称、状态、结论、Runner 名称和本地观察时间；它不会恢复 raw webhook 留存，也不会回填历史记录。State 测试覆盖重新打开数据库后的 `workflow_job`、`workflow_run` 元信息、终态结果 round trip、拒绝请求的持久化，以及重复迁移和 installation ID 修复时保留历史原文。保留历史兼容列、已有值和回填逻辑；清理历史原文与回收磁盘空间需要单独安排维护操作。请求与日志的保留行为不变。
 
-状态表结构主要由 `internal/state/records.go` 里的 GORM tag 定义。服务启动时，已有 SQLite `runner_requests` 和 `runner_profiles` 表只通过创建全部缺失的 model columns 和 indexes 做 additive migration；它们会跳过通用 SQLite `AutoMigrate` 表重建，从而保留历史上通过 ALTER 添加的 runner-request 字段，以及旧 runner-profile rows 和自定义 indexes，并补齐 managed-catalog 字段。Admin newest-first 列表依赖 `(queued_at DESC, id ASC)` 上的 `idx_runner_requests_queued_id`。Repository-authorized 列表通过 `(github_installation_id, queued_at DESC, id ASC)` 上的 `idx_runner_requests_github_installation_queued_id` 分别查询每个 installation，再合并有界结果。创建缺失索引不会重写 rows，但应先在 disposable production-sized copy 上测量启动 I/O 和锁等待。未来如需对任一 additive-only 表做 non-additive 变更，必须增加窄范围显式 migration 和数据保全回归 fixture。其他表会先针对旧 columns、obsolete OAuth constraints 和不兼容的 legacy scope tables 执行窄范围 compatibility pass，再运行 GORM `AutoMigrate`。缺少 `scope_type`/`scope_id` 的旧 `account_preferences` 和 `account_secrets` 表会被删除并重建，而不是迁移原数据。升级后必须重新配置其中保存的 Sandbox Preferences 和 API keys；已保存的 GitHub OAuth tokens 也会被清除，相关用户需重新使用 GitHub 登录后才能同步 installations。修改 state record、索引或迁移 helper 时，至少先跑：
+状态表结构主要由 `internal/state/records.go` 里的 GORM tag 定义。服务启动时，已有 SQLite `runner_requests` 和 `runner_profiles` 表只通过创建全部缺失的 model columns 和 indexes 做 additive migration；它们会跳过通用 SQLite `AutoMigrate` 表重建，从而保留历史上通过 ALTER 添加的 runner-request 字段，以及旧 runner-profile rows 和自定义 indexes，并补齐 managed-catalog 字段。Admin newest-first 列表依赖 `(queued_at DESC, id ASC)` 上的 `idx_runner_requests_queued_id`。管理员 `/runner_requests` 集合接口返回包含 `items`、`next_cursor` 和 `has_more` 的 envelope；游标对 `(queued_at, id)` 使用独占语义，不能与其他筛选条件混用。`/runner_request_metrics` 独立返回全局的排队／创建／运行／停止中／已完成／失败／未匹配和 Runner Spec 数量，不受列表筛选影响。Repository-authorized 列表通过 `(github_installation_id, queued_at DESC, id ASC)` 上的 `idx_runner_requests_github_installation_queued_id` 分别查询每个 installation，再合并有界结果。创建缺失索引不会重写 rows，但应先在 disposable production-sized copy 上测量启动 I/O 和锁等待。未来如需对任一 additive-only 表做 non-additive 变更，必须增加窄范围显式 migration 和数据保全回归 fixture。其他表会先针对旧 columns、obsolete OAuth constraints 和不兼容的 legacy scope tables 执行窄范围 compatibility pass，再运行 GORM `AutoMigrate`。缺少 `scope_type`/`scope_id` 的旧 `account_preferences` 和 `account_secrets` 表会被删除并重建，而不是迁移原数据。升级后必须重新配置其中保存的 Sandbox Preferences 和 API keys；已保存的 GitHub OAuth tokens 也会被清除，相关用户需重新使用 GitHub 登录后才能同步 installations。修改 state record、索引或迁移 helper 时，至少先跑：
 
 ```bash
 go test ./internal/state -count=1
@@ -474,6 +474,7 @@ curl -fsS -X POST http://127.0.0.1:25500/runner_requests \
 ```bash
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_requests | jq
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_requests/manual-001 | jq
+curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_request_metrics | jq
 ```
 
 停止 runner：

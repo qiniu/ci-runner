@@ -4812,44 +4812,57 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	}
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
 
-	req := adminRequest(http.MethodGet, "/runner_requests", nil)
+	req := adminRequest(http.MethodGet, "/runner_requests?limit=10", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var states []state.RunnerState
-	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+	var page adminRunnerRequestPage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 100 {
-		t.Fatalf("default page len = %d, want 100", len(states))
+	if len(page.Items) != 10 {
+		t.Fatalf("first page len = %d, want 10", len(page.Items))
 	}
-	if rec.Header().Get("X-Total-Count") != "105" {
-		t.Fatalf("X-Total-Count = %q, want 105", rec.Header().Get("X-Total-Count"))
+	if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
+		t.Fatalf("first page cursor = %#v, has_more=%v", page.NextCursor, page.HasMore)
 	}
-	if rec.Header().Get("X-Limit") != "100" || rec.Header().Get("X-Offset") != "0" {
-		t.Fatalf("unexpected pagination headers: limit=%q offset=%q", rec.Header().Get("X-Limit"), rec.Header().Get("X-Offset"))
-	}
-	if !strings.Contains(rec.Header().Get("Link"), `rel="next"`) {
-		t.Fatalf("expected next link, got %q", rec.Header().Get("Link"))
+	firstIDs := make(map[string]struct{}, len(page.Items))
+	for _, item := range page.Items {
+		firstIDs[item.ID] = struct{}{}
 	}
 
-	req = adminRequest(http.MethodGet, "/runner_requests?limit=10&offset=100", nil)
+	req = adminRequest(http.MethodGet, "/runner_requests?limit=10&cursor="+url.QueryEscape(*page.NextCursor), nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	states = nil
-	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+	page = adminRunnerRequestPage{}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 5 {
-		t.Fatalf("second page len = %d, want 5", len(states))
+	if len(page.Items) != 10 {
+		t.Fatalf("second page len = %d, want 10", len(page.Items))
 	}
-	if !strings.Contains(rec.Header().Get("Link"), `rel="prev"`) {
-		t.Fatalf("expected prev link, got %q", rec.Header().Get("Link"))
+	for _, item := range page.Items {
+		if _, ok := firstIDs[item.ID]; ok {
+			t.Fatalf("cursor page repeated item %q", item.ID)
+		}
+	}
+	req = adminRequest(http.MethodGet, "/runner_requests?limit=10&status=completed&cursor="+url.QueryEscape(*page.NextCursor), nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cursor reused with different filter status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = adminRequest(http.MethodGet, "/runner_requests?limit=10&offset=10", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("offset status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = adminRequest(http.MethodGet, "/runner_requests?repository_full_name=octo%2Folder&runner_spec_name=large", nil)
@@ -4858,12 +4871,12 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("filtered request status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	states = nil
-	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+	page = adminRunnerRequestPage{}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || states[0].ID != "runner-000" || rec.Header().Get("X-Total-Count") != "1" {
-		t.Fatalf("filtered states=%#v total=%q", states, rec.Header().Get("X-Total-Count"))
+	if len(page.Items) != 1 || page.Items[0].ID != "runner-000" || page.HasMore {
+		t.Fatalf("filtered page=%#v has_more=%v", page.Items, page.HasMore)
 	}
 
 	longSpecName := strings.Repeat("x", 257)
@@ -4884,12 +4897,12 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("long Runner Spec filter status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	states = nil
-	if err := json.NewDecoder(rec.Body).Decode(&states); err != nil {
+	page = adminRunnerRequestPage{}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || states[0].ID != "long-spec-request" || rec.Header().Get("X-Total-Count") != "1" {
-		t.Fatalf("long Runner Spec filter states=%#v total=%q", states, rec.Header().Get("X-Total-Count"))
+	if len(page.Items) != 1 || page.Items[0].ID != "long-spec-request" || page.HasMore {
+		t.Fatalf("long Runner Spec filter page=%#v has_more=%v", page.Items, page.HasMore)
 	}
 
 	req = adminRequest(http.MethodGet, "/runner_request_repositories?q=OLDER&limit=10", nil)
@@ -4950,6 +4963,71 @@ func TestListRunnerRequestsIsPaginated(t *testing.T) {
 	}
 	if repositoriesRequest.ID != "repositories" || repositoriesRequest.RepositoryFullName != "octo/reserved-word" {
 		t.Fatalf("repositories request detail=%#v", repositoriesRequest)
+	}
+}
+
+func TestRunnerRequestMetricsAreIndependentFromListFilters(t *testing.T) {
+	store := state.New(t.TempDir())
+	for _, status := range []string{state.StatusQueued, state.StatusCreating, state.StatusRunning, state.StatusStopping, state.StatusCompleted} {
+		_, runnerState, err := store.CreateRequest(state.RunnerRequest{
+			ID: fmt.Sprintf("metric-%s", status), Source: "test", RepositoryFullName: "octo/repo", Labels: []string{"self-hosted"}, RunnerName: status,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runnerState.Status = status
+		if err := store.WriteState(runnerState); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"metric-failed", "metric-unmatched"} {
+		_, runnerState, err := store.CreateRequest(state.RunnerRequest{
+			ID: id, Source: "test", RepositoryFullName: "octo/repo", Labels: []string{"self-hosted"}, RunnerName: id,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runnerState.Status = state.StatusFailed
+		if id == "metric-failed" {
+			runnerState.FailureStage = "runner"
+		} else {
+			runnerState.FailureStage = "admission"
+			runnerState.FailureReason = "profile_labels_not_matched"
+		}
+		if err := store.WriteState(runnerState); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "metric-profile", Labels: []string{"self-hosted"}, RequiredLabels: []string{"self-hosted"}, TemplateID: "template", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/runner_request_metrics", nil)
+	unauthenticatedRec := httptest.NewRecorder()
+	srv.ServeHTTP(unauthenticatedRec, unauthenticated)
+	if unauthenticatedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated metrics status=%d body=%s", unauthenticatedRec.Code, unauthenticatedRec.Body.String())
+	}
+	var firstMetrics state.RunnerRequestMetrics
+	for _, target := range []string{"/runner_request_metrics", "/runner_request_metrics?status=failed&repository_full_name=other/repo"} {
+		req := adminRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", target, rec.Code, rec.Body.String())
+		}
+		var metrics state.RunnerRequestMetrics
+		if err := json.NewDecoder(rec.Body).Decode(&metrics); err != nil {
+			t.Fatal(err)
+		}
+		if metrics.Queued != 1 || metrics.Creating != 1 || metrics.Running != 1 || metrics.Stopping != 1 || metrics.Completed != 1 || metrics.Failed != 1 || metrics.Unmatched != 1 || metrics.RunnerSpecs == 0 {
+			t.Fatalf("%s metrics=%#v", target, metrics)
+		}
+		if firstMetrics == (state.RunnerRequestMetrics{}) {
+			firstMetrics = metrics
+		} else if metrics != firstMetrics {
+			t.Fatalf("%s metrics changed with list filters: first=%#v current=%#v", target, firstMetrics, metrics)
+		}
 	}
 }
 

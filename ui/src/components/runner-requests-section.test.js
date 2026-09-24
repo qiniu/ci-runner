@@ -11,9 +11,8 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all", pagination = {
     hasAccess: true,
     loading: false,
     runners: [runner],
-    total: pagination.total ?? 1,
-    offset: pagination.offset ?? 0,
-    limit: pagination.limit ?? 100,
+    hasMore: pagination.hasMore ?? false,
+    loadingMore: false,
     createID: "",
     createRepository: "",
     createRunnerSpec: "",
@@ -35,8 +34,7 @@ function renderRunnerRequests(runner, runnerStatusFilter = "all", pagination = {
     onRepositoryFilterChange() {},
     onRunnerSpecFilterChange() {},
     async onSearchRepositories() { return { repositories: [], hasMore: false } },
-    onPreviousPage() {},
-    onNextPage() {},
+    onLoadMore() {},
     onLookupRunnerRequest() {},
     onOpenRunnerRequest() {},
     onRetryRunner() {},
@@ -132,7 +130,7 @@ describe("RunnerRequestsSection", () => {
     expect(html).toContain(">e2b-101445685709</a>")
   })
 
-  test("renders the request count after the table", async () => {
+  test("renders the loaded request count after the table", async () => {
     await i18n.changeLanguage("en")
     const html = renderRunnerRequests({
       id: "101445685709",
@@ -142,11 +140,11 @@ describe("RunnerRequestsSection", () => {
       created_at: "2026-09-06T07:04:57Z",
     })
 
-    expect(html.indexOf("1-1 of 1")).toBeGreaterThan(html.indexOf("</table>"))
-    expect(html).toContain("Page 1 of 1")
+    expect(html.indexOf("1 loaded")).toBeGreaterThan(html.indexOf("</table>"))
+    expect(html).toContain("All matching requests loaded")
   })
 
-  test("renders the server-side result range and page controls", async () => {
+  test("renders the cursor loading state", async () => {
     await i18n.changeLanguage("en")
     const html = renderRunnerRequests({
       id: "older-request",
@@ -154,12 +152,10 @@ describe("RunnerRequestsSection", () => {
       runner_name: "e2b-older-request",
       updated_at: "2026-09-06T07:25:09Z",
       created_at: "2026-09-06T07:04:57Z",
-    }, "all", { total: 205, offset: 100 })
+    }, "all", { hasMore: true })
 
-    expect(html).toContain("101-101 of 205")
-    expect(html).toContain("Page 2 of 3")
-    expect(html).toContain('aria-label="Previous Runner request page"')
-    expect(html).toContain('aria-label="Next Runner request page"')
+    expect(html).toContain("Load more requests")
+    expect(html).toContain("1 loaded")
   })
 
   test("lets the request table grow with its content", async () => {

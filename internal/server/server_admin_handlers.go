@@ -3,8 +3,11 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -16,6 +19,52 @@ import (
 )
 
 const maxRunnerRequestRepositoryFilterLength = 256
+
+const adminRunnerRequestCursorVersion = 1
+
+type adminRunnerRequestCursor struct {
+	Version   int    `json:"v"`
+	QueuedAt  string `json:"queued_at"`
+	ID        string `json:"id"`
+	FilterKey string `json:"filter"`
+}
+
+type adminRunnerRequestPage struct {
+	Items      []state.RunnerState `json:"items"`
+	NextCursor *string             `json:"next_cursor"`
+	HasMore    bool                `json:"has_more"`
+}
+
+func adminRunnerRequestFilterKey(status, repository, profile string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(status+"\x00"+repository+"\x00"+profile)))
+}
+
+func encodeAdminRunnerRequestCursor(cursor adminRunnerRequestCursor) (string, error) {
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeAdminRunnerRequestCursor(raw, filterKey string) (*state.RunnerRequestCursor, error) {
+	if len(raw) > 2048 {
+		return nil, fmt.Errorf("Runner request cursor is too long")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Runner request cursor")
+	}
+	var encoded adminRunnerRequestCursor
+	if err := json.Unmarshal(payload, &encoded); err != nil || encoded.Version != adminRunnerRequestCursorVersion || encoded.FilterKey != filterKey || encoded.ID == "" {
+		return nil, fmt.Errorf("invalid Runner request cursor")
+	}
+	queuedAt, err := time.Parse(time.RFC3339Nano, encoded.QueuedAt)
+	if err != nil || queuedAt.IsZero() {
+		return nil, fmt.Errorf("invalid Runner request cursor")
+	}
+	return &state.RunnerRequestCursor{QueuedAt: queuedAt, ID: encoded.ID}, nil
+}
 
 func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminAuth(w, r) {
@@ -111,6 +160,10 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if r.URL.Query().Get("offset") != "" || offset != 0 {
+		writeError(w, http.StatusBadRequest, "offset is not supported; use cursor")
+		return
+	}
 	displayStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 	if !validRunnerRequestDisplayStatus(displayStatus) {
 		writeError(w, http.StatusBadRequest, "invalid Runner request status")
@@ -122,19 +175,57 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runnerSpecName := strings.TrimSpace(r.URL.Query().Get("runner_spec_name"))
-	states, total, err := s.store.ListStatesPage(state.RunnerRequestListOptions{
+	filterKey := adminRunnerRequestFilterKey(displayStatus, repositoryFullName, runnerSpecName)
+	var cursor *state.RunnerRequestCursor
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		cursor, err = decodeAdminRunnerRequestCursor(raw, filterKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	states, hasMore, err := s.store.ListStatesCursor(state.RunnerRequestListOptions{
 		RepositoryFullName: repositoryFullName,
 		ProfileName:        runnerSpecName,
 		DisplayStatus:      displayStatus,
 		Limit:              limit,
-		Offset:             offset,
-	})
+	}, cursor)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writePaginationHeaders(w, r, total, limit, offset)
-	writeJSON(w, http.StatusOK, states)
+	var nextCursor *string
+	if hasMore && len(states) > 0 {
+		last := states[len(states)-1]
+		encoded, encodeErr := encodeAdminRunnerRequestCursor(adminRunnerRequestCursor{
+			Version:   adminRunnerRequestCursorVersion,
+			QueuedAt:  last.CreatedAt.UTC().Format(time.RFC3339Nano),
+			ID:        last.ID,
+			FilterKey: filterKey,
+		})
+		if encodeErr != nil {
+			writeError(w, http.StatusInternalServerError, encodeErr.Error())
+			return
+		}
+		nextCursor = &encoded
+	}
+	writeJSON(w, http.StatusOK, adminRunnerRequestPage{
+		Items:      states,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	})
+}
+
+func (s *Server) handleRunnerRequestMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	metrics, err := s.store.GetRunnerRequestMetrics()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 func validRunnerRequestDisplayStatus(status string) bool {

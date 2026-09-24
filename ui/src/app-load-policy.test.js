@@ -6,6 +6,7 @@ import {
   adminDataResources,
   adminPollingResources,
   adminRunnerRequestsPath,
+  mergeAdminRunnerPages,
   shouldPollAdminSection,
   shouldPollUserRoute,
   userDataResources,
@@ -16,8 +17,8 @@ import {
 
 describe("app load policy", () => {
   test.each([
-    ["overview", ["runner_requests", "runner_specs"]],
-    ["runner_requests", ["runner_requests", "runner_specs"]],
+    ["overview", ["runner_requests", "runner_request_metrics", "runner_specs"]],
+    ["runner_requests", ["runner_requests", "runner_request_metrics", "runner_specs"]],
     ["runner_specs", ["runner_specs"]],
     ["audit", ["audit_events"]],
     ["accounts", []],
@@ -34,9 +35,25 @@ describe("app load policy", () => {
     expect(shouldPollAdminSection("runner_requests")).toBe(true)
     expect(shouldPollAdminSection("runner_specs")).toBe(false)
     expect(shouldPollAdminSection("audit")).toBe(false)
-    expect(adminPollingResources("overview")).toEqual(["runner_requests"])
-    expect(adminPollingResources("runner_requests")).toEqual(["runner_requests"])
+    expect(adminPollingResources("overview")).toEqual(["runner_requests", "runner_request_metrics"])
+    expect(adminPollingResources("runner_requests")).toEqual(["runner_requests", "runner_request_metrics"])
     expect(adminPollingResources("runner_specs")).toEqual([])
+  })
+
+  test("merges polled admin rows without losing loaded history", () => {
+    const existing = [
+      { id: "older", status: "completed", runner_name: "older" },
+      { id: "same", status: "running", runner_name: "same" },
+    ]
+    const latest = [
+      { id: "new", status: "queued", runner_name: "new" },
+      { id: "same", status: "completed", runner_name: "same" },
+    ]
+    expect(mergeAdminRunnerPages(latest, existing)).toEqual([
+      latest[0],
+      latest[1],
+      existing[0],
+    ])
   })
 
   test("builds filtered admin Runner request pages without client-side truncation", () => {
@@ -45,13 +62,13 @@ describe("app load policy", () => {
       repository: "octo/older repo",
       runnerSpec: "large",
       limit: 100,
-      offset: 200,
-    })).toBe("/runner_requests?limit=100&offset=200&status=failed&repository_full_name=octo%2Folder+repo&runner_spec_name=large")
+      cursor: "next-page",
+    })).toBe("/runner_requests?limit=100&cursor=next-page&status=failed&repository_full_name=octo%2Folder+repo&runner_spec_name=large")
     expect(adminRunnerRequestsPath({
       status: "all",
       repository: "all",
       runnerSpec: "all",
-    })).toBe("/runner_requests?limit=100&offset=0")
+    })).toBe("/runner_requests?limit=100")
   })
 
   test.each([

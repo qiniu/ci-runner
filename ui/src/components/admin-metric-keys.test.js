@@ -16,7 +16,16 @@ describe("translated admin metrics", () => {
     expect(AdminFormatModule.runnerDisplayStatus(unmatched)).toBe("unmatched")
     expect(AdminFormatModule.runnerDisplayStatus(failed)).toBe("failed")
 
-    const metrics = AdminFormatModule.runnerMetrics([unmatched, failed], 2, i18n.getFixedT("en"))
+    const metrics = AdminFormatModule.runnerMetrics({
+      queued: 0,
+      creating: 0,
+      running: 0,
+      stopping: 0,
+      completed: 0,
+      failed: 1,
+      unmatched: 1,
+      runner_specs: 2,
+    }, i18n.getFixedT("en"))
     expect(metrics.find((metric) => metric.id === "failed")?.value).toBe(1)
   })
 
@@ -52,10 +61,31 @@ describe("translated admin metrics", () => {
       englishAccountMetrics.map((metric) => metric.label),
     )
 
-    const englishRunnerMetrics = AdminFormatModule.runnerMetrics([], 2, en)
-    const chineseRunnerMetrics = AdminFormatModule.runnerMetrics([], 2, zh)
+    const englishRunnerMetrics = AdminFormatModule.runnerMetrics({
+      queued: 1,
+      creating: 2,
+      running: 3,
+      stopping: 4,
+      completed: 5,
+      failed: 6,
+      unmatched: 7,
+      runner_specs: 8,
+    }, en)
+    const chineseRunnerMetrics = AdminFormatModule.runnerMetrics({
+      queued: 1,
+      creating: 2,
+      running: 3,
+      stopping: 4,
+      completed: 5,
+      failed: 6,
+      unmatched: 7,
+      runner_specs: 8,
+    }, zh)
     expect(englishRunnerMetrics.map((metric) => metric.id)).toEqual([
-      "active",
+      "queued",
+      "creating",
+      "running",
+      "stopping",
       "completed",
       "failed",
       "runner-specs",
