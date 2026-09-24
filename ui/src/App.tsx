@@ -1290,7 +1290,7 @@ function App() {
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
           {section === "overview" || (section === "runner_requests" && !runnerRequestIdentifier) ? (
             <div className="shrink-0 overflow-x-auto">
-              <div className="grid min-w-[980px] grid-cols-7 gap-4">
+              <div className="grid min-w-[980px] grid-cols-6 gap-4">
                 {metrics.map((metric) => (
                   <Card key={metric.id} className="gap-3 py-5">
                     <CardHeader className="px-5">
