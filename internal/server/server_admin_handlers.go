@@ -49,7 +49,7 @@ func encodeAdminRunnerRequestCursor(cursor adminRunnerRequestCursor) (string, er
 
 func decodeAdminRunnerRequestCursor(raw, filterKey string) (*state.RunnerRequestCursor, error) {
 	if len(raw) > 2048 {
-		return nil, fmt.Errorf("Runner request cursor is too long")
+		return nil, fmt.Errorf("runner request cursor is too long")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
