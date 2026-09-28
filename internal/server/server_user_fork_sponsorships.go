@@ -266,6 +266,10 @@ func (s *Server) handleUserAddForkSponsorshipApproval(w http.ResponseWriter, r *
 	if !ok {
 		return
 	}
+	if s.gh == nil {
+		writeError(w, http.StatusInternalServerError, "github client is not configured")
+		return
+	}
 	sourceRepositoryID, ok := positivePathInt64(w, r.PathValue("sourceRepositoryID"), "invalid source repository id")
 	if !ok {
 		return
