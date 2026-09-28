@@ -207,7 +207,7 @@ describe("Sandbox service Settings", () => {
       },
     })
     expect(organization).toContain("Fork sponsorship")
-    expect(organization).toContain("Upstream repository")
+    expect(organization).toContain("Organization repository")
   })
 
   test("distinguishes custom Runner Specs in account Settings from the platform catalog", () => {

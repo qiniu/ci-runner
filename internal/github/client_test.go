@@ -976,6 +976,26 @@ func TestListUserInstallationRepositoriesUsesOAuthToken(t *testing.T) {
 	}
 }
 
+func TestListUserInstallationRepositoryDetailsPreservesSourceMetadata(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repositories":[{"id":42,"name":"project","full_name":"o/project","fork":false,"owner":{"id":7,"login":"o","type":"Organization"}},{"id":43,"name":"fork","full_name":"o/fork","fork":true,"owner":{"id":7,"login":"o","type":"Organization"}}]}`))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	repositories, err := client.ListUserInstallationRepositoryDetails(t.Context(), "user-token", 987)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 2 || repositories[0].ID != 42 || repositories[0].Name != "project" || repositories[0].Owner.ID != 7 || repositories[1].ID != 43 || !repositories[1].Fork {
+		t.Fatalf("unexpected repository details: %#v", repositories)
+	}
+}
+
 func TestListUserInstallationRepositoriesClassifiesRateLimitResponse(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {

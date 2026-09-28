@@ -64,6 +64,8 @@ requeue 和 mismatched-job requeue 都会清除两类快照，从而重新检查
 
 owner 可管理的 Organization scope 暴露：
 
+- `GET /user/fork-sponsorship-repositories?installation_id=...` 列出同时对当前登录
+  用户和所选 GitHub App installation 可见、由当前组织拥有且不是 Fork 的仓库；
 - `GET /user/fork-sponsorship-policies?installation_id=...`
 - `POST /user/fork-sponsorship-policies?installation_id=...` 按 full name 解析并创建 source repository 策略；
 - `PUT /user/fork-sponsorship-policies/{source_repository_id}?installation_id=...`
@@ -75,7 +77,8 @@ owner 可管理的 Organization scope 暴露：
 不产生 audit event。
 
 Organization Settings 增加 **Fork sponsorship** 标签页，个人账户不显示。页面管理
-策略创建、模式、启用状态、并发和精确 Fork 批准，不暴露凭据或 Provider 目录。
+策略创建、启用状态和并发，不暴露凭据或 Provider 目录。新策略通过可搜索的组织仓库
+选择器创建；准入方式为互斥单选，仅在“需要精确审批”模式下显示精确 Fork 审批。
 
 赞助不能扩大 Settings 权限，也不能扩大普通用户现有的精确
 `(installation_id, repository_full_name)` Job 授权交集。

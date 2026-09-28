@@ -381,6 +381,21 @@ func (c *Client) ListInstallationRepositories(ctx context.Context, installationI
 
 // ListUserInstallationRepositories lists repositories accessible to both the user token and installation.
 func (c *Client) ListUserInstallationRepositories(ctx context.Context, token string, installationID int64) ([]string, error) {
+	repositories, err := c.ListUserInstallationRepositoryDetails(ctx, token, installationID)
+	if err != nil {
+		return nil, err
+	}
+	fullNames := make([]string, 0, len(repositories))
+	for _, repository := range repositories {
+		if fullName := strings.TrimSpace(repository.FullName); fullName != "" {
+			fullNames = append(fullNames, fullName)
+		}
+	}
+	return fullNames, nil
+}
+
+// ListUserInstallationRepositoryDetails lists repository metadata accessible to both the user token and installation.
+func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, token string, installationID int64) ([]Repository, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, fmt.Errorf("github oauth token is required")
@@ -389,7 +404,7 @@ func (c *Client) ListUserInstallationRepositories(ctx context.Context, token str
 		return nil, fmt.Errorf("installation id is required")
 	}
 	nextURL := fmt.Sprintf("%s/user/installations/%d/repositories?per_page=100", c.baseURL, installationID)
-	var repositories []string
+	var repositories []Repository
 	for nextURL != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 		if err != nil {
@@ -416,18 +431,12 @@ func (c *Client) ListUserInstallationRepositories(ctx context.Context, token str
 			}
 		}
 		var out struct {
-			Repositories []struct {
-				FullName string `json:"full_name"`
-			} `json:"repositories"`
+			Repositories []Repository `json:"repositories"`
 		}
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, err
 		}
-		for _, repo := range out.Repositories {
-			if fullName := strings.TrimSpace(repo.FullName); fullName != "" {
-				repositories = append(repositories, fullName)
-			}
-		}
+		repositories = append(repositories, out.Repositories...)
 		nextURL = nextLink(resp.Header.Get("Link"))
 	}
 	return repositories, nil

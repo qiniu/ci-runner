@@ -21,6 +21,11 @@ func TestUserForkSponsorshipPolicyAPIRequiresOrganizationOwnerAndAuditsMutation(
 		switch r.URL.Path {
 		case "/user/memberships/orgs":
 			_, _ = w.Write([]byte(`[{"state":"active","role":"admin","organization":{"id":600,"login":"acme"}}]`))
+		case "/user/installations/200/repositories":
+			if r.Header.Get("Authorization") != "Bearer user-token" {
+				t.Fatalf("repository list authorization = %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"repositories":[{"id":300,"name":"project","full_name":"acme/project","fork":false,"owner":{"id":600,"login":"acme","type":"Organization"}},{"id":301,"name":"forked","full_name":"acme/forked","fork":true,"owner":{"id":600,"login":"acme","type":"Organization"}},{"id":302,"name":"other","full_name":"other/project","fork":false,"owner":{"id":700,"login":"other","type":"Organization"}}]}`))
 		case "/repos/acme/project":
 			_, _ = w.Write([]byte(`{"id":300,"full_name":"acme/project","fork":false,"owner":{"id":600,"login":"acme","type":"Organization"}}`))
 		default:
@@ -41,10 +46,19 @@ func TestUserForkSponsorshipPolicyAPIRequiresOrganizationOwnerAndAuditsMutation(
 		t.Fatal(err)
 	}
 	target := "/user/fork-sponsorship-policies?installation_id=" + strconv.FormatInt(installation.ID, 10)
-	req := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(`{"source_repository_full_name":"acme/project","mode":"approval_required","enabled":true,"max_concurrency":2}`))
-	req.Header.Set("Content-Type", "application/json")
+	repositoriesTarget := "/user/fork-sponsorship-repositories?installation_id=" + strconv.FormatInt(installation.ID, 10)
+	req := httptest.NewRequest(http.MethodGet, repositoriesTarget, nil)
 	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
 	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"full_name":"acme/project"`) || strings.Contains(rec.Body.String(), "acme/forked") || strings.Contains(rec.Body.String(), "other/project") {
+		t.Fatalf("list source repositories status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(`{"source_repository_full_name":"acme/project","mode":"approval_required","enabled":true,"max_concurrency":2}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"source_repository_id":300`) {
 		t.Fatalf("create policy status=%d body=%s", rec.Code, rec.Body.String())

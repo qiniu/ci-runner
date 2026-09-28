@@ -439,6 +439,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PATCH /user/runner-specs/{name}", s.handleUserPatchRunnerSpec)
 	s.mux.HandleFunc("DELETE /user/runner-specs/{name}", s.handleUserDeleteRunnerSpec)
 	s.mux.HandleFunc("GET /user/fork-sponsorship-policies", s.handleUserListForkSponsorshipPolicies)
+	s.mux.HandleFunc("GET /user/fork-sponsorship-repositories", s.handleUserListForkSponsorshipRepositories)
 	s.mux.HandleFunc("POST /user/fork-sponsorship-policies", s.handleUserCreateForkSponsorshipPolicy)
 	s.mux.HandleFunc("PUT /user/fork-sponsorship-policies/{sourceRepositoryID}", s.handleUserPutForkSponsorshipPolicy)
 	s.mux.HandleFunc("DELETE /user/fork-sponsorship-policies/{sourceRepositoryID}", s.handleUserDeleteForkSponsorshipPolicy)

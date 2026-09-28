@@ -1,19 +1,30 @@
-import { Plus, RefreshCw, Save, Trash2 } from "lucide-react"
+import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import type { ForkSponsorshipMode, ForkSponsorshipPolicy } from "@/admin-types"
+import type { ForkSponsorshipMode, ForkSponsorshipPolicy, ForkSponsorshipRepository } from "@/admin-types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 
 type Request = (url: string, options?: RequestInit) => Promise<unknown>
 
 const defaultMode: ForkSponsorshipMode = "approval_required"
+
+const eligibilityModes: Array<{
+  value: ForkSponsorshipMode
+  label: "user.approvalRequired" | "user.writePermission" | "user.organizationMember"
+  description: "user.approvalRequiredDescription" | "user.writePermissionDescription" | "user.organizationMemberDescription"
+}> = [
+  { value: "approval_required", label: "user.approvalRequired", description: "user.approvalRequiredDescription" },
+  { value: "write_permission", label: "user.writePermission", description: "user.writePermissionDescription" },
+  { value: "organization_member", label: "user.organizationMember", description: "user.organizationMemberDescription" },
+]
 
 function policyPayload(policy: Pick<ForkSponsorshipPolicy, "source_repository_full_name" | "mode" | "enabled" | "max_concurrency">) {
   return {
@@ -27,48 +38,89 @@ function policyPayload(policy: Pick<ForkSponsorshipPolicy, "source_repository_fu
 export function ForkSponsorshipSection({ request, installationID }: { request: Request; installationID: number }) {
   const { t } = useTranslation()
   const [items, setItems] = useState<ForkSponsorshipPolicy[]>([])
+  const [repositories, setRepositories] = useState<ForkSponsorshipRepository[]>([])
   const [loading, setLoading] = useState(true)
+  const [repositoriesLoading, setRepositoriesLoading] = useState(true)
+  const [repositoriesError, setRepositoriesError] = useState("")
   const [saving, setSaving] = useState(false)
   const [sourceRepository, setSourceRepository] = useState("")
+  const [repositoryOpen, setRepositoryOpen] = useState(false)
+  const [repositoryQuery, setRepositoryQuery] = useState("")
   const query = `?installation_id=${installationID}`
-	const currentQuery = useRef(query)
-	const loadGeneration = useRef(0)
-	currentQuery.current = query
+  const currentQuery = useRef(query)
+  const loadGeneration = useRef(0)
+  const repositoryLoadGeneration = useRef(0)
+  currentQuery.current = query
 
   const load = useCallback(async () => {
-		const generation = ++loadGeneration.current
+    const generation = ++loadGeneration.current
     setLoading(true)
     try {
       const response = await request(`/user/fork-sponsorship-policies${query}`) as { items?: ForkSponsorshipPolicy[] }
-			if (generation === loadGeneration.current && currentQuery.current === query) setItems(response.items || [])
+      if (generation === loadGeneration.current && currentQuery.current === query) setItems(response.items || [])
     } catch (error) {
-			if (generation === loadGeneration.current && currentQuery.current === query) toast.error(error instanceof Error ? error.message : t("user.forkSponsorshipLoadFailed"))
+      if (generation === loadGeneration.current && currentQuery.current === query) toast.error(error instanceof Error ? error.message : t("user.forkSponsorshipLoadFailed"))
     } finally {
-			if (generation === loadGeneration.current && currentQuery.current === query) setLoading(false)
+      if (generation === loadGeneration.current && currentQuery.current === query) setLoading(false)
     }
   }, [query, request, t])
 
-  useEffect(() => { void load() }, [load])
+  const loadRepositories = useCallback(async () => {
+    const generation = ++repositoryLoadGeneration.current
+    setRepositoriesLoading(true)
+    setRepositoriesError("")
+    try {
+      const response = await request(`/user/fork-sponsorship-repositories${query}`) as { items?: ForkSponsorshipRepository[] }
+      if (generation === repositoryLoadGeneration.current && currentQuery.current === query) setRepositories(response.items || [])
+    } catch (error) {
+      if (generation === repositoryLoadGeneration.current && currentQuery.current === query) {
+        setRepositoriesError(error instanceof Error ? error.message : t("user.sourceRepositoriesLoadFailed"))
+      }
+    } finally {
+      if (generation === repositoryLoadGeneration.current && currentQuery.current === query) setRepositoriesLoading(false)
+    }
+  }, [query, request, t])
+
+  useEffect(() => {
+    void load()
+    void loadRepositories()
+  }, [load, loadRepositories])
+
+  useEffect(() => {
+    if (sourceRepository && items.some((item) => item.source_repository_full_name === sourceRepository)) {
+      setSourceRepository("")
+    }
+  }, [items, sourceRepository])
+
+  const configuredRepositoryIDs = new Set(items.map((item) => item.source_repository_id))
+  const availableRepositories = repositories.filter((repository) => !configuredRepositoryIDs.has(repository.id))
+  const normalizedRepositoryQuery = repositoryQuery.trim().toLocaleLowerCase()
+  const filteredRepositories = availableRepositories.filter((repository) => (
+    !normalizedRepositoryQuery
+    || repository.name.toLocaleLowerCase().includes(normalizedRepositoryQuery)
+    || repository.full_name.toLocaleLowerCase().includes(normalizedRepositoryQuery)
+  ))
+  const selectedRepository = repositories.find((repository) => repository.full_name === sourceRepository)
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (saving || !sourceRepository.trim()) return
-		const operationQuery = query
+    if (saving || !sourceRepository) return
+    const operationQuery = query
     setSaving(true)
     try {
       await request(`/user/fork-sponsorship-policies${query}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_repository_full_name: sourceRepository.trim(), mode: defaultMode, enabled: false, max_concurrency: 1 }),
+        body: JSON.stringify({ source_repository_full_name: sourceRepository, mode: defaultMode, enabled: false, max_concurrency: 1 }),
       })
-			if (currentQuery.current !== operationQuery) return
+      if (currentQuery.current !== operationQuery) return
       setSourceRepository("")
       toast.success(t("user.forkSponsorshipSaved"))
       await load()
     } catch (error) {
-			if (currentQuery.current === operationQuery) toast.error(error instanceof Error ? error.message : t("user.forkSponsorshipSaveFailed"))
+      if (currentQuery.current === operationQuery) toast.error(error instanceof Error ? error.message : t("user.forkSponsorshipSaveFailed"))
     } finally {
-			if (currentQuery.current === operationQuery) setSaving(false)
+      if (currentQuery.current === operationQuery) setSaving(false)
     }
   }
 
@@ -83,14 +135,82 @@ export function ForkSponsorshipSection({ request, installationID }: { request: R
           <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={create}>
             <div className="min-w-0 flex-1 space-y-2">
               <Label htmlFor={`fork-source-${installationID}`}>{t("user.sourceRepository")}</Label>
-              <Input id={`fork-source-${installationID}`} value={sourceRepository} onChange={(event) => setSourceRepository(event.target.value)} placeholder={t("user.sourceRepositoryPlaceholder")} autoComplete="off" />
+              <Popover
+                open={repositoryOpen}
+                onOpenChange={(open) => {
+                  setRepositoryOpen(open)
+                  if (open) setRepositoryQuery("")
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <Button
+                    id={`fork-source-${installationID}`}
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={repositoryOpen}
+                    aria-label={t("user.sourceRepository")}
+                    className="w-full justify-between px-3 font-normal"
+                    disabled={repositoriesLoading && repositories.length === 0}
+                  >
+                    <span className={cn("truncate", !selectedRepository && "text-muted-foreground")}>
+                      {selectedRepository?.name || t("user.sourceRepositoryPlaceholder")}
+                    </span>
+                    {repositoriesLoading ? <LoaderCircle className="size-4 animate-spin opacity-50" /> : <ChevronsUpDown className="size-4 opacity-50" />}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                  <div className="border-b p-2">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        data-testid="fork-source-repository-search"
+                        value={repositoryQuery}
+                        onChange={(event) => setRepositoryQuery(event.target.value)}
+                        placeholder={t("user.searchSourceRepositories")}
+                        className="pl-8"
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto p-1" role="listbox" aria-label={t("user.sourceRepository")}>
+                    {filteredRepositories.map((repository) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={sourceRepository === repository.full_name}
+                        key={repository.id}
+                        className="flex w-full items-start gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                        onClick={() => {
+                          setSourceRepository(repository.full_name)
+                          setRepositoryOpen(false)
+                        }}
+                      >
+                        <Check className={cn("mt-0.5 size-4 shrink-0", sourceRepository === repository.full_name ? "opacity-100" : "opacity-0")} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium">{repository.name}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{repository.full_name}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {!repositoriesLoading && filteredRepositories.length === 0 ? (
+                      <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                        {normalizedRepositoryQuery ? t("user.noMatchingSourceRepositories") : t("user.noAvailableSourceRepositories")}
+                      </div>
+                    ) : null}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <p className={cn("text-xs", repositoriesError ? "text-destructive" : "text-muted-foreground")}>
+                {repositoriesError || t("user.sourceRepositoryDescription")}
+              </p>
             </div>
-            <Button type="submit" disabled={saving || !sourceRepository.trim()}>
+            <Button type="submit" disabled={saving || !sourceRepository}>
               <Plus className="h-4 w-4" />
               {t("user.addPolicy")}
             </Button>
-            <Button type="button" variant="outline" size="icon" onClick={() => void load()} disabled={loading} title={t("common.refresh")}>
-              <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            <Button type="button" variant="outline" size="icon" onClick={() => { void load(); void loadRepositories() }} disabled={loading || repositoriesLoading} title={t("common.refresh")}>
+              <RefreshCw className={loading || repositoriesLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             </Button>
           </form>
         </CardContent>
@@ -201,18 +321,36 @@ function ForkSponsorshipPolicyEditor({ item, query, request, onChanged }: { item
           </Button>
         </div>
       </div>
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_160px_auto] sm:items-end">
-        <div className="space-y-2">
-          <Label>{t("user.eligibilityMode")}</Label>
-          <Select value={mode} onValueChange={(value) => setMode(value as ForkSponsorshipMode)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="approval_required">{t("user.approvalRequired")}</SelectItem>
-              <SelectItem value="write_permission">{t("user.writePermission")}</SelectItem>
-              <SelectItem value="organization_member">{t("user.organizationMember")}</SelectItem>
-            </SelectContent>
-          </Select>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">{t("user.eligibilityMode")}</legend>
+        <div className="grid gap-2 lg:grid-cols-3">
+          {eligibilityModes.map((option) => (
+            <label
+              key={option.value}
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors hover:bg-muted/50",
+                mode === option.value && "border-primary bg-primary/5",
+                saving && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <input
+                type="radio"
+                name={`fork-mode-${item.source_repository_id}`}
+                value={option.value}
+                checked={mode === option.value}
+                disabled={saving}
+                onChange={() => setMode(option.value)}
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{t(option.label)}</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{t(option.description)}</span>
+              </span>
+            </label>
+          ))}
         </div>
+      </fieldset>
+      <div className="grid gap-4 sm:grid-cols-[160px_auto] sm:items-end">
         <div className="space-y-2">
           <Label htmlFor={`fork-limit-${item.source_repository_id}`}>{t("user.maxConcurrency")}</Label>
           <Input id={`fork-limit-${item.source_repository_id}`} type="number" min="1" step="1" value={maxConcurrency} onChange={(event) => setMaxConcurrency(event.target.value)} />
@@ -222,7 +360,7 @@ function ForkSponsorshipPolicyEditor({ item, query, request, onChanged }: { item
           <Label htmlFor={`fork-enabled-${item.source_repository_id}`}>{t("common.enabled")}</Label>
         </div>
       </div>
-      <div className="space-y-3">
+      {mode === "approval_required" && <div className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold">{t("user.approvedForks")}</h4>
           <p className="text-xs text-muted-foreground">{t("user.approvedForksDescription")}</p>
@@ -249,7 +387,7 @@ function ForkSponsorshipPolicyEditor({ item, query, request, onChanged }: { item
             ))}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   )
 }

@@ -86,6 +86,9 @@ policies are evaluated again.
 
 Owner-manageable organization scopes expose:
 
+- `GET /user/fork-sponsorship-repositories?installation_id=...` lists
+  non-fork repositories owned by the organization and visible through both the
+  signed-in user token and the selected GitHub App installation.
 - `GET /user/fork-sponsorship-policies?installation_id=...`
 - `POST /user/fork-sponsorship-policies?installation_id=...` resolves a new source repository by full name.
 - `PUT /user/fork-sponsorship-policies/{source_repository_id}?installation_id=...`
@@ -97,8 +100,10 @@ Repository metadata is validated before an audited database transaction. Data
 and audit evidence commit atomically; rejected writes leave no audit event.
 
 Organization Settings adds a **Fork sponsorship** tab. Personal account routes
-do not show it. The page manages policy creation, mode, enabled state,
-concurrency and exact fork approvals without exposing credentials or catalogs.
+do not show it. Policy creation uses a searchable organization-repository
+picker. Eligibility is one mutually exclusive mode, and exact fork approvals
+are shown only for the approval-required mode. The page also manages enabled
+state and concurrency without exposing credentials or catalogs.
 
 Sponsorship never broadens Settings access or ordinary-user Job access beyond
 the existing exact `(installation_id, repository_full_name)` intersection.

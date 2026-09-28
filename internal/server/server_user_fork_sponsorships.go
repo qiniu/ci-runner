@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,12 @@ import (
 type userForkSponsorshipPolicyResponse struct {
 	state.ForkSponsorshipPolicy
 	Approvals []state.ForkSponsorshipApproval `json:"approvals"`
+}
+
+type userForkSponsorshipRepositoryResponse struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
 }
 
 type userForkSponsorshipPolicyInput struct {
@@ -29,39 +36,39 @@ type userForkSponsorshipApprovalInput struct {
 	ForkRepositoryFullName string `json:"fork_repository_full_name"`
 }
 
-func (s *Server) userForkSponsorshipScope(w http.ResponseWriter, r *http.Request) (adminSession, int64, state.GitHubInstallationAccount, bool) {
+func (s *Server) userForkSponsorshipScope(w http.ResponseWriter, r *http.Request) (adminSession, state.Account, int64, state.GitHubInstallationAccount, bool) {
 	session, account, ok := s.requireUserSession(w, r)
 	if !ok {
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
 	scope, err := s.accountPreferenceScopeFromRequest(account.ID, r)
 	if err != nil || scope.Type != state.AccountScopeTypeGitHubInstall {
 		writeErrorCode(w, http.StatusBadRequest, "fork_sponsorship_scope_invalid", "an organization installation_id is required")
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
 	manageable, err := s.accountPreferenceScopeManageable(r.Context(), account.ID, scope)
 	if err != nil {
 		s.writeUserRepositoryAuthorizationError(w, err)
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
 	if !manageable {
 		writeErrorCode(w, http.StatusForbidden, "fork_sponsorship_scope_forbidden", "fork sponsorship for this organization is managed by its owners")
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
 	owner, err := s.githubInstallationOwner(r.Context(), scope.ID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to resolve GitHub installation owner")
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
 	if !strings.EqualFold(strings.TrimSpace(owner.AccountType), "organization") {
 		writeErrorCode(w, http.StatusBadRequest, "fork_sponsorship_scope_invalid", "fork sponsorship is available only for organization installations")
-		return adminSession{}, 0, state.GitHubInstallationAccount{}, false
+		return adminSession{}, state.Account{}, 0, state.GitHubInstallationAccount{}, false
 	}
-	return session, scope.ID, owner, true
+	return session, account, scope.ID, owner, true
 }
 
 func (s *Server) handleUserListForkSponsorshipPolicies(w http.ResponseWriter, r *http.Request) {
-	_, installationID, _, ok := s.userForkSponsorshipScope(w, r)
+	_, _, installationID, _, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}
@@ -82,8 +89,45 @@ func (s *Server) handleUserListForkSponsorshipPolicies(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) handleUserListForkSponsorshipRepositories(w http.ResponseWriter, r *http.Request) {
+	_, account, installationID, owner, ok := s.userForkSponsorshipScope(w, r)
+	if !ok {
+		return
+	}
+	if s.gh == nil {
+		writeError(w, http.StatusInternalServerError, "github client is not configured")
+		return
+	}
+	token, err := s.githubUserAccessToken(account.ID)
+	if err != nil {
+		s.writeUserRepositoryAuthorizationError(w, err)
+		return
+	}
+	repositories, err := s.gh.ListUserInstallationRepositoryDetails(r.Context(), token, installationID)
+	if err != nil {
+		s.writeUserRepositoryAuthorizationError(w, err)
+		return
+	}
+	items := make([]userForkSponsorshipRepositoryResponse, 0, len(repositories))
+	for _, repository := range repositories {
+		if repository.ID <= 0 || repository.Fork || repository.Owner.ID != owner.GitHubAccountID || !strings.EqualFold(strings.TrimSpace(repository.Owner.Login), strings.TrimSpace(owner.AccountLogin)) {
+			continue
+		}
+		fullName := strings.TrimSpace(repository.FullName)
+		name := strings.TrimSpace(repository.Name)
+		if fullName == "" || name == "" {
+			continue
+		}
+		items = append(items, userForkSponsorshipRepositoryResponse{ID: repository.ID, Name: name, FullName: fullName})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].FullName) < strings.ToLower(items[j].FullName)
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) handleUserPutForkSponsorshipPolicy(w http.ResponseWriter, r *http.Request) {
-	session, installationID, owner, ok := s.userForkSponsorshipScope(w, r)
+	session, _, installationID, owner, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}
@@ -136,7 +180,7 @@ func (s *Server) handleUserPutForkSponsorshipPolicy(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) handleUserCreateForkSponsorshipPolicy(w http.ResponseWriter, r *http.Request) {
-	session, installationID, owner, ok := s.userForkSponsorshipScope(w, r)
+	session, _, installationID, owner, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}
@@ -190,7 +234,7 @@ func (s *Server) handleUserCreateForkSponsorshipPolicy(w http.ResponseWriter, r 
 }
 
 func (s *Server) handleUserDeleteForkSponsorshipPolicy(w http.ResponseWriter, r *http.Request) {
-	session, installationID, _, ok := s.userForkSponsorshipScope(w, r)
+	session, _, installationID, _, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}
@@ -218,7 +262,7 @@ func (s *Server) handleUserDeleteForkSponsorshipPolicy(w http.ResponseWriter, r 
 }
 
 func (s *Server) handleUserAddForkSponsorshipApproval(w http.ResponseWriter, r *http.Request) {
-	session, installationID, _, ok := s.userForkSponsorshipScope(w, r)
+	session, _, installationID, _, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}
@@ -265,7 +309,7 @@ func (s *Server) handleUserAddForkSponsorshipApproval(w http.ResponseWriter, r *
 }
 
 func (s *Server) handleUserDeleteForkSponsorshipApproval(w http.ResponseWriter, r *http.Request) {
-	session, installationID, _, ok := s.userForkSponsorshipScope(w, r)
+	session, _, installationID, _, ok := s.userForkSponsorshipScope(w, r)
 	if !ok {
 		return
 	}

@@ -36,6 +36,9 @@ describe("ForkSponsorshipSection", () => {
     const requested = []
     const request = async (url) => {
       requested.push(url)
+      if (url.startsWith("/user/fork-sponsorship-repositories")) {
+        return { items: [{ id: 301, name: "another", full_name: "qiniu/another" }] }
+      }
       return {
         items: [{
           sponsor_installation_id: 989,
@@ -63,10 +66,14 @@ describe("ForkSponsorshipSection", () => {
     await act(async () => root.render(createElement(ForkSponsorshipSection, { request, installationID: 989 })))
     await settle()
 
-    expect(requested).toEqual(["/user/fork-sponsorship-policies?installation_id=989"])
+    expect(requested.sort()).toEqual([
+      "/user/fork-sponsorship-policies?installation_id=989",
+      "/user/fork-sponsorship-repositories?installation_id=989",
+    ])
     expect(container.textContent).toContain("qiniu/project")
     expect(container.textContent).toContain("miclle/project")
-    expect(container.textContent).toContain("Exact approvals are required")
+    expect(container.textContent).toContain("Used only when Exact approval required is selected")
+    expect(container.querySelectorAll('input[type="radio"]').length).toBe(3)
   })
 
   test("synchronizes editor fields after refreshing changed policy data", async () => {
@@ -79,7 +86,9 @@ describe("ForkSponsorshipSection", () => {
       max_concurrency: 2,
       approvals: [],
     }
-    const request = async () => ({ items: [policy] })
+    const request = async (url) => url.startsWith("/user/fork-sponsorship-repositories")
+      ? { items: [{ id: 301, name: "another", full_name: "qiniu/another" }] }
+      : { items: [policy] }
     const container = document.createElement("div")
     document.body.append(container)
     const root = createRoot(container)
@@ -100,5 +109,8 @@ describe("ForkSponsorshipSection", () => {
 
     expect(container.querySelector("#fork-limit-300").value).toBe("7")
     expect(container.querySelector('[role="switch"]').getAttribute("data-state")).toBe("unchecked")
+    expect(container.querySelector('input[value="write_permission"]').checked).toBe(true)
+    expect(container.textContent).not.toContain("Approved forks")
   })
+
 })

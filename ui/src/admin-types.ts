@@ -275,6 +275,12 @@ export type GitHubInstallation = {
 
 export type ForkSponsorshipMode = "approval_required" | "write_permission" | "organization_member"
 
+export type ForkSponsorshipRepository = {
+  id: number
+  name: string
+  full_name: string
+}
+
 export type ForkSponsorshipApproval = {
   sponsor_installation_id: number
   source_repository_id: number
