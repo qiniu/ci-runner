@@ -74,6 +74,10 @@ describe("ForkSponsorshipSection", () => {
     expect(container.textContent).toContain("miclle/project")
     expect(container.textContent).toContain("Used only when Exact approval required is selected")
     expect(container.querySelectorAll('input[type="radio"]').length).toBe(3)
+    const sourceControlRow = container.querySelector('[data-testid="fork-source-control-row"]')
+    expect(sourceControlRow.querySelector('[role="combobox"]')).toBeTruthy()
+    expect(sourceControlRow.querySelector('button[type="submit"]')).toBeTruthy()
+    expect(sourceControlRow.querySelector('button[aria-label="Refresh"]')).toBeTruthy()
   })
 
   test("synchronizes editor fields after refreshing changed policy data", async () => {

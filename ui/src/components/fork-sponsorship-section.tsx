@@ -132,86 +132,90 @@ export function ForkSponsorshipSection({ request, installationID }: { request: R
           <CardDescription>{t("user.forkSponsorshipDescription")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={create}>
-            <div className="min-w-0 flex-1 space-y-2">
-              <Label htmlFor={`fork-source-${installationID}`}>{t("user.sourceRepository")}</Label>
-              <Popover
-                open={repositoryOpen}
-                onOpenChange={(open) => {
-                  setRepositoryOpen(open)
-                  if (open) setRepositoryQuery("")
-                }}
-              >
-                <PopoverTrigger asChild>
-                  <Button
-                    id={`fork-source-${installationID}`}
-                    type="button"
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={repositoryOpen}
-                    aria-label={t("user.sourceRepository")}
-                    className="w-full justify-between px-3 font-normal"
-                    disabled={repositoriesLoading && repositories.length === 0}
-                  >
-                    <span className={cn("truncate", !selectedRepository && "text-muted-foreground")}>
-                      {selectedRepository?.name || t("user.sourceRepositoryPlaceholder")}
-                    </span>
-                    {repositoriesLoading ? <LoaderCircle className="size-4 animate-spin opacity-50" /> : <ChevronsUpDown className="size-4 opacity-50" />}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
-                  <div className="border-b p-2">
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        data-testid="fork-source-repository-search"
-                        value={repositoryQuery}
-                        onChange={(event) => setRepositoryQuery(event.target.value)}
-                        placeholder={t("user.searchSourceRepositories")}
-                        className="pl-8"
-                        autoComplete="off"
-                      />
-                    </div>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto p-1" role="listbox" aria-label={t("user.sourceRepository")}>
-                    {filteredRepositories.map((repository) => (
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={sourceRepository === repository.full_name}
-                        key={repository.id}
-                        className="flex w-full items-start gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-                        onClick={() => {
-                          setSourceRepository(repository.full_name)
-                          setRepositoryOpen(false)
-                        }}
-                      >
-                        <Check className={cn("mt-0.5 size-4 shrink-0", sourceRepository === repository.full_name ? "opacity-100" : "opacity-0")} />
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">{repository.name}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{repository.full_name}</span>
-                        </span>
-                      </button>
-                    ))}
-                    {!repositoriesLoading && filteredRepositories.length === 0 ? (
-                      <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                        {normalizedRepositoryQuery ? t("user.noMatchingSourceRepositories") : t("user.noAvailableSourceRepositories")}
+          <form className="space-y-2" onSubmit={create}>
+            <Label htmlFor={`fork-source-${installationID}`}>{t("user.sourceRepository")}</Label>
+            <div data-testid="fork-source-control-row" className="flex min-w-0 flex-col gap-2 sm:flex-row">
+              <div className="min-w-0 flex-1">
+                <Popover
+                  open={repositoryOpen}
+                  onOpenChange={(open) => {
+                    setRepositoryOpen(open)
+                    if (open) setRepositoryQuery("")
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      id={`fork-source-${installationID}`}
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={repositoryOpen}
+                      aria-label={t("user.sourceRepository")}
+                      className="w-full justify-between px-3 font-normal"
+                      disabled={repositoriesLoading && repositories.length === 0}
+                    >
+                      <span className={cn("truncate", !selectedRepository && "text-muted-foreground")}>
+                        {selectedRepository?.name || t("user.sourceRepositoryPlaceholder")}
+                      </span>
+                      {repositoriesLoading ? <LoaderCircle className="size-4 animate-spin opacity-50" /> : <ChevronsUpDown className="size-4 opacity-50" />}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                    <div className="border-b p-2">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          data-testid="fork-source-repository-search"
+                          value={repositoryQuery}
+                          onChange={(event) => setRepositoryQuery(event.target.value)}
+                          placeholder={t("user.searchSourceRepositories")}
+                          className="pl-8"
+                          autoComplete="off"
+                        />
                       </div>
-                    ) : null}
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <p className={cn("text-xs", repositoriesError ? "text-destructive" : "text-muted-foreground")}>
-                {repositoriesError || t("user.sourceRepositoryDescription")}
-              </p>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto p-1" role="listbox" aria-label={t("user.sourceRepository")}>
+                      {filteredRepositories.map((repository) => (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={sourceRepository === repository.full_name}
+                          key={repository.id}
+                          className="flex w-full items-start gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                          onClick={() => {
+                            setSourceRepository(repository.full_name)
+                            setRepositoryOpen(false)
+                          }}
+                        >
+                          <Check className={cn("mt-0.5 size-4 shrink-0", sourceRepository === repository.full_name ? "opacity-100" : "opacity-0")} />
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium">{repository.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">{repository.full_name}</span>
+                          </span>
+                        </button>
+                      ))}
+                      {!repositoriesLoading && filteredRepositories.length === 0 ? (
+                        <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                          {normalizedRepositoryQuery ? t("user.noMatchingSourceRepositories") : t("user.noAvailableSourceRepositories")}
+                        </div>
+                      ) : null}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button className="min-w-0 flex-1 sm:flex-none" type="submit" disabled={saving || !sourceRepository}>
+                  <Plus className="h-4 w-4" />
+                  {t("user.addPolicy")}
+                </Button>
+                <Button type="button" variant="outline" size="icon" onClick={() => { void load(); void loadRepositories() }} disabled={loading || repositoriesLoading} title={t("common.refresh")} aria-label={t("common.refresh")}>
+                  <RefreshCw className={loading || repositoriesLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+                </Button>
+              </div>
             </div>
-            <Button type="submit" disabled={saving || !sourceRepository}>
-              <Plus className="h-4 w-4" />
-              {t("user.addPolicy")}
-            </Button>
-            <Button type="button" variant="outline" size="icon" onClick={() => { void load(); void loadRepositories() }} disabled={loading || repositoriesLoading} title={t("common.refresh")}>
-              <RefreshCw className={loading || repositoriesLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            </Button>
+            <p className={cn("text-xs", repositoriesError ? "text-destructive" : "text-muted-foreground")}>
+              {repositoriesError || t("user.sourceRepositoryDescription")}
+            </p>
           </form>
         </CardContent>
       </Card>
