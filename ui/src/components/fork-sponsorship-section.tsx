@@ -113,6 +113,12 @@ function ForkSponsorshipPolicyEditor({ item, query, request, onChanged }: { item
   const [forkRepository, setForkRepository] = useState("")
   const [saving, setSaving] = useState(false)
 
+  useEffect(() => {
+    setMode(item.mode)
+    setEnabled(item.enabled)
+    setMaxConcurrency(String(item.max_concurrency))
+  }, [item.mode, item.enabled, item.max_concurrency])
+
   const save = async () => {
     const limit = Number(maxConcurrency)
     if (!Number.isInteger(limit) || limit <= 0) return

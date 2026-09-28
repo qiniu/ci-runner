@@ -667,7 +667,11 @@ function AccountsPage({
                 </TabsContent>
                 {preferenceInstallationID && selected.account_type?.toLowerCase() === "organization" && (
                   <TabsContent value="fork-sponsorship">
-                    <ForkSponsorshipSection request={request} installationID={preferenceInstallationID} />
+                    <ForkSponsorshipSection
+                      key={`fork-sponsorship-${preferenceInstallationID}`}
+                      request={request}
+                      installationID={preferenceInstallationID}
+                    />
                   </TabsContent>
                 )}
                 <TabsContent value="sandbox-templates">

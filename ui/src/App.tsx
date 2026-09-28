@@ -1717,8 +1717,10 @@ function accountSettingsPath(
   currentLogin: string | undefined,
   tab: AccountSettingsTab
 ): string {
-  const segment = tab === "preferences" ? "preferences" : tab === "sandbox-templates" ? "sandbox-templates" : tab === "sandbox-instances" ? "sandbox-instances" : tab === "runner-specs" ? "runner-specs" : tab === "fork-sponsorship" ? "fork-sponsorship" : "repositories"
   const login = accountLogin?.trim()
+  const isPersonalDestination = !login || login === currentLogin
+  const effectiveTab = isPersonalDestination && tab === "fork-sponsorship" ? "preferences" : tab
+  const segment = effectiveTab === "preferences" ? "preferences" : effectiveTab === "sandbox-templates" ? "sandbox-templates" : effectiveTab === "sandbox-instances" ? "sandbox-instances" : effectiveTab === "runner-specs" ? "runner-specs" : effectiveTab === "fork-sponsorship" ? "fork-sponsorship" : "repositories"
   if (!login || login === currentLogin) return `/account/${segment}`
   return `/organizations/${encodeURIComponent(login)}/${segment}`
 }

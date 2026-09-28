@@ -68,4 +68,37 @@ describe("ForkSponsorshipSection", () => {
     expect(container.textContent).toContain("miclle/project")
     expect(container.textContent).toContain("Exact approvals are required")
   })
+
+  test("synchronizes editor fields after refreshing changed policy data", async () => {
+    let policy = {
+      sponsor_installation_id: 989,
+      source_repository_id: 300,
+      source_repository_full_name: "qiniu/project",
+      mode: "approval_required",
+      enabled: true,
+      max_concurrency: 2,
+      approvals: [],
+    }
+    const request = async () => ({ items: [policy] })
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+
+    await act(async () => root.render(createElement(ForkSponsorshipSection, { request, installationID: 989 })))
+    await settle()
+
+    expect(container.querySelector("#fork-limit-300").value).toBe("2")
+
+    policy = { ...policy, mode: "write_permission", enabled: false, max_concurrency: 7 }
+    const refresh = container.querySelector('button[title="Refresh"]')
+    await act(async () => {
+      refresh.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector("#fork-limit-300").value).toBe("7")
+    expect(container.querySelector('[role="switch"]').getAttribute("data-state")).toBe("unchecked")
+  })
 })
