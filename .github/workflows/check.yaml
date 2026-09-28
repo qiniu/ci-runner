@@ -163,7 +163,7 @@ jobs:
     env:
       RUNNERD_CATALOG_BACKEND_TESTS: "1"
       RUNNERD_POSTGRES_TEST_DSN: host=127.0.0.1 user=postgres password=runnerd dbname=runnerd_test port=5432 sslmode=disable
-      RUNNERD_MYSQL_TEST_DSN: root:runnerd@tcp(127.0.0.1:3306)/runnerd_test
+      RUNNERD_MYSQL_TEST_DSN: root:runnerd@tcp(127.0.0.1:3306)/runnerd_test?clientFoundRows=true
     steps:
       - uses: actions/checkout@v6
         with:

@@ -118,7 +118,10 @@ func (s *DBStore) CreateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (For
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
+	result := db.Create(&record)
+	if translator, ok := db.Dialector.(gorm.ErrorTranslator); ok && result.Error != nil && errors.Is(translator.Translate(result.Error), gorm.ErrDuplicatedKey) {
+		return ForkSponsorshipPolicy{}, ErrConflict
+	}
 	if result.Error != nil {
 		return ForkSponsorshipPolicy{}, result.Error
 	}

@@ -3853,6 +3853,7 @@ func TestApplyMutationWithAuditSQLBackends(t *testing.T) {
 			}
 
 			testProfileConditionalSave(t, store)
+			testForkSponsorshipPolicyDuplicateCreateSQLBackend(t, store)
 			testForkSponsorshipApprovalDeleteSerializationSQLBackend(t, store, db)
 
 			if err := db.Migrator().DropTable(&auditEventRecord{}); err != nil {
@@ -3874,6 +3875,54 @@ func TestApplyMutationWithAuditSQLBackends(t *testing.T) {
 				t.Fatalf("%s mutation committed despite audit failure: %v", backend.name, err)
 			}
 		})
+	}
+}
+
+func testForkSponsorshipPolicyDuplicateCreateSQLBackend(t *testing.T, store *DBStore) {
+	t.Helper()
+	const resourceID = "801:802"
+	policy := ForkSponsorshipPolicy{
+		SponsorInstallationID:    801,
+		SourceRepositoryID:       802,
+		SourceRepositoryFullName: "acme/duplicate",
+		Mode:                     ForkSponsorshipModeApprovalRequired,
+		Enabled:                  true,
+		MaxConcurrency:           2,
+	}
+	if _, err := store.ApplyMutationWithAudit(AuditEvent{
+		Actor: "github:test", Action: "fork_sponsorship_policy.create", ResourceType: "fork_sponsorship_policy", ResourceID: resourceID,
+	}, func(tx Store) error {
+		_, mutationErr := tx.CreateForkSponsorshipPolicy(policy)
+		return mutationErr
+	}); err != nil {
+		t.Fatalf("create fork sponsorship policy with audit: %v", err)
+	}
+	eventsBefore, err := store.ListAuditEvents(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	duplicate := policy
+	duplicate.Mode = ForkSponsorshipModeOrganizationMember
+	duplicate.MaxConcurrency = 9
+	if _, err := store.ApplyMutationWithAudit(AuditEvent{
+		Actor: "github:test", Action: "fork_sponsorship_policy.create", ResourceType: "fork_sponsorship_policy", ResourceID: resourceID,
+	}, func(tx Store) error {
+		_, mutationErr := tx.CreateForkSponsorshipPolicy(duplicate)
+		return mutationErr
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate fork sponsorship policy create = %v, want ErrConflict", err)
+	}
+	saved, err := store.GetForkSponsorshipPolicy(policy.SponsorInstallationID, policy.SourceRepositoryID)
+	if err != nil || saved.Mode != policy.Mode || saved.MaxConcurrency != policy.MaxConcurrency {
+		t.Fatalf("duplicate create changed fork sponsorship policy: policy=%#v err=%v", saved, err)
+	}
+	eventsAfter, err := store.ListAuditEvents(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsAfter) != len(eventsBefore) {
+		t.Fatalf("duplicate create persisted audit event: before=%d after=%d", len(eventsBefore), len(eventsAfter))
 	}
 }
 
