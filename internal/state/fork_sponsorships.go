@@ -298,16 +298,7 @@ func (s *DBStore) InFlightCountForForkSponsorship(sponsorInstallationID, sourceR
 }
 
 func forkSponsorshipPolicyFromRecord(record forkSponsorshipPolicyRecord) ForkSponsorshipPolicy {
-	return ForkSponsorshipPolicy{
-		SponsorInstallationID:    record.SponsorInstallationID,
-		SourceRepositoryID:       record.SourceRepositoryID,
-		SourceRepositoryFullName: record.SourceRepositoryFullName,
-		Mode:                     record.Mode,
-		Enabled:                  record.Enabled,
-		MaxConcurrency:           record.MaxConcurrency,
-		CreatedAt:                record.CreatedAt,
-		UpdatedAt:                record.UpdatedAt,
-	}
+	return ForkSponsorshipPolicy(record)
 }
 
 func forkSponsorshipApprovalFromRecord(record forkSponsorshipApprovalRecord) ForkSponsorshipApproval {

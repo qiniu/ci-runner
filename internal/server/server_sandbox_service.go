@@ -13,9 +13,11 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
-var errSandboxServiceNotConfigured = errors.New("sandbox service not configured")
-var errForkSponsorshipAtCapacity = errors.New("fork sponsorship is at capacity")
-var errForkSponsorshipPolicyChanged = errors.New("fork sponsorship policy changed during startup")
+var (
+	errSandboxServiceNotConfigured  = errors.New("sandbox service not configured")
+	errForkSponsorshipAtCapacity    = errors.New("fork sponsorship is at capacity")
+	errForkSponsorshipPolicyChanged = errors.New("fork sponsorship policy changed during startup")
+)
 
 func (s *Server) sandboxServiceForRunnerRequest(ctx context.Context, req state.RunnerRequest) (sandboxrunner.Service, error) {
 	svc, _, err := s.sandboxServiceAndConfigForRunnerRequestContext(ctx, req)
