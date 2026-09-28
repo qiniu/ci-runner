@@ -3,67 +3,71 @@ package state
 import "time"
 
 type runnerRequestRecord struct {
-	ID                      string     `gorm:"column:id;primaryKey;index:idx_runner_requests_queued_id,priority:2,sort:asc;index:idx_runner_requests_github_installation_queued_id,priority:3,sort:asc;index:idx_runner_requests_profile_queued_id,priority:3,sort:asc;index:idx_runner_requests_repository_queued_id,priority:3,sort:asc"`
-	Source                  string     `gorm:"column:source;not null"`
-	WorkflowJobID           *int64     `gorm:"column:workflow_job_id;uniqueIndex:idx_runner_requests_workflow_job_id"`
-	GitHubInstallationID    int64      `gorm:"column:github_installation_id;index:idx_runner_requests_github_installation_updated;index:idx_runner_requests_github_installation_queued,priority:1;index:idx_runner_requests_github_installation_queued_id,priority:1"`
-	WorkflowRunID           int64      `gorm:"column:workflow_run_id;index:idx_runner_requests_workflow_run"`
-	WorkflowName            string     `gorm:"column:workflow_name"`
-	WorkflowRunAttempt      int64      `gorm:"column:workflow_run_attempt"`
-	HeadBranch              string     `gorm:"column:head_branch"`
-	HeadSHA                 string     `gorm:"column:head_sha;index:idx_runner_requests_repository_head,priority:2"`
-	GitHubJobURL            string     `gorm:"column:github_job_url"`
-	GitHubJobName           string     `gorm:"column:github_job_name"`
-	GitHubJobStatus         string     `gorm:"column:github_job_status"`
-	GitHubJobConclusion     string     `gorm:"column:github_job_conclusion"`
-	GitHubJobRunnerName     string     `gorm:"column:github_job_runner_name"`
-	GitHubJobObservedAt     *time.Time `gorm:"column:github_job_observed_at"`
-	PullRequestNumber       int64      `gorm:"column:pull_request_number;index:idx_runner_requests_repository_pr,priority:2"`
-	GitHubContextBackfilled bool       `gorm:"column:github_context_backfilled;not null;default:false;index:idx_runner_requests_github_context_backfill"`
-	RepositoryFullName      string     `gorm:"column:repository_full_name;index:idx_runner_requests_repository_pr,priority:1;index:idx_runner_requests_repository_head,priority:1;index:idx_runner_requests_repository_queued_id,priority:1"`
-	RequestedLabelsJSON     string     `gorm:"column:requested_labels_json"`
-	LabelsJSON              string     `gorm:"column:labels_json;not null"`
-	ProfileName             string     `gorm:"column:profile_name;index:idx_runner_requests_profile_queued_id,priority:1;index:idx_runner_requests_profile_scope_status,priority:4"`
-	ProfileSource           string     `gorm:"column:profile_source;index:idx_runner_requests_profile_scope_status,priority:1"`
-	ProfileScopeType        string     `gorm:"column:profile_scope_type;index:idx_runner_requests_profile_scope_status,priority:2"`
-	ProfileScopeID          int64      `gorm:"column:profile_scope_id;index:idx_runner_requests_profile_scope_status,priority:3"`
-	RunnerGroup             string     `gorm:"column:runner_group"`
-	RunnerName              string     `gorm:"column:runner_name;not null"`
-	Status                  string     `gorm:"column:status;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_lease_expiry"`
-	FailureStage            string     `gorm:"column:failure_stage"`
-	FailureReason           string     `gorm:"column:failure_reason"`
-	LastErrorCode           string     `gorm:"column:last_error_code"`
-	LastErrorMessage        string     `gorm:"column:last_error_message"`
-	LastErrorRetryable      bool       `gorm:"column:last_error_retryable;not null;default:false"`
-	RetryCount              int        `gorm:"column:retry_count;not null;default:0"`
-	SandboxID               string     `gorm:"column:sandbox_id"`
-	SandboxAPIURL           string     `gorm:"column:sandbox_api_url"`
-	SandboxAPIKeyEncrypted  string     `gorm:"column:sandbox_api_key_encrypted;type:text"`
-	SandboxConfigSource     string     `gorm:"column:sandbox_config_source"`
-	SandboxRegion           string     `gorm:"column:sandbox_region"`
-	ResolvedTemplateID      string     `gorm:"column:resolved_template_id"`
-	TemplateVersion         string     `gorm:"column:template_version"`
-	RunnerVersion           string     `gorm:"column:runner_version"`
-	EffectiveRunnerVersion  string     `gorm:"column:effective_runner_version"`
-	ProcessPID              uint32     `gorm:"column:process_pid"`
-	AssignedJobID           int64      `gorm:"column:assigned_job_id"`
-	AssignedJobName         string     `gorm:"column:assigned_job_name"`
-	TerminationSource       string     `gorm:"column:termination_source"`
-	RunnerExitCode          *int       `gorm:"column:runner_exit_code"`
-	Error                   string     `gorm:"column:error"`
-	GitHubPayloadJSON       string     `gorm:"column:github_payload_json;type:text"`
-	QueuedAt                time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
-	LastAttemptAt           *time.Time `gorm:"column:last_attempt_at"`
-	NextRetryAt             *time.Time `gorm:"column:next_retry_at;index:idx_runner_requests_status_retry_queue"`
-	CreatingAt              *time.Time `gorm:"column:creating_at"`
-	RunningAt               *time.Time `gorm:"column:running_at"`
-	StoppingAt              *time.Time `gorm:"column:stopping_at"`
-	CompletedAt             *time.Time `gorm:"column:completed_at"`
-	FailedAt                *time.Time `gorm:"column:failed_at"`
-	LeaseOwner              string     `gorm:"column:lease_owner"`
-	LeaseExpiresAt          *time.Time `gorm:"column:lease_expires_at;index:idx_runner_requests_lease_expiry"`
-	UpdatedAt               time.Time  `gorm:"column:updated_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_github_installation_updated"`
-	Version                 int64      `gorm:"column:version;not null;default:0"`
+	ID                              string     `gorm:"column:id;primaryKey;index:idx_runner_requests_queued_id,priority:2,sort:asc;index:idx_runner_requests_github_installation_queued_id,priority:3,sort:asc;index:idx_runner_requests_profile_queued_id,priority:3,sort:asc;index:idx_runner_requests_repository_queued_id,priority:3,sort:asc"`
+	Source                          string     `gorm:"column:source;not null"`
+	WorkflowJobID                   *int64     `gorm:"column:workflow_job_id;uniqueIndex:idx_runner_requests_workflow_job_id"`
+	GitHubInstallationID            int64      `gorm:"column:github_installation_id;index:idx_runner_requests_github_installation_updated;index:idx_runner_requests_github_installation_queued,priority:1;index:idx_runner_requests_github_installation_queued_id,priority:1"`
+	WorkflowRunID                   int64      `gorm:"column:workflow_run_id;index:idx_runner_requests_workflow_run"`
+	WorkflowName                    string     `gorm:"column:workflow_name"`
+	WorkflowRunAttempt              int64      `gorm:"column:workflow_run_attempt"`
+	HeadBranch                      string     `gorm:"column:head_branch"`
+	HeadSHA                         string     `gorm:"column:head_sha;index:idx_runner_requests_repository_head,priority:2"`
+	GitHubJobURL                    string     `gorm:"column:github_job_url"`
+	GitHubJobName                   string     `gorm:"column:github_job_name"`
+	GitHubJobStatus                 string     `gorm:"column:github_job_status"`
+	GitHubJobConclusion             string     `gorm:"column:github_job_conclusion"`
+	GitHubJobRunnerName             string     `gorm:"column:github_job_runner_name"`
+	GitHubJobObservedAt             *time.Time `gorm:"column:github_job_observed_at"`
+	PullRequestNumber               int64      `gorm:"column:pull_request_number;index:idx_runner_requests_repository_pr,priority:2"`
+	GitHubContextBackfilled         bool       `gorm:"column:github_context_backfilled;not null;default:false;index:idx_runner_requests_github_context_backfill"`
+	RepositoryFullName              string     `gorm:"column:repository_full_name;index:idx_runner_requests_repository_pr,priority:1;index:idx_runner_requests_repository_head,priority:1;index:idx_runner_requests_repository_queued_id,priority:1"`
+	RequestedLabelsJSON             string     `gorm:"column:requested_labels_json"`
+	LabelsJSON                      string     `gorm:"column:labels_json;not null"`
+	ProfileName                     string     `gorm:"column:profile_name;index:idx_runner_requests_profile_queued_id,priority:1;index:idx_runner_requests_profile_scope_status,priority:4"`
+	ProfileSource                   string     `gorm:"column:profile_source;index:idx_runner_requests_profile_scope_status,priority:1"`
+	ProfileScopeType                string     `gorm:"column:profile_scope_type;index:idx_runner_requests_profile_scope_status,priority:2"`
+	ProfileScopeID                  int64      `gorm:"column:profile_scope_id;index:idx_runner_requests_profile_scope_status,priority:3"`
+	RunnerGroup                     string     `gorm:"column:runner_group"`
+	RunnerName                      string     `gorm:"column:runner_name;not null"`
+	Status                          string     `gorm:"column:status;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_lease_expiry;index:idx_runner_requests_sponsor_inflight,priority:3"`
+	FailureStage                    string     `gorm:"column:failure_stage"`
+	FailureReason                   string     `gorm:"column:failure_reason"`
+	LastErrorCode                   string     `gorm:"column:last_error_code"`
+	LastErrorMessage                string     `gorm:"column:last_error_message"`
+	LastErrorRetryable              bool       `gorm:"column:last_error_retryable;not null;default:false"`
+	RetryCount                      int        `gorm:"column:retry_count;not null;default:0"`
+	SandboxID                       string     `gorm:"column:sandbox_id"`
+	SandboxAPIURL                   string     `gorm:"column:sandbox_api_url"`
+	SandboxAPIKeyEncrypted          string     `gorm:"column:sandbox_api_key_encrypted;type:text"`
+	SandboxConfigSource             string     `gorm:"column:sandbox_config_source"`
+	SponsorInstallationID           int64      `gorm:"column:sponsor_installation_id;index:idx_runner_requests_sponsor_inflight,priority:1"`
+	SponsorSourceRepositoryID       int64      `gorm:"column:sponsor_source_repository_id;index:idx_runner_requests_sponsor_inflight,priority:2"`
+	SponsorSourceRepositoryFullName string     `gorm:"column:sponsor_source_repository_full_name"`
+	SponsorAuthorizationReason      string     `gorm:"column:sponsor_authorization_reason"`
+	SandboxRegion                   string     `gorm:"column:sandbox_region"`
+	ResolvedTemplateID              string     `gorm:"column:resolved_template_id"`
+	TemplateVersion                 string     `gorm:"column:template_version"`
+	RunnerVersion                   string     `gorm:"column:runner_version"`
+	EffectiveRunnerVersion          string     `gorm:"column:effective_runner_version"`
+	ProcessPID                      uint32     `gorm:"column:process_pid"`
+	AssignedJobID                   int64      `gorm:"column:assigned_job_id"`
+	AssignedJobName                 string     `gorm:"column:assigned_job_name"`
+	TerminationSource               string     `gorm:"column:termination_source"`
+	RunnerExitCode                  *int       `gorm:"column:runner_exit_code"`
+	Error                           string     `gorm:"column:error"`
+	GitHubPayloadJSON               string     `gorm:"column:github_payload_json;type:text"`
+	QueuedAt                        time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
+	LastAttemptAt                   *time.Time `gorm:"column:last_attempt_at"`
+	NextRetryAt                     *time.Time `gorm:"column:next_retry_at;index:idx_runner_requests_status_retry_queue"`
+	CreatingAt                      *time.Time `gorm:"column:creating_at"`
+	RunningAt                       *time.Time `gorm:"column:running_at"`
+	StoppingAt                      *time.Time `gorm:"column:stopping_at"`
+	CompletedAt                     *time.Time `gorm:"column:completed_at"`
+	FailedAt                        *time.Time `gorm:"column:failed_at"`
+	LeaseOwner                      string     `gorm:"column:lease_owner"`
+	LeaseExpiresAt                  *time.Time `gorm:"column:lease_expires_at;index:idx_runner_requests_lease_expiry"`
+	UpdatedAt                       time.Time  `gorm:"column:updated_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_github_installation_updated"`
+	Version                         int64      `gorm:"column:version;not null;default:0"`
 }
 
 func (runnerRequestRecord) TableName() string { return "runner_requests" }
@@ -184,6 +188,32 @@ type githubInstallationOwnerRecord struct {
 }
 
 func (githubInstallationOwnerRecord) TableName() string { return "github_installation_owners" }
+
+type forkSponsorshipPolicyRecord struct {
+	SponsorInstallationID    int64     `gorm:"column:sponsor_installation_id;primaryKey;autoIncrement:false;index:idx_fork_sponsorship_policies_sponsor"`
+	SourceRepositoryID       int64     `gorm:"column:source_repository_id;primaryKey;autoIncrement:false;uniqueIndex:idx_fork_sponsorship_policies_source"`
+	SourceRepositoryFullName string    `gorm:"column:source_repository_full_name;not null"`
+	Mode                     string    `gorm:"column:mode;not null"`
+	Enabled                  bool      `gorm:"column:enabled;not null;default:false"`
+	MaxConcurrency           int       `gorm:"column:max_concurrency;not null"`
+	CreatedAt                time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt                time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (forkSponsorshipPolicyRecord) TableName() string { return "fork_sponsorship_policies" }
+
+type forkSponsorshipApprovalRecord struct {
+	SourceRepositoryID     int64     `gorm:"column:source_repository_id;primaryKey;autoIncrement:false;index:idx_fork_sponsorship_approvals_sponsor,priority:2"`
+	ForkRepositoryID       int64     `gorm:"column:fork_repository_id;primaryKey;autoIncrement:false"`
+	SponsorInstallationID  int64     `gorm:"column:sponsor_installation_id;not null;index:idx_fork_sponsorship_approvals_sponsor,priority:1"`
+	ForkRepositoryFullName string    `gorm:"column:fork_repository_full_name;not null"`
+	ForkOwnerID            int64     `gorm:"column:fork_owner_id;not null"`
+	ForkOwnerLogin         string    `gorm:"column:fork_owner_login;not null"`
+	CreatedAt              time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt              time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (forkSponsorshipApprovalRecord) TableName() string { return "fork_sponsorship_approvals" }
 
 type accountSecretRecord struct {
 	ID             int64     `gorm:"column:id;primaryKey;autoIncrement"`

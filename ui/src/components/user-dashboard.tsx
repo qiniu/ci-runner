@@ -53,6 +53,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { shouldShowSandboxSetupTask } from "@/user-onboarding"
 import { SandboxesSection, SandboxTemplatesSection } from "@/components/sandbox-catalog-sections"
 import { UserRunnerSpecsSection } from "@/components/user-runner-specs-section"
+import { ForkSponsorshipSection } from "@/components/fork-sponsorship-section"
 import { findSandboxRegionByAPIURL, useSandboxRegions } from "@/components/sandbox-catalog-utils"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -78,7 +79,7 @@ type BuildGroup = {
 }
 
 type UserPage = "home" | "repositories" | "runner-specs" | "settings"
-type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs"
+type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs" | "fork-sponsorship"
 type AccountSettingsRoute = {
   accountLogin?: string
   tab: AccountSettingsTab
@@ -606,7 +607,7 @@ function AccountsPage({
                 onValueChange={(value) => onNavigateAccountSettings(selected.account_login, value as AccountSettingsTab)}
                 className="gap-4"
               >
-                <TabsList className="h-auto w-full justify-start rounded-none border-b bg-transparent p-0">
+                <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
                   <TabsTrigger
                     value="preferences"
                     className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
@@ -619,6 +620,14 @@ function AccountsPage({
                   >
                     {t("user.customRunnerSpecs")}
                   </TabsTrigger>
+                  {selected.account_type?.toLowerCase() === "organization" && (
+                    <TabsTrigger
+                      value="fork-sponsorship"
+                      className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
+                    >
+                      {t("user.forkSponsorship")}
+                    </TabsTrigger>
+                  )}
                   <TabsTrigger
                     value="sandbox-templates"
                     className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
@@ -656,6 +665,11 @@ function AccountsPage({
                       : "/account/sandbox-templates"}
                   />
                 </TabsContent>
+                {preferenceInstallationID && selected.account_type?.toLowerCase() === "organization" && (
+                  <TabsContent value="fork-sponsorship">
+                    <ForkSponsorshipSection request={request} installationID={preferenceInstallationID} />
+                  </TabsContent>
+                )}
                 <TabsContent value="sandbox-templates">
                   <SandboxTemplatesSection
                     key={`templates-${preferenceInstallationID ?? "account"}`}

@@ -442,19 +442,14 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.failStart(id, st, "sandbox_config", err)
 		return
 	}
-	if sandboxConfig.APIURL != "" || sandboxConfig.EncryptedAPIKey != "" {
-		current, err := s.store.ReadState(id)
-		if err != nil {
-			s.failStart(id, st, "sandbox_config", fmt.Errorf("read state for sandbox config snapshot: %w", err))
+	if err := s.persistSandboxServiceSnapshot(id, sandboxConfig); err != nil {
+		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
+			s.deferCreatingRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
+			s.signalQueue()
 			return
 		}
-		current.SandboxAPIURL = sandboxConfig.APIURL
-		current.SandboxAPIKeyEncrypted = sandboxConfig.EncryptedAPIKey
-		current.SandboxConfigSource = sandboxConfig.Source
-		if err := s.store.WriteState(current); err != nil {
-			s.failStart(id, current, "sandbox_config", fmt.Errorf("write sandbox config snapshot: %w", err))
-			return
-		}
+		s.failStart(id, st, "sandbox_config", err)
+		return
 	}
 	templateID := profile.TemplateID
 	var runnerApplications []sandboxrunner.RunnerApplication
@@ -1308,6 +1303,8 @@ func (s *Server) requeueInterruptedCreation(id string, stateVersion int64) error
 	st.CreatingAt = time.Time{}
 	st.RunningAt = time.Time{}
 	st.StoppingAt = time.Time{}
+	clearRunnerEnvironmentSnapshot(&st)
+	clearSandboxServiceSnapshot(&st)
 	if err := s.store.WriteState(st); err != nil {
 		return fmt.Errorf("requeue interrupted runner creation: %w", err)
 	}
@@ -1663,6 +1660,16 @@ func clearRunnerEnvironmentSnapshot(st *state.RunnerState) {
 	st.EffectiveRunnerVersion = ""
 }
 
+func clearSandboxServiceSnapshot(st *state.RunnerState) {
+	st.SandboxAPIURL = ""
+	st.SandboxAPIKeyEncrypted = ""
+	st.SandboxConfigSource = ""
+	st.SponsorInstallationID = 0
+	st.SponsorSourceRepositoryID = 0
+	st.SponsorSourceRepositoryFullName = ""
+	st.SponsorAuthorizationReason = ""
+}
+
 func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, allowRetry bool) failureResult {
 	now := time.Now().UTC()
 	code, retryable := classifyRetryableError(stage, err)
@@ -1680,6 +1687,7 @@ func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, al
 	if allowRetry && retryable && isQueueDeferFailure(code) {
 		st.Status = state.StatusQueued
 		clearRunnerEnvironmentSnapshot(st)
+		clearSandboxServiceSnapshot(st)
 		if st.RetryCount < s.cfg.RetryMaxAttempts {
 			st.RetryCount++
 		}
@@ -1696,6 +1704,7 @@ func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, al
 	if allowRetry && retryable && st.RetryCount < s.cfg.RetryMaxAttempts {
 		st.Status = state.StatusQueued
 		clearRunnerEnvironmentSnapshot(st)
+		clearSandboxServiceSnapshot(st)
 		st.RetryCount++
 		st.NextRetryAt = s.nextRetryAt(st.RetryCount, now)
 		st.CreatingAt = time.Time{}
@@ -1900,9 +1909,34 @@ func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time) 
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
 	st.NextRetryAt = nextAttempt
+	clearSandboxServiceSnapshot(&st)
 	if err := s.store.WriteState(st); err != nil {
 		s.logger.Error("defer queued request", "id", id, "error", err)
 		_ = s.store.ReleaseLease(id, workerID)
+	}
+}
+
+func (s *Server) deferCreatingRequest(id, workerID string, nextAttempt time.Time) {
+	unlock := s.lockRunner(id)
+	defer unlock()
+	st, err := s.store.ReadState(id)
+	if err != nil {
+		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
+		_ = s.store.ReleaseLease(id, workerID)
+		return
+	}
+	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" {
+		return
+	}
+	st.Status = state.StatusQueued
+	st.CreatingAt = time.Time{}
+	st.LeaseOwner = ""
+	st.LeaseExpiresAt = time.Time{}
+	st.NextRetryAt = nextAttempt
+	clearRunnerEnvironmentSnapshot(&st)
+	clearSandboxServiceSnapshot(&st)
+	if err := s.store.WriteState(st); err != nil {
+		s.logger.Error("defer sponsored runner request", "id", id, "error", err)
 	}
 }
 
@@ -2141,6 +2175,18 @@ func (s *Server) lockRunner(id string) func() {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
 	mu := &s.locks[int(h.Sum32()%uint32(len(s.locks)))]
+	mu.Lock()
+	return func() {
+		mu.Unlock()
+	}
+}
+
+func (s *Server) lockForkSponsorship(sponsorInstallationID, sourceRepositoryID int64) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strconv.FormatInt(sponsorInstallationID, 10)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strconv.FormatInt(sourceRepositoryID, 10)))
+	mu := &s.forkSponsorshipLocks[int(h.Sum32()%uint32(len(s.forkSponsorshipLocks)))]
 	mu.Lock()
 	return func() {
 		mu.Unlock()

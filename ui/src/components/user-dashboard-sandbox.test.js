@@ -180,6 +180,36 @@ describe("Sandbox service Settings", () => {
     expect(settingsHTML).not.toContain("Choose which account or organization should receive availability and concurrency overrides.")
   })
 
+  test("shows Fork sponsorship only for an organization Settings scope", () => {
+    const personal = renderDashboard({
+      locationPath: "/account/preferences",
+      accountSettingsRoute: { accountLogin: "miclle", tab: "preferences" },
+    })
+    expect(personal).not.toContain("Fork sponsorship")
+
+    const organization = renderDashboard({
+      locationPath: "/organizations/qiniu/fork-sponsorship",
+      accountSettingsRoute: { accountLogin: "qiniu", tab: "fork-sponsorship" },
+      githubApp: {
+        settings_manageability: true,
+        setup_url: "/github-app/setup",
+        installations: [{
+          id: 3,
+          account_id: 1,
+          installation_id: 989,
+          account_type: "organization",
+          account_login: "qiniu",
+          manageable: true,
+          repositories: [],
+          created_at: "2026-07-29T00:00:00Z",
+          updated_at: "2026-07-29T00:00:00Z",
+        }],
+      },
+    })
+    expect(organization).toContain("Fork sponsorship")
+    expect(organization).toContain("Upstream repository")
+  })
+
   test("distinguishes custom Runner Specs in account Settings from the platform catalog", () => {
     const html = renderDashboard({
       accountSettingsRoute: { accountLogin: "miclle", tab: "preferences" },

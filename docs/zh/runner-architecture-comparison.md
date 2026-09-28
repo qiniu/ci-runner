@@ -196,7 +196,7 @@ stateDiagram-v2
 
 ### 配置和密钥边界
 
-`runnerd.yaml` 配置 service behavior、GitHub auth、OAuth login、database 和 worker policy。Sandbox service credentials 不是 file config：普通用户通过 Preferences 配置 scoped credentials，管理员可在 `/admin/sandbox_service` 启用独立的平台回退。API keys 加密后存储。fallback audience 可以是全部 repository owners，或按 stable owner identity 匹配的 selected GitHub users/organizations。解析顺序为 request snapshot、installation custom/inherited 配置、符合条件的个人账户配置、已启用且 audience eligible 的 admin default，最后是未配置错误。
+`runnerd.yaml` 配置 service behavior、GitHub auth、OAuth login、database 和 worker policy。Sandbox service credentials 不是 file config：普通用户通过 Preferences 配置 scoped credentials，管理员可在 `/admin/sandbox_service` 启用独立的平台回退。API keys 加密后存储。fallback audience 可以是全部 repository owners，或按 stable owner identity 匹配的 selected GitHub users/organizations。对于托管 Spec，解析顺序为 request snapshot、installation custom/inherited 配置、符合条件的个人账户配置、owner 为已验证 Fork 网络配置的组织赞助、已启用且 audience eligible 的 admin default，最后是未配置错误。赞助只保存 sponsor service 和不含凭据的来源快照，不转移 Job 所有权，也不共享 Cache S3、自定义 Spec、Runner Group 或 Provider 目录访问。
 
 ```mermaid
 flowchart LR

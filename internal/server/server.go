@@ -36,14 +36,15 @@ type Server struct {
 	terminals   *terminalHub
 	startedAt   time.Time
 
-	admissionMu sync.Mutex
-	locks       [64]sync.Mutex
-	queueNotify chan struct{}
-	startOnce   sync.Once
-	workerID    string
-	loopCtx     context.Context
-	loopCancel  context.CancelFunc
-	loopWG      sync.WaitGroup
+	admissionMu          sync.Mutex
+	forkSponsorshipLocks [64]sync.Mutex
+	locks                [64]sync.Mutex
+	queueNotify          chan struct{}
+	startOnce            sync.Once
+	workerID             string
+	loopCtx              context.Context
+	loopCancel           context.CancelFunc
+	loopWG               sync.WaitGroup
 
 	recoveryMetricsDeferred atomic.Int32
 
@@ -437,6 +438,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /user/runner-specs", s.handleUserCreateRunnerSpec)
 	s.mux.HandleFunc("PATCH /user/runner-specs/{name}", s.handleUserPatchRunnerSpec)
 	s.mux.HandleFunc("DELETE /user/runner-specs/{name}", s.handleUserDeleteRunnerSpec)
+	s.mux.HandleFunc("GET /user/fork-sponsorship-policies", s.handleUserListForkSponsorshipPolicies)
+	s.mux.HandleFunc("POST /user/fork-sponsorship-policies", s.handleUserCreateForkSponsorshipPolicy)
+	s.mux.HandleFunc("PUT /user/fork-sponsorship-policies/{sourceRepositoryID}", s.handleUserPutForkSponsorshipPolicy)
+	s.mux.HandleFunc("DELETE /user/fork-sponsorship-policies/{sourceRepositoryID}", s.handleUserDeleteForkSponsorshipPolicy)
+	s.mux.HandleFunc("POST /user/fork-sponsorship-policies/{sourceRepositoryID}/approvals", s.handleUserAddForkSponsorshipApproval)
+	s.mux.HandleFunc("DELETE /user/fork-sponsorship-policies/{sourceRepositoryID}/approvals/{forkRepositoryID}", s.handleUserDeleteForkSponsorshipApproval)
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_request_metrics", s.handleRunnerRequestMetrics)

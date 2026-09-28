@@ -79,6 +79,8 @@ cp runnerd.yaml.example runnerd.yaml
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
 
+Organization owners can open **Settings → Fork sponsorship** to let trusted personal forks use the organization's Sandbox service for managed Runner Specs. A policy is bound to the upstream repository's stable GitHub ID, starts disabled, has its own positive concurrency limit, and can require an exact fork approval, upstream write permission, or active organization membership. The Job and GitHub Runner remain owned by the fork; organization Cache S3, custom Runner Specs, physical template IDs, Runner Groups, credentials, and provider catalogs are never inherited. See [Organization-Sponsored Fork Runners](docs/organization-sponsored-fork-runners.md).
+
 For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testing.md](docs/testing.md) for detailed local setup including GitHub App creation and webhook forwarding.
 
 ## Configuration
@@ -323,6 +325,7 @@ The built-in web UI provides:
 | `/admin/runner_specs` | Managed and custom global Runner Spec administration |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or owner-manageable Organization |
+| `/organizations/{login}/fork-sponsorship` | Owner-only policies for organization-sponsored managed Runner execution in trusted forks |
 | `/admin/sandbox_service` | Sandbox service configuration |
 | `/admin/match` | Label-match preview against the current enabled Runner Specs |
 | `/admin/audit` | Audit event history |

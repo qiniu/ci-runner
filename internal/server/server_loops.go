@@ -324,6 +324,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	next.GitHubJobConclusion = ""
 	next.GitHubJobRunnerName = ""
 	next.GitHubJobObservedAt = time.Time{}
+	clearSandboxServiceSnapshot(&next)
 	if err := s.store.WriteState(next); err != nil {
 		return false, state.RunnerState{}, fmt.Errorf("write mismatched workflow job requeue: %w", err)
 	}

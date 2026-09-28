@@ -264,10 +264,36 @@ export type GitHubInstallation = {
   account_id: number
   installation_id: number
   account_login?: string
+	account_type?: string
   account_name?: string
   account_avatar?: string
   manageable?: boolean
   repositories: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type ForkSponsorshipMode = "approval_required" | "write_permission" | "organization_member"
+
+export type ForkSponsorshipApproval = {
+  sponsor_installation_id: number
+  source_repository_id: number
+  fork_repository_id: number
+  fork_repository_full_name: string
+  fork_owner_id: number
+  fork_owner_login: string
+  created_at: string
+  updated_at: string
+}
+
+export type ForkSponsorshipPolicy = {
+  sponsor_installation_id: number
+  source_repository_id: number
+  source_repository_full_name: string
+  mode: ForkSponsorshipMode
+  enabled: boolean
+  max_concurrency: number
+  approvals: ForkSponsorshipApproval[]
   created_at: string
   updated_at: string
 }

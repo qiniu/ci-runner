@@ -6792,6 +6792,13 @@ func TestRecoverRequeuesCreatingRunnerWhenSandboxIsAbsent(t *testing.T) {
 	st.Status = state.StatusCreating
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
+	st.SandboxAPIURL = "https://sponsor.example.test"
+	st.SandboxAPIKeyEncrypted = "encrypted"
+	st.SandboxConfigSource = sandboxConfigSourceForkSponsorship
+	st.SponsorInstallationID = 200
+	st.SponsorSourceRepositoryID = 300
+	st.SponsorSourceRepositoryFullName = "acme/project"
+	st.SponsorAuthorizationReason = state.ForkSponsorshipModeApprovalRequired
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -6807,6 +6814,9 @@ func TestRecoverRequeuesCreatingRunnerWhenSandboxIsAbsent(t *testing.T) {
 	}
 	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
 		t.Fatalf("expected missing creation to be requeued, got %#v", got)
+	}
+	if got.SandboxAPIURL != "" || got.SandboxAPIKeyEncrypted != "" || got.SandboxConfigSource != "" || got.SponsorInstallationID != 0 || got.SponsorSourceRepositoryID != 0 || got.SponsorSourceRepositoryFullName != "" || got.SponsorAuthorizationReason != "" {
+		t.Fatalf("expected recovery requeue to clear Sandbox and sponsorship snapshots, got %#v", got)
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("expected missing creation not to stop a sandbox, got %d stops", fake.stoppedCount())

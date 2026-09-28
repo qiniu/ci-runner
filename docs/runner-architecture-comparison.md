@@ -196,7 +196,7 @@ stateDiagram-v2
 
 ### Configuration And Secret Boundaries
 
-`runnerd.yaml` configures service behavior, GitHub auth, OAuth login, database, and worker policy. Sandbox service credentials are not file config: ordinary users configure scoped credentials through Preferences, while admins may enable an independent platform fallback at `/admin/sandbox_service`. API keys are stored encrypted. The fallback audience is all repository owners or selected GitHub users/organizations matched by stable owner identity. Resolution order is request snapshot, installation custom/inherited config, eligible personal account config, enabled and audience-eligible admin default, then not configured.
+`runnerd.yaml` configures service behavior, GitHub auth, OAuth login, database, and worker policy. Sandbox service credentials are not file config: ordinary users configure scoped credentials through Preferences, while admins may enable an independent platform fallback at `/admin/sandbox_service`. API keys are stored encrypted. The fallback audience is all repository owners or selected GitHub users/organizations matched by stable owner identity. For managed Specs, resolution order is request snapshot, installation custom/inherited config, eligible personal account config, owner-configured organization sponsorship for a verified fork network, enabled and audience-eligible admin default, then not configured. Sponsorship snapshots only the sponsor service and credential-free provenance; it does not transfer Job ownership, Cache S3, custom Specs, Runner Groups, or provider catalog access.
 
 ```mermaid
 flowchart LR

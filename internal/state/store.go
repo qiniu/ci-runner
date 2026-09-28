@@ -41,84 +41,92 @@ var (
 )
 
 type RunnerRequest struct {
-	ID                     string    `json:"id"`
-	Source                 string    `json:"source"`
-	JobID                  int64     `json:"job_id,omitempty"`
-	PullRequestNumber      int64     `json:"pull_request_number,omitempty"`
-	GitHubInstallationID   int64     `json:"github_installation_id,omitempty"`
-	RepositoryFullName     string    `json:"repository_full_name,omitempty"`
-	RequestedLabels        []string  `json:"requested_labels,omitempty"`
-	Labels                 []string  `json:"labels"`
-	ProfileName            string    `json:"runner_spec_name,omitempty"`
-	ProfileSource          string    `json:"runner_spec_source,omitempty"`
-	ProfileScopeType       string    `json:"runner_spec_scope_type,omitempty"`
-	ProfileScopeID         int64     `json:"runner_spec_scope_id,omitempty"`
-	RunnerGroup            string    `json:"runner_group,omitempty"`
-	RunnerName             string    `json:"runner_name"`
-	SandboxAPIURL          string    `json:"-"`
-	SandboxAPIKeyEncrypted string    `json:"-"`
-	SandboxConfigSource    string    `json:"sandbox_config_source,omitempty"`
-	CreatedAt              time.Time `json:"created_at"`
+	ID                              string    `json:"id"`
+	Source                          string    `json:"source"`
+	JobID                           int64     `json:"job_id,omitempty"`
+	PullRequestNumber               int64     `json:"pull_request_number,omitempty"`
+	GitHubInstallationID            int64     `json:"github_installation_id,omitempty"`
+	RepositoryFullName              string    `json:"repository_full_name,omitempty"`
+	RequestedLabels                 []string  `json:"requested_labels,omitempty"`
+	Labels                          []string  `json:"labels"`
+	ProfileName                     string    `json:"runner_spec_name,omitempty"`
+	ProfileSource                   string    `json:"runner_spec_source,omitempty"`
+	ProfileScopeType                string    `json:"runner_spec_scope_type,omitempty"`
+	ProfileScopeID                  int64     `json:"runner_spec_scope_id,omitempty"`
+	RunnerGroup                     string    `json:"runner_group,omitempty"`
+	RunnerName                      string    `json:"runner_name"`
+	SandboxAPIURL                   string    `json:"-"`
+	SandboxAPIKeyEncrypted          string    `json:"-"`
+	SandboxConfigSource             string    `json:"sandbox_config_source,omitempty"`
+	SponsorInstallationID           int64     `json:"sponsor_installation_id,omitempty"`
+	SponsorSourceRepositoryID       int64     `json:"sponsor_source_repository_id,omitempty"`
+	SponsorSourceRepositoryFullName string    `json:"sponsor_source_repository_full_name,omitempty"`
+	SponsorAuthorizationReason      string    `json:"sponsor_authorization_reason,omitempty"`
+	CreatedAt                       time.Time `json:"created_at"`
 }
 
 type RunnerState struct {
-	ID                     string    `json:"id"`
-	Status                 string    `json:"status"`
-	GitHubInstallationID   int64     `json:"github_installation_id,omitempty"`
-	RepositoryFullName     string    `json:"repository_full_name,omitempty"`
-	RequestedLabels        []string  `json:"requested_labels,omitempty"`
-	ProfileName            string    `json:"runner_spec_name,omitempty"`
-	ProfileSource          string    `json:"runner_spec_source,omitempty"`
-	ProfileScopeType       string    `json:"runner_spec_scope_type,omitempty"`
-	ProfileScopeID         int64     `json:"runner_spec_scope_id,omitempty"`
-	RunnerGroup            string    `json:"runner_group,omitempty"`
-	RunnerName             string    `json:"runner_name"`
-	SandboxID              string    `json:"sandbox_id,omitempty"`
-	SandboxAPIURL          string    `json:"-"`
-	SandboxAPIKeyEncrypted string    `json:"-"`
-	SandboxConfigSource    string    `json:"sandbox_config_source,omitempty"`
-	SandboxRegion          string    `json:"sandbox_region,omitempty"`
-	ResolvedTemplateID     string    `json:"resolved_template_id,omitempty"`
-	TemplateVersion        string    `json:"template_version,omitempty"`
-	RunnerVersion          string    `json:"runner_version,omitempty"`
-	EffectiveRunnerVersion string    `json:"effective_runner_version,omitempty"`
-	ProcessPID             uint32    `json:"process_pid,omitempty"`
-	WorkflowJobID          int64     `json:"workflow_job_id,omitempty"`
-	WorkflowRunID          int64     `json:"workflow_run_id,omitempty"`
-	WorkflowName           string    `json:"workflow_name,omitempty"`
-	WorkflowRunAttempt     int64     `json:"workflow_run_attempt,omitempty"`
-	HeadBranch             string    `json:"head_branch,omitempty"`
-	HeadSHA                string    `json:"head_sha,omitempty"`
-	GitHubJobURL           string    `json:"github_job_url,omitempty"`
-	GitHubJobName          string    `json:"github_job_name,omitempty"`
-	GitHubJobStatus        string    `json:"github_job_status,omitempty"`
-	GitHubJobConclusion    string    `json:"github_job_conclusion,omitempty"`
-	GitHubJobRunnerName    string    `json:"github_job_runner_name,omitempty"`
-	GitHubJobObservedAt    time.Time `json:"github_job_observed_at,omitempty"`
-	PullRequestNumber      int64     `json:"pull_request_number,omitempty"`
-	AssignedJobID          int64     `json:"assigned_job_id,omitempty"`
-	AssignedJobName        string    `json:"assigned_job_name,omitempty"`
-	TerminationSource      string    `json:"termination_source,omitempty"`
-	RunnerExitCode         *int      `json:"runner_exit_code,omitempty"`
-	Error                  string    `json:"error,omitempty"`
-	FailureStage           string    `json:"failure_stage,omitempty"`
-	FailureReason          string    `json:"failure_reason,omitempty"`
-	LastErrorCode          string    `json:"last_error_code,omitempty"`
-	LastErrorMessage       string    `json:"last_error_message,omitempty"`
-	LastErrorRetryable     bool      `json:"last_error_retryable,omitempty"`
-	RetryCount             int       `json:"retry_count,omitempty"`
-	UpdatedAt              time.Time `json:"updated_at"`
-	CreatedAt              time.Time `json:"created_at"`
-	LastAttemptAt          time.Time `json:"last_attempt_at,omitempty"`
-	NextRetryAt            time.Time `json:"next_retry_at,omitempty"`
-	CreatingAt             time.Time `json:"creating_at,omitempty"`
-	RunningAt              time.Time `json:"running_at,omitempty"`
-	StoppingAt             time.Time `json:"stopping_at,omitempty"`
-	CompletedAt            time.Time `json:"completed_at,omitempty"`
-	FailedAt               time.Time `json:"failed_at,omitempty"`
-	LeaseOwner             string    `json:"lease_owner,omitempty"`
-	LeaseExpiresAt         time.Time `json:"lease_expires_at,omitempty"`
-	Version                int64     `json:"version"`
+	ID                              string    `json:"id"`
+	Status                          string    `json:"status"`
+	GitHubInstallationID            int64     `json:"github_installation_id,omitempty"`
+	RepositoryFullName              string    `json:"repository_full_name,omitempty"`
+	RequestedLabels                 []string  `json:"requested_labels,omitempty"`
+	ProfileName                     string    `json:"runner_spec_name,omitempty"`
+	ProfileSource                   string    `json:"runner_spec_source,omitempty"`
+	ProfileScopeType                string    `json:"runner_spec_scope_type,omitempty"`
+	ProfileScopeID                  int64     `json:"runner_spec_scope_id,omitempty"`
+	RunnerGroup                     string    `json:"runner_group,omitempty"`
+	RunnerName                      string    `json:"runner_name"`
+	SandboxID                       string    `json:"sandbox_id,omitempty"`
+	SandboxAPIURL                   string    `json:"-"`
+	SandboxAPIKeyEncrypted          string    `json:"-"`
+	SandboxConfigSource             string    `json:"sandbox_config_source,omitempty"`
+	SponsorInstallationID           int64     `json:"sponsor_installation_id,omitempty"`
+	SponsorSourceRepositoryID       int64     `json:"sponsor_source_repository_id,omitempty"`
+	SponsorSourceRepositoryFullName string    `json:"sponsor_source_repository_full_name,omitempty"`
+	SponsorAuthorizationReason      string    `json:"sponsor_authorization_reason,omitempty"`
+	SandboxRegion                   string    `json:"sandbox_region,omitempty"`
+	ResolvedTemplateID              string    `json:"resolved_template_id,omitempty"`
+	TemplateVersion                 string    `json:"template_version,omitempty"`
+	RunnerVersion                   string    `json:"runner_version,omitempty"`
+	EffectiveRunnerVersion          string    `json:"effective_runner_version,omitempty"`
+	ProcessPID                      uint32    `json:"process_pid,omitempty"`
+	WorkflowJobID                   int64     `json:"workflow_job_id,omitempty"`
+	WorkflowRunID                   int64     `json:"workflow_run_id,omitempty"`
+	WorkflowName                    string    `json:"workflow_name,omitempty"`
+	WorkflowRunAttempt              int64     `json:"workflow_run_attempt,omitempty"`
+	HeadBranch                      string    `json:"head_branch,omitempty"`
+	HeadSHA                         string    `json:"head_sha,omitempty"`
+	GitHubJobURL                    string    `json:"github_job_url,omitempty"`
+	GitHubJobName                   string    `json:"github_job_name,omitempty"`
+	GitHubJobStatus                 string    `json:"github_job_status,omitempty"`
+	GitHubJobConclusion             string    `json:"github_job_conclusion,omitempty"`
+	GitHubJobRunnerName             string    `json:"github_job_runner_name,omitempty"`
+	GitHubJobObservedAt             time.Time `json:"github_job_observed_at,omitempty"`
+	PullRequestNumber               int64     `json:"pull_request_number,omitempty"`
+	AssignedJobID                   int64     `json:"assigned_job_id,omitempty"`
+	AssignedJobName                 string    `json:"assigned_job_name,omitempty"`
+	TerminationSource               string    `json:"termination_source,omitempty"`
+	RunnerExitCode                  *int      `json:"runner_exit_code,omitempty"`
+	Error                           string    `json:"error,omitempty"`
+	FailureStage                    string    `json:"failure_stage,omitempty"`
+	FailureReason                   string    `json:"failure_reason,omitempty"`
+	LastErrorCode                   string    `json:"last_error_code,omitempty"`
+	LastErrorMessage                string    `json:"last_error_message,omitempty"`
+	LastErrorRetryable              bool      `json:"last_error_retryable,omitempty"`
+	RetryCount                      int       `json:"retry_count,omitempty"`
+	UpdatedAt                       time.Time `json:"updated_at"`
+	CreatedAt                       time.Time `json:"created_at"`
+	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
+	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
+	CreatingAt                      time.Time `json:"creating_at,omitempty"`
+	RunningAt                       time.Time `json:"running_at,omitempty"`
+	StoppingAt                      time.Time `json:"stopping_at,omitempty"`
+	CompletedAt                     time.Time `json:"completed_at,omitempty"`
+	FailedAt                        time.Time `json:"failed_at,omitempty"`
+	LeaseOwner                      string    `json:"lease_owner,omitempty"`
+	LeaseExpiresAt                  time.Time `json:"lease_expires_at,omitempty"`
+	Version                         int64     `json:"version"`
 }
 
 // RunnerRequestListOptions controls admin Runner request filtering and pagination.
@@ -318,6 +326,34 @@ type GitHubInstallationRepositoryAccess struct {
 }
 
 const (
+	ForkSponsorshipModeApprovalRequired   = "approval_required"
+	ForkSponsorshipModeWritePermission    = "write_permission"
+	ForkSponsorshipModeOrganizationMember = "organization_member"
+)
+
+type ForkSponsorshipPolicy struct {
+	SponsorInstallationID    int64     `json:"sponsor_installation_id"`
+	SourceRepositoryID       int64     `json:"source_repository_id"`
+	SourceRepositoryFullName string    `json:"source_repository_full_name"`
+	Mode                     string    `json:"mode"`
+	Enabled                  bool      `json:"enabled"`
+	MaxConcurrency           int       `json:"max_concurrency"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+}
+
+type ForkSponsorshipApproval struct {
+	SponsorInstallationID  int64     `json:"sponsor_installation_id"`
+	SourceRepositoryID     int64     `json:"source_repository_id"`
+	ForkRepositoryID       int64     `json:"fork_repository_id"`
+	ForkRepositoryFullName string    `json:"fork_repository_full_name"`
+	ForkOwnerID            int64     `json:"fork_owner_id"`
+	ForkOwnerLogin         string    `json:"fork_owner_login"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
+}
+
+const (
 	AccountSecretTypeSandboxAPIKey        = "sandbox_api_key"
 	AccountSecretTypeGitHubOAuthToken     = "github_oauth_token"
 	AccountSecretTypeCacheAccessKeyID     = "cache_access_key_id"
@@ -477,6 +513,21 @@ type SandboxServiceDefaultStore interface {
 	SandboxServiceDefaultAudienceContains(githubAccountID int64, accountType string) (bool, error)
 }
 
+type ForkSponsorshipStore interface {
+	ListForkSponsorshipPolicies(sponsorInstallationID int64) ([]ForkSponsorshipPolicy, error)
+	GetForkSponsorshipPolicy(sponsorInstallationID, sourceRepositoryID int64) (ForkSponsorshipPolicy, error)
+	GetForkSponsorshipPolicyBySourceRepositoryID(sourceRepositoryID int64) (ForkSponsorshipPolicy, error)
+	CreateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error)
+	UpdateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error)
+	UpsertForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error)
+	DeleteForkSponsorshipPolicy(sponsorInstallationID, sourceRepositoryID int64) error
+	ListForkSponsorshipApprovals(sponsorInstallationID, sourceRepositoryID int64) ([]ForkSponsorshipApproval, error)
+	GetForkSponsorshipApproval(sourceRepositoryID, forkRepositoryID int64) (ForkSponsorshipApproval, error)
+	UpsertForkSponsorshipApproval(approval ForkSponsorshipApproval) (ForkSponsorshipApproval, error)
+	DeleteForkSponsorshipApproval(sponsorInstallationID, sourceRepositoryID, forkRepositoryID int64) error
+	InFlightCountForForkSponsorship(sponsorInstallationID, sourceRepositoryID int64) (int, error)
+}
+
 type AuditStore interface {
 	AppendAuditEvent(event AuditEvent) (AuditEvent, error)
 	ApplyMutationWithAudit(event AuditEvent, mutation func(Store) error) (AuditEvent, error)
@@ -491,6 +542,7 @@ type Store interface {
 	AccountSecretStore
 	AccountPreferenceStore
 	SandboxServiceDefaultStore
+	ForkSponsorshipStore
 	AuditStore
 }
 

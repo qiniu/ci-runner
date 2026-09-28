@@ -3853,6 +3853,7 @@ func TestApplyMutationWithAuditSQLBackends(t *testing.T) {
 			}
 
 			testProfileConditionalSave(t, store)
+			testForkSponsorshipApprovalDeleteSerializationSQLBackend(t, store, db)
 
 			if err := db.Migrator().DropTable(&auditEventRecord{}); err != nil {
 				t.Fatal(err)
@@ -3873,6 +3874,71 @@ func TestApplyMutationWithAuditSQLBackends(t *testing.T) {
 				t.Fatalf("%s mutation committed despite audit failure: %v", backend.name, err)
 			}
 		})
+	}
+}
+
+func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, store *DBStore, db *gorm.DB) {
+	t.Helper()
+	const sponsorInstallationID int64 = 701
+	const sourceRepositoryID int64 = 702
+	if _, err := store.CreateForkSponsorshipPolicy(ForkSponsorshipPolicy{
+		SponsorInstallationID:    sponsorInstallationID,
+		SourceRepositoryID:       sourceRepositoryID,
+		SourceRepositoryFullName: "acme/concurrent",
+		Mode:                     ForkSponsorshipModeApprovalRequired,
+		Enabled:                  true,
+		MaxConcurrency:           1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	insertTx := db.Begin()
+	if insertTx.Error != nil {
+		t.Fatal(insertTx.Error)
+	}
+	defer insertTx.Rollback()
+	if err := lockForkSponsorshipPolicy(insertTx, sponsorInstallationID, sourceRepositoryID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- store.DeleteForkSponsorshipPolicy(sponsorInstallationID, sourceRepositoryID)
+	}()
+	<-deleteStarted
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("policy deletion did not wait for the approval transaction: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	now := time.Now().UTC()
+	if err := upsertForkSponsorshipApprovalRecord(insertTx, forkSponsorshipApprovalRecord{
+		SponsorInstallationID:  sponsorInstallationID,
+		SourceRepositoryID:     sourceRepositoryID,
+		ForkRepositoryID:       703,
+		ForkRepositoryFullName: "member/concurrent",
+		ForkOwnerID:            704,
+		ForkOwnerLogin:         "member",
+		CreatedAt:              now,
+		UpdatedAt:              now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertTx.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetForkSponsorshipPolicy(sponsorInstallationID, sourceRepositoryID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("policy still exists after serialized deletion: %v", err)
+	}
+	approvals, err := store.ListForkSponsorshipApprovals(sponsorInstallationID, sourceRepositoryID)
+	if err != nil || len(approvals) != 0 {
+		t.Fatalf("serialized policy deletion left approvals: approvals=%#v err=%v", approvals, err)
 	}
 }
 
@@ -3969,7 +4035,7 @@ func TestFreshSchemaIncludesScopedRunnerCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"scoped_runner_profiles"} {
+	for _, table := range []string{"scoped_runner_profiles", "fork_sponsorship_policies", "fork_sponsorship_approvals"} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("expected fresh schema table %s", table)
 		}
@@ -3988,7 +4054,7 @@ func TestFreshSchemaIncludesScopedRunnerCatalog(t *testing.T) {
 			t.Fatalf("expected fresh schema index %s", index.name)
 		}
 	}
-	for _, column := range []string{"profile_source", "profile_scope_type", "profile_scope_id"} {
+	for _, column := range []string{"profile_source", "profile_scope_type", "profile_scope_id", "sponsor_installation_id", "sponsor_source_repository_id", "sponsor_source_repository_full_name", "sponsor_authorization_reason"} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
 			t.Fatalf("expected runner_requests.%s", column)
 		}
@@ -4043,13 +4109,16 @@ func TestMigrateSQLiteRunnerRequestAddsProfileScopeWithoutLosingRows(t *testing.
 	if row.ID != "legacy-request" || row.Status != StatusCompleted {
 		t.Fatalf("legacy row changed during migration: %#v", row)
 	}
-	for _, column := range []string{"profile_source", "profile_scope_type", "profile_scope_id"} {
+	for _, column := range []string{"profile_source", "profile_scope_type", "profile_scope_id", "sponsor_installation_id", "sponsor_source_repository_id", "sponsor_source_repository_full_name", "sponsor_authorization_reason"} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
 			t.Fatalf("expected migrated runner_requests.%s", column)
 		}
 	}
 	if !db.Migrator().HasIndex(&runnerRequestRecord{}, "idx_runner_requests_profile_scope_status") {
 		t.Fatal("expected profile scope status index")
+	}
+	if !db.Migrator().HasIndex(&runnerRequestRecord{}, "idx_runner_requests_sponsor_inflight") {
+		t.Fatal("expected fork sponsorship in-flight index")
 	}
 }
 
@@ -5431,6 +5500,10 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"template_version",
 		"runner_version",
 		"effective_runner_version",
+		"sponsor_installation_id",
+		"sponsor_source_repository_id",
+		"sponsor_source_repository_full_name",
+		"sponsor_authorization_reason",
 	} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
 			t.Fatalf("expected additive runner request column %s after migration", column)
@@ -5441,6 +5514,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"idx_runner_requests_github_installation_queued_id",
 		"idx_runner_requests_profile_queued_id",
 		"idx_runner_requests_repository_queued_id",
+		"idx_runner_requests_sponsor_inflight",
 	} {
 		if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
 			t.Fatalf("expected runner request list ordering index %s after additive migration", indexName)

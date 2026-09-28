@@ -79,6 +79,8 @@ cp runnerd.yaml.example runnerd.yaml
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
 9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用 managed default，或配置自定义 spec 要求的 labels。
 
+Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 Fork 使用组织的 Sandbox 服务运行托管 Runner 规格。策略按上游仓库的稳定 GitHub ID 绑定，创建后默认关闭，并具有独立的正数并发上限；准入方式可以是精确 Fork 审批、上游仓库写权限或 active 组织成员。Job 与 GitHub Runner 仍归 Fork 所有；组织 Cache S3、自定义 Runner 规格、物理模板 ID、Runner Group、凭据和 Provider 目录不会被继承。详见[组织赞助的 Fork Runner](docs/zh/organization-sponsored-fork-runners.md)。
+
 本地开发请使用 `task dev` 配合 `runnerd.local.yaml`。详细的本地环境搭建（包括 GitHub App 创建和 webhook 转发）请参阅 [docs/zh/testing.md](docs/zh/testing.md)。
 
 ## 配置
@@ -310,6 +312,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
 | `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
 | `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |
+| `/organizations/{login}/fork-sponsorship` | 由 owner 管理可信 Fork 使用组织 Sandbox 执行托管 Runner 的赞助策略 |
 | `/admin/sandbox_service` | Sandbox 服务配置               |
 | `/admin/match`           | 针对当前已启用 Runner Spec 的标签匹配预览 |
 | `/admin/audit`           | 审计事件历史 |

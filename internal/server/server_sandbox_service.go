@@ -8,11 +8,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
 var errSandboxServiceNotConfigured = errors.New("sandbox service not configured")
+var errForkSponsorshipAtCapacity = errors.New("fork sponsorship is at capacity")
+var errForkSponsorshipPolicyChanged = errors.New("fork sponsorship policy changed during startup")
 
 func (s *Server) sandboxServiceForRunnerRequest(ctx context.Context, req state.RunnerRequest) (sandboxrunner.Service, error) {
 	svc, _, err := s.sandboxServiceAndConfigForRunnerRequestContext(ctx, req)
@@ -20,9 +23,17 @@ func (s *Server) sandboxServiceForRunnerRequest(ctx context.Context, req state.R
 }
 
 type sandboxServiceConfigSnapshot struct {
-	APIURL          string
-	EncryptedAPIKey string
-	Source          string
+	APIURL                          string
+	EncryptedAPIKey                 string
+	Source                          string
+	SponsorInstallationID           int64
+	SponsorSourceRepositoryID       int64
+	SponsorSourceRepositoryFullName string
+	SponsorAuthorizationReason      string
+	ForkRepositoryID                int64
+	ForkRepositoryFullName          string
+	ForkOwnerID                     int64
+	ForkOwnerLogin                  string
 }
 
 const (
@@ -31,6 +42,7 @@ const (
 	sandboxConfigSourceAccount          = "account"
 	sandboxConfigSourceInheritedAccount = "inherited_account"
 	sandboxConfigSourceAdminDefault     = "admin_default"
+	sandboxConfigSourceForkSponsorship  = "organization_sponsorship"
 )
 
 func (s *Server) sandboxServiceAndConfigForRunnerRequest(req state.RunnerRequest) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
@@ -47,16 +59,17 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 		if source == "" {
 			source = sandboxConfigSourceRequestSnapshot
 		}
-		svc, err := s.sandboxServiceForConfig(sandboxServiceConfigSnapshot{
-			APIURL:          req.SandboxAPIURL,
-			EncryptedAPIKey: req.SandboxAPIKeyEncrypted,
-			Source:          source,
-		})
-		return svc, sandboxServiceConfigSnapshot{
-			APIURL:          strings.TrimSpace(req.SandboxAPIURL),
-			EncryptedAPIKey: strings.TrimSpace(req.SandboxAPIKeyEncrypted),
-			Source:          source,
-		}, err
+		snapshot := sandboxServiceConfigSnapshot{
+			APIURL:                          strings.TrimSpace(req.SandboxAPIURL),
+			EncryptedAPIKey:                 strings.TrimSpace(req.SandboxAPIKeyEncrypted),
+			Source:                          source,
+			SponsorInstallationID:           req.SponsorInstallationID,
+			SponsorSourceRepositoryID:       req.SponsorSourceRepositoryID,
+			SponsorSourceRepositoryFullName: strings.TrimSpace(req.SponsorSourceRepositoryFullName),
+			SponsorAuthorizationReason:      strings.TrimSpace(req.SponsorAuthorizationReason),
+		}
+		svc, err := s.sandboxServiceForConfig(snapshot)
+		return svc, snapshot, err
 	}
 	if req.GitHubInstallationID <= 0 {
 		installationID, ok, err := s.githubInstallationScopeForRepository(req.RepositoryFullName)
@@ -107,9 +120,152 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 	if scopedCustom {
 		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
 	}
+	profile, profileErr := s.profileForRunnerRequest(req)
+	if profileErr == nil && strings.TrimSpace(profile.ManagedBy) != "" {
+		svc, snapshot, sponsorshipErr := s.sandboxServiceForForkSponsorship(ctx, req)
+		if sponsorshipErr == nil {
+			return svc, snapshot, nil
+		}
+		if !errors.Is(sponsorshipErr, state.ErrNotFound) {
+			return nil, sandboxServiceConfigSnapshot{}, sponsorshipErr
+		}
+	}
 	return s.sandboxServiceForAdminDefault(func() (state.GitHubInstallationAccount, error) {
 		return s.githubInstallationOwner(ctx, req.GitHubInstallationID)
 	})
+}
+
+func (s *Server) sandboxServiceForForkSponsorship(ctx context.Context, req state.RunnerRequest) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
+	if s.gh == nil || strings.TrimSpace(req.RepositoryFullName) == "" {
+		return nil, sandboxServiceConfigSnapshot{}, state.ErrNotFound
+	}
+	fork, err := s.gh.GetRepository(ctx, req.RepositoryFullName)
+	if err != nil {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("resolve fork repository for sponsorship: %w", err)
+	}
+	if !fork.Fork || fork.ID <= 0 || fork.Owner.ID <= 0 || strings.TrimSpace(fork.Owner.Login) == "" || fork.Source == nil || fork.Source.ID <= 0 || strings.TrimSpace(fork.Source.FullName) == "" {
+		return nil, sandboxServiceConfigSnapshot{}, state.ErrNotFound
+	}
+	if !strings.EqualFold(strings.TrimSpace(fork.FullName), strings.TrimSpace(req.RepositoryFullName)) {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("fork repository identity changed: %w", state.ErrNotFound)
+	}
+	source := *fork.Source
+	policy, err := s.store.GetForkSponsorshipPolicyBySourceRepositoryID(source.ID)
+	if err != nil {
+		return nil, sandboxServiceConfigSnapshot{}, err
+	}
+	if !policy.Enabled || !strings.EqualFold(strings.TrimSpace(policy.SourceRepositoryFullName), strings.TrimSpace(source.FullName)) {
+		return nil, sandboxServiceConfigSnapshot{}, state.ErrNotFound
+	}
+	sponsor, err := s.githubInstallationOwner(ctx, policy.SponsorInstallationID)
+	if err != nil {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("resolve fork sponsor installation: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(sponsor.AccountType), "organization") || source.Owner.ID <= 0 || source.Owner.ID != sponsor.GitHubAccountID || !strings.EqualFold(strings.TrimSpace(source.Owner.Login), strings.TrimSpace(sponsor.AccountLogin)) {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("fork sponsorship source owner no longer matches sponsor: %w", state.ErrNotFound)
+	}
+	reason, err := s.authorizeForkSponsorship(ctx, policy, fork, source)
+	if err != nil {
+		return nil, sandboxServiceConfigSnapshot{}, err
+	}
+	svc, snapshot, err := s.sandboxServiceForScope(accountPreferenceScope{Type: state.AccountScopeTypeGitHubInstall, ID: policy.SponsorInstallationID})
+	if err != nil {
+		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("resolve sponsor sandbox service: %w", err)
+	}
+	snapshot.Source = sandboxConfigSourceForkSponsorship
+	snapshot.SponsorInstallationID = policy.SponsorInstallationID
+	snapshot.SponsorSourceRepositoryID = policy.SourceRepositoryID
+	snapshot.SponsorSourceRepositoryFullName = policy.SourceRepositoryFullName
+	snapshot.SponsorAuthorizationReason = reason
+	snapshot.ForkRepositoryID = fork.ID
+	snapshot.ForkRepositoryFullName = fork.FullName
+	snapshot.ForkOwnerID = fork.Owner.ID
+	snapshot.ForkOwnerLogin = fork.Owner.Login
+	return svc, snapshot, nil
+}
+
+func (s *Server) persistSandboxServiceSnapshot(id string, snapshot sandboxServiceConfigSnapshot) error {
+	if snapshot.APIURL == "" && snapshot.EncryptedAPIKey == "" {
+		return nil
+	}
+	if snapshot.Source == sandboxConfigSourceForkSponsorship {
+		unlock := s.lockForkSponsorship(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
+		defer unlock()
+
+		policy, err := s.store.GetForkSponsorshipPolicy(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
+		if err != nil || !policy.Enabled || policy.Mode != snapshot.SponsorAuthorizationReason || !strings.EqualFold(policy.SourceRepositoryFullName, snapshot.SponsorSourceRepositoryFullName) {
+			return errForkSponsorshipPolicyChanged
+		}
+		if policy.Mode == state.ForkSponsorshipModeApprovalRequired {
+			approval, approvalErr := s.store.GetForkSponsorshipApproval(policy.SourceRepositoryID, snapshot.ForkRepositoryID)
+			if approvalErr != nil || approval.SponsorInstallationID != policy.SponsorInstallationID || approval.ForkOwnerID != snapshot.ForkOwnerID || !strings.EqualFold(approval.ForkRepositoryFullName, snapshot.ForkRepositoryFullName) || !strings.EqualFold(approval.ForkOwnerLogin, snapshot.ForkOwnerLogin) {
+				return errForkSponsorshipPolicyChanged
+			}
+		}
+		inFlight, err := s.store.InFlightCountForForkSponsorship(policy.SponsorInstallationID, policy.SourceRepositoryID)
+		if err != nil {
+			return err
+		}
+		if inFlight >= policy.MaxConcurrency {
+			return errForkSponsorshipAtCapacity
+		}
+	}
+
+	current, err := s.store.ReadState(id)
+	if err != nil {
+		return fmt.Errorf("read state for sandbox config snapshot: %w", err)
+	}
+	current.SandboxAPIURL = snapshot.APIURL
+	current.SandboxAPIKeyEncrypted = snapshot.EncryptedAPIKey
+	current.SandboxConfigSource = snapshot.Source
+	current.SponsorInstallationID = snapshot.SponsorInstallationID
+	current.SponsorSourceRepositoryID = snapshot.SponsorSourceRepositoryID
+	current.SponsorSourceRepositoryFullName = snapshot.SponsorSourceRepositoryFullName
+	current.SponsorAuthorizationReason = snapshot.SponsorAuthorizationReason
+	if err := s.store.WriteState(current); err != nil {
+		return fmt.Errorf("write sandbox config snapshot: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) authorizeForkSponsorship(ctx context.Context, policy state.ForkSponsorshipPolicy, fork, source github.Repository) (string, error) {
+	switch policy.Mode {
+	case state.ForkSponsorshipModeApprovalRequired:
+		approval, err := s.store.GetForkSponsorshipApproval(policy.SourceRepositoryID, fork.ID)
+		if err != nil {
+			return "", err
+		}
+		if approval.SponsorInstallationID != policy.SponsorInstallationID || approval.ForkOwnerID != fork.Owner.ID || !strings.EqualFold(approval.ForkRepositoryFullName, fork.FullName) || !strings.EqualFold(approval.ForkOwnerLogin, fork.Owner.Login) {
+			return "", state.ErrNotFound
+		}
+		return state.ForkSponsorshipModeApprovalRequired, nil
+	case state.ForkSponsorshipModeWritePermission:
+		if !strings.EqualFold(strings.TrimSpace(fork.Owner.Type), "user") {
+			return "", state.ErrNotFound
+		}
+		permission, err := s.gh.GetRepositoryCollaboratorPermission(ctx, source.FullName, fork.Owner.Login)
+		if err != nil {
+			return "", fmt.Errorf("check fork owner repository permission: %w", err)
+		}
+		if permission.UserID != fork.Owner.ID || !strings.EqualFold(permission.UserLogin, fork.Owner.Login) || (permission.Permission != "write" && permission.Permission != "maintain" && permission.Permission != "admin") {
+			return "", state.ErrNotFound
+		}
+		return state.ForkSponsorshipModeWritePermission, nil
+	case state.ForkSponsorshipModeOrganizationMember:
+		if !strings.EqualFold(strings.TrimSpace(fork.Owner.Type), "user") {
+			return "", state.ErrNotFound
+		}
+		membership, err := s.gh.GetOrganizationMembership(ctx, source.FullName, source.Owner.Login, fork.Owner.Login)
+		if err != nil {
+			return "", fmt.Errorf("check fork owner organization membership: %w", err)
+		}
+		if membership.State != "active" || membership.UserID != fork.Owner.ID || !strings.EqualFold(membership.UserLogin, fork.Owner.Login) {
+			return "", state.ErrNotFound
+		}
+		return state.ForkSponsorshipModeOrganizationMember, nil
+	default:
+		return "", state.ErrNotFound
+	}
 }
 
 func (s *Server) githubInstallationScopeForRepository(repositoryFullName string) (int64, bool, error) {

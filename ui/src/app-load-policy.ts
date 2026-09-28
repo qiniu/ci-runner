@@ -264,7 +264,7 @@ export function isAccountSettingsRoute(path: string): boolean {
     path === "/settings" ||
     path === "/accounts" ||
     /^\/account\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path) ||
-    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
+    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs|fork-sponsorship)$/.test(path)
   )
 }
 
@@ -273,7 +273,7 @@ function isSandboxSettingsRoute(path: string): boolean {
     path === "/settings" ||
     path === "/accounts" ||
     /^\/account\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path) ||
-    /^\/organizations\/[^/]+\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
+    /^\/organizations\/[^/]+\/(preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs|fork-sponsorship)$/.test(path)
   )
 }
 

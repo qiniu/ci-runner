@@ -176,6 +176,7 @@ describe("app load policy", () => {
     ["/organizations/octo/sandbox-templates", ["github_app", "preferences", "onboarding"]],
     ["/account/runner-specs", ["github_app", "preferences", "onboarding"]],
     ["/organizations/octo/runner-specs", ["github_app", "preferences", "onboarding"]],
+    ["/organizations/octo/fork-sponsorship", ["github_app", "preferences", "onboarding"]],
     ["/jobs/job-1", []],
     ["/admin/", []],
   ])("loads only data used by user route %s", (path, expected) => {
@@ -187,6 +188,7 @@ describe("app load policy", () => {
     ["/repositories", "/user/github-app"],
     ["/account/preferences", "/user/github-app?include=settings"],
     ["/organizations/qbox/sandbox-templates", "/user/github-app?include=settings"],
+    ["/organizations/qbox/fork-sponsorship", "/user/github-app?include=settings"],
   ])("loads Settings manageability only for Settings route %s", (path, expected) => {
     expect(appPolicy.userGitHubAppPath?.(path)).toBe(expected)
   })
@@ -227,6 +229,7 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/account/preferences")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/account/runner-specs")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-specs")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/organizations/octo/fork-sponsorship")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/account/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-types")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/admin/runner_specs")).toBe("admin")

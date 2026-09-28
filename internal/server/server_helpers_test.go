@@ -2882,6 +2882,13 @@ func TestReconcileMismatchedCompletedJobsRequeuesOriginalJob(t *testing.T) {
 	st.TemplateVersion = "20260915.1"
 	st.RunnerVersion = "2.336.0"
 	st.EffectiveRunnerVersion = "2.338.0"
+	st.SandboxAPIURL = "https://sponsor.example.test"
+	st.SandboxAPIKeyEncrypted = "encrypted"
+	st.SandboxConfigSource = sandboxConfigSourceForkSponsorship
+	st.SponsorInstallationID = 200
+	st.SponsorSourceRepositoryID = 300
+	st.SponsorSourceRepositoryFullName = "acme/project"
+	st.SponsorAuthorizationReason = state.ForkSponsorshipModeApprovalRequired
 	st.CompletedAt = time.Now().UTC()
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
@@ -2905,6 +2912,9 @@ func TestReconcileMismatchedCompletedJobsRequeuesOriginalJob(t *testing.T) {
 	}
 	if got.SandboxRegion != "" || got.ResolvedTemplateID != "" || got.TemplateVersion != "" || got.RunnerVersion != "" || got.EffectiveRunnerVersion != "" {
 		t.Fatalf("expected runner environment snapshot to be cleared when requeued, got %#v", got)
+	}
+	if got.SandboxAPIURL != "" || got.SandboxAPIKeyEncrypted != "" || got.SandboxConfigSource != "" || got.SponsorInstallationID != 0 || got.SponsorSourceRepositoryID != 0 || got.SponsorSourceRepositoryFullName != "" || got.SponsorAuthorizationReason != "" {
+		t.Fatalf("expected Sandbox and sponsorship snapshots to be cleared when requeued, got %#v", got)
 	}
 }
 
@@ -3024,6 +3034,13 @@ func TestFailStartRequeuesRunnerWhenRetriesRemain(t *testing.T) {
 	st.TemplateVersion = "20260915.1"
 	st.RunnerVersion = "2.336.0"
 	st.EffectiveRunnerVersion = "2.338.0"
+	st.SandboxAPIURL = "https://sponsor.example.test"
+	st.SandboxAPIKeyEncrypted = "encrypted"
+	st.SandboxConfigSource = sandboxConfigSourceForkSponsorship
+	st.SponsorInstallationID = 200
+	st.SponsorSourceRepositoryID = 300
+	st.SponsorSourceRepositoryFullName = "acme/project"
+	st.SponsorAuthorizationReason = state.ForkSponsorshipModeApprovalRequired
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
@@ -3041,6 +3058,9 @@ func TestFailStartRequeuesRunnerWhenRetriesRemain(t *testing.T) {
 	}
 	if got.SandboxRegion != "" || got.ResolvedTemplateID != "" || got.TemplateVersion != "" || got.RunnerVersion != "" || got.EffectiveRunnerVersion != "" {
 		t.Fatalf("failStart retry: expected runner environment snapshot to be cleared, got %#v", got)
+	}
+	if got.SandboxAPIURL != "" || got.SandboxAPIKeyEncrypted != "" || got.SandboxConfigSource != "" || got.SponsorInstallationID != 0 || got.SponsorSourceRepositoryID != 0 || got.SponsorSourceRepositoryFullName != "" || got.SponsorAuthorizationReason != "" {
+		t.Fatalf("failStart retry: expected Sandbox and sponsorship snapshots to be cleared, got %#v", got)
 	}
 }
 

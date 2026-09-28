@@ -91,7 +91,7 @@ const DocsPage = lazy(() =>
   import("@/components/docs-page").then(({ DocsPage: Component }) => ({ default: Component }))
 )
 
-type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs"
+type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs" | "fork-sponsorship"
 type AccountSettingsRoute = {
   accountLogin?: string
   tab: AccountSettingsTab
@@ -1539,7 +1539,7 @@ function isAccountSettingsPath(path: string): boolean {
     path === "/account/sandbox-templates" ||
     path === "/account/sandbox-instances" ||
     path === "/account/runner-specs" ||
-    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/.test(path)
+    /^\/organizations\/[^/]+\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs|fork-sponsorship)$/.test(path)
   )
 }
 
@@ -1551,7 +1551,7 @@ function parseAccountSettingsRoute(path: string, currentLogin?: string): Account
   if (path === "/account/sandbox-instances") return { accountLogin: currentLogin, tab: "sandbox-instances" }
   if (path === "/account/runner-specs") return { accountLogin: currentLogin, tab: "runner-specs" }
 
-  const organizationMatch = path.match(/^\/organizations\/([^/]+)\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs)$/)
+  const organizationMatch = path.match(/^\/organizations\/([^/]+)\/(repositories|preferences|sandbox|sandbox-templates|sandbox-instances|runner-specs|fork-sponsorship)$/)
   if (!organizationMatch) return null
   const accountLogin = safeDecodePathSegment(organizationMatch[1])
   if (!accountLogin) return null
@@ -1717,7 +1717,7 @@ function accountSettingsPath(
   currentLogin: string | undefined,
   tab: AccountSettingsTab
 ): string {
-  const segment = tab === "preferences" ? "preferences" : tab === "sandbox-templates" ? "sandbox-templates" : tab === "sandbox-instances" ? "sandbox-instances" : tab === "runner-specs" ? "runner-specs" : "repositories"
+  const segment = tab === "preferences" ? "preferences" : tab === "sandbox-templates" ? "sandbox-templates" : tab === "sandbox-instances" ? "sandbox-instances" : tab === "runner-specs" ? "runner-specs" : tab === "fork-sponsorship" ? "fork-sponsorship" : "repositories"
   const login = accountLogin?.trim()
   if (!login || login === currentLogin) return `/account/${segment}`
   return `/organizations/${encodeURIComponent(login)}/${segment}`

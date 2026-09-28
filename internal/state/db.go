@@ -175,6 +175,8 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 		&oauthIdentityRecord{},
 		&githubInstallationRecord{},
 		&githubInstallationOwnerRecord{},
+		&forkSponsorshipPolicyRecord{},
+		&forkSponsorshipApprovalRecord{},
 		&accountSecretRecord{},
 		&accountPreferenceRecord{},
 		&sandboxServiceDefaultRecord{},
