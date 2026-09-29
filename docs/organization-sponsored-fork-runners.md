@@ -1,7 +1,7 @@
 # Organization-Sponsored Fork Runners
 
-Status: local implementation is complete on `feat/organization-sponsored-forks`;
-real-fork deployment acceptance remains pending.
+Status: released to production. Eligible and rejected real-fork acceptance runs
+completed on 2026-09-29. See the public [fork sponsorship guide](https://runner.qiniuinc.com/docs/guides/fork-sponsorship) for the platform workflow.
 
 ## Problem And Product Boundary
 
@@ -149,7 +149,7 @@ Chinese i18n parity.
 Local gates are `go test ./internal/state -count=1`, focused GitHub/server tests,
 `task ui-i18n-check`, `task test`, and `task ui-production-smoke`. Dedicated
 PostgreSQL/MySQL databases and a production SQLite snapshot remain external
-release gates. Production acceptance requires an approved fork run and a
+release gates. Production acceptance requires an eligible fork run and a
 rejected control run with cleanup and provenance evidence.
 
 ## Delivery Status
@@ -163,4 +163,4 @@ rejected control run with cleanup and provenance evidence.
 - [x] Add Organization Settings UI and localization.
 - [x] Synchronize operator, testing, architecture, and agent documentation.
 - [x] Pass local verification gates.
-- [ ] Complete real-fork deployment acceptance.
+- [x] Complete eligible and rejected real-fork deployment acceptance.

@@ -14,6 +14,7 @@ describe("public site documentation catalog", () => {
       "/docs/getting-started/hosted",
       "/docs/getting-started/deploy",
       "/docs/guides/workflow",
+      "/docs/guides/fork-sponsorship",
       "/docs/guides/cache",
       "/docs/guides/custom-templates",
       "/docs/troubleshooting",
@@ -27,6 +28,8 @@ describe("public site documentation catalog", () => {
   test("keeps the selected article while changing language", () => {
     expect(siteDocumentForPath("/docs/guides/workflow", "en")?.title).toBe("Run your first workflow")
     expect(siteDocumentForPath("/docs/guides/workflow", "zh-CN")?.title).toBe("运行第一个工作流")
+    expect(siteDocumentForPath("/docs/guides/fork-sponsorship", "en")?.title).toBe("Sponsor trusted forks with an organization Sandbox")
+    expect(siteDocumentForPath("/docs/guides/fork-sponsorship", "zh-CN")?.title).toBe("使用组织 Sandbox 赞助可信 Fork")
     expect(siteDocumentForPath("/docs/guides/custom-templates", "en")?.title).toBe("Build and use a custom runner template")
     expect(siteDocumentForPath("/docs/guides/custom-templates", "zh-CN")?.title).toBe("构建并使用自定义 Runner 模板")
     expect(siteDocumentForPath("/docs/guides/cache", "en")?.title).toBe("Configure and use Cache S3")
@@ -38,8 +41,8 @@ describe("public site documentation catalog", () => {
     const english = siteDocuments("en")
     const chinese = siteDocuments("zh")
 
-    expect(english).toHaveLength(8)
-    expect(chinese).toHaveLength(8)
+    expect(english).toHaveLength(9)
+    expect(chinese).toHaveLength(9)
     expect(english.map((document) => document.path)).toEqual(chinese.map((document) => document.path))
     expect(english.every((document) => document.title && document.summary && document.markdown.startsWith("# "))).toBe(true)
     expect(chinese.every((document) => document.title && document.summary && document.markdown.startsWith("# "))).toBe(true)
@@ -49,6 +52,21 @@ describe("public site documentation catalog", () => {
       )
     })
     expect([...english, ...chinese].some((document) => document.markdown.includes("qiniu-sandbox"))).toBe(false)
+  })
+
+  test("documents the organization fork sponsorship contract", () => {
+    for (const language of ["en", "zh"]) {
+      const markdown = siteDocumentForPath("/docs/guides/fork-sponsorship", language)?.markdown
+
+      expect(markdown).toContain("runs-on: [qiniu, ubuntu-24.04]")
+      expect(markdown).toContain("write")
+      expect(markdown).toContain("maintain")
+      expect(markdown).toContain("admin")
+      expect(markdown).toContain("Cache S3")
+      expect(markdown).toContain(language === "en" ? "Exact approval required" : "需要精确审批")
+      expect(markdown).toContain(language === "en" ? "Organization member" : "组织成员")
+      expect(markdown).toContain(language === "en" ? "custom Runner Specs" : "自定义 Runner 规格")
+    }
   })
 
   test("documents the custom template build and runtime contracts", () => {

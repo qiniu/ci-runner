@@ -16,6 +16,7 @@ describe("DocsPage", () => {
       expect(html).toContain("开始使用托管服务")
       expect(html).toContain('aria-label="文档导航"')
       expect(html).toContain('href="/docs/guides/workflow"')
+      expect(html).toContain('href="/docs/guides/fork-sponsorship"')
       expect(html).toContain('href="/jobs"')
       expect(html).toContain('aria-label="打开 Jobs"')
       expect(html).toContain("qiniu, ubuntu-24.04")

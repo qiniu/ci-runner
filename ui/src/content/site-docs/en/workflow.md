@@ -31,6 +31,8 @@ jobs:
 
 Commit the file to a repository authorized for the Qiniu CI Runner GitHub App.
 
+When the repository is a personal fork that should use an upstream organization's Sandbox service, complete [organization fork sponsorship](/docs/guides/fork-sponsorship) before triggering the workflow.
+
 ## Why these labels work
 
 Managed specs use the rule `required labels ⊆ job labels ⊆ advertised labels`.

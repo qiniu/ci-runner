@@ -79,7 +79,7 @@ cp runnerd.yaml.example runnerd.yaml
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
 
-Organization owners can open **Settings → Fork sponsorship** to let trusted personal forks use the organization's Sandbox service for managed Runner Specs. A policy is bound to the upstream repository's stable GitHub ID, starts disabled, has its own positive concurrency limit, and can require an exact fork approval, upstream write permission, or active organization membership. The Job and GitHub Runner remain owned by the fork; organization Cache S3, custom Runner Specs, physical template IDs, Runner Groups, credentials, and provider catalogs are never inherited. See [Organization-Sponsored Fork Runners](docs/organization-sponsored-fork-runners.md).
+Organization owners can open **Settings → Fork sponsorship** to let trusted personal forks use the organization's Sandbox service for managed Runner Specs. A policy is bound to the upstream repository's stable GitHub ID, starts disabled, has its own positive concurrency limit, and can require an exact fork approval, upstream write permission, or active organization membership. The Job and GitHub Runner remain owned by the fork; organization Cache S3, custom Runner Specs, physical template IDs, Runner Groups, credentials, and provider catalogs are never inherited. See [Sponsor trusted forks with an organization Sandbox](https://runner.qiniuinc.com/docs/guides/fork-sponsorship) for the platform workflow and [Organization-Sponsored Fork Runners](docs/organization-sponsored-fork-runners.md) for implementation details.
 
 For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testing.md](docs/testing.md) for detailed local setup including GitHub App creation and webhook forwarding.
 
@@ -446,7 +446,7 @@ standard workflow, and large workflow gates recorded in
 
 | Document | Description |
 | --- | --- |
-| [Hosted site guides](https://runner.qiniuinc.com/docs) | Hosted quick start, runnerd deployment, workflow example, custom template lifecycle, troubleshooting, and managed labels |
+| [Hosted site guides](https://runner.qiniuinc.com/docs) | Hosted quick start, runnerd deployment, workflow example, organization fork sponsorship, custom template lifecycle, troubleshooting, and managed labels |
 | [docs/testing.md](docs/testing.md) | Local testing, GitHub App/OAuth setup, webhook forwarding, troubleshooting |
 | [docs/deployment-smoke.md](docs/deployment-smoke.md) | Production-style readiness checklist |
 | [docs/default-runner-templates.md](docs/default-runner-templates.md) | Public template labels, qshell release flow, regional smoke, and rollback |

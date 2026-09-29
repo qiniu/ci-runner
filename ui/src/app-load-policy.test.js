@@ -218,6 +218,7 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/docs/getting-started/hosted")).toBe("public")
     expect(appPolicy.appRouteAccess?.("/docs/getting-started/deploy")).toBe("public")
     expect(appPolicy.appRouteAccess?.("/docs/guides/workflow")).toBe("public")
+    expect(appPolicy.appRouteAccess?.("/docs/guides/fork-sponsorship")).toBe("public")
     expect(appPolicy.appRouteAccess?.("/docs/guides/cache")).toBe("public")
     expect(appPolicy.appRouteAccess?.("/docs/guides/custom-templates")).toBe("public")
     expect(appPolicy.appRouteAccess?.("/docs/troubleshooting")).toBe("public")

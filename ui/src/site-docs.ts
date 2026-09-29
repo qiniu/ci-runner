@@ -1,5 +1,6 @@
 import enDeploy from "@/content/site-docs/en/getting-started-deploy.md?raw"
 import enCustomTemplates from "@/content/site-docs/en/custom-templates.md?raw"
+import enForkSponsorship from "@/content/site-docs/en/fork-sponsorship.md?raw"
 import enHosted from "@/content/site-docs/en/getting-started-hosted.md?raw"
 import enIndex from "@/content/site-docs/en/index.md?raw"
 import enLabels from "@/content/site-docs/en/runner-labels.md?raw"
@@ -8,6 +9,7 @@ import enCache from "@/content/site-docs/en/cache.md?raw"
 import enWorkflow from "@/content/site-docs/en/workflow.md?raw"
 import zhDeploy from "@/content/site-docs/zh/getting-started-deploy.md?raw"
 import zhCustomTemplates from "@/content/site-docs/zh/custom-templates.md?raw"
+import zhForkSponsorship from "@/content/site-docs/zh/fork-sponsorship.md?raw"
 import zhHosted from "@/content/site-docs/zh/getting-started-hosted.md?raw"
 import zhIndex from "@/content/site-docs/zh/index.md?raw"
 import zhLabels from "@/content/site-docs/zh/runner-labels.md?raw"
@@ -48,19 +50,24 @@ const definitions: SiteDocumentDefinition[] = [
     markdown: { en: enDeploy, zh: zhDeploy },
   },
   { path: siteDocumentRoutes[3], group: "guides", markdown: { en: enWorkflow, zh: zhWorkflow } },
-  { path: siteDocumentRoutes[4], group: "guides", markdown: { en: enCache, zh: zhCache } },
   {
-    path: siteDocumentRoutes[5],
+    path: siteDocumentRoutes[4],
+    group: "guides",
+    markdown: { en: enForkSponsorship, zh: zhForkSponsorship },
+  },
+  { path: siteDocumentRoutes[5], group: "guides", markdown: { en: enCache, zh: zhCache } },
+  {
+    path: siteDocumentRoutes[6],
     group: "guides",
     markdown: { en: enCustomTemplates, zh: zhCustomTemplates },
   },
   {
-    path: siteDocumentRoutes[6],
+    path: siteDocumentRoutes[7],
     group: "guides",
     markdown: { en: enTroubleshooting, zh: zhTroubleshooting },
   },
   {
-    path: siteDocumentRoutes[7],
+    path: siteDocumentRoutes[8],
     group: "reference",
     markdown: { en: enLabels, zh: zhLabels },
   },

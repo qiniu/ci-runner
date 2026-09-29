@@ -20,6 +20,12 @@
 
 [运行第一个工作流](/docs/guides/workflow)
 
+## 赞助可信 Fork
+
+允许符合条件的个人 Fork 使用组织的 Sandbox 服务，无需共享凭据，也不会把任务转移到组织仓库。
+
+[配置组织 Fork 赞助](/docs/guides/fork-sponsorship)
+
 ## 配置缓存
 
 在 Preferences 中保存 Cache S3，然后在 workflow 中使用 `qiniu/actions-cache@v5`。

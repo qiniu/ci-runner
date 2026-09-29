@@ -20,6 +20,12 @@ Copy a complete workflow using the current managed labels and learn what a succe
 
 [Run your first workflow](/docs/guides/workflow)
 
+## Sponsor trusted forks
+
+Let eligible personal forks use an organization's Sandbox service without sharing credentials or moving the job out of the fork.
+
+[Configure organization fork sponsorship](/docs/guides/fork-sponsorship)
+
 ## Configure cache
 
 Save Cache S3 in Preferences, then use `qiniu/actions-cache@v5` in the workflow.

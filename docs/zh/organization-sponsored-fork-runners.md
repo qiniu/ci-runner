@@ -1,6 +1,6 @@
 # 组织赞助的 Fork Runner
 
-状态：`feat/organization-sponsored-forks` 分支的本地实现已完成，真实 Fork 部署验收待完成。
+状态：已发布到生产环境，并于 2026-09-29 完成符合条件和拒绝对照的真实 Fork 验收。平台使用流程见公开的 [Fork 赞助指南](https://runner.qiniuinc.com/docs/guides/fork-sponsorship)。
 
 ## 问题与产品边界
 
@@ -110,7 +110,7 @@ PostgreSQL/MySQL 的审计事务、三种准入模式、转移／撤销／容量
 
 本地门禁为 `go test ./internal/state -count=1`、GitHub/server 聚焦测试、
 `task ui-i18n-check`、`task test` 和 `task ui-production-smoke`。专用 PostgreSQL/MySQL
-数据库和生产 SQLite snapshot 是外部发布门禁。生产验收需要一个批准的 Fork Run 和
+数据库和生产 SQLite snapshot 是外部发布门禁。生产验收需要一个符合策略的 Fork Run 和
 一个拒绝对照 Run，并保留清理与来源证据。
 
 ## 交付状态
@@ -124,4 +124,4 @@ PostgreSQL/MySQL 的审计事务、三种准入模式、转移／撤销／容量
 - [x] 增加 Organization Settings UI 和多语言文案。
 - [x] 同步运维、测试、架构和 agent 文档。
 - [x] 通过本地验证门禁。
-- [ ] 完成真实 Fork 部署验收。
+- [x] 完成符合条件和拒绝对照的真实 Fork 部署验收。

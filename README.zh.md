@@ -79,7 +79,7 @@ cp runnerd.yaml.example runnerd.yaml
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
 9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用 managed default，或配置自定义 spec 要求的 labels。
 
-Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 Fork 使用组织的 Sandbox 服务运行托管 Runner 规格。策略按上游仓库的稳定 GitHub ID 绑定，创建后默认关闭，并具有独立的正数并发上限；准入方式可以是精确 Fork 审批、上游仓库写权限或 active 组织成员。Job 与 GitHub Runner 仍归 Fork 所有；组织 Cache S3、自定义 Runner 规格、物理模板 ID、Runner Group、凭据和 Provider 目录不会被继承。详见[组织赞助的 Fork Runner](docs/zh/organization-sponsored-fork-runners.md)。
+Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 Fork 使用组织的 Sandbox 服务运行托管 Runner 规格。策略按上游仓库的稳定 GitHub ID 绑定，创建后默认关闭，并具有独立的正数并发上限；准入方式可以是精确 Fork 审批、上游仓库写权限或 active 组织成员。Job 与 GitHub Runner 仍归 Fork 所有；组织 Cache S3、自定义 Runner 规格、物理模板 ID、Runner Group、凭据和 Provider 目录不会被继承。平台使用流程见[使用组织 Sandbox 赞助可信 Fork](https://runner.qiniuinc.com/docs/guides/fork-sponsorship)，实现细节见[组织赞助的 Fork Runner](docs/zh/organization-sponsored-fork-runners.md)。
 
 本地开发请使用 `task dev` 配合 `runnerd.local.yaml`。详细的本地环境搭建（包括 GitHub App 创建和 webhook 转发）请参阅 [docs/zh/testing.md](docs/zh/testing.md)。
 
@@ -420,7 +420,7 @@ workflow 与 large workflow 门槛，证据保留在
 
 | 文档                                                                                   | 说明                                                    |
 | -------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| [站点指南](https://runner.qiniuinc.com/docs)                                           | 托管版快速开始、runnerd 部署、Workflow 示例、自定义模板全流程、故障排查和 managed labels |
+| [站点指南](https://runner.qiniuinc.com/docs)                                           | 托管版快速开始、runnerd 部署、Workflow 示例、组织 Fork 赞助、自定义模板全流程、故障排查和 managed labels |
 | [docs/zh/testing.md](docs/zh/testing.md)                                               | 本地测试、GitHub App/OAuth 设置、webhook 转发、故障排查 |
 | [docs/zh/deployment-smoke.md](docs/zh/deployment-smoke.md)                             | 生产环境就绪检查清单                                    |
 | [docs/zh/default-runner-templates.md](docs/zh/default-runner-templates.md)             | 公共模板 labels、qshell 发布流程、区域 smoke 和回滚     |

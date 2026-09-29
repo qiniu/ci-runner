@@ -31,6 +31,8 @@ jobs:
 
 将文件提交到已经授权给 Qiniu CI Runner GitHub App 的仓库。
 
+如果目标仓库是个人 Fork，并且需要使用上游组织的 Sandbox 服务，请在触发 workflow 前完成[组织 Fork 赞助配置](/docs/guides/fork-sponsorship)。
+
 ## 标签为什么能够匹配
 
 托管 spec 使用 `必需标签 ⊆ Job 标签 ⊆ 声明标签` 规则。
