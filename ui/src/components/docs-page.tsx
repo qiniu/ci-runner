@@ -251,7 +251,7 @@ function DocsThemeToggle() {
 
 const markdownComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="max-w-[720px] text-4xl font-semibold leading-[1.05] tracking-[-0.05em] text-[#07131b] sm:text-5xl dark:text-white">
+    <h1 className="max-w-[960px] text-4xl font-semibold leading-[1.05] tracking-[-0.05em] text-[#07131b] sm:text-5xl dark:text-white">
       {children}
     </h1>
   ),
