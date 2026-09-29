@@ -57,13 +57,17 @@ Managed Runner request resolution order becomes:
 1. saved request snapshot;
 2. fork installation configuration;
 3. personal account fallback;
-4. eligible organization sponsorship;
-5. eligible platform default;
+4. eligible organization sponsorship, using either the sponsor's scoped service
+   or a platform default whose audience includes the sponsor organization;
+5. eligible platform default for the fork installation when sponsorship is
+   absent or ineligible;
 6. not configured.
 
 Corrupt fork or personal configuration remains an error and does not fall
-through. Sponsorship applies only to runnerd-managed Runner Specs. Platform
-custom and scoped custom Specs preserve their owning-scope credential contract.
+through. A sponsored request keeps organization-sponsorship provenance when its
+credentials come from the platform default. Sponsorship applies only to
+runnerd-managed Runner Specs. Platform custom and scoped custom Specs preserve
+their owning-scope credential contract.
 
 ## State Model
 
@@ -122,6 +126,9 @@ the existing exact `(installation_id, repository_full_name)` intersection.
 
 - Invalid or absent fork metadata and disabled/ineligible policies behave as no
   sponsorship and allow the existing platform-default resolution to continue.
+- An eligible sponsor without scoped Sandbox configuration may use the platform
+  default only when its audience includes the sponsor organization. The saved
+  request source remains organization sponsorship.
 - An eligible sponsor with corrupt Sandbox configuration fails closed; the
   platform default must not hide the owner configuration error.
 - Policy capacity defers the request with a retryable result instead of changing

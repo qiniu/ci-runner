@@ -40,7 +40,9 @@
 7. 在 Runner request 保存加密 Sandbox 配置和不含凭据的赞助来源。
 
 Managed Runner request 的解析顺序变为：request 快照、Fork installation 配置、个人
-账户回退、符合条件的组织赞助、符合受众的平台默认值、未配置错误。
+账户回退、符合条件的组织赞助（优先使用 sponsor scope 配置，未配置时可使用受众包含
+赞助组织的平台默认值）、赞助缺失或不符合条件时适用于 Fork installation 的平台默认值、
+未配置错误。通过平台默认值完成的赞助请求仍保留组织赞助来源。
 
 Fork 或个人配置损坏时继续报错，不能回退。赞助只适用于 runnerd-managed Runner
 Specs；platform custom 和 scoped custom Specs 继续使用所属作用域凭据。
@@ -93,6 +95,8 @@ Organization Settings 增加 **Fork sponsorship** 标签页，个人账户不显
 ## 失败与撤销
 
 - Fork 元数据无效／缺失和禁用／不符合条件的策略视为没有赞助，继续现有平台默认解析；
+- 符合条件的 sponsor 未配置 scoped Sandbox 服务时，只有平台默认值的受众包含赞助组织
+  才能继续使用该默认值；保存的 request 来源仍为组织赞助；
 - 符合条件但组织 Sandbox 配置损坏时 fail closed，不能用平台默认值掩盖 owner 配置错误；
 - 策略达到容量时以可重试结果延后，不能更换付费来源；
 - 删除或禁用策略阻止新启动和 fresh retry，但不终止已经运行的 Sandbox；
