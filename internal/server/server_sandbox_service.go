@@ -170,7 +170,7 @@ func (s *Server) sandboxServiceForForkSponsorship(ctx context.Context, req state
 	if err != nil {
 		return nil, sandboxServiceConfigSnapshot{}, err
 	}
-	svc, snapshot, err := s.sandboxServiceForScope(accountPreferenceScope{Type: state.AccountScopeTypeGitHubInstall, ID: policy.SponsorInstallationID})
+	svc, snapshot, err := s.sandboxServiceForScopeWithDefaultContext(ctx, accountPreferenceScope{Type: state.AccountScopeTypeGitHubInstall, ID: policy.SponsorInstallationID})
 	if err != nil {
 		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("resolve sponsor sandbox service: %w", err)
 	}

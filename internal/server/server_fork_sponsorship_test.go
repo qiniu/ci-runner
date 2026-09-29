@@ -132,6 +132,125 @@ func TestSandboxServiceUsesEligibleForkSponsorshipModes(t *testing.T) {
 	}
 }
 
+func TestSandboxServiceUsesEligiblePlatformDefaultForForkSponsorship(t *testing.T) {
+	githubServer := forkSponsorshipGitHubServer(t)
+	defer githubServer.Close()
+	store := state.New(t.TempDir())
+	srv := New(config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}, store, github.NewClient(githubServer.URL, githubServer.Client()), nil, nil)
+	configureForkSponsorshipTestState(t, srv, store, state.ForkSponsorshipModeOrganizationMember, 2)
+	removeForkSponsorshipSandboxService(t, store)
+
+	encrypted, err := encryptSecret("platform-key", srv.cfg.AuthEncryptionKey.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{
+		Enabled:         true,
+		AudienceMode:    state.SandboxServiceDefaultAudienceModeSelected,
+		APIURL:          "https://platform-sandbox.example.test",
+		APIKeyEncrypted: encrypted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSandboxServiceDefaultAudience(state.SandboxServiceDefaultAudience{
+		GitHubAccountID: 600,
+		AccountType:     "organization",
+		AccountLogin:    "acme",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, snapshot, err := srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{
+		ID:                   "platform-sponsored-request",
+		GitHubInstallationID: 100,
+		RepositoryFullName:   "member/project",
+		ProfileName:          "ubuntu-managed",
+		ProfileSource:        "global",
+	})
+	if err != nil || svc == nil {
+		t.Fatalf("resolve platform-sponsored service: service=%T snapshot=%#v err=%v", svc, snapshot, err)
+	}
+	if snapshot.APIURL != "https://platform-sandbox.example.test" || snapshot.EncryptedAPIKey != encrypted {
+		t.Fatalf("unexpected platform Sandbox snapshot: %#v", snapshot)
+	}
+	if snapshot.Source != sandboxConfigSourceForkSponsorship || snapshot.SponsorInstallationID != 200 || snapshot.SponsorSourceRepositoryID != 300 || snapshot.SponsorAuthorizationReason != state.ForkSponsorshipModeOrganizationMember {
+		t.Fatalf("unexpected sponsorship provenance: %#v", snapshot)
+	}
+}
+
+func TestForkSponsorshipRejectsPlatformDefaultOutsideSponsorAudience(t *testing.T) {
+	githubServer := forkSponsorshipGitHubServer(t)
+	defer githubServer.Close()
+	store := state.New(t.TempDir())
+	srv := New(config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}, store, github.NewClient(githubServer.URL, githubServer.Client()), nil, nil)
+	configureForkSponsorshipTestState(t, srv, store, state.ForkSponsorshipModeOrganizationMember, 2)
+	removeForkSponsorshipSandboxService(t, store)
+
+	encrypted, err := encryptSecret("platform-key", srv.cfg.AuthEncryptionKey.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{
+		Enabled:         true,
+		AudienceMode:    state.SandboxServiceDefaultAudienceModeSelected,
+		APIURL:          "https://platform-sandbox.example.test",
+		APIKeyEncrypted: encrypted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{
+		ID:                   "ineligible-platform-sponsored-request",
+		GitHubInstallationID: 100,
+		RepositoryFullName:   "member/project",
+		ProfileName:          "ubuntu-managed",
+		ProfileSource:        "global",
+	})
+	if !errors.Is(err, errSandboxServiceNotConfigured) {
+		t.Fatalf("platform default outside sponsor audience error = %v, want Sandbox service not configured", err)
+	}
+}
+
+func TestForkSponsorshipDoesNotHideCorruptSponsorConfigurationWithPlatformDefault(t *testing.T) {
+	githubServer := forkSponsorshipGitHubServer(t)
+	defer githubServer.Close()
+	store := state.New(t.TempDir())
+	srv := New(config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}, store, github.NewClient(githubServer.URL, githubServer.Client()), nil, nil)
+	configureForkSponsorshipTestState(t, srv, store, state.ForkSponsorshipModeOrganizationMember, 2)
+	if _, err := store.UpsertAccountPreference(state.AccountPreference{
+		ScopeType: state.AccountScopeTypeGitHubInstall,
+		ScopeID:   200,
+		Namespace: accountPreferenceNamespaceSandbox,
+		Key:       accountPreferenceKeySandboxService,
+		ValueJSON: "{",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := encryptSecret("platform-key", srv.cfg.AuthEncryptionKey.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{
+		Enabled:         true,
+		AudienceMode:    state.SandboxServiceDefaultAudienceModeAll,
+		APIURL:          "https://platform-sandbox.example.test",
+		APIKeyEncrypted: encrypted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{
+		ID:                   "corrupt-sponsor-request",
+		GitHubInstallationID: 100,
+		RepositoryFullName:   "member/project",
+		ProfileName:          "ubuntu-managed",
+		ProfileSource:        "global",
+	})
+	if err == nil || errors.Is(err, errSandboxServiceNotConfigured) {
+		t.Fatalf("corrupt sponsor configuration error = %v, want fail-closed configuration error", err)
+	}
+}
+
 func TestForkSponsorshipCapacityAndManagedOnlyBoundary(t *testing.T) {
 	githubServer := forkSponsorshipGitHubServer(t)
 	defer githubServer.Close()
@@ -269,6 +388,16 @@ func configureForkSponsorshipTestState(t *testing.T, srv *Server, store state.St
 		t.Fatal(err)
 	}
 	if _, err := store.UpsertAccountSecret(state.AccountSecret{ScopeType: state.AccountScopeTypeGitHubInstall, ScopeID: 200, KeyType: state.AccountSecretTypeSandboxAPIKey, EncryptedValue: encrypted}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removeForkSponsorshipSandboxService(t *testing.T, store state.Store) {
+	t.Helper()
+	if err := store.DeleteAccountPreference(state.AccountScopeTypeGitHubInstall, 200, accountPreferenceNamespaceSandbox, accountPreferenceKeySandboxService); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAccountSecret(state.AccountScopeTypeGitHubInstall, 200, state.AccountSecretTypeSandboxAPIKey); err != nil {
 		t.Fatal(err)
 	}
 }
