@@ -17,7 +17,7 @@ If GitHub has no webhook delivery, fix the App event configuration. If runnerd h
 
 ## Runner loses communication during a job
 
-GitHub's “self-hosted runner lost communication” message does not identify the cause by itself. Check the Qiniu CI Runner Job details and Runner logs for the first failure. If they report `sandbox_timeout`, the Sandbox reached its lifetime limit while the job was still running. See [Job and Sandbox time limits](/docs/guides/workflow) before changing the workflow's `timeout-minutes` value.
+GitHub's “self-hosted runner lost communication” message does not identify the cause by itself. Check the Qiniu CI Runner Job details and Runner logs for the first failure. If the Job reports a timeout, ask the runnerd administrator to confirm whether the Runner request failed at `sandbox_timeout`. That stage means the Sandbox reached its lifetime limit while the job was still running. See [Job and Sandbox time limits](/docs/guides/workflow) before changing the workflow's `timeout-minutes` value.
 
 ## Repository is missing
 
