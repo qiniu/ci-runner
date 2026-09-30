@@ -44,6 +44,12 @@ For Ubuntu 24.04:
 
 The shortest supported request is therefore `[qiniu, ubuntu-24.04]`. Adding an unsupported label such as `gpu` prevents a match. Requests containing only `qiniu` or only `ubuntu-24.04` also do not match.
 
+## Job and Sandbox time limits
+
+The hosted Qiniu CI Runner service currently limits each Sandbox to 24 hours. This lifetime starts when the Sandbox is created, before the GitHub job begins. When it expires, the Sandbox stops even if the job is still running. The limit applies to all repositories; a workflow cannot extend it. Self-deployed runnerd instances use their own `sandbox.timeout_seconds` setting instead.
+
+GitHub Actions separately limits each job with `jobs.<job_id>.timeout-minutes` (360 minutes by default). Set this in your workflow when you need a shorter limit for a particular job. For example, `timeout-minutes: 180` allows up to three hours of job execution, subject to the Sandbox lifetime. Leave room for Sandbox startup and Runner registration when choosing a value near the platform limit. See [GitHub's workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).
+
 ## Trigger the run
 
 Open the repository on GitHub, then choose **Actions → Qiniu CI Runner smoke → Run workflow**.

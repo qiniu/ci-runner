@@ -15,6 +15,10 @@
 
 如果 GitHub 中没有 webhook delivery，请修复 App 事件配置。如果 runnerd 已收到请求但提示没有匹配项，请修复标签或 policy。如果请求已经匹配但被延迟，请检查并发和 Sandbox 容量。
 
+## Job 运行中 Runner 失联
+
+GitHub 提示“self-hosted runner lost communication”时，不能仅凭这条消息判断原因。请检查 Qiniu CI Runner Job 详情和 Runner 日志中的第一条失败信息。如果显示 `sandbox_timeout`，说明 Job 仍在运行时 Sandbox 已达到存活时间上限。调整 workflow 的 `timeout-minutes` 前，请先阅读 [Job 与 Sandbox 的时间限制](/docs/guides/workflow)。
+
 ## 仓库没有显示
 
 仓库可见性不能只根据 installation 判断，而是以下两项的交集：
