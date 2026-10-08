@@ -682,6 +682,8 @@ Common issues:
 
 ## 9. How To Read GitHub Actions Logs
 
+In the Jobs panel, select the job name to open its GitHub Job or the workflow name to open its Run. Standalone Job details provide **View job on GitHub** (or **View workflow run on GitHub** when only the Run is known). The default **Runner logs** tab shares the admin request event timeline, showing Runner lifecycle output and process stdout/stderr with timestamps and stages. It initially loads the newest 200 mixed events; filters apply to loaded records. The ordinary-user `GET /user/runner_requests/{id}/events` endpoint uses exact installation/repository authorization, accepts exclusive `before_id` or `after_id` cursors, and returns `{events, has_more}`. Older pages and active five-second incremental refresh merge without discarding loaded history; manual refresh and explicit scrolling to the bottom remain available. Workflow step output stays on GitHub. Both the Jobs panel and standalone Job fallback use this navigation; neither requests GitHub log archives. The retired `GET /user/runner_requests/{id}/github-log` endpoint returns `404`.
+
 runnerd creates a repository-level self-hosted GitHub Actions runner by default; a spec with `runner_group` creates an organization runner for the repository owner instead. After a job is picked up by the runner inside the sandbox, workflow step logs appear normally in GitHub Actions:
 
 ```text

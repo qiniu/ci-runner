@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react"
 import type { RunnerState } from "@/admin-types"
 import { formatTime } from "@/admin-format"
 import type { AppTFunction } from "@/i18n"
+import { workflowRunURL } from "@/components/runner-github-links"
 
 export type RunnerJobDetailRow = {
   id: string
@@ -53,14 +54,6 @@ export function workflowRunLink(job: RunnerState) {
       <ExternalLink className="h-3 w-3" />
     </a>
   )
-}
-
-function workflowRunURL(job: RunnerState) {
-  if (!job.github_job_url || !job.workflow_run_id) return ""
-  const marker = `/actions/runs/${job.workflow_run_id}`
-  const index = job.github_job_url.indexOf(marker)
-  if (index === -1) return ""
-  return job.github_job_url.slice(0, index + marker.length)
 }
 
 function runnerStatusLabel(status: RunnerState["status"], t: AppTFunction) {

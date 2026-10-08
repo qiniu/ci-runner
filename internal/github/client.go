@@ -29,7 +29,6 @@ type Client struct {
 	baseURL           string
 	http              *http.Client
 	userHTTP          *http.Client
-	downloadHTTP      *http.Client
 	appAuth           *appAuthenticator
 	tokensMu          sync.Mutex
 	regTokens         map[string]RegistrationToken
@@ -583,21 +582,17 @@ func NewClient(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return newClient(baseURL, httpClient, httpClient)
+	return newClient(baseURL, httpClient)
 }
 
-func newClient(baseURL string, httpClient, downloadHTTP *http.Client) *Client {
+func newClient(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
-	}
-	if downloadHTTP == nil {
-		downloadHTTP = httpClient
 	}
 	return &Client{
 		baseURL:      strings.TrimRight(baseURL, "/"),
 		http:         httpClient,
 		userHTTP:     httpClient,
-		downloadHTTP: downloadHTTP,
 		regTokens:    map[string]RegistrationToken{},
 		applications: map[string]runnerApplicationsCacheEntry{},
 	}
@@ -624,7 +619,7 @@ func NewAppClient(baseURL string, auth AppAuth, httpClient *http.Client) (*Clien
 	appHTTP.Transport = appTransport
 	cloned := *httpClient
 	cloned.Transport = baseTransport
-	client := newClient(baseURL, &cloned, &cloned)
+	client := newClient(baseURL, &cloned)
 	client.appAuth = &appAuthenticator{
 		baseURL:              strings.TrimRight(baseURL, "/"),
 		staticInstallationID: auth.InstallationID,
@@ -638,21 +633,21 @@ func NewAppClient(baseURL string, auth AppAuth, httpClient *http.Client) (*Clien
 }
 
 func NewTokenClient(baseURL, token string, httpClient *http.Client) *Client {
-	downloadHTTP := cloneHTTPClient(httpClient)
-	client := newClient(baseURL, clientWithTransport(downloadHTTP, bearerTransport{
+	userHTTP := cloneHTTPClient(httpClient)
+	client := newClient(baseURL, clientWithTransport(userHTTP, bearerTransport{
 		token: strings.TrimSpace(token),
-	}), downloadHTTP)
-	client.userHTTP = downloadHTTP
+	}))
+	client.userHTTP = userHTTP
 	return client
 }
 
 func NewBasicAuthClient(baseURL, username, password string, httpClient *http.Client) *Client {
-	downloadHTTP := cloneHTTPClient(httpClient)
-	client := newClient(baseURL, clientWithTransport(downloadHTTP, basicAuthTransport{
+	userHTTP := cloneHTTPClient(httpClient)
+	client := newClient(baseURL, clientWithTransport(userHTTP, basicAuthTransport{
 		username: username,
 		password: password,
-	}), downloadHTTP)
-	client.userHTTP = downloadHTTP
+	}))
+	client.userHTTP = userHTTP
 	return client
 }
 
@@ -1235,90 +1230,6 @@ func (c *Client) GetIssue(ctx context.Context, repositoryFullName string, number
 	return issue, nil
 }
 
-func (c *Client) DownloadWorkflowJobLogs(ctx context.Context, repositoryFullName string, jobID int64) ([]byte, string, error) {
-	if jobID == 0 {
-		return nil, "", fmt.Errorf("workflow job id is required")
-	}
-	return c.downloadActionsLog(ctx, repositoryFullName, fmt.Sprintf("actions/jobs/%d/logs", jobID), "download_workflow_job_logs", "github workflow job logs")
-}
-
-func (c *Client) DownloadWorkflowRunLogs(ctx context.Context, repositoryFullName string, runID int64) ([]byte, string, error) {
-	if runID == 0 {
-		return nil, "", fmt.Errorf("workflow run id is required")
-	}
-	return c.downloadActionsLog(ctx, repositoryFullName, fmt.Sprintf("actions/runs/%d/logs", runID), "download_workflow_run_logs", "github workflow run logs")
-}
-
-func (c *Client) downloadActionsLog(ctx context.Context, repositoryFullName, apiPath, metricName, errorLabel string) ([]byte, string, error) {
-	startedAt := time.Now()
-	result := "error"
-	defer func() { metrics.RecordGitHubAPI(metricName, result, time.Since(startedAt)) }()
-	repositoryFullName = c.repositoryFullName(repositoryFullName)
-	if repositoryFullName == "" {
-		return nil, "", fmt.Errorf("repository full name is required")
-	}
-	url := fmt.Sprintf("%s/repos/%s/%s", c.baseURL, repositoryFullName, apiPath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	setGitHubHeaders(req)
-
-	resp, err := c.doNoRedirect(req, repositoryFullName)
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.StatusCode == http.StatusMovedPermanently ||
-		resp.StatusCode == http.StatusFound ||
-		resp.StatusCode == http.StatusSeeOther ||
-		resp.StatusCode == http.StatusTemporaryRedirect ||
-		resp.StatusCode == http.StatusPermanentRedirect {
-		location := strings.TrimSpace(resp.Header.Get("Location"))
-		resp.Body.Close()
-		if location == "" {
-			return nil, "", fmt.Errorf("%s: redirect missing location", errorLabel)
-		}
-		resp, err = c.downloadRedirect(ctx, location)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	defer resp.Body.Close()
-	body, readErr := readActionsLogBody(resp.Body, 32<<20)
-	if readErr != nil {
-		return nil, "", fmt.Errorf("%s: %w", errorLabel, readErr)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("%s: status %d: %s", errorLabel, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	result = "success"
-	return body, resp.Header.Get("Content-Type"), nil
-}
-
-func readActionsLogBody(r io.Reader, maxBytes int64) ([]byte, error) {
-	if maxBytes <= 0 {
-		return nil, fmt.Errorf("log size limit must be positive")
-	}
-	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(body)) > maxBytes {
-		return nil, fmt.Errorf("log archive exceeds %d bytes", maxBytes)
-	}
-	return body, nil
-}
-
-func (c *Client) downloadRedirect(ctx context.Context, location string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
-	if err != nil {
-		return nil, err
-	}
-	client := *c.downloadHTTP
-	client.CheckRedirect = nil
-	return client.Do(req)
-}
-
 func (c *Client) do(req *http.Request, repositoryFullName string) (*http.Response, error) {
 	if c.appAuth == nil {
 		return c.http.Do(req)
@@ -1328,22 +1239,6 @@ func (c *Client) do(req *http.Request, repositoryFullName string) (*http.Respons
 		return nil, err
 	}
 	return client.Do(req)
-}
-
-func (c *Client) doNoRedirect(req *http.Request, repositoryFullName string) (*http.Response, error) {
-	client := c.http
-	if c.appAuth != nil {
-		var err error
-		client, err = c.appAuth.clientForRepository(req.Context(), c.repositoryFullName(repositoryFullName))
-		if err != nil {
-			return nil, err
-		}
-	}
-	cloned := *client
-	cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	return cloned.Do(req)
 }
 
 func (a *appAuthenticator) clientForRepository(ctx context.Context, repositoryFullName string) (*http.Client, error) {

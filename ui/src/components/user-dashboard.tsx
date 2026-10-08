@@ -9,23 +9,22 @@ import {
   KeyRound,
   Loader2,
   Play,
-  RefreshCw,
   ShieldCheck,
   SquareTerminal,
   Workflow,
   X,
 } from "lucide-react"
-import { type CSSProperties, type FormEvent, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type FormEvent, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { AuthSession, GitHubAppConfig, ProductTourOnboarding, RunnerJobGroup, RunnerState, UserPreferences } from "@/admin-types"
-import { logNames } from "@/admin-types"
+import { activeStatuses } from "@/admin-types"
 import { formatRunnerDuration, formatTime, runnerStatusLabel } from "@/admin-format"
-import { localizedLogTextForView, type LocalizedLogMessageKey, type LocalizedLogText } from "@/app-log-state"
 import appI18n, { type AppTFunction } from "@/i18n"
 import { userRunnerHistoryWindow } from "@/app-load-policy"
 import { AccountMenu } from "@/components/account-menu"
-import { githubLogFailureState } from "@/components/github-log-utils"
+import { RunnerEventTimeline } from "@/components/runner-event-timeline"
+import { workflowRunURL } from "@/components/runner-github-links"
 import { RepositoryReadinessPage } from "@/components/repository-readiness-page"
 import { UserOnboardingTour } from "@/components/user-onboarding-tour"
 import {
@@ -84,10 +83,6 @@ type AccountSettingsRoute = {
   accountLogin?: string
   tab: AccountSettingsTab
 }
-
-type GitHubLogState =
-  | { kind: "log"; text: LocalizedLogText }
-  | { kind: "unavailable"; detail: string }
 
 const jobLogTabsListClassName = "h-auto w-full justify-start gap-6 rounded-none border-b bg-transparent p-0 text-muted-foreground"
 const jobLogTabsTriggerClassName = "h-10 flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none hover:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent"
@@ -1235,7 +1230,9 @@ function PullRequestsPage({
   const { t, i18n } = useTranslation()
   const currentJobs = selectedJobGroup?.current_jobs || (selected ? currentBuildJobs(selected) : [])
   const previousJobs = selectedJobGroup?.previous_jobs || (selected ? previousBuildJobs(selected, currentJobs) : [])
-  const allJobs = [...currentJobs, ...previousJobs]
+  const allJobs = [...currentJobs, ...previousJobs].map((job) =>
+    selected?.jobs.find((latest) => latest.id === job.id) || job
+  )
   const selectedJob = allJobs.find((job) => job.id === selectedJobID) || allJobs[0] || null
   const effectiveSelectedJobID = selectedJob?.id || ""
   const workflows = workflowGroups(allJobs, t)
@@ -1355,7 +1352,7 @@ function PullRequestsPage({
                             <JobField
                               label={t("user.jobName")}
                               value={selectedJob.github_job_url ? (
-                                <a className={cn("inline-flex max-w-full min-w-0 items-center gap-1 hover:underline", jobStatusTextClass(selectedJob.status))} href={selectedJob.github_job_url} target="_blank" rel="noreferrer">
+                                <a className={cn("inline-flex max-w-full min-w-0 items-center gap-1 hover:underline", jobStatusTextClass(selectedJob.status))} href={selectedJob.github_job_url} target="_blank" rel="noreferrer" title={t("user.openGitHubJob")}>
                                   <span className="truncate">{runnerJobTitle(selectedJob)}</span>
                                   <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                                 </a>
@@ -1366,7 +1363,7 @@ function PullRequestsPage({
                             <JobField
                               label={t("user.workflow")}
                               value={workflowRunURL(selectedJob) ? (
-                                <a className="inline-flex max-w-full min-w-0 items-center gap-1 text-primary hover:underline" href={workflowRunURL(selectedJob)} target="_blank" rel="noreferrer">
+                                <a className="inline-flex max-w-full min-w-0 items-center gap-1 text-primary hover:underline" href={workflowRunURL(selectedJob)} target="_blank" rel="noreferrer" title={t("user.openGitHubRun")}>
                                   <span className="truncate">{selectedJob.workflow_name || t("user.workflow")}</span>
                                   <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                                 </a>
@@ -1546,13 +1543,8 @@ function RunnerJobLogPanel({
   request: (url: string, options?: RequestInit) => Promise<unknown>
 }) {
   const { t, i18n } = useTranslation()
-  const [selectedLog, setSelectedLog] = useState<(typeof logNames)[number]>("control.log")
-  const [activeTab, setActiveTab] = useState("github-logs")
-  const [runnerLogText, setRunnerLogText] = useState<LocalizedLogText>({ kind: "message", key: "user.loadingRunnerLog" })
-  const [githubLog, setGithubLog] = useState<GitHubLogState>({ kind: "log", text: { kind: "message", key: "user.loadingGitHubLog" } })
-  const [githubLogLoading, setGithubLogLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState("runner-logs")
   const endpoint = `/user/runner_requests/${encodeURIComponent(job.id)}`
-  const endpointRef = useRef(endpoint)
   const terminalAvailable = isTerminalAvailable(job)
   const { terminalEl, terminalSession, terminalError, terminalConnecting, connectTerminal } = useSandboxTerminal({
     endpoint,
@@ -1563,147 +1555,17 @@ function RunnerJobLogPanel({
     connectErrorMessage: t("user.consoleConnectFailed"),
   })
 
-  useEffect(() => {
-    endpointRef.current = endpoint
-  }, [endpoint])
-
-  useEffect(() => {
-    if (activeTab !== "runner-logs") return
-    let active = true
-    queueMicrotask(() => {
-      if (active) {
-        setRunnerLogText({ kind: "message", key: "user.loadingRunnerLog" })
-      }
-    })
-    void request(`${endpoint}/logs/${encodeURIComponent(selectedLog)}`)
-      .then((text) => {
-        if (active) {
-          setRunnerLogText(logResponseText(text, "user.runnerLogEmpty"))
-        }
-      })
-      .catch((error) => {
-        if (active) {
-          setRunnerLogText(error instanceof Error
-            ? { kind: "text", text: error.message }
-            : { kind: "message", key: "user.runnerLogFailed" })
-        }
-      })
-    return () => {
-      active = false
-    }
-  }, [activeTab, endpoint, request, selectedLog])
-
-  useEffect(() => {
-    let active = true
-    queueMicrotask(() => {
-      if (active) {
-        setGithubLogLoading(true)
-        setGithubLog({ kind: "log", text: { kind: "message", key: "user.loadingGitHubLog" } })
-      }
-    })
-    void request(`${endpoint}/github-log`)
-      .then((text) => {
-        if (active) {
-          setGithubLog(githubLogResponseState(text, "user.githubLogEmpty"))
-        }
-      })
-      .catch((error) => {
-        if (active) {
-          setGithubLog(githubLogErrorState(error))
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setGithubLogLoading(false)
-        }
-      })
-    return () => {
-      active = false
-    }
-  }, [endpoint, request])
-
-  const refreshGithubLog = () => {
-    const refreshEndpoint = endpoint
-    setGithubLogLoading(true)
-    setGithubLog({ kind: "log", text: { kind: "message", key: "user.loadingGitHubLog" } })
-    void request(`${refreshEndpoint}/github-log`)
-      .then((text) => {
-        if (endpointRef.current === refreshEndpoint) {
-          setGithubLog(githubLogResponseState(text, "user.githubLogEmpty"))
-        }
-      })
-      .catch((error) => {
-        if (endpointRef.current === refreshEndpoint) {
-          setGithubLog(githubLogErrorState(error))
-        }
-      })
-      .finally(() => {
-        if (endpointRef.current === refreshEndpoint) {
-          setGithubLogLoading(false)
-        }
-      })
-  }
-
-  const githubLogActions = (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
-      onClick={refreshGithubLog}
-      disabled={githubLogLoading}
-    >
-      <RefreshCw className={cn(githubLogLoading && "animate-spin")} />
-      {t("user.refresh")}
-    </Button>
-  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col gap-0">
         <TabsList className={jobLogTabsListClassName}>
-          <TabsTrigger className={jobLogTabsTriggerClassName} value="github-logs">{t("user.githubLogs")}</TabsTrigger>
           <TabsTrigger className={jobLogTabsTriggerClassName} value="runner-logs">{t("user.runnerLogs")}</TabsTrigger>
           <TabsTrigger className={jobLogTabsTriggerClassName} value="web-console">{t("user.webConsole")}</TabsTrigger>
           <TabsTrigger className={jobLogTabsTriggerClassName} value="details">{t("user.details")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="github-logs" className="m-0 pt-2">
-          {githubLog.kind === "unavailable" ? (
-            <GitHubLogsUnavailable detail={githubLog.detail} actions={githubLogActions} />
-          ) : (
-            <LogOutput
-              text={localizedLogTextForView(githubLog.text, t)}
-              description={t("user.githubLogSource")}
-              actions={githubLogActions}
-            />
-          )}
-        </TabsContent>
         <TabsContent value="runner-logs" className="m-0 pt-2">
-          <LogOutput
-            text={localizedLogTextForView(runnerLogText, t)}
-            description={t("user.runnerLogDescription", { log: selectedLog.replace(".log", "") })}
-            leading={(
-              <div className="flex items-center gap-1 rounded-md border border-white/10 bg-white/5 p-1" aria-label={t("user.runnerLogStream")}>
-                {logNames.map((name) => {
-                  const value = name.replace(".log", "")
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      className={cn(
-                        "rounded px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white",
-                        selectedLog === name && "bg-emerald-400/15 text-emerald-100"
-                      )}
-                      aria-pressed={selectedLog === name}
-                      onClick={() => setSelectedLog(name)}
-                    >
-                      {value}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          />
+          <RunnerEventTimeline endpoint={`${endpoint}/events`} request={request} autoRefresh={activeStatuses.has(job.status)} />
         </TabsContent>
         <TabsContent value="web-console" forceMount className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden pt-2 data-[state=inactive]:hidden">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-y border-emerald-500/15 bg-[#111318] text-slate-100 shadow-[inset_3px_0_0_theme(colors.emerald.500/0.35)]">
@@ -1754,66 +1616,6 @@ function RunnerJobLogPanel({
   )
 }
 
-function logResponseText(text: unknown, emptyMessageKey: LocalizedLogMessageKey): LocalizedLogText {
-  if (typeof text === "string") {
-    return text
-      ? { kind: "text", text }
-      : { kind: "message", key: emptyMessageKey }
-  }
-  return { kind: "text", text: JSON.stringify(text, null, 2) }
-}
-
-function githubLogResponseState(text: unknown, emptyMessageKey: LocalizedLogMessageKey): GitHubLogState {
-  return { kind: "log", text: logResponseText(text, emptyMessageKey) }
-}
-
-function githubLogErrorState(error: unknown): GitHubLogState {
-  const failure = githubLogFailureState(error)
-  return failure.kind === "text" && isGitHubLogUnavailable(failure.text)
-    ? { kind: "unavailable", detail: failure.text }
-    : { kind: "log", text: failure }
-}
-
-function isGitHubLogUnavailable(text: string) {
-  const value = text.toLowerCase()
-  return (
-    value.includes("status 404") ||
-    value.includes("blobnotfound") ||
-    value.includes("the specified blob does not exist")
-  )
-}
-
-function GitHubLogsUnavailable({ detail, actions }: { detail: string; actions: ReactNode }) {
-  const { t } = useTranslation()
-  return (
-    <div className="overflow-hidden border-y border-emerald-500/15 bg-slate-950 text-slate-100 shadow-[inset_3px_0_0_theme(colors.emerald.500/0.35)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-900/95 px-4 py-3">
-        <div className="text-xs text-slate-400">{t("user.githubLogSource")}</div>
-        <div className="flex items-center gap-2">{actions}</div>
-      </div>
-      <div className="flex min-h-[260px] items-center justify-center px-4 py-12">
-        <div className="max-w-xl text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-md border border-white/10 bg-white/5 text-amber-200">
-            <AlertCircle className="h-5 w-5" />
-          </div>
-          <h3 className="mt-4 text-sm font-semibold text-slate-100">{t("user.githubLogsUnavailable")}</h3>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            {t("user.githubLogsUnavailableDescription")}
-          </p>
-          <details className="mt-5 rounded-md border border-white/10 bg-white/[0.03] text-left">
-            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-300 hover:text-slate-100">
-              {t("user.showTechnicalDetails")}
-            </summary>
-            <pre className="max-h-48 overflow-auto border-t border-white/10 px-3 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-400">
-              {detail}
-            </pre>
-          </details>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function WebConsoleError({ message }: { message: string }) {
   const { t } = useTranslation()
   return (
@@ -1853,145 +1655,6 @@ function WebConsoleUnavailable({ job }: { job: RunnerState }) {
   )
 }
 
-function LogOutput({
-  text,
-  description,
-  actions,
-  leading,
-}: {
-  text: string
-  description: string
-  actions?: ReactNode
-  leading?: ReactNode
-}) {
-  const { t } = useTranslation()
-  const logRef = useRef<HTMLDivElement | null>(null)
-  const [collapseState, setCollapseState] = useState<{ text: string; groups: Set<number> }>(() => ({ text, groups: new Set() }))
-  const collapsedGroups = useMemo(() => (collapseState.text === text ? collapseState.groups : new Set<number>()), [collapseState, text])
-  const lines = useMemo(() => text.split(/\r?\n/), [text])
-  const largeLog = lines.length > 20000
-  const logLines = useMemo(() => (largeLog ? [] : parseLogLines(lines, collapsedGroups)), [lines, collapsedGroups, largeLog])
-  const numberWidth = `${Math.max(2, String(lines.length).length)}ch`
-
-  const scrollToBottom = () => {
-    logRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-  }
-
-  const toggleGroup = (groupID: number) => {
-    setCollapseState((current) => {
-      const next = new Set(current.text === text ? current.groups : [])
-      if (next.has(groupID)) {
-        next.delete(groupID)
-      } else {
-        next.add(groupID)
-      }
-      return { text, groups: next }
-    })
-  }
-
-  return (
-    <div className="overflow-hidden border-y border-emerald-500/15 bg-slate-950 text-slate-100 shadow-[inset_3px_0_0_theme(colors.emerald.500/0.35)]">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-900/95 px-4 py-3 backdrop-blur">
-        <div className="flex min-w-0 flex-wrap items-center gap-3">
-          {leading}
-          <div className="min-w-0 text-xs text-slate-400">{description}</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
-            onClick={scrollToBottom}
-          >
-            {t("user.scrollToBottom")}
-          </Button>
-          {actions}
-        </div>
-      </div>
-      <div ref={logRef} className="py-3 font-mono text-xs leading-relaxed">
-        {largeLog ? (
-          <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words px-4 text-slate-200">{text}</pre>
-        ) : logLines.map((logLine) => {
-          const rowStyle = { "--line-number-width": numberWidth } as CSSProperties
-          const rowClassName = "grid grid-cols-[12px_var(--line-number-width)_minmax(0,1fr)] gap-1 px-4"
-          if (logLine.groupID !== undefined && logLine.kind === "group-start") {
-            return (
-              <button
-                key={`${logLine.index}-${logLine.text.slice(0, 16)}`}
-                type="button"
-                className={cn(rowClassName, "group text-left")}
-                style={rowStyle}
-                onClick={() => toggleGroup(logLine.groupID ?? logLine.index)}
-                aria-expanded={!collapsedGroups.has(logLine.groupID ?? logLine.index)}
-              >
-                <span className="flex h-[1.625em] select-none items-center justify-center text-slate-300 group-hover:text-emerald-200">
-                  <Play
-                    className={cn(
-                      "h-3 w-3 max-w-none fill-current stroke-current",
-                      !collapsedGroups.has(logLine.groupID ?? logLine.index) && "rotate-90"
-                    )}
-                  />
-                </span>
-                <span className="select-none text-right text-slate-500">{logLine.index + 1}</span>
-                <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left text-slate-200 group-hover:text-emerald-200", logLineClass(logLine.text))}>{logLine.displayText || " "}</span>
-              </button>
-            )}
-          return (
-            <div key={`${logLine.index}-${logLine.text.slice(0, 16)}`} className={rowClassName} style={rowStyle}>
-              <span />
-              <span className="select-none text-right text-slate-500">{logLine.index + 1}</span>
-              <span className={cn("min-w-0 whitespace-pre-wrap break-words text-slate-200", logLineClass(logLine.text))}>{logLine.displayText || " "}</span>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function logLineClass(line: string) {
-  if (line.includes("##[group]") || line.includes("##[endgroup]")) return "font-semibold text-emerald-300"
-  if (line.trimStart().startsWith("$ ")) return "font-semibold text-cyan-200"
-  return ""
-}
-
-type ParsedLogLine = {
-  index: number
-  text: string
-  displayText: string
-  kind: "line" | "group-start" | "group-end"
-  groupID?: number
-}
-
-function parseLogLines(lines: string[], collapsedGroups: Set<number>): ParsedLogLine[] {
-  const visible: ParsedLogLine[] = []
-  const stack: number[] = []
-
-  lines.forEach((text, index) => {
-    const hiddenByParent = stack.some((groupID) => collapsedGroups.has(groupID))
-
-    if (text.includes("##[group]")) {
-      if (!hiddenByParent) {
-        visible.push({ index, text, displayText: text.replace("##[group]", ""), kind: "group-start", groupID: index })
-      }
-      stack.push(index)
-      return
-    }
-
-    if (text.includes("##[endgroup]")) {
-      stack.pop()
-      return
-    }
-
-    if (!hiddenByParent) {
-      visible.push({ index, text, displayText: text, kind: "line" })
-    }
-  })
-
-  return visible
-}
-
 function workflowRunValue(job: RunnerState, t: AppTFunction) {
   const runID = job.workflow_run_id ? String(job.workflow_run_id) : t("common.unknown")
   const jobID = job.workflow_job_id ? String(job.workflow_job_id) : job.id
@@ -2014,14 +1677,6 @@ function workflowRunValue(job: RunnerState, t: AppTFunction) {
       </a>
     </span>
   )
-}
-
-function workflowRunURL(job: RunnerState) {
-  if (!job.github_job_url || !job.workflow_run_id) return ""
-  const marker = `/actions/runs/${job.workflow_run_id}`
-  const index = job.github_job_url.indexOf(marker)
-  if (index < 0) return ""
-  return job.github_job_url.slice(0, index + marker.length)
 }
 
 function pullRequestHeading(group: BuildGroup, jobGroup: RunnerJobGroup | null) {

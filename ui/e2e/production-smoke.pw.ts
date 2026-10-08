@@ -147,15 +147,8 @@ test("keeps the Jobs list independently scrollable beside the Web Console", asyn
       await route.fulfill({ json: selectedGroup })
       return
     }
-    if (url.pathname.endsWith("/github-log")) {
-      await route.fulfill({
-        contentType: "text/plain",
-        body: Array.from({ length: 200 }, (_, index) => `fixture log line ${index + 1}`).join("\n"),
-      })
-      return
-    }
-    if (url.pathname.includes("/logs/")) {
-      await route.fulfill({ contentType: "text/plain", body: "fixture runner log\n" })
+    if (url.pathname.endsWith("/events")) {
+      await route.fulfill({ json: fixtureRunnerEvents() })
       return
     }
     await route.fulfill({ status: 404, body: "fixture route not found" })
@@ -212,7 +205,7 @@ test("keeps the Jobs list independently scrollable beside the Web Console", asyn
   diagnostics.expectClean()
 })
 
-test("reveals Jobs before secondary metadata and loads Runner logs only when selected", async ({ page }) => {
+test("reveals Jobs with Runner logs and a GitHub link before secondary metadata", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
 
   const diagnostics = observeBrowserDiagnostics(page)
@@ -223,6 +216,10 @@ test("reveals Jobs before secondary metadata and loads Runner logs only when sel
   const githubAppGate = new Promise<void>((resolve) => { releaseGitHubApp = resolve })
   let runnerLogRequests = 0
   let groupRequests = 0
+  const githubLogRequests: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/github-log")) githubLogRequests.push(request.url())
+  })
 
   await page.route("**/auth/session", (route) => route.fulfill({
     json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
@@ -247,11 +244,9 @@ test("reveals Jobs before secondary metadata and loads Runner logs only when sel
         jobs: [selected], current_jobs: [selected], previous_jobs: [],
         workflow_run_ids: [selected.workflow_run_id], head_sha: selected.head_sha, head_branch: selected.head_branch,
       } })
-    } else if (url.pathname.endsWith("/github-log")) {
-      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
-    } else if (url.pathname.includes("/logs/")) {
+    } else if (url.pathname.endsWith("/events")) {
       runnerLogRequests += 1
-      await route.fulfill({ body: "fixture Runner log", contentType: "text/plain" })
+      await route.fulfill({ json: fixtureRunnerEvents() })
     } else {
       await route.fulfill({ status: 404, body: "fixture route not found" })
     }
@@ -264,19 +259,102 @@ test("reveals Jobs before secondary metadata and loads Runner logs only when sel
 
     releaseJobs()
     await expect(page.getByRole("button", { name: /fixture\/repository-0/ })).toBeVisible()
-    await expect(page.getByText("fixture GitHub log")).toBeVisible()
-    expect(runnerLogRequests).toBe(0)
-    await expect.poll(() => groupRequests).toBe(1)
-    await page.getByRole("tab", { name: /Runner logs|Runner 日志/i }).click()
+    await expect(page.getByRole("tab", { name: /Runner logs|Runner 日志/i })).toHaveAttribute("aria-selected", "true")
+    await expect(page.getByRole("tab", { name: /GitHub logs|GitHub 日志/i })).toHaveCount(0)
     await expect(page.getByText("fixture Runner log")).toBeVisible()
+    const timeline = page.getByRole("region", { name: /Run history|运行记录/, exact: true })
+    await expect(timeline.getByRole("tab", { name: /All|全部/, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(timeline.locator("[data-runner-event-id]")).toHaveCount(3)
+    await expect(timeline.getByText("fixture Runner stdout", { exact: true })).toBeVisible()
+    await expect(timeline.getByText("fixture Runner stderr", { exact: true })).toBeVisible()
+    await expect(timeline.getByText("control · runner_hook", { exact: true })).toBeVisible()
+    await timeline.getByRole("tab", { name: "stderr", exact: true }).click()
+    await expect(timeline.locator("[data-runner-event-id]")).toHaveCount(1)
+    await expect(timeline.getByText("fixture Runner stderr", { exact: true })).toBeVisible()
+    await timeline.getByRole("tab", { name: /All|全部/, exact: true }).click()
+    await expect(timeline.locator("[data-runner-event-id]")).toHaveCount(3)
+    const githubLink = page.locator(`a[href="${runners[0].github_job_url}"]`)
+    await expect(githubLink).toHaveCount(1)
+    await expect(githubLink).toHaveText(runners[0].assigned_job_name!)
+    await expect(githubLink).toHaveAttribute("href", runners[0].github_job_url!)
+    await expect(githubLink).toHaveAttribute("target", "_blank")
+    await expect(githubLink).toHaveAttribute("title", /View job on GitHub|在 GitHub 查看 Job/)
+    const workflowLink = page.getByRole("link", { name: runners[0].workflow_name!, exact: true })
+    await expect(workflowLink).toHaveAttribute("href", runners[0].github_job_url!.split("/job/")[0])
+    await expect(workflowLink).toHaveAttribute("title", /View workflow run on GitHub|在 GitHub 查看 Workflow Run/)
+    await expect.poll(() => groupRequests).toBe(1)
+    await page.screenshot({ path: test.info().outputPath("job-github-link.png"), fullPage: true })
     expect(runnerLogRequests).toBe(1)
     await page.getByRole("button", { name: /fixture\/repository-0/ }).click()
     expect(groupRequests).toBe(1)
+    expect(githubLogRequests).toEqual([])
     diagnostics.expectClean()
   } finally {
     releaseJobs()
     releaseGitHubApp()
   }
+})
+
+test("uses Runner logs and GitHub navigation in the standalone Job fallback", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const diagnostics = observeBrowserDiagnostics(page)
+  let selected = fixtureRunners(1)[0]
+  const requests: string[] = []
+  let jobReads = 0
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
+  }))
+  await page.route("**/user/**", async (route) => {
+    const path = new URL(route.request().url()).pathname
+    requests.push(path)
+    if (path === `/user/runner_requests/${selected.id}`) {
+      jobReads += 1
+      if (jobReads >= 3) selected = { ...selected, status: "completed" }
+      await route.fulfill({ json: selected })
+    } else if (path.endsWith("/group")) {
+      await route.fulfill({ json: {
+        key: "", group: "manual", repository: selected.repository_full_name,
+        jobs: [selected], current_jobs: [selected], previous_jobs: [], workflow_run_ids: [],
+      } })
+    } else if (path.endsWith("/events")) {
+      const eventPage = fixtureRunnerEvents()
+      if (selected.status === "completed") eventPage.events.push({
+        id: 4, event_type: "control_log", stage: "runner_cleanup", message: "fixture final cleanup", created_at: "2026-09-29T03:51:03.999Z",
+      })
+      await route.fulfill({ json: eventPage })
+    } else if (path === "/user/github-app") {
+      await route.fulfill({ json: { setup_url: "/github-app/setup", installations: [] } })
+    } else if (path === "/user/onboarding/product-tour") {
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+  const original = selected
+  for (const variant of ["job", "run", "none"]) {
+    selected = { ...original,
+      github_job_url: variant === "job" ? original.github_job_url : undefined,
+      workflow_run_id: variant === "none" ? undefined : original.workflow_run_id,
+    }
+    await page.goto(`/jobs/${selected.id}`, { waitUntil: "networkidle" })
+    await expect(page.getByRole("tab", { name: /Runner logs|Runner 日志/i })).toHaveAttribute("aria-selected", "true")
+    await expect(page.getByText("fixture Runner log")).toBeVisible()
+    await expect(page.getByRole("tab", { name: /GitHub logs|GitHub 日志/i })).toHaveCount(0)
+    const link = page.getByRole("link", { name: /View job on GitHub|View workflow run on GitHub|在 GitHub 查看/ })
+    if (variant === "none") {
+      await expect(link).toHaveCount(0)
+    } else {
+      await expect(link).toHaveAttribute("href", variant === "job" ? original.github_job_url! : "https://github.com/fixture/repository-0/actions/runs/20000")
+      await expect(link).toHaveAttribute("target", "_blank")
+    }
+    if (variant === "job") {
+      await expect(page.locator("header").getByText(/Completed|已完成/, { exact: true })).toBeVisible({ timeout: 15000 })
+      await expect(page.getByText("fixture final cleanup", { exact: true })).toBeVisible()
+      await expect(page.locator("[data-runner-event-id]")).toHaveCount(4)
+    }
+    diagnostics.expectClean()
+  }
+  expect(requests.filter((path) => path.endsWith("/github-log"))).toEqual([])
 })
 
 test("reloads Jobs after returning from another page while an older list request is pending", async ({ page }) => {
@@ -302,8 +380,8 @@ test("reloads Jobs after returning from another page while an older list request
       await route.fulfill({ json: { items: [], sandbox_source: "none" } })
     } else if (url.pathname === "/user/onboarding/product-tour") {
       await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
-    } else if (url.pathname.endsWith("/github-log")) {
-      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
+    } else if (url.pathname.endsWith("/events")) {
+      await route.fulfill({ json: fixtureRunnerEvents() })
     } else {
       await route.fulfill({ status: 404, body: "fixture route not found" })
     }
@@ -361,8 +439,8 @@ test("loads older jobs for the default visible group beyond the initial Jobs pag
         head_sha: selected.head_sha, head_branch: selected.head_branch,
         pull_request_number: 42,
       } })
-    } else if (url.pathname.endsWith("/github-log")) {
-      await route.fulfill({ body: "fixture GitHub log", contentType: "text/plain" })
+    } else if (url.pathname.endsWith("/events")) {
+      await route.fulfill({ json: fixtureRunnerEvents() })
     } else {
       await route.fulfill({ status: 404, body: "fixture route not found" })
     }
@@ -403,6 +481,7 @@ test("does not show the previous account preferences during an in-place session 
       await route.fulfill({ json: preferences(sessionChecks > 1 ? "bob-bucket" : "alice-bucket") })
     } else if (url.pathname === "/user/onboarding/product-tour") {
       await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+
     } else {
       await route.fulfill({ status: 404, body: "fixture route not found" })
     }
@@ -434,6 +513,7 @@ test("reports a preferences failure without treating GitHub accounts as failed",
       await route.fulfill({ status: 500, body: "" })
     } else if (url.pathname === "/user/onboarding/product-tour") {
       await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+
     } else {
       await route.fulfill({ status: 404, body: "fixture route not found" })
     }
@@ -514,4 +594,15 @@ function fixtureRunners(count: number): RunnerState[] {
       completed_at: index === 0 ? undefined : createdAt,
     }
   })
+}
+
+function fixtureRunnerEvents() {
+  return {
+    events: [
+      { id: 1, event_type: "control_log", stage: "runner_hook", message: "fixture Runner log", created_at: "2026-09-29T03:51:00.123Z" },
+      { id: 2, event_type: "stdout_log", message: "fixture Runner stdout", created_at: "2026-09-29T03:51:01.456Z" },
+      { id: 3, event_type: "stderr_log", message: "fixture Runner stderr", created_at: "2026-09-29T03:51:02.789Z" },
+    ],
+    has_more: false,
+  }
 }

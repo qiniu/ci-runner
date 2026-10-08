@@ -421,7 +421,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /user/github/branches/{owner}/{repo}/{branch}/{sha}/jobs", s.handleUserGetGitHubBranchJobGroup)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/siblings", s.handleUserListRunnerSiblings)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/logs/{name}", s.handleUserGetRunnerLog)
-	s.mux.HandleFunc("GET /user/runner_requests/{id}/github-log", s.handleUserGetRunnerGitHubLog)
+	s.mux.HandleFunc("GET /user/runner_requests/{id}/events", s.handleUserRunnerRequestEvents)
+	// Keep the retired log endpoint out of the SPA fallback.
+	s.mux.HandleFunc("GET /user/runner_requests/{id}/github-log", http.NotFound)
 	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal", s.handleUserCreateRunnerTerminal)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/terminal/{sessionID}/events", s.handleUserRunnerTerminalEvents)
 	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal/{sessionID}/input", s.handleUserRunnerTerminalInput)

@@ -657,6 +657,8 @@ curl -fsS -b "$COOKIE_JAR" \
 
 ## 9. GitHub Actions 日志怎么看
 
+在 Jobs 面板中，点击任务名称打开 GitHub Job，点击工作流名称打开对应的 Run。独立 Job 详情页提供 **在 GitHub 查看 Job**；仅已知 Run 时，使用 **在 GitHub 查看 Workflow Run**。默认的 **Runner 日志** 标签与后台请求详情共用事件时间线，显示 Runner 生命周期和进程 stdout/stderr，并保留时间戳与阶段。首次加载最近 200 条混合事件，筛选仅作用于已加载记录。普通用户的 `GET /user/runner_requests/{id}/events` 接口校验精确安装/仓库权限，接受互斥的排他游标 `before_id` 或 `after_id`，返回 `{events, has_more}`。更早分页与活动期间每五秒增量刷新合并记录，不丢弃已加载历史；支持手动刷新和主动滚动到底部。工作流步骤输出仍在 GitHub 查看。Jobs 面板和独立 Job 详情回退页均使用这种跳转，不再请求 GitHub 日志归档。已退役的 `GET /user/runner_requests/{id}/github-log` 接口返回 `404`。
+
 runnerd 默认创建 repository 级 self-hosted GitHub Actions runner；如果 spec 配置了 `runner_group`，则会为 repository owner 创建 organization runner。job 被 sandbox 里的 runner 接走后，workflow step 的日志会正常显示在 GitHub Actions 页面里：
 
 ```text

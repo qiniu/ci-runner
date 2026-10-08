@@ -331,6 +331,7 @@ After the workflow completes, verify:
 
 - The Qiniu sandbox has stopped or is no longer active.
 - The GitHub self-hosted runner registration has been removed or is offline and cleaned up by runnerd.
+- Job details default to Runner logs and have no GitHub logs tab. Verify that Jobs and admin request details show the same mixed event rows, timestamps, stages, and stream filters. Check older-page loading, active incremental refresh, and manual refresh without losing history or forcing the reader to the bottom. The user events API must reject anonymous sessions, missing/rejected OAuth tokens, and a mismatched installation/repository pair. In the Jobs panel, the job name opens the selected GitHub Job and the workflow name opens its Run in a new tab, without a duplicate button. The standalone detail button falls back to the Run when only repository/Run context is known, and is absent without either target. Opening details makes no `/github-log` request.
 - The runner request has control/stdout/stderr logs available from the admin UI or `/runner_requests/{id}/logs/{name}`.
 - `/diagnostics/vars` shows updated workflow job, runner registration, cleanup, and duration counters.
 

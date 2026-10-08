@@ -1,7 +1,6 @@
 package server
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -842,7 +841,7 @@ func TestUserRunnerAuthorizationUsesRepositoryIntersection(t *testing.T) {
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/group"},
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/siblings"},
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/logs/control.log"},
-		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/github-log"},
+		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/events"},
 		{method: http.MethodPost, target: "/user/runner_requests/hidden-job/terminal", body: strings.NewReader(`{"cols":120,"rows":32}`)},
 		{method: http.MethodGet, target: "/user/github/pulls/o/hidden/7/jobs"},
 		{method: http.MethodGet, target: "/user/github/runs/o/hidden/42/jobs"},
@@ -2100,135 +2099,23 @@ func runnerStateIDs(states []state.RunnerState) []string {
 	return ids
 }
 
-func TestUserRunnerGitHubLog(t *testing.T) {
-	var archive bytes.Buffer
-	zw := zip.NewWriter(&archive)
-	file, err := zw.Create("0_Qiniu runner smoke.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Write([]byte("Run tests\nAll green\n")); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
+func TestRetiredUserGitHubLogEndpoint(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/user/installations/987/repositories":
-			if r.Header.Get("Authorization") != "Bearer user-token" {
-				t.Fatalf("expected user token authorization, got %q", r.Header.Get("Authorization"))
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"repositories":[{"full_name":"o/r"}]}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001/logs":
-			w.Header().Set("Content-Type", "application/zip")
-			w.Write(archive.Bytes())
-		default:
-			t.Fatalf("unexpected github log request: %s %s", r.Method, r.URL.String())
-		}
+		t.Errorf("retired endpoint called GitHub: %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ghServer.Close()
-
-	store := state.New(t.TempDir())
-	account, _, err := store.UpsertAccountForOAuthIdentity(state.OAuthIdentity{OAuthProvider: "github", OAuthSubject: "hubot-id", OAuthLogin: "hubot"}, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{
-		AccountID:      account.ID,
-		InstallationID: 987,
-		AccountLogin:   "o",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_, st, err := store.CreateRequest(state.RunnerRequest{
-		ID:                   "github-log-1",
-		Source:               "github_webhook",
-		JobID:                1001,
-		GitHubInstallationID: 987,
-		RepositoryFullName:   "o/r",
-		Labels:               []string{"self-hosted", "e2b"},
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	st.Status = state.StatusCompleted
-	if err := store.WriteState(st); err != nil {
-		t.Fatal(err)
-	}
-	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
-	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
-
-	req := httptest.NewRequest(http.MethodGet, "/user/runner_requests/github-log-1/github-log", nil)
-	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected github log, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "===== 0_Qiniu runner smoke.txt =====") || !strings.Contains(body, "All green") {
-		t.Fatalf("unexpected github log body: %s", body)
-	}
-}
-
-func TestFormatGitHubActionsLogMarksTruncatedFiles(t *testing.T) {
-	var archive bytes.Buffer
-	zw := zip.NewWriter(&archive)
-	file, err := zw.Create("0_large.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Write(bytes.Repeat([]byte("x"), (8<<20)+1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	text, err := formatGitHubActionsLog(archive.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(text, "[runnerd] GitHub log file truncated after 8388608 bytes.") {
-		t.Fatalf("expected truncation marker, got suffix %q", text[len(text)-128:])
-	}
-}
-
-func TestFormatGitHubActionsLogCapsTotalOutput(t *testing.T) {
-	var archive bytes.Buffer
-	zw := zip.NewWriter(&archive)
-	for i := 0; i < 3; i++ {
-		file, err := zw.Create(fmt.Sprintf("%d_large.txt", i))
-		if err != nil {
-			t.Fatal(err)
+	srv := newTestServer(t, state.New(t.TempDir()), ghServer.URL, &fakeSandbox{})
+	for _, cookie := range []*http.Cookie{nil, testSessionCookie("hubot-id", "hubot", "user"), testSessionCookie("admin-id", "admin", "admin")} {
+		req := httptest.NewRequest(http.MethodGet, "/user/runner_requests/job-1/github-log", nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
 		}
-		if _, err := file.Write(bytes.Repeat([]byte("x"), 9<<20)); err != nil {
-			t.Fatal(err)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("retired endpoint status = %d, want 404", rec.Code)
 		}
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	text, err := formatGitHubActionsLog(archive.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(text, "[runnerd] GitHub log output truncated after 16777216 bytes.") {
-		t.Fatalf("expected total truncation marker, got suffix %q", text[len(text)-128:])
-	}
-	if strings.Contains(text, "===== 2_large.txt =====") {
-		t.Fatal("expected formatter to stop before appending every log file")
-	}
-}
-
-func TestFormatGitHubActionsLogCapsPlainTextOutput(t *testing.T) {
-	text, err := formatGitHubActionsLog(bytes.Repeat([]byte("x"), maxGitHubLogOutputBytes+1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(text, "[runnerd] GitHub log output truncated after 16777216 bytes.") {
-		t.Fatalf("expected total truncation marker, got suffix %q", text[len(text)-128:])
 	}
 }
 

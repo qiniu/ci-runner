@@ -1,8 +1,6 @@
 package server
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,10 +61,8 @@ type pullTitleResult struct {
 }
 
 const (
-	terminalIdleCloseDelay  = 30 * time.Second
-	maxGitHubLogFileBytes   = 8 << 20
-	maxGitHubLogOutputBytes = 16 << 20
-	maxPullTitleCacheItems  = 512
+	terminalIdleCloseDelay = 30 * time.Second
+	maxPullTitleCacheItems = 512
 )
 
 type terminalHub struct {
@@ -495,55 +491,6 @@ func (s *Server) handleUserGetRunnerLog(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeRunnerLog(w, s.store, r.PathValue("id"), r.PathValue("name"))
-}
-
-func (s *Server) handleUserGetRunnerGitHubLog(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	if s.gh == nil {
-		writeError(w, http.StatusBadGateway, "github client is not configured")
-		return
-	}
-	if strings.TrimSpace(st.RepositoryFullName) == "" {
-		writeError(w, http.StatusConflict, "runner has no github repository")
-		return
-	}
-	jobID := st.AssignedJobID
-	if jobID == 0 {
-		jobID = st.WorkflowJobID
-	}
-	var (
-		data        []byte
-		contentType string
-		err         error
-	)
-	if jobID != 0 {
-		data, contentType, err = s.gh.DownloadWorkflowJobLogs(r.Context(), st.RepositoryFullName, jobID)
-	} else if st.WorkflowRunID != 0 {
-		data, contentType, err = s.gh.DownloadWorkflowRunLogs(r.Context(), st.RepositoryFullName, st.WorkflowRunID)
-	} else {
-		writeError(w, http.StatusConflict, "runner has no github workflow job or run id")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	text, err := formatGitHubActionsLog(data)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if strings.TrimSpace(text) == "" {
-		text = "GitHub log is empty"
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-GitHub-Log-Content-Type", contentType)
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, text)
 }
 
 func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.Request) {
@@ -1015,78 +962,6 @@ func hasInt64(values []int64, needle int64) bool {
 		}
 	}
 	return false
-}
-
-func formatGitHubActionsLog(data []byte) (string, error) {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		if len(data) > maxGitHubLogOutputBytes {
-			return string(data[:maxGitHubLogOutputBytes]) + fmt.Sprintf("\n[runnerd] GitHub log output truncated after %d bytes.\n", maxGitHubLogOutputBytes), nil
-		}
-		return string(data), nil
-	}
-	files := append([]*zip.File(nil), reader.File...)
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name < files[j].Name
-	})
-	var out strings.Builder
-	for _, file := range files {
-		if out.Len() >= maxGitHubLogOutputBytes {
-			break
-		}
-		if file.FileInfo().IsDir() {
-			continue
-		}
-		rc, err := file.Open()
-		if err != nil {
-			return "", fmt.Errorf("open github log %s: %w", file.Name, err)
-		}
-		remainingLimit := int64(maxGitHubLogOutputBytes-out.Len()) + 1
-		readLimit := int64(maxGitHubLogFileBytes) + 1
-		if remainingLimit < readLimit {
-			readLimit = remainingLimit
-		}
-		chunk, readErr := io.ReadAll(io.LimitReader(rc, readLimit))
-		closeErr := rc.Close()
-		if readErr != nil {
-			return "", fmt.Errorf("read github log %s: %w", file.Name, readErr)
-		}
-		if closeErr != nil {
-			return "", fmt.Errorf("close github log %s: %w", file.Name, closeErr)
-		}
-		if out.Len() > 0 {
-			out.WriteByte('\n')
-		}
-		out.WriteString("===== ")
-		out.WriteString(file.Name)
-		out.WriteString(" =====\n")
-		fileTruncated := len(chunk) > maxGitHubLogFileBytes
-		if fileTruncated {
-			chunk = chunk[:maxGitHubLogFileBytes]
-		}
-		outputTruncated := false
-		remaining := maxGitHubLogOutputBytes - out.Len()
-		if remaining <= 0 {
-			out.WriteString(fmt.Sprintf("[runnerd] GitHub log output truncated after %d bytes.\n", maxGitHubLogOutputBytes))
-			break
-		}
-		if len(chunk) > remaining {
-			chunk = chunk[:remaining]
-			outputTruncated = true
-		}
-		out.Write(chunk)
-		if len(chunk) == 0 || chunk[len(chunk)-1] != '\n' {
-			out.WriteByte('\n')
-		}
-		if fileTruncated {
-			out.WriteString(fmt.Sprintf("[runnerd] GitHub log file truncated after %d bytes.\n", maxGitHubLogFileBytes))
-		}
-		if outputTruncated || out.Len() >= maxGitHubLogOutputBytes {
-			out.WriteString(fmt.Sprintf("[runnerd] GitHub log output truncated after %d bytes.\n", maxGitHubLogOutputBytes))
-			break
-		}
-	}
-	return out.String(), nil
 }
 
 func writeTerminalEvent(w io.Writer, data []byte) {

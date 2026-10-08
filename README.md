@@ -184,7 +184,7 @@ env:
 
 | Scope | Permission | Access | Purpose |
 | --- | --- | --- | --- |
-| Repository | Actions | Read-only | Query job/run status, list queued jobs, read logs; required for webhook events |
+| Repository | Actions | Read-only | Query job/run status, list queued jobs; required for webhook events |
 | Repository | Administration | Read & write | Repository-level runner registration (when spec has no `runner_group`) |
 | Repository | Metadata | Read-only | Identify repositories and owners |
 | Repository | Pull requests | Read-only | Show PR titles in job groups |
@@ -332,6 +332,8 @@ The built-in web UI provides:
 | `/admin/diagnostics` | runnerd runtime diagnostics with redacted summary, pprof discovery, and on-demand expvar |
 
 `/` is always the public Qiniu CI Runner product landing page. `/docs` and its fixed guide routes are public, same-origin, and available in English and Simplified Chinese. The ordinary-user Jobs homepage is `/jobs`; other protected routes include `/repositories`, PR job groups (`/github/pulls/{owner}/{repo}/{number}/jobs`), and account settings (`/account/preferences`, `/account/sandbox-templates`, `/account/sandbox-instances`), with matching `/organizations/{login}/...` routes. Opening a protected route without a session shows a focused GitHub sign-in page and returns to the original URL after OAuth.
+
+Job details open **Runner logs** by default and retain the Web Console and request details. Jobs and admin request details share one event timeline: mixed control/stdout/stderr records, timestamps, stages, stream filters, older-page loading, and incremental refresh every five seconds while active. `GET /user/runner_requests/{id}/events` requires the same exact installation/repository authorization as Job details and returns the same event pages as the admin endpoint. In the Jobs panel, the job name links to the GitHub Job and the workflow name links to its Run. Standalone Job details provide **View job on GitHub**, falling back to the Workflow Run when its repository and Run ID are known. runnerd does not download or duplicate GitHub Actions logs. The retired `/user/runner_requests/{id}/github-log` endpoint returns `404`.
 
 Runner request lists return the newest 100 rows by default and cap pages at 500. They project only public runner-state fields instead of stored webhook payloads or Sandbox credentials. Admin polling uses the `(queued_at DESC, id ASC)` index; repository-authorized user polling queries each installation through `(github_installation_id, queued_at DESC, id ASC)` and merges the bounded results while preserving exact installation/repository access pairs.
 

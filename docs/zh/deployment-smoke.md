@@ -312,6 +312,7 @@ Workflow 完成后确认：
 
 - Qiniu sandbox 已停止或不再 active。
 - GitHub self-hosted runner registration 已移除，或已 offline 并被 runnerd 清理。
+- Job 详情默认展示 Runner 日志，没有 GitHub 日志标签。确认 Jobs 与后台请求详情显示相同的混合事件、时间戳、阶段和日志流筛选；检查更早分页、活动期间增量刷新和手动刷新，不丢失历史或强制滚动到底部。普通用户事件接口必须拒绝匿名会话、缺失/被拒绝的 OAuth Token，以及不匹配的安装/仓库组合。Jobs 面板通过任务名称在新标签页打开 GitHub Job，通过工作流名称打开 Run，没有重复按钮。独立详情页的按钮仅在已知仓库和 Run 时回退到 Run，两者都未知时不显示按钮。打开详情不会请求 `/github-log`。
 - Runner request 的 control/stdout/stderr logs 可以通过 admin UI 或 `/runner_requests/{id}/logs/{name}` 查看。
 - `/diagnostics/vars` 显示更新后的 workflow job、runner registration、cleanup 和 duration counters。
 

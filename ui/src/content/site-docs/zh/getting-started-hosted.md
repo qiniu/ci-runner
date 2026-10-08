@@ -59,7 +59,7 @@ runs-on: [qiniu, ubuntu-24.04]
 1. GitHub 发送 queued workflow-job webhook。
 2. runnerd 匹配托管 spec 并创建 Sandbox。
 3. 临时 Runner 注册到 GitHub 并接收任务。
-4. Qiniu CI Runner 显示任务、Runner 日志、GitHub 日志、详细信息，以及可用期间的 Web Console。
+4. Qiniu CI Runner 显示任务、Runner 日志、详细信息，以及可用期间的 Web Console。点击任务名称阅读 GitHub 上的工作流步骤日志，点击工作流名称打开对应的 Run。
 5. 任务结束后，runnerd 移除 Runner 注册并停止 Sandbox。
 
 ## 成功标准

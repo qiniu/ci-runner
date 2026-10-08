@@ -86,7 +86,7 @@ Before opening the deployment to users, verify:
 - the GitHub App installation and authorized repository appear;
 - Sandbox readiness resolves for the repository owner;
 - a real workflow is picked up by an ephemeral Runner;
-- GitHub and Runner logs are readable;
+- workflow step logs are readable through the job name link to GitHub, and Runner lifecycle output is readable in the **Runner logs** tab;
 - Runner registration and Sandbox resources are removed after completion;
 - diagnostics show no unresolved create or cleanup failure.
 

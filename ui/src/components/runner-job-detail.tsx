@@ -3,20 +3,18 @@ import { ArrowLeft, CheckCircle2, Clock3, ExternalLink, Loader2, Play, RefreshCw
 import { useTranslation } from "react-i18next"
 
 import type { RunnerJobGroup, RunnerState } from "@/admin-types"
-import { logNames } from "@/admin-types"
+import { activeStatuses } from "@/admin-types"
 import { formatRunnerDuration, formatTime, runnerStatusLabel } from "@/admin-format"
-import { localizedLogTextForView, type LocalizedLogText } from "@/app-log-state"
 import type { AppTFunction } from "@/i18n"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { runnerJobDetailRows, workflowRunLink } from "@/components/runner-job-detail-rows"
-import { githubLogFailureState } from "@/components/github-log-utils"
+import { RunnerEventTimeline } from "@/components/runner-event-timeline"
+import { githubJobLink } from "@/components/runner-github-links"
 import { useSandboxTerminal } from "@/hooks/use-sandbox-terminal"
 import { cn } from "@/lib/utils"
-
-type LogName = (typeof logNames)[number]
 
 type RunnerJobDetailProps = {
   id: string
@@ -36,11 +34,9 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
   const [job, setJob] = useState<RunnerState | null>(null)
   const [jobGroup, setJobGroup] = useState<RunnerJobGroup | null>(null)
   const [loading, setLoading] = useState(true)
-  const [selectedLog, setSelectedLog] = useState<LogName>("control.log")
-  const [logText, setLogText] = useState<LocalizedLogText>({ kind: "message", key: "user.loadingRunnerLog" })
-  const [githubLogText, setGithubLogText] = useState<LocalizedLogText>({ kind: "message", key: "user.loadingGitHubLog" })
-  const [githubLogLoading, setGithubLogLoading] = useState(false)
+  const [eventRefreshRevision, setEventRefreshRevision] = useState(0)
   const endpoint = useMemo(() => `${apiBase}/${encodeURIComponent(id)}`, [apiBase, id])
+  const githubLink = job ? githubJobLink(job) : null
   const terminalAvailable = job ? isTerminalAvailable(job) : false
   const { terminalEl, terminalSession, terminalError, terminalConnecting, connectTerminal } = useSandboxTerminal({
     endpoint,
@@ -51,15 +47,15 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
     connectErrorMessage: t("user.terminalConnectFailed"),
   })
 
-  const loadJob = useCallback(async (active: ActiveGuard = { current: true }) => {
-    setLoading(true)
+  const loadJob = useCallback(async (active: ActiveGuard = { current: true }, background = false) => {
+    if (!background) setLoading(true)
     try {
       const data = await request(endpoint)
       if (active.current) {
         setJob(data as RunnerState)
       }
     } finally {
-      if (active.current) {
+      if (active.current && !background) {
         setLoading(false)
       }
     }
@@ -78,49 +74,6 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
     }
   }, [endpoint, request])
 
-  const loadLog = useCallback(async (name = selectedLog, active: ActiveGuard = { current: true }) => {
-    setLogText({ kind: "message", key: "user.loadingRunnerLog" })
-    try {
-      const text = await request(`${endpoint}/logs/${encodeURIComponent(name)}`)
-      if (active.current) {
-        setLogText(typeof text === "string"
-          ? text
-            ? { kind: "text", text }
-            : { kind: "message", key: "user.runnerLogEmpty" }
-          : { kind: "text", text: JSON.stringify(text, null, 2) })
-      }
-    } catch (error) {
-      if (active.current) {
-        setLogText(error instanceof Error
-          ? { kind: "text", text: error.message }
-          : { kind: "message", key: "user.runnerLogFailed" })
-      }
-    }
-  }, [endpoint, request, selectedLog])
-
-  const loadGithubLog = useCallback(async (active: ActiveGuard = { current: true }) => {
-    setGithubLogLoading(true)
-    setGithubLogText({ kind: "message", key: "user.loadingGitHubLog" })
-    try {
-      const text = await request(`${endpoint}/github-log`)
-      if (active.current) {
-        setGithubLogText(typeof text === "string"
-          ? text
-            ? { kind: "text", text }
-            : { kind: "message", key: "user.githubLogEmpty" }
-          : { kind: "text", text: JSON.stringify(text, null, 2) })
-      }
-    } catch (error) {
-      if (active.current) {
-        setGithubLogText(githubLogFailureState(error))
-      }
-    } finally {
-      if (active.current) {
-        setGithubLogLoading(false)
-      }
-    }
-  }, [endpoint, request])
-
   useEffect(() => {
     const active = { current: true }
     void loadJob(active)
@@ -131,22 +84,27 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
   }, [loadJob, loadJobGroup])
 
   useEffect(() => {
+    if (!job || !activeStatuses.has(job.status)) return
     const active = { current: true }
-    void loadLog(selectedLog, active)
+    let timer: number
+    const poll = async () => {
+      try {
+        await loadJob(active, true)
+      } catch {
+        // Keep the last known state and retry after a transient lookup failure.
+      } finally {
+        if (active.current) timer = window.setTimeout(() => void poll(), 5000)
+      }
+    }
+    timer = window.setTimeout(() => void poll(), 5000)
     return () => {
       active.current = false
+      window.clearTimeout(timer)
     }
-  }, [loadLog, selectedLog])
-
-  useEffect(() => {
-    const active = { current: true }
-    void loadGithubLog(active)
-    return () => {
-      active.current = false
-    }
-  }, [loadGithubLog])
+  }, [job, loadJob])
 
   const refreshPage = () => {
+    setEventRefreshRevision((revision) => revision + 1)
     void loadJob()
     void loadJobGroup()
   }
@@ -181,11 +139,11 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {job?.github_job_url ? (
+            {githubLink ? (
               <Button type="button" variant="outline" asChild>
-                <a href={job.github_job_url} target="_blank" rel="noreferrer">
+                <a href={githubLink.url} target="_blank" rel="noreferrer">
                   <ExternalLink />
-                  GitHub
+                  {t(githubLink.labelKey)}
                 </a>
               </Button>
             ) : null}
@@ -231,63 +189,14 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
               <div className="text-sm text-muted-foreground">{t("common.loading")}</div>
             )}
           </div>
-          <Tabs defaultValue="github-logs" className="h-full">
+          <Tabs defaultValue="logs" className="h-full">
             <TabsList>
-              <TabsTrigger value="github-logs">{t("user.githubLogs")}</TabsTrigger>
               <TabsTrigger value="logs">{t("user.runnerLogs")}</TabsTrigger>
               <TabsTrigger value="terminal">{t("common.terminal")}</TabsTrigger>
               <TabsTrigger value="details">{t("common.details")}</TabsTrigger>
             </TabsList>
             <TabsContent value="logs" className="mt-4">
-              <Card className="gap-0 py-0">
-                <CardHeader className="sticky top-0 z-10 border-b bg-card px-5 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <CardTitle>{t("user.runnerLogs")}</CardTitle>
-                      <CardDescription>{t("user.runnerLifecycleLogs")}</CardDescription>
-                    </div>
-                    <Button type="button" variant="outline" size="sm" onClick={() => void loadLog()}>
-                      <RefreshCw />
-                      {t("common.refresh")}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-5">
-                  <Tabs value={selectedLog} onValueChange={(value) => setSelectedLog(value as LogName)}>
-                    <TabsList>
-                      {logNames.map((name) => (
-                        <TabsTrigger key={name} value={name}>
-                          {name.replace(".log", "")}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
-                  <pre className="mt-4 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-                    {localizedLogTextForView(logText, t)}
-                  </pre>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value="github-logs" className="mt-4">
-              <Card className="gap-0 py-0">
-                <CardHeader className="sticky top-0 z-10 border-b bg-card px-5 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <CardTitle>{t("user.githubLogs")}</CardTitle>
-                      <CardDescription>{t("user.githubLogSource")}</CardDescription>
-                    </div>
-                    <Button type="button" variant="outline" size="sm" onClick={() => void loadGithubLog()} disabled={githubLogLoading}>
-                      <RefreshCw className={cn(githubLogLoading && "animate-spin")} />
-                      {t("common.refresh")}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-5">
-                  <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-                    {localizedLogTextForView(githubLogText, t)}
-                  </pre>
-                </CardContent>
-              </Card>
+              {job ? <RunnerEventTimeline endpoint={`${endpoint}/events`} request={request} autoRefresh={activeStatuses.has(job.status)} refreshRevision={eventRefreshRevision} /> : null}
             </TabsContent>
             <TabsContent value="terminal" forceMount className="mt-4 data-[state=inactive]:hidden">
               <Card className="gap-0 py-0">

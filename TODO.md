@@ -31,6 +31,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Maintenance
 
+- Keep Job details focused on the shared Runner event timeline, Web Console, and request details. Jobs and admin request details must use the same event rows and cursor behavior while retaining their authorization boundaries. Workflow step logs remain on GitHub through the Job/Run link; do not restore duplicate log fetching or streaming without a separately validated need. See [Testing: GitHub Actions logs](docs/testing.md#9-how-to-read-github-actions-logs).
+
 - Keep `README.md` and `README.zh.md`, the paired English/Chinese files under `docs/`, and this roadmap in sync when build, dev, config, or UI asset workflows change.
 - Keep `docs/deployment-smoke.md` and `docs/zh/deployment-smoke.md` aligned with real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics behavior.
 - Keep generated production UI assets under `internal/server/ui/` out of hand edits; change source files in `ui/` and rebuild with `task build`.

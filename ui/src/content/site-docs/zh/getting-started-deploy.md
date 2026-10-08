@@ -86,7 +86,7 @@ runs-on: [qiniu, ubuntu-24.04]
 - GitHub App installation 和授权仓库可见；
 - 仓库所有者的 Sandbox 就绪状态可以解析；
 - 真实 workflow 被临时 Runner 接走；
-- GitHub 日志和 Runner 日志可读；
+- 通过任务名称的 GitHub 链接可阅读工作流步骤日志，**Runner 日志** 标签中的生命周期输出可读；
 - 完成后 Runner 注册和 Sandbox 资源被清理；
 - diagnostics 中没有未解决的创建或清理失败。
 

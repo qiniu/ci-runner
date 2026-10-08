@@ -61,7 +61,7 @@ GitHub Actions 另行通过 `jobs.<job_id>.timeout-minutes` 限制每个 Job，�
 同时使用两个视图：
 
 - **GitHub Actions：**查看 workflow 状态、step 输出、结论和分配到的 Runner。
-- **Qiniu CI Runner Jobs：**查看匹配的 spec、Runner 生命周期事件、GitHub 日志、Runner 日志、详细信息，以及 Sandbox 运行期间的 Web Console。
+- **Qiniu CI Runner Jobs：**查看匹配的 spec、带时间戳和阶段的 control/stdout/stderr 日志时间线、日志流筛选、更早记录、详细信息，以及 Sandbox 运行期间的 Web Console。点击任务名称阅读 GitHub 上的工作流步骤日志，点击工作流名称打开对应的 Run。
 
 不要把“Sandbox 已创建”当作完成。任务还必须被分配、执行、结束并完成清理。
 

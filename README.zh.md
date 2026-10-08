@@ -184,7 +184,7 @@ env:
 
 | 范围         | 权限                | 访问级别     | 用途                                                             |
 | ------------ | ------------------- | ------------ | ---------------------------------------------------------------- |
-| Repository   | Actions             | Read-only    | 查询 job/run 状态、列出排队 job、读取日志；接收 webhook 事件所需 |
+| Repository   | Actions             | Read-only    | 查询 job/run 状态、列出排队 job；接收 webhook 事件所需 |
 | Repository   | Administration      | Read & write | 仓库级 runner 注册（spec 未设置 `runner_group` 时）              |
 | Repository   | Metadata            | Read-only    | 识别仓库及其所属账户                                             |
 | Repository   | Pull requests       | Read-only    | 在 job 分组中显示 PR 标题                                        |
@@ -319,6 +319,8 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/diagnostics`     | runnerd 运行时诊断，用于查看脱敏摘要、pprof discovery 和按需加载的 expvar |
 
 `/` 始终是公开的 Qiniu CI Runner 产品首页。`/docs` 及其固定指南路由公开、同域，并提供英文和简体中文。普通用户 Jobs 首页位于 `/jobs`；其他受保护路由包括 `/repositories`、PR job 分组（`/github/pulls/{owner}/{repo}/{number}/jobs`）、账户设置（`/account/preferences`、`/account/sandbox-templates`、`/account/sandbox-instances`），以及对应的 `/organizations/{login}/...` 路由。未登录访问受保护路由时会显示独立的 GitHub 登录页，并在 OAuth 完成后返回原 URL。
+
+Job 详情默认展示 **Runner 日志**，并保留 Web Console 和详细信息。Jobs 与后台请求详情共用事件时间线，混排 control、stdout、stderr，显示时间戳和阶段，支持日志流筛选、加载更早记录及活动期间每五秒增量刷新。`GET /user/runner_requests/{id}/events` 使用与 Job 详情相同的精确安装/仓库权限校验，返回与后台接口相同的事件分页。在 Jobs 面板中，任务名称链接到 GitHub Job，工作流名称链接到对应的 Run。独立 Job 详情页提供 **在 GitHub 查看 Job**；缺少 Job URL 时，若已知仓库和 Run ID，则提供 Workflow Run 跳转。runnerd 不再下载或重复展示 GitHub Actions 日志。已退役的 `/user/runner_requests/{id}/github-log` 接口返回 `404`。
 
 Runner request 列表默认返回最新 100 行，单页最多 500 行，并且只读取公开 runner state 所需字段，不加载已保存的 webhook payload 或 Sandbox credentials。Admin 轮询使用 `(queued_at DESC, id ASC)` 索引；经过 repository 授权的普通用户轮询通过 `(github_installation_id, queued_at DESC, id ASC)` 分别查询每个 installation，再合并有界结果，同时保留精确的 installation/repository 授权关系。
 

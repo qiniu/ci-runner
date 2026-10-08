@@ -61,7 +61,7 @@ The job initially waits for a matching Runner. Qiniu CI Runner creates the Sandb
 Use both views:
 
 - **GitHub Actions:** workflow state, step output, conclusion, and the assigned Runner.
-- **Qiniu CI Runner Jobs:** matched spec, Runner lifecycle events, GitHub logs, Runner logs, details, and the Web Console while the Sandbox is running.
+- **Qiniu CI Runner Jobs:** matched spec, Runner logs as a shared chronological control/stdout/stderr timeline with timestamps, stages, filters and older records, details, and the Web Console while the Sandbox is running. Select the job name to open workflow step logs on GitHub, or the workflow name to open its Run.
 
 Do not treat “Sandbox created” as completion. The job must be assigned, execute, finish, and clean up.
 

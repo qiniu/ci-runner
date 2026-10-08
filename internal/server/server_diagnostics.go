@@ -179,6 +179,18 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
+	s.writeRunnerRequestEvents(w, r, r.PathValue("id"))
+}
+
+func (s *Server) handleUserRunnerRequestEvents(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.userRunnerState(w, r)
+	if !ok {
+		return
+	}
+	s.writeRunnerRequestEvents(w, r, st.ID)
+}
+
+func (s *Server) writeRunnerRequestEvents(w http.ResponseWriter, r *http.Request, requestID string) {
 	afterValue := strings.TrimSpace(r.URL.Query().Get("after_id"))
 	beforeValue := strings.TrimSpace(r.URL.Query().Get("before_id"))
 	if afterValue != "" && beforeValue != "" {
@@ -203,9 +215,9 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 		}
 		beforeID = parsed
 	}
-	st, err := s.store.ReadState(r.PathValue("id"))
+	st, err := s.store.ReadState(requestID)
 	if err != nil {
-		s.writeRunnerRequestLookupError(w, r.PathValue("id"), err)
+		s.writeRunnerRequestLookupError(w, requestID, err)
 		return
 	}
 	var events []state.RunnerEvent
@@ -216,9 +228,10 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 		events, hasMore, err = s.store.ListRunnerEvents(st.ID, beforeID, diagnosticRunnerEventLimit)
 	}
 	if err != nil {
-		s.writeRunnerEventReadError(w, st.ID, err)
+		s.writeRunnerEventReadError(w, requestID, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, runnerRequestEventPage{Events: events, HasMore: hasMore})
 }
 

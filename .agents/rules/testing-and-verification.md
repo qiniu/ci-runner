@@ -107,6 +107,12 @@ RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
 - For Sandbox fallback changes, verify scoped override, enabled-default fallback, disabled/incomplete default rejection, catalog access, and config-source display without exposing endpoint/key or audience metadata to ordinary users.
 - For audience changes, verify `all`, selected match/miss, selected-empty, user/org stable identity, login rename tolerance, manual preconfiguration before sign-in/sync, GitHub 404 rejection, installation-owner lookup/cache behavior, audit events, and saved snapshot behavior.
 
+## Shared Runner Event Timeline
+
+- Verify Jobs, the standalone Job fallback, and admin request details through the shared timeline component. Cover mixed event rows, timestamps/stages, loaded-record filters, exclusive forward/backward pages, merging concurrent history and refresh requests, stale responses after switching Jobs, failure recovery, and the final event refresh when an active request becomes terminal.
+- Test `/user/runner_requests/{id}/events` against the admin page contract, including the newest 200 records, exclusive cursors, `Cache-Control: no-store`, and anonymous/missing-token/rejected-token/exact installation-repository authorization failures. Keep diagnostics and management endpoints admin-only.
+- Run `bun test src/components/runner-event-timeline.test.js src/components/admin-diagnostics-section.test.js` from `ui/` and the production browser smoke. Do not run a production UI rebuild concurrently with Go compilation: the build replaces files read by `go:embed`.
+
 ## UI Internationalization
 
 Run this after changing fixed UI copy, locale resources, translation-key

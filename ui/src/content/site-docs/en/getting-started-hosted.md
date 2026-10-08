@@ -59,7 +59,7 @@ Trigger the workflow from GitHub Actions. While the job runs:
 1. GitHub sends a queued workflow-job webhook.
 2. runnerd matches the managed spec and creates a Sandbox.
 3. The ephemeral Runner registers with GitHub and accepts the job.
-4. Qiniu CI Runner shows the job, Runner logs, GitHub logs, details, and the Web Console while it is available.
+4. Qiniu CI Runner shows the job, Runner logs, details, and the Web Console while it is available. Select the job name to read workflow step logs on GitHub, or the workflow name to open its Run.
 5. After completion, runnerd removes the Runner registration and stops the Sandbox.
 
 ## What success looks like
