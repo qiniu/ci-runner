@@ -316,7 +316,7 @@ describe("admin diagnostics", () => {
     expect(Array.from(container.querySelectorAll('[data-slot="badge"]')).some((badge) => badge.textContent === "Failed")).toBe(false)
   })
 
-  test("polls every new event page without reopening exhausted history", async () => {
+  test("polls mixed event pages independently of the control-only diagnosis without reopening history", async () => {
     let diagnosisRequestCount = 0
     const eventURLs = []
     const request = async (url) => {
@@ -361,7 +361,12 @@ describe("admin diagnostics", () => {
         },
         github_job: { lookup_status: "unavailable" },
         findings: [],
-        events: [],
+        events: [{
+          id: diagnosisRequestCount === 1 ? 1 : 5,
+          event_type: "control_log",
+          message: diagnosisRequestCount === 1 ? "runner started\n" : "runner completed\n",
+          created_at: "2026-09-06T07:05:05Z",
+        }],
         events_truncated: false,
       }
     }

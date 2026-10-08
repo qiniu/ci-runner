@@ -806,7 +806,6 @@ export const en = {
     sandboxPermissionDeniedFor: "You do not have permission to manage {{login}} Sandbox settings.",
     runCount: "{{count}} run",
     runCount_other: "{{count}} runs",
-    showTechnicalDetails: "Show technical details",
     consoleStateUnavailable: "The Sandbox is no longer accepting Web Console sessions for this job state.",
     consoleCleanedUp: "The Sandbox has already been cleaned up, so a Web Console session cannot be opened.",
     consoleAvailabilityDescription: "Web Console is available while a Sandbox job is creating, running, or stopping. {{reason}}",

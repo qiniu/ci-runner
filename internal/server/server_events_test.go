@@ -7,13 +7,24 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
+type eventStateReadCountingStore struct {
+	state.Store
+	reads atomic.Int32
+}
+
+func (s *eventStateReadCountingStore) ReadState(id string) (state.RunnerState, error) {
+	s.reads.Add(1)
+	return s.Store.ReadState(id)
+}
+
 func TestUserRunnerEventsMatchesAdminPagination(t *testing.T) {
-	store := state.New(t.TempDir())
+	store := &eventStateReadCountingStore{Store: state.New(t.TempDir())}
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/user/installations/987/repositories" || r.Header.Get("Authorization") != "Bearer user-token" {
 			t.Errorf("unexpected GitHub authorization request: %s", r.URL.Path)
@@ -56,7 +67,11 @@ func TestUserRunnerEventsMatchesAdminPagination(t *testing.T) {
 			userReq := httptest.NewRequest(http.MethodGet, "/user/runner_requests/events-job/events"+tc.query, nil)
 			userReq.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
 			userRec := httptest.NewRecorder()
+			readsBefore := store.reads.Load()
 			srv.ServeHTTP(userRec, userReq)
+			if got := store.reads.Load() - readsBefore; got != 1 {
+				t.Fatalf("user event page read state %d times, want once", got)
+			}
 			adminRec := httptest.NewRecorder()
 			srv.ServeHTTP(adminRec, adminRequest(http.MethodGet, "/runner_requests/events-job/events"+tc.query, nil))
 			if userRec.Code != http.StatusOK || adminRec.Code != http.StatusOK || userRec.Body.String() != adminRec.Body.String() {

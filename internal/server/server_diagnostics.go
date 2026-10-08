@@ -179,7 +179,7 @@ func (s *Server) handleRunnerRequestEvents(w http.ResponseWriter, r *http.Reques
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
-	s.writeRunnerRequestEvents(w, r, r.PathValue("id"))
+	s.writeRunnerRequestEvents(w, r, nil)
 }
 
 func (s *Server) handleUserRunnerRequestEvents(w http.ResponseWriter, r *http.Request) {
@@ -187,10 +187,11 @@ func (s *Server) handleUserRunnerRequestEvents(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	s.writeRunnerRequestEvents(w, r, st.ID)
+	s.writeRunnerRequestEvents(w, r, &st)
 }
 
-func (s *Server) writeRunnerRequestEvents(w http.ResponseWriter, r *http.Request, requestID string) {
+func (s *Server) writeRunnerRequestEvents(w http.ResponseWriter, r *http.Request, st *state.RunnerState) {
+	requestID := r.PathValue("id")
 	afterValue := strings.TrimSpace(r.URL.Query().Get("after_id"))
 	beforeValue := strings.TrimSpace(r.URL.Query().Get("before_id"))
 	if afterValue != "" && beforeValue != "" {
@@ -215,13 +216,17 @@ func (s *Server) writeRunnerRequestEvents(w http.ResponseWriter, r *http.Request
 		}
 		beforeID = parsed
 	}
-	st, err := s.store.ReadState(requestID)
-	if err != nil {
-		s.writeRunnerRequestLookupError(w, requestID, err)
-		return
+	if st == nil {
+		loaded, err := s.store.ReadState(requestID)
+		if err != nil {
+			s.writeRunnerRequestLookupError(w, requestID, err)
+			return
+		}
+		st = &loaded
 	}
 	var events []state.RunnerEvent
 	var hasMore bool
+	var err error
 	if afterValue != "" {
 		events, hasMore, err = s.store.ListRunnerEventsAfter(st.ID, afterID, diagnosticRunnerEventLimit)
 	} else {

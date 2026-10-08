@@ -6,6 +6,7 @@ export function workflowRunURL(job: RunnerState): string {
   const jobURL = job.github_job_url || ""
   const index = jobURL.indexOf(marker)
   if (index >= 0) return jobURL.slice(0, index + marker.length)
+  if (jobURL) return ""
   const repository = job.repository_full_name?.split("/")
   if (repository?.length !== 2 || repository.some((part) => !part)) return ""
   return `https://github.com/${repository.map(encodeURIComponent).join("/")}${marker}`

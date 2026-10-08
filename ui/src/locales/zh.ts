@@ -806,7 +806,6 @@ export const zh = {
     sandboxPermissionDeniedFor: "你没有权限管理 {{login}} 的 Sandbox 设置。",
     runCount: "{{count}} 次运行",
     runCount_other: "{{count}} 次运行",
-    showTechnicalDetails: "显示技术详情",
     consoleStateUnavailable: "当前任务状态下，Sandbox 已不再接受 Web 控制台会话。",
     consoleCleanedUp: "Sandbox 已清理，无法再打开 Web 控制台会话。",
     consoleAvailabilityDescription: "Sandbox 任务处于创建、运行或停止中时可以使用 Web 控制台。{{reason}}",
