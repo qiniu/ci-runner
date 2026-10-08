@@ -84,9 +84,9 @@ All eight public builds use `templates/` as their Docker context. Shared setup
 functions, helper scripts, and the sole Actions Runner version/SHA-256/size pin
 live in `templates/common/`; retain per-Ubuntu setup differences and keep the
 Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
-The pin is the public templates' preinstalled baseline. Specs with
-`runner_update_policy=preinstalled` use that baseline directly; public template
-images continue to follow the regular rebuild process.
+The pin is the preinstalled baseline of the public templates built here.
+`runner_update_policy=preinstalled` uses the selected image's baseline directly;
+these public images continue to follow the regular rebuild process.
 The weekly/manual `Actions Runner Update` workflow may update only this shared
 pin and `templates/runner-images-compatibility.json` after validating the
 latest stable release, canonical Linux x64 asset metadata, downloaded size and
