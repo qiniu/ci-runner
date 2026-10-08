@@ -247,7 +247,7 @@ management APIs now return `404 Not Found`, while old Admin bookmarks redirect
 to Runner Specs. They are not part of supported configuration, matching, or
 recovery behavior; any legacy database artifacts are ignored by current code.
 
-The database is the single catalog authority. Startup migrates old managed rows once, preserves their operator settings and runtime behavior, and never restores edited/deleted specs. A fresh installation starts with an empty catalog. Runtime keeps the existing public-name/private-ID behavior; this refactor adds no configurable Runner preparation, Docker or sponsorship policy. See [Platform Runner Specs](docs/platform-runner-specs.md) for fields, migration and validation.
+The database is the single catalog authority. Startup migrates old managed rows once, preserves their operator settings and runtime behavior, and never restores edited/deleted specs. Legacy private specs keep their physical template IDs and clear unused public names so later edits remain valid. A fresh installation starts with an empty catalog. Runtime keeps the existing public-name/private-ID behavior; this refactor adds no configurable Runner preparation, Docker or sponsorship policy. See [Platform Runner Specs](docs/platform-runner-specs.md) for fields, migration and validation.
 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.

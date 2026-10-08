@@ -133,13 +133,15 @@ compatibility gate. Both DSNs must point to
 dedicated disposable databases whose names end in `_test`: the tests refuse
 other database names, then drop and recreate runnerd state tables. They cover
 fresh schema creation without retired catalog tables, repeated migration, and
-atomic mutation/audit commit and rollback behavior.
+atomic mutation/audit commit and rollback behavior. The profile-policy gate also
+checks that legacy private bindings retain their physical IDs, clear inert public
+names and remain editable without changing historical timestamps.
 
 ```bash
 RUNNERD_CATALOG_BACKEND_TESTS=1 \
 RUNNERD_POSTGRES_TEST_DSN='host=127.0.0.1 user=runnerd password=runnerd dbname=runnerd_test port=5432 sslmode=disable' \
 RUNNERD_MYSQL_TEST_DSN='runnerd:runnerd@tcp(127.0.0.1:3306)/runnerd_test' \
-  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema)SQLBackends' -count=1 -v
+  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy)SQLBackends' -count=1 -v
 ```
 
 Restart recovery has focused tests that do not require a live sandbox:

@@ -72,6 +72,10 @@ func migrateRunnerProfilePolicies(db *gorm.DB) error {
 			}
 			if p.TemplateSource == TemplateSourcePublic {
 				updates["template_id"] = ""
+			} else {
+				// Legacy custom specs used only the physical ID. A stray public
+				// name was inert, but would now fail private-binding validation.
+				updates["default_template_name"] = ""
 			}
 			result := tx.Model(&runnerProfileRecord{}).Where("name = ? AND (template_source = ? OR template_source IS NULL)", row.Name, "").Updates(updates)
 			if result.Error != nil {

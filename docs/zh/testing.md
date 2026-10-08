@@ -128,13 +128,13 @@ State migration 和带审计的 catalog mutation 还提供 opt-in 的真实方�
 门禁。两个 DSN 必须指向名称以 `_test` 结尾的专用、
 可丢弃数据库；测试会拒绝其他数据库名称，然后删除并重建 runnerd state tables。
 覆盖范围包括 fresh schema 不创建已退役 catalog tables、重复迁移，以及 mutation
-与 audit 的原子提交和回滚。
+与 audit 的原子提交和回滚。规格策略迁移测试还验证旧私有绑定保留物理 ID、清空不参与运行的公共名称、保持可编辑，并保留历史时间戳。
 
 ```bash
 RUNNERD_CATALOG_BACKEND_TESTS=1 \
 RUNNERD_POSTGRES_TEST_DSN='host=127.0.0.1 user=runnerd password=runnerd dbname=runnerd_test port=5432 sslmode=disable' \
 RUNNERD_MYSQL_TEST_DSN='runnerd:runnerd@tcp(127.0.0.1:3306)/runnerd_test' \
-  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema)SQLBackends' -count=1 -v
+  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy)SQLBackends' -count=1 -v
 ```
 
 服务重启恢复有一组不依赖真实 Sandbox 的定向测试：

@@ -65,7 +65,7 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 1, 1, 2, 3, 0, time.UTC)
-	for _, row := range []struct{ name, owner, template string }{{"public", "qiniu/ci-runner", "public-name"}, {"private", "", ""}, {"legacy-incomplete", "qiniu/ci-runner", ""}} {
+	for _, row := range []struct{ name, owner, template string }{{"public", "qiniu/ci-runner", "public-name"}, {"private", "", "stray-public-name"}, {"legacy-incomplete", "qiniu/ci-runner", ""}} {
 		if err := db.Exec(`INSERT INTO runner_profiles VALUES (?, '["qiniu","ubuntu"]','["qiniu","ubuntu"]','old-id',?,'group',7,2,91,0,1,?,1,?,?)`, row.name, row.template, row.owner, now, now).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -88,8 +88,12 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if private.TemplateSource != TemplateSourcePrivate || private.Published || private.TemplateID != "old-id" {
+	if private.TemplateSource != TemplateSourcePrivate || private.Published || private.TemplateID != "old-id" || private.DefaultTemplateName != "" || !private.UpdatedAt.Equal(now) {
 		t.Fatalf("legacy private policy: %#v", private)
+	}
+	private.MaxConcurrency = 8
+	if _, err := store.UpsertProfileIfUnchanged(private, &private.UpdatedAt); err != nil {
+		t.Fatalf("migrated private spec cannot be edited: %v", err)
 	}
 	// An incomplete historical managed row must not become a runnable private spec.
 	incomplete, err := store.GetProfile("legacy-incomplete")
@@ -155,27 +159,32 @@ func TestProfilePolicyRejectsPrivatePublicationAndInvalidBindings(t *testing.T) 
 }
 
 func TestRunnerProfilePolicyMigrationRollsBackWhenAuditFails(t *testing.T) {
-	store := New(t.TempDir()).(*DBStore)
-	db, err := store.dbOrEnsure()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Raw rows model a pre-policy database; migration must not partially publish one.
-	if err := db.Create(&runnerProfileRecord{Name: "legacy", LabelsJSON: `["qiniu"]`, TemplateID: "old", DefaultTemplateName: "public-name", ManagedBy: "qiniu/ci-runner", CreatedAt: time.Now(), UpdatedAt: time.Now()}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(`CREATE TRIGGER reject_policy_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit failure'); END`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateRunnerProfilePolicies(db); err == nil {
-		t.Fatal("audit failure allowed migration")
-	}
-	var row runnerProfileRecord
-	if err := db.First(&row, "name = ?", "legacy").Error; err != nil {
-		t.Fatal(err)
-	}
-	if row.TemplateSource != "" || row.Published || row.TemplateID != "old" {
-		t.Fatalf("partial migration persisted: %#v", row)
+	for _, owner := range []string{"qiniu/ci-runner", ""} {
+		t.Run("owner="+owner, func(t *testing.T) {
+			store := New(t.TempDir()).(*DBStore)
+			db, err := store.dbOrEnsure()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Raw rows model pre-policy public and private bindings. Each
+			// binding change must roll back when its audit insert fails.
+			if err := db.Create(&runnerProfileRecord{Name: "legacy", LabelsJSON: `["qiniu"]`, TemplateID: "old", DefaultTemplateName: "public-name", ManagedBy: owner, CreatedAt: time.Now(), UpdatedAt: time.Now()}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Exec(`CREATE TRIGGER reject_policy_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit failure'); END`).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := migrateRunnerProfilePolicies(db); err == nil {
+				t.Fatal("audit failure allowed migration")
+			}
+			var row runnerProfileRecord
+			if err := db.First(&row, "name = ?", "legacy").Error; err != nil {
+				t.Fatal(err)
+			}
+			if row.TemplateSource != "" || row.Published || row.TemplateID != "old" || row.DefaultTemplateName != "public-name" {
+				t.Fatalf("partial migration persisted: %#v", row)
+			}
+		})
 	}
 }
 
@@ -214,8 +223,20 @@ func TestRunnerProfilePolicySQLBackends(t *testing.T) {
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)
 			}
+			private := runnerProfileRecord{Name: "legacy-private", LabelsJSON: `["custom"]`, TemplateID: "private-id", DefaultTemplateName: "stray-name", MaxConcurrency: 4, CreatedAt: stamp, UpdatedAt: stamp}
+			if err := db.Create(&private).Error; err != nil {
+				t.Fatal(err)
+			}
 			if err := migrateRunnerProfilePolicies(db); err != nil {
 				t.Fatal(err)
+			}
+			migratedPrivate, err := store.GetProfile(private.Name)
+			if err != nil || migratedPrivate.TemplateSource != TemplateSourcePrivate || migratedPrivate.Published || migratedPrivate.TemplateID != "private-id" || migratedPrivate.DefaultTemplateName != "" || migratedPrivate.MaxConcurrency != 4 || !migratedPrivate.CreatedAt.Equal(stamp) || !migratedPrivate.UpdatedAt.Equal(stamp) {
+				t.Fatalf("private migration mismatch: %#v %v", migratedPrivate, err)
+			}
+			migratedPrivate.MaxConcurrency = 5
+			if _, err := store.UpsertProfileIfUnchanged(migratedPrivate, &migratedPrivate.UpdatedAt); err != nil {
+				t.Fatalf("migrated private spec cannot be edited: %v", err)
 			}
 			var got runnerProfileRecord
 			if err := db.First(&got, "name = ?", row.Name).Error; err != nil {
@@ -238,10 +259,13 @@ func TestRunnerProfilePolicySQLBackends(t *testing.T) {
 			}
 			assertRetiredRunnerPolicyValues(t, db)
 			var count int64
-			if err := db.Model(&auditEventRecord{}).Where("action = ?", "profile.policy_migrate").Count(&count).Error; err != nil || count != 1 {
+			if err := db.Model(&auditEventRecord{}).Where("action = ?", "profile.policy_migrate").Count(&count).Error; err != nil || count != 2 {
 				t.Fatalf("migration audit count %d: %v", count, err)
 			}
 			if err := db.Delete(&runnerProfileRecord{}, "name = ?", row.Name).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Delete(&runnerProfileRecord{}, "name = ?", private.Name).Error; err != nil {
 				t.Fatal(err)
 			}
 			if err := store.migrate(db); err != nil {
