@@ -483,6 +483,7 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile created", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusCreated, profile)
@@ -607,6 +608,7 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile updated", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusOK, profile)
@@ -687,6 +689,7 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile deleted", "name", name)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

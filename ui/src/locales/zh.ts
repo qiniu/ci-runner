@@ -348,7 +348,7 @@ export const zh = {
     minIdle: "最小空闲数",
     priority: "优先级",
     saveRunnerSpec: "保存 Runner 规格",
-    specsDescription: "管理托管目录项和平台共享的自定义 Runner 规格；点击所在行可编辑。",
+    specsDescription: "管理平台 Runner 规格及其公开发布设置；点击所在行可编辑。",
     githubGroup: "GitHub 组",
     limit: "限制",
     createRunnerSpec: "创建平台 Runner 规格",

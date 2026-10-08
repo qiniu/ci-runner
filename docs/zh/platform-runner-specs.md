@@ -18,7 +18,7 @@
 
 创建、更换绑定、发布、重新启用已发布规格时，只使用配置的 **Admin** Sandbox endpoint/key 校验，即使运行时 fallback 已关闭。公共名称必须唯一解析到 `public: true` 且状态为 `ready` 或 `uploaded` 的模板；私有 ID 保留原来的访问权限和有效默认构建检查。本地字段先校验，远程调用总计限时 5 秒，并位于审计事务之外。拒绝或过期保存不修改规格和审计记录。
 
-`/runner-specs` 仅展示启用且已发布的公共规格。`/user/runner-specs` 以 `platform_public` 返回已发布公共条目，并返回所选 scope 自有的 `scoped_custom` 条目，省略未发布或私有的平台规格。只有 scope 自定义条目可返回物理 ID 和 GitHub Runner Group。`GET /api/public/runner-templates` 按稳定名称汇总启用且已发布的公共规格，只公开名称和 workflow labels，缓存 60 秒。Provider 目录仍是独立、受凭据约束的资源。Large 规格配置并通过公共名称校验后也可发布，不能仅根据名称自动归入公共目录。
+`/runner-specs` 仅展示启用且已发布的公共规格。`/user/runner-specs` 以 `platform_public` 返回已发布公共条目，并返回所选 scope 自有的 `scoped_custom` 条目，省略未发布或私有的平台规格。只有 scope 自定义条目可返回物理 ID 和 GitHub Runner Group。`GET /api/public/runner-templates` 按稳定名称汇总启用且已发布的公共规格，只公开名称和 workflow labels，每个服务进程将公开投影缓存 60 秒，并合并并发加载；Admin 成功保存或删除规格后会使当前进程缓存失效，浏览器仍可缓存响应 60 秒。Provider 目录仍是独立、受凭据约束的资源。Large 规格配置并通过公共名称校验后也可发布，不能仅根据名称自动归入公共目录。
 
 ## 修改与升级兼容
 

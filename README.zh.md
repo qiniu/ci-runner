@@ -251,7 +251,7 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
-`GET /api/public/runner-templates` 无需登录即可返回数据库中启用且已发布的公共绑定，包含管理员配置并验证后的 large 规格。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，缓存 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
+`GET /api/public/runner-templates` 无需登录即可返回数据库中启用且已发布的公共绑定，包含管理员配置并验证后的 large 规格。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，每个服务进程将公开投影缓存 60 秒，并合并并发加载；Admin 成功保存或删除规格后会使当前进程缓存失效，浏览器仍可缓存响应 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
 
 普通用户在 `/runner-specs` 只读浏览平台 Runner 规格及其工作流标签；该页面不提供
 个人账号／Organization 选择，也不能修改平台规格的启用状态或并发策略。在

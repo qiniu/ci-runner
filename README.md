@@ -252,7 +252,7 @@ The database is the single catalog authority. Startup migrates old managed rows 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes enabled, published public bindings from the database without authentication, including validated large specs when configured. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials; cache lifetime is 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
+`GET /api/public/runner-templates` exposes enabled, published public bindings from the database without authentication, including validated large specs when configured. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials; the public projection is cached in each server process for 60 seconds, with concurrent cache fills coalesced. Successful Admin spec saves and deletes invalidate that process cache; browser caches may retain responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
 
 Ordinary users browse the read-only platform Runner Spec catalog at
 `/runner-specs`. That page has no account/Organization selector or user-editable

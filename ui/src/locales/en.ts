@@ -348,7 +348,7 @@ export const en = {
     minIdle: "Min idle",
     priority: "Priority",
     saveRunnerSpec: "Save runner spec",
-    specsDescription: "Managed catalog entries and platform-shared custom Runner Specs. Click a row to edit it.",
+    specsDescription: "Manage platform Runner Specs and their publication settings. Click a row to edit it.",
     githubGroup: "GitHub group",
     limit: "Limit",
     createRunnerSpec: "Create platform runner spec",
