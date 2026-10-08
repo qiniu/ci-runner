@@ -84,8 +84,9 @@ All eight public builds use `templates/` as their Docker context. Shared setup
 functions, helper scripts, and the sole Actions Runner version/SHA-256/size pin
 live in `templates/common/`; retain per-Ubuntu setup differences and keep the
 Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
-The pin is the managed template's preinstalled baseline. Managed templates use
-that baseline directly and continue to follow the regular rebuild process.
+The pin is the public templates' preinstalled baseline. Specs with
+`runner_update_policy=preinstalled` use that baseline directly; public template
+images continue to follow the regular rebuild process.
 The weekly/manual `Actions Runner Update` workflow may update only this shared
 pin and `templates/runner-images-compatibility.json` after validating the
 latest stable release, canonical Linux x64 asset metadata, downloaded size and
@@ -99,8 +100,8 @@ regional template promotion belongs to a separately protected manual workflow.
 Treat a lower latest version and equal-version size/digest drift as visible hard
 failures. The digest proves consistency with GitHub's release metadata, not
 independent provenance; human review remains the merge trust boundary.
-Before registering a custom-template Runner, runnerd must resolve GitHub's
-official Linux Runner applications, validate the GitHub-owned release URL,
+Before registering a Runner with `runner_update_policy=official`, runnerd must
+resolve GitHub's official Linux Runner applications, validate the GitHub-owned release URL,
 filename, architecture, version, and SHA-256 in runnerd, then pass only those
 credential-free descriptors into the Sandbox. A stale writable copy must be
 downloaded with a hard five-minute total deadline and 512-MiB bound using
@@ -111,10 +112,10 @@ writable directory through a sibling random update root containing the candidate
 and previous-directory backup. On HUP, INT, TERM, or a failed second move, restore
 the previous directory before exiting; if restoration itself fails, keep the
 backup path and report it instead of deleting the last recoverable copy.
-Failure is closed before registration. Every fresh Sandbox may
-repeat this update when its immutable custom template remains stale. Keep
-GitHub's official Runner self-update enabled after registration for both managed
-and custom templates, and never restore `--disableupdate`.
+Failure is closed before registration. Every fresh Sandbox using `official`
+preparation may repeat this update when its immutable template remains stale. Keep
+GitHub's official Runner self-update enabled after registration for both
+`official` and `preinstalled` policies, and never restore `--disableupdate`.
 Keep the host-side archive checksum, sixteen small COPY chunks, and remote full
 checksum in the same Docker `RUN` as runtime installation; qshell does not
 restore cached `/tmp` outputs. Each of the four per-Ubuntu source directories

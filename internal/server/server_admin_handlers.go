@@ -438,18 +438,21 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		enabled = *input.Enabled
 	}
 	requestedProfile := state.RunnerProfile{
-		Name:           input.Name,
-		TemplateSource: input.TemplateSource, DefaultTemplateName: strings.TrimSpace(input.DefaultTemplateName),
-		Published: input.Published, RunnerUpdatePolicy: input.RunnerUpdatePolicy,
-		RequireDocker: input.RequireDocker, ForkSponsorship: input.ForkSponsorship,
-		Labels:         input.Labels,
-		RequiredLabels: input.RequiredLabels,
-		TemplateID:     input.TemplateID,
-		RunnerGroup:    input.RunnerGroup,
-		MaxConcurrency: input.MaxConcurrency,
-		MinIdle:        intValue(input.MinIdle),
-		Priority:       intValue(input.Priority),
-		Enabled:        enabled,
+		Name:                input.Name,
+		TemplateSource:      input.TemplateSource,
+		DefaultTemplateName: strings.TrimSpace(input.DefaultTemplateName),
+		Published:           input.Published,
+		RunnerUpdatePolicy:  input.RunnerUpdatePolicy,
+		RequireDocker:       input.RequireDocker,
+		ForkSponsorship:     input.ForkSponsorship,
+		Labels:              input.Labels,
+		RequiredLabels:      input.RequiredLabels,
+		TemplateID:          input.TemplateID,
+		RunnerGroup:         input.RunnerGroup,
+		MaxConcurrency:      input.MaxConcurrency,
+		MinIdle:             intValue(input.MinIdle),
+		Priority:            intValue(input.Priority),
+		Enabled:             enabled,
 	}
 	requestedProfile = state.NormalizeProfilePolicy(requestedProfile)
 	if err := state.ValidateProfile(requestedProfile); err != nil {

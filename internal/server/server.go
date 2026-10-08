@@ -48,8 +48,10 @@ type Server struct {
 
 	recoveryMetricsDeferred atomic.Int32
 
-	publicTemplatesMu    sync.Mutex
+	publicTemplatesMu    sync.RWMutex
 	publicTemplatesCache cachedPublicTemplates
+	publicTemplatesEpoch uint64
+	publicTemplatesGroup singleflight.Group
 
 	pullTitleMu    sync.Mutex
 	pullTitleCache map[string]cachedPullTitle

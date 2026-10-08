@@ -64,6 +64,77 @@ func TestPublicRunnerTemplatesCacheCoalescesConcurrentReads(t *testing.T) {
 	}
 }
 
+type publicTemplatesBlockingStore struct {
+	state.Store
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (s *publicTemplatesBlockingStore) ListProfiles() ([]state.RunnerProfile, error) {
+	profiles, err := s.Store.ListProfiles()
+	if s.calls.Add(1) == 1 {
+		close(s.started)
+		<-s.release
+	}
+	return profiles, err
+}
+
+func TestPublicRunnerTemplatesInvalidationDoesNotWaitForOldFill(t *testing.T) {
+	store := &publicTemplatesBlockingStore{Store: state.New(t.TempDir()), started: make(chan struct{}), release: make(chan struct{})}
+	profile := publicCatalogFixture()[0]
+	if _, err := store.UpsertProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{store: store}
+	oldResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() { oldResponse <- publicTemplatesResponse(srv) }()
+	// Always release the blocked database read, even when an assertion fails.
+	releaseFill := sync.OnceFunc(func() { close(store.release) })
+	defer releaseFill()
+	select {
+	case <-store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first fill did not start")
+	}
+	profile.Published = false
+	if _, err := store.UpsertProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{})
+	go func() {
+		srv.invalidatePublicRunnerTemplates()
+		close(invalidated)
+	}()
+	select {
+	case <-invalidated:
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalidation waited on database I/O")
+	}
+	newResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() { newResponse <- publicTemplatesResponse(srv) }()
+	select {
+	case rec := <-newResponse:
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+			t.Fatalf("new epoch served the old snapshot: %d %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("new epoch waited on old fill")
+	}
+	releaseFill()
+	select {
+	case rec := <-oldResponse:
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+			t.Fatalf("old fill restored an invalidated snapshot: %d %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old fill did not retry")
+	}
+	if got := store.calls.Load(); got != 2 {
+		t.Fatalf("profile reads = %d, want one per epoch", got)
+	}
+}
+
 func TestPublicRunnerTemplatesCacheExpiresAndRetriesFailures(t *testing.T) {
 	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
 	srv := &Server{store: store}
