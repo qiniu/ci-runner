@@ -8875,7 +8875,7 @@ func TestUserRunnerSpecsListHidesPlatformTemplateIDsAndReturnsScopedFields(t *te
 
 func TestUserRunnerSpecControlMethodsAreNotExposed(t *testing.T) {
 	store := state.New(t.TempDir())
-	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu", "managed"}, RequiredLabels: []string{"qiniu"}, TemplateID: "platform-template", ManagedBy: "runnerd", Enabled: true})
+	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu", "managed"}, RequiredLabels: []string{"qiniu"}, DefaultTemplateName: "platform-template", ManagedBy: "runnerd", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9563,7 +9563,7 @@ func publicCatalogFixture() []state.RunnerProfile {
 		if os == "latest" {
 			template = "github-runner-ubuntu-24-04"
 		}
-		profiles = append(profiles, state.RunnerProfile{Name: "qiniu-ubuntu-" + os, Labels: []string{"self-hosted", "linux", "x64", "qiniu", "ubuntu-" + os}, RequiredLabels: []string{"qiniu", "ubuntu-" + os}, DefaultTemplateName: template, TemplateSource: state.TemplateSourcePublic, Published: true, Enabled: true, RunnerUpdatePolicy: state.RunnerUpdatePreinstalled, RequireDocker: true, ForkSponsorship: true})
+		profiles = append(profiles, state.RunnerProfile{Name: "qiniu-ubuntu-" + os, Labels: []string{"self-hosted", "linux", "x64", "qiniu", "ubuntu-" + os}, RequiredLabels: []string{"qiniu", "ubuntu-" + os}, DefaultTemplateName: template, TemplateSource: state.TemplateSourcePublic, Published: true, Enabled: true})
 	}
 	return profiles
 }

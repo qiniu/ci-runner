@@ -146,7 +146,7 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" https://<runner
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
-  jq '[.[] | {name, template_source, published, required_labels, default_template_name, runner_update_policy, require_docker, fork_sponsorship, enabled}]'
+  jq '[.[] | {name, template_source, published, required_labels, default_template_name, enabled}]'
 ```
 
 已有标准目录的 5 个逻辑名称包括 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`；这是迁移示例，不是启动时要求的固定数量。每个已配置区域运行 `task template-defaults-check` 并保存 8 个物理模板 ID。公共名称通过该 scope 的 endpoint 解析，不能写回某一区域的 ID。large 规格只有配置经过校验的公共名称并明确发布后才进入公共目录。

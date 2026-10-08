@@ -553,7 +553,7 @@ test("filters the platform spec directory to enabled published public entries", 
 test("edits former managed specs and clears publication when switching to private binding", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
   const diagnostics = observeBrowserDiagnostics(page)
-  let profile = { name: "old-managed", labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, managed_by: "qiniu/ci-runner", runner_update_policy: "preinstalled", require_docker: true, fork_sponsorship: true, enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "", updated_at: "2026-10-01T00:00:00Z" }
+  let profile = { name: "old-managed", labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, managed_by: "qiniu/ci-runner", enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "", updated_at: "2026-10-01T00:00:00Z" }
   let saved: Record<string, unknown> | undefined
   await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin" } }))
   await page.route("**/runner_specs**", (route) => {
@@ -567,20 +567,33 @@ test("edits former managed specs and clears publication when switching to privat
     return route.fulfill({ json: [profile] })
   })
   await page.goto("/admin/runner_specs", { waitUntil: "networkidle" })
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.setViewportSize({ width: 1485, height: 1000 })
   await page.getByRole("button", { name: "Edit old-managed", exact: true }).click()
   await expect(page.locator("#runner-spec-labels")).toBeEnabled()
   await expect(page.locator("#runner-spec-default-template")).toBeEnabled()
+  await expect(page.locator("#runner-spec-update-policy, #runner-spec-require_docker, #runner-spec-fork_sponsorship")).toHaveCount(0)
+  const longLabels = `self-hosted,linux,x64,qiniu,ubuntu-24.04,${"long-label-".repeat(12)}`
+  const longTemplate = `github-runner-ubuntu-24-04-${"extended-".repeat(12)}`
+  await page.locator("#runner-spec-labels").fill(longLabels)
+  await page.locator("#runner-spec-default-template").fill(longTemplate)
+  const assertWrappedFields = async () => {
+    await expect.poll(() => page.locator("#runner-spec-labels, #runner-spec-default-template").evaluateAll((fields) => fields.every((field) => field.scrollWidth <= field.clientWidth + 1 && field.scrollHeight <= field.clientHeight + 1))).toBe(true)
+    expect(await page.getByRole("dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth + 1)).toBe(true)
+  }
+  await assertWrappedFields()
+  expect(await page.getByRole("dialog").evaluate((dialog) => dialog.getBoundingClientRect().width)).toBeGreaterThan(700)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await assertWrappedFields()
+  await expect(page.locator("#runner-spec-labels")).toHaveValue(longLabels)
+  await expect(page.locator("#runner-spec-default-template")).toHaveValue(longTemplate)
   await page.locator("#runner-spec-labels").fill("qiniu,ubuntu,new-label")
   await page.locator("#runner-spec-template-source").selectOption("private")
   await expect(page.locator("#runner-spec-published")).not.toBeChecked()
-  await expect(page.locator("#runner-spec-fork_sponsorship")).not.toBeChecked()
   await expect(page.locator("#runner-spec-published")).toBeDisabled()
   await page.locator("#runner-spec-template-id").fill("private-template")
-  await page.locator("#runner-spec-update-policy").selectOption("official")
   await page.getByRole("button", { name: "Save runner spec", exact: true }).click()
   await expect(page.getByRole("dialog")).toHaveCount(0)
-  expect(saved).toMatchObject({ template_source: "private", template_id: "private-template", default_template_name: "", published: false, fork_sponsorship: false, runner_update_policy: "official", expected_updated_at: "2026-10-01T00:00:00Z", labels: ["qiniu", "ubuntu", "new-label"] })
+  expect(saved).toMatchObject({ template_source: "private", template_id: "private-template", default_template_name: "", published: false, expected_updated_at: "2026-10-01T00:00:00Z", labels: ["qiniu", "ubuntu", "new-label"] })
   await expect(page.getByText("private-template", { exact: true })).toBeVisible()
   diagnostics.expectClean()
 })

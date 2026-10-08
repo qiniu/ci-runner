@@ -12,56 +12,23 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
-func TestCreatePrivateSpecWithoutTemplateSourcePreservesPreparationPolicy(t *testing.T) {
-	for _, tt := range []struct {
-		policy, want string
-		status       int
-	}{
-		{state.RunnerUpdatePreinstalled, state.RunnerUpdatePreinstalled, http.StatusCreated},
-		{state.RunnerUpdateOfficial, state.RunnerUpdateOfficial, http.StatusCreated},
-		{"", state.RunnerUpdateOfficial, http.StatusCreated},
-		{"invalid", "", http.StatusBadRequest},
-	} {
-		t.Run(tt.policy, func(t *testing.T) {
-			store := state.New(t.TempDir())
-			srv := newTestServer(t, store, "", &fakeSandbox{})
-			configureAdminProfileTemplateService(t, srv, nil, "valid-id")
-			before, err := store.ListAuditEvents(100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			payload := map[string]any{"name": "custom", "labels": []string{"qiniu"}, "template_id": "valid-id"}
-			if tt.policy != "" {
-				payload["runner_update_policy"] = tt.policy
-			}
-			body, err := json.Marshal(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec := httptest.NewRecorder()
-			srv.ServeHTTP(rec, adminRequest(http.MethodPost, "/runner_specs", strings.NewReader(string(body))))
-			if rec.Code != tt.status {
-				t.Fatalf("create status %d: %s", rec.Code, rec.Body.String())
-			}
-			profile, err := store.GetProfile("custom")
-			if tt.status == http.StatusBadRequest {
-				if !errors.Is(err, state.ErrNotFound) {
-					t.Fatalf("invalid policy persisted: %v", err)
-				}
-				after, auditErr := store.ListAuditEvents(100)
-				if auditErr != nil || len(after) != len(before) {
-					t.Fatalf("rejected policy changed audit events: %v", auditErr)
-				}
-				return
-			}
-			if err != nil || profile.TemplateSource != state.TemplateSourcePrivate || profile.RunnerUpdatePolicy != tt.want {
-				t.Fatalf("saved private policy: %#v %v", profile, err)
-			}
-			var response state.RunnerProfile
-			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.RunnerUpdatePolicy != tt.want {
-				t.Fatalf("response policy: %s %v", rec.Body.String(), err)
-			}
-		})
+func TestLegacyPrivateSpecCreateRetainsContract(t *testing.T) {
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "", &fakeSandbox{})
+	configureAdminProfileTemplateService(t, srv, nil, "valid-id")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, adminRequest(http.MethodPost, "/runner_specs", strings.NewReader(`{"name":"custom","labels":["qiniu"],"template_id":"valid-id"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status %d: %s", rec.Code, rec.Body.String())
+	}
+	profile, err := store.GetProfile("custom")
+	if err != nil || profile.TemplateSource != state.TemplateSourcePrivate || profile.TemplateID != "valid-id" || profile.Published {
+		t.Fatalf("legacy create contract: %#v %v", profile, err)
+	}
+	for _, field := range []string{"runner_update_policy", "require_docker", "fork_sponsorship"} {
+		if strings.Contains(rec.Body.String(), field) {
+			t.Fatalf("unexpected execution option %q: %s", field, rec.Body.String())
+		}
 	}
 }
 
@@ -90,7 +57,7 @@ func TestPublicSpecPublicationValidatesProviderAndUpdatesDatabaseCatalog(t *test
 			}))
 			before, _ := store.ListAuditEvents(100)
 			rec := httptest.NewRecorder()
-			srv.ServeHTTP(rec, adminRequest(http.MethodPost, "/runner_specs", strings.NewReader(`{"name":"new-public","labels":["qiniu","public"],"required_labels":["qiniu","public"],"template_source":"public","default_template_name":"public-name","published":true,"enabled":true,"runner_update_policy":"official"}`)))
+			srv.ServeHTTP(rec, adminRequest(http.MethodPost, "/runner_specs", strings.NewReader(`{"name":"new-public","labels":["qiniu","public"],"required_labels":["qiniu","public"],"template_source":"public","default_template_name":"public-name","published":true,"enabled":true}`)))
 			if rec.Code != tt.status {
 				t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 			}
@@ -134,7 +101,7 @@ func TestPrivateSpecCannotPublishAndActiveSpecCannotChangeExecutionOrDelete(t *t
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	before, _ := store.GetProfile("default")
-	for _, body := range []string{`{"published":true}`, `{"fork_sponsorship":true}`} {
+	for _, body := range []string{`{"published":true}`} {
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(body)))
 		if rec.Code != 400 {

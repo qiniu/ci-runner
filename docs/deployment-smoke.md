@@ -150,7 +150,7 @@ After upgrading, inspect the database catalog and confirm that old public-name s
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
-  jq '[.[] | {name, template_source, published, required_labels, default_template_name, runner_update_policy, require_docker, fork_sponsorship, enabled}]'
+  jq '[.[] | {name, template_source, published, required_labels, default_template_name, enabled}]'
 ```
 
 For an existing standard catalog, the five logical names include `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`, `qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`. These are migration examples, not a required startup count. In each configured Sandbox region, run `task template-defaults-check` and retain the eight physical-template IDs. Public-name bindings resolve through that scoped endpoint without persisting one region's ID. Large specs enter the public directory only after configuring a validated public-name binding and explicitly publishing them.

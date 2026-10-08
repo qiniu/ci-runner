@@ -290,15 +290,7 @@ func TestForkSponsorshipCapacityAndPublicPolicyBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile.ForkSponsorship = false
-	if _, err := store.UpsertProfile(profile); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "no-sponsorship", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "ubuntu-managed", ProfileSource: "global"})
-	if !errors.Is(err, errSandboxServiceNotConfigured) {
-		t.Fatalf("disabled sponsorship used sponsor credentials: %v", err)
-	}
-	profile.ForkSponsorship = true
+	profile.ManagedBy = ""
 	profile.Published = false
 	if _, err := store.UpsertProfile(profile); err != nil {
 		t.Fatal(err)

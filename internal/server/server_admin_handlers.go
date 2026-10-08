@@ -442,9 +442,6 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		TemplateSource:      input.TemplateSource,
 		DefaultTemplateName: strings.TrimSpace(input.DefaultTemplateName),
 		Published:           input.Published,
-		RunnerUpdatePolicy:  input.RunnerUpdatePolicy,
-		RequireDocker:       input.RequireDocker,
-		ForkSponsorship:     input.ForkSponsorship,
 		Labels:              input.Labels,
 		RequiredLabels:      input.RequiredLabels,
 		TemplateID:          input.TemplateID,
@@ -547,15 +544,6 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Published != nil {
 		current.Published = *input.Published
-	}
-	if input.RunnerUpdatePolicy != nil {
-		current.RunnerUpdatePolicy = strings.TrimSpace(*input.RunnerUpdatePolicy)
-	}
-	if input.RequireDocker != nil {
-		current.RequireDocker = *input.RequireDocker
-	}
-	if input.ForkSponsorship != nil {
-		current.ForkSponsorship = *input.ForkSponsorship
 	}
 	if input.TemplateID != nil {
 		current.TemplateID = *input.TemplateID

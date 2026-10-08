@@ -670,26 +670,25 @@ func TestRunnerLifecycleManagedDefaultResolvesBeforeRegistration(t *testing.T) {
 	}
 }
 
-func TestRunnerLifecyclePublicBindingUsesIndependentPreparationPolicies(t *testing.T) {
+func TestRunnerLifecycleDatabasePublicBindingPreservesStartupBehavior(t *testing.T) {
 	events := &lifecycleEventRecorder{}
 	ghServer := newLifecycleGitHubServer(t, events)
 	defer ghServer.Close()
 	store := state.New(t.TempDir())
 	profile := state.NormalizeProfilePolicy(lifecycleManagedProfile("old-id"))
-	profile.RunnerUpdatePolicy = state.RunnerUpdateOfficial
-	profile.RequireDocker = false
+	profile.ManagedBy = ""
 	upsertLifecycleProfile(t, store, profile)
 	sandbox := &managedLifecycleSandboxService{lifecycleSandboxService: &lifecycleSandboxService{events: events}, templates: []sandboxrunner.CatalogTemplate{{TemplateID: "scoped-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildStatus: "ready", Public: true}}}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
-	createLifecycleRequest(t, store, "public-official", "managed", 987)
-	go srv.startRunner(context.Background(), "public-official", "worker-test")
-	waitForState(t, store, "public-official", state.StatusRunning)
+	createLifecycleRequest(t, store, "database-public", "managed", 987)
+	go srv.startRunner(context.Background(), "database-public", "worker-test")
+	waitForState(t, store, "database-public", state.StatusRunning)
 	inputs := sandbox.startInputs()
-	if len(inputs) != 1 || inputs[0].TemplateID != "scoped-id" || inputs[0].RequireDocker {
-		t.Fatalf("independent public startup: %#v", inputs)
+	if len(inputs) != 1 || inputs[0].TemplateID != "scoped-id" || !inputs[0].RequireDocker {
+		t.Fatalf("public startup without legacy ownership: %#v", inputs)
 	}
-	if got := events.snapshot(); !equalStrings(got, []string{"catalog", "downloads", "token", "start"}) {
-		t.Fatalf("official public preparation order: %#v", got)
+	if got := events.snapshot(); !equalStrings(got, []string{"catalog", "token", "start"}) {
+		t.Fatalf("public preparation order: %#v", got)
 	}
 }
 

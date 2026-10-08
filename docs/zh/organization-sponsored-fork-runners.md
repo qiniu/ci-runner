@@ -44,7 +44,7 @@ Managed Runner request 的解析顺序变为：request 快照、Fork installatio
 赞助组织的平台默认值）、赞助缺失或不符合条件时适用于 Fork installation 的平台默认值、
 未配置错误。通过平台默认值完成的赞助请求仍保留组织赞助来源。
 
-Fork 或个人配置损坏时继续报错，不能回退。赞助只适用于公共名称绑定且 `fork_sponsorship=true` 的平台规格；私有平台规格和 scoped custom Specs 继续使用所属作用域凭据。目录发布与赞助开关相互独立。
+Fork 或个人配置损坏时继续报错，不能回退。赞助只适用于公共名称绑定的平台规格；私有平台规格和 scoped custom Specs 继续使用所属作用域凭据。目录发布不改变原有组织赞助规则。
 
 ## 状态模型
 

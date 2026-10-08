@@ -66,7 +66,7 @@ Managed Runner request resolution order becomes:
 Corrupt fork or personal configuration remains an error and does not fall
 through. A sponsored request keeps organization-sponsorship provenance when its
 credentials come from the platform default. Sponsorship applies only to
-public-name platform Specs with `fork_sponsorship=true`. Private platform and scoped custom Specs preserve their owning-scope credential contract. Publication is independent of sponsorship.
+public-name platform Specs. Private platform and scoped custom Specs preserve their owning-scope credential contract. Publication does not change the existing sponsorship rules.
 
 ## State Model
 

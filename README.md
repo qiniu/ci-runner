@@ -247,7 +247,7 @@ management APIs now return `404 Not Found`, while old Admin bookmarks redirect
 to Runner Specs. They are not part of supported configuration, matching, or
 recovery behavior; any legacy database artifacts are ignored by current code.
 
-The database is the single catalog authority. Startup migrates old managed rows once, preserves their operator settings and runtime behavior, and never restores edited/deleted specs. A fresh installation starts with an empty catalog. `runner_update_policy`, `require_docker` and `fork_sponsorship` are independent of public-directory visibility. See [Platform Runner Specs](docs/platform-runner-specs.md) for fields, migration and validation.
+The database is the single catalog authority. Startup migrates old managed rows once, preserves their operator settings and runtime behavior, and never restores edited/deleted specs. A fresh installation starts with an empty catalog. Runtime keeps the existing public-name/private-ID behavior; this refactor adds no configurable Runner preparation, Docker or sponsorship policy. See [Platform Runner Specs](docs/platform-runner-specs.md) for fields, migration and validation.
 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
@@ -367,7 +367,7 @@ cache-resume guidance after a remote build time limit, plus publication and
 smoke commands. Shared setup code and the Actions Runner version pin live in
 `templates/common/`. Build tasks verify the official Runner archive locally,
 upload it as small COPY chunks, and verify it again before installation.
-The pin remains the tested preinstalled baseline. Specs with `runner_update_policy=preinstalled` use it and rely on regular template rebuilds. Specs with `runner_update_policy=official` resolve and verify GitHub's official Runner archive before
+The pin remains the tested preinstalled baseline. Public-name specs use it and rely on regular template rebuilds. Private-ID specs resolve and verify GitHub's official Runner archive before
 registration and replaces a stale writable copy before the current Job can be
 accepted. Official self-update remains enabled after registration for both
 paths.

@@ -3913,7 +3913,7 @@ func TestScopedRunnerProfileConditionalWritesRejectStaleRevision(t *testing.T) {
 
 func TestMatchProfileForScopeIgnoresLegacyManagedScopeControls(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
-	if _, err := store.UpsertProfile(RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true}); err != nil {
+	if _, err := store.UpsertProfile(RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, DefaultTemplateName: "public-template", ManagedBy: "runnerd", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	scope := RunnerProfileScope{Type: RunnerProfileScopeAccount, ID: 1}

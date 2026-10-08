@@ -109,9 +109,6 @@ type createProfileRequest struct {
 	TemplateSource      string   `json:"template_source"`
 	DefaultTemplateName string   `json:"default_template_name"`
 	Published           bool     `json:"published"`
-	RunnerUpdatePolicy  string   `json:"runner_update_policy"`
-	RequireDocker       bool     `json:"require_docker"`
-	ForkSponsorship     bool     `json:"fork_sponsorship"`
 	Name                string   `json:"name"`
 	Labels              []string `json:"labels"`
 	RequiredLabels      []string `json:"required_labels"`
@@ -127,9 +124,6 @@ type patchProfileRequest struct {
 	TemplateSource      *string   `json:"template_source"`
 	DefaultTemplateName *string   `json:"default_template_name"`
 	Published           *bool     `json:"published"`
-	RunnerUpdatePolicy  *string   `json:"runner_update_policy"`
-	RequireDocker       *bool     `json:"require_docker"`
-	ForkSponsorship     *bool     `json:"fork_sponsorship"`
 	ExpectedUpdatedAt   string    `json:"expected_updated_at"`
 	Labels              *[]string `json:"labels"`
 	RequiredLabels      *[]string `json:"required_labels"`

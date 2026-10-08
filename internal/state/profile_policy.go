@@ -9,10 +9,8 @@ import (
 )
 
 const (
-	TemplateSourcePublic     = "public"
-	TemplateSourcePrivate    = "private"
-	RunnerUpdateOfficial     = "official"
-	RunnerUpdatePreinstalled = "preinstalled"
+	TemplateSourcePublic  = "public"
+	TemplateSourcePrivate = "private"
 )
 
 // NormalizeProfilePolicy translates legacy rows once. Explicit policy fields
@@ -21,20 +19,12 @@ func NormalizeProfilePolicy(p RunnerProfile) RunnerProfile {
 	if p.TemplateSource == "" {
 		p.TemplateSource = TemplateSourcePrivate
 		if strings.TrimSpace(p.ManagedBy) != "" {
-			if p.RunnerUpdatePolicy == "" {
-				p.RunnerUpdatePolicy = RunnerUpdatePreinstalled
-			}
-			p.RequireDocker = true
+			p.TemplateSource = TemplateSourcePublic
+			p.TemplateID = ""
 			if strings.TrimSpace(p.DefaultTemplateName) != "" {
-				p.TemplateSource = TemplateSourcePublic
-				p.TemplateID = ""
 				p.Published = true
-				p.ForkSponsorship = true
 			}
 		}
-	}
-	if p.RunnerUpdatePolicy == "" {
-		p.RunnerUpdatePolicy = RunnerUpdateOfficial
 	}
 	return p
 }
@@ -52,14 +42,11 @@ func ValidateProfilePolicy(p RunnerProfile) error {
 		if strings.TrimSpace(p.DefaultTemplateName) != "" {
 			return fmt.Errorf("private templates must use a physical template ID, not a public template name")
 		}
-		if p.Published || p.ForkSponsorship {
-			return fmt.Errorf("private templates cannot be published or use fork sponsorship")
+		if p.Published {
+			return fmt.Errorf("private templates cannot be published")
 		}
 	default:
 		return fmt.Errorf("invalid template source")
-	}
-	if p.RunnerUpdatePolicy != RunnerUpdateOfficial && p.RunnerUpdatePolicy != RunnerUpdatePreinstalled {
-		return fmt.Errorf("invalid runner update policy")
 	}
 	if p.MaxConcurrency < 0 || p.MinIdle < 0 {
 		return fmt.Errorf("capacity values must not be negative")
@@ -79,12 +66,9 @@ func migrateRunnerProfilePolicies(db *gorm.DB) error {
 		for _, row := range rows {
 			p := NormalizeProfilePolicy(RunnerProfile{ManagedBy: row.ManagedBy, DefaultTemplateName: row.DefaultTemplateName})
 			updates := map[string]any{
-				"template_source":      p.TemplateSource,
-				"published":            p.Published,
-				"runner_update_policy": p.RunnerUpdatePolicy,
-				"require_docker":       p.RequireDocker,
-				"fork_sponsorship":     p.ForkSponsorship,
-				"updated_at":           row.UpdatedAt,
+				"template_source": p.TemplateSource,
+				"published":       p.Published,
+				"updated_at":      row.UpdatedAt,
 			}
 			if p.TemplateSource == TemplateSourcePublic {
 				updates["template_id"] = ""

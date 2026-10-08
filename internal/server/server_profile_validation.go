@@ -90,7 +90,7 @@ func writeProfileConflict(w http.ResponseWriter, err error) bool {
 }
 
 func profileExecutionChanged(a, b state.RunnerProfile) bool {
-	return !sameStringSlice(a.Labels, b.Labels) || !sameStringSlice(a.RequiredLabels, b.RequiredLabels) || a.TemplateSource != b.TemplateSource || a.TemplateID != b.TemplateID || a.DefaultTemplateName != b.DefaultTemplateName || a.RunnerGroup != b.RunnerGroup || a.RunnerUpdatePolicy != b.RunnerUpdatePolicy || a.RequireDocker != b.RequireDocker || a.ForkSponsorship != b.ForkSponsorship
+	return !sameStringSlice(a.Labels, b.Labels) || !sameStringSlice(a.RequiredLabels, b.RequiredLabels) || a.TemplateSource != b.TemplateSource || a.TemplateID != b.TemplateID || a.DefaultTemplateName != b.DefaultTemplateName || a.RunnerGroup != b.RunnerGroup
 }
 
 func writeProfileInUse(w http.ResponseWriter, err error) bool {

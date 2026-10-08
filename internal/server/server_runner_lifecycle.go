@@ -477,7 +477,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			return
 		}
 	}
-	if profile.RunnerUpdatePolicy != state.RunnerUpdatePreinstalled {
+	if profile.TemplateSource != state.TemplateSourcePublic {
 		s.logger.Info("resolving github runner applications", "id", id)
 		s.store.AppendLog(id, "control.log", []byte("resolving github runner applications for preflight update\n"))
 		applications, err := s.gh.ListRunnerApplications(ctx, req.RepositoryFullName, req.RunnerGroup)
@@ -520,7 +520,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			RunnerGroup:        strings.TrimSpace(req.RunnerGroup),
 			RunnerApplications: runnerApplications,
 			TemplateID:         templateID,
-			RequireDocker:      profile.RequireDocker,
+			RequireDocker:      profile.TemplateSource == state.TemplateSourcePublic,
 			Timeout:            s.cfg.SandboxTimeout,
 			CommandContext:     ctx,
 			OnStdout:           func(data []byte) { s.appendRunnerStdout(id, data) },

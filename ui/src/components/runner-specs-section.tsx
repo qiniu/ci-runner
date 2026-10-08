@@ -1,4 +1,9 @@
-import { type Dispatch, type FormEvent, type SetStateAction } from "react"
+import {
+  type ComponentProps,
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+} from "react"
 import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -37,9 +42,6 @@ export type RunnerSpecFormState = {
   template_source: "public" | "private"
   default_template_name: string
   published: boolean
-  runner_update_policy: "official" | "preinstalled"
-  require_docker: boolean
-  fork_sponsorship: boolean
 
   name: string
   labels: string
@@ -52,23 +54,23 @@ export type RunnerSpecFormState = {
   enabled: boolean
 }
 
-const runnerSpecPolicyOptions = [
-  {
-    field: "published",
-    label: "admin.publishRunnerSpec",
-    requiresPublicTemplate: true,
-  },
-  {
-    field: "require_docker",
-    label: "admin.requireDocker",
-    requiresPublicTemplate: false,
-  },
-  {
-    field: "fork_sponsorship",
-    label: "admin.allowForkSponsorship",
-    requiresPublicTemplate: true,
-  },
-] as const
+function RunnerSpecTextField(props: ComponentProps<"textarea">) {
+  return (
+    <textarea
+      rows={1}
+      className="field-sizing-content min-h-9 w-full min-w-0 resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+      {...props}
+      onKeyDown={(event) => {
+        // These are single-line identifiers; visual wrapping must not add newlines.
+        if (event.key === "Enter") event.preventDefault()
+      }}
+      onChange={(event) => {
+        event.target.value = event.target.value.replace(/[\r\n]/g, "")
+        props.onChange?.(event)
+      }}
+    />
+  )
+}
 
 export function RunnerSpecDialogForm({
   savingRunnerSpec = false,
@@ -90,14 +92,17 @@ export function RunnerSpecDialogForm({
 
   return (
     <form onSubmit={onSubmitRunnerSpec} aria-busy={savingRunnerSpec}>
-      <fieldset className="grid min-w-0 gap-4" disabled={savingRunnerSpec}>
+      <fieldset
+        className="grid min-w-0 gap-4 [&_select]:min-w-0 [&_select]:w-full"
+        disabled={savingRunnerSpec}
+      >
         <p className="text-sm leading-5 text-muted-foreground">
           {t("admin.platformSharedSpecDescription")}
         </p>
 
         <div className="grid gap-2">
           <Label htmlFor="runner-spec-name">{t("common.name")}</Label>
-          <Input
+          <RunnerSpecTextField
             id="runner-spec-name"
             value={runnerSpecForm.name}
             onChange={(event) =>
@@ -111,10 +116,10 @@ export function RunnerSpecDialogForm({
           />
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="runner-spec-labels">{t("common.labels")}</Label>
-            <Input
+            <RunnerSpecTextField
               id="runner-spec-labels"
               value={runnerSpecForm.labels}
               onChange={(event) =>
@@ -130,7 +135,7 @@ export function RunnerSpecDialogForm({
             <Label htmlFor="runner-spec-required-labels">
               {t("admin.requiredLabels")}
             </Label>
-            <Input
+            <RunnerSpecTextField
               id="runner-spec-required-labels"
               value={runnerSpecForm.required_labels}
               onChange={(event) =>
@@ -162,7 +167,6 @@ export function RunnerSpecDialogForm({
                 template_id: "",
                 default_template_name: "",
                 published: false,
-                fork_sponsorship: false,
               }))
             }
           >
@@ -170,13 +174,13 @@ export function RunnerSpecDialogForm({
             <option value="public">{t("admin.publicTemplateName")}</option>
           </select>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-4">
           {publicTemplate ? (
             <div className="grid gap-2">
               <Label htmlFor="runner-spec-default-template">
                 {t("admin.defaultTemplate")}
               </Label>
-              <Input
+              <RunnerSpecTextField
                 id="runner-spec-default-template"
                 value={runnerSpecForm.default_template_name || ""}
                 onChange={(event) =>
@@ -192,7 +196,7 @@ export function RunnerSpecDialogForm({
               <Label htmlFor="runner-spec-template-id">
                 {t("admin.templateID")}
               </Label>
-              <Input
+              <RunnerSpecTextField
                 id="runner-spec-template-id"
                 value={runnerSpecForm.template_id}
                 onChange={(event) =>
@@ -222,7 +226,7 @@ export function RunnerSpecDialogForm({
             <Label htmlFor="runner-spec-github-group">
               {t("admin.githubRunnerGroup")}
             </Label>
-            <Input
+            <RunnerSpecTextField
               id="runner-spec-github-group"
               value={runnerSpecForm.runner_group}
               onChange={(event) =>
@@ -284,49 +288,21 @@ export function RunnerSpecDialogForm({
         </div>
 
         <div className="grid gap-2">
-          <Label htmlFor="runner-spec-update-policy">
-            {t("admin.runnerUpdatePolicy")}
-          </Label>
-          <select
-            id="runner-spec-update-policy"
-            className="h-9 rounded-md border bg-background px-3 text-sm"
-            value={runnerSpecForm.runner_update_policy || "official"}
-            onChange={(event) =>
-              onRunnerSpecFormChange((current) => ({
-                ...current,
-                runner_update_policy: event.target.value as
-                  | "official"
-                  | "preinstalled",
-              }))
-            }
-          >
-            <option value="official">{t("admin.runnerUpdateOfficial")}</option>
-            <option value="preinstalled">
-              {t("admin.runnerUpdatePreinstalled")}
-            </option>
-          </select>
-          <p className="text-xs text-muted-foreground">
-            {t("admin.runnerUpdatePolicyDescription")}
-          </p>
-          {runnerSpecPolicyOptions.map(
-            ({ field, label, requiresPublicTemplate }) => (
-              <label key={field} className="flex items-center gap-2 text-sm">
-                <input
-                  id={`runner-spec-${field}`}
-                  type="checkbox"
-                  checked={Boolean(runnerSpecForm[field])}
-                  disabled={requiresPublicTemplate && !publicTemplate}
-                  onChange={(event) =>
-                    onRunnerSpecFormChange((current) => ({
-                      ...current,
-                      [field]: event.target.checked,
-                    }))
-                  }
-                />
-                {t(label)}
-              </label>
-            ),
-          )}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              id="runner-spec-published"
+              type="checkbox"
+              checked={runnerSpecForm.published}
+              disabled={!publicTemplate}
+              onChange={(event) =>
+                onRunnerSpecFormChange((current) => ({
+                  ...current,
+                  published: event.target.checked,
+                }))
+              }
+            />
+            {t("admin.publishRunnerSpec")}
+          </label>
           <p className="text-xs text-muted-foreground">
             {t("admin.publishRunnerSpecDescription")}
           </p>
@@ -530,7 +506,7 @@ export function RunnerSpecsSection({
           if (!savingRunnerSpec) onRunnerSpecOpenChange(open)
         }}
       >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
               {editingRunnerSpec

@@ -6,7 +6,53 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
+
+func addRetiredRunnerPolicyColumns(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, column := range []struct{ name, definition string }{
+		{"runner_update_policy", "VARCHAR(32) NOT NULL DEFAULT 'official'"},
+		{"require_docker", "BOOLEAN NOT NULL DEFAULT FALSE"},
+		{"fork_sponsorship", "BOOLEAN NOT NULL DEFAULT FALSE"},
+	} {
+		if db.Migrator().HasColumn(&runnerProfileRecord{}, column.name) {
+			t.Fatalf("fresh schema unexpectedly contains %s", column.name)
+		}
+		if err := db.Exec("ALTER TABLE runner_profiles ADD COLUMN " + column.name + " " + column.definition).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertRetiredRunnerPolicyValues(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	var policy string
+	if err := db.Raw("SELECT runner_update_policy FROM runner_profiles WHERE name = ?", "legacy").Scan(&policy).Error; err != nil || policy != "official" {
+		t.Fatalf("retired column was altered: %q %v", policy, err)
+	}
+}
+
+func TestRetiredRunnerPolicyColumnsRemainInert(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addRetiredRunnerPolicyColumns(t, db)
+	if err := db.Create(&runnerProfileRecord{Name: "legacy", LabelsJSON: `["qiniu"]`, ManagedBy: "runnerd", DefaultTemplateName: "public-name"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.GetProfile("legacy")
+	if err != nil || p.TemplateSource != TemplateSourcePublic || !p.Published {
+		t.Fatalf("retired columns affected public binding: %#v %v", p, err)
+	}
+	assertRetiredRunnerPolicyValues(t, db)
+}
 
 func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
@@ -19,7 +65,7 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 1, 1, 2, 3, 0, time.UTC)
-	for _, row := range []struct{ name, owner, template string }{{"public", "qiniu/ci-runner", "public-name"}, {"private", "", ""}} {
+	for _, row := range []struct{ name, owner, template string }{{"public", "qiniu/ci-runner", "public-name"}, {"private", "", ""}, {"legacy-incomplete", "qiniu/ci-runner", ""}} {
 		if err := db.Exec(`INSERT INTO runner_profiles VALUES (?, '["qiniu","ubuntu"]','["qiniu","ubuntu"]','old-id',?,'group',7,2,91,0,1,?,1,?,?)`, row.name, row.template, row.owner, now, now).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -32,7 +78,7 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if public.TemplateSource != TemplateSourcePublic || !public.Published || !public.ForkSponsorship || !public.RequireDocker || public.RunnerUpdatePolicy != RunnerUpdatePreinstalled || public.TemplateID != "" {
+	if public.TemplateSource != TemplateSourcePublic || !public.Published || public.TemplateID != "" {
 		t.Fatalf("legacy public policy: %#v", public)
 	}
 	if public.Enabled || public.MaxConcurrency != 7 || public.MinIdle != 2 || public.Priority != 91 || public.RunnerGroup != "group" || !public.UpdatedAt.Equal(now) || !public.CreatedAt.Equal(now) {
@@ -42,11 +88,16 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if private.TemplateSource != TemplateSourcePrivate || private.Published || private.TemplateID != "old-id" || private.RunnerUpdatePolicy != RunnerUpdateOfficial {
+	if private.TemplateSource != TemplateSourcePrivate || private.Published || private.TemplateID != "old-id" {
 		t.Fatalf("legacy private policy: %#v", private)
 	}
+	// An incomplete historical managed row must not become a runnable private spec.
+	incomplete, err := store.GetProfile("legacy-incomplete")
+	if err != nil || incomplete.TemplateSource != TemplateSourcePublic || incomplete.Published || incomplete.DefaultTemplateName != "" {
+		t.Fatalf("incomplete legacy binding changed: %#v %v", incomplete, err)
+	}
 	events, err := store.ListAuditEvents(100)
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 {
 		t.Fatalf("migration audit: %#v %v", events, err)
 	}
 	db, err = store.dbOrEnsure()
@@ -57,9 +108,6 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 		t.Fatal("legacy index lost")
 	}
 	public.Published = false
-	public.RequireDocker = false
-	public.ForkSponsorship = false
-	public.RunnerUpdatePolicy = RunnerUpdateOfficial
 	public, err = store.UpsertProfile(public)
 	if err != nil {
 		t.Fatal(err)
@@ -70,11 +118,11 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Published || got.RequireDocker || got.ForkSponsorship || got.RunnerUpdatePolicy != RunnerUpdateOfficial || !got.UpdatedAt.Equal(public.UpdatedAt) {
+	if got.Published || !got.UpdatedAt.Equal(public.UpdatedAt) {
 		t.Fatalf("restart restored legacy policy: %#v", got)
 	}
 	events, err = restarted.ListAuditEvents(100)
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 {
 		t.Fatalf("migration repeated: %#v %v", events, err)
 	}
 	if err := restarted.DeleteProfile("public"); err != nil {
@@ -91,35 +139,18 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	}
 }
 
-func TestProfilePolicyRejectsPrivatePublicationAndInvalidModes(t *testing.T) {
+func TestProfilePolicyRejectsPrivatePublicationAndInvalidBindings(t *testing.T) {
 	for _, p := range []RunnerProfile{
 		{TemplateSource: TemplateSourcePrivate, Published: true},
-		{TemplateSource: TemplateSourcePrivate, ForkSponsorship: true},
 		{TemplateSource: TemplateSourcePublic, DefaultTemplateName: "public", TemplateID: "region-id"},
 		{TemplateSource: TemplateSourcePublic},
 		{TemplateSource: "unknown"},
-		{TemplateSource: TemplateSourcePrivate, RunnerUpdatePolicy: "unknown"},
 	} {
 		p.Name = "spec"
 		p.Labels = []string{"qiniu"}
 		if _, err := New(t.TempDir()).UpsertProfile(p); err == nil {
 			t.Fatalf("invalid policy accepted: %#v", p)
 		}
-	}
-}
-
-func TestOmittedTemplateSourcePreservesExplicitRunnerUpdatePolicy(t *testing.T) {
-	for _, owner := range []string{"", "qiniu/ci-runner"} {
-		for _, policy := range []string{RunnerUpdateOfficial, RunnerUpdatePreinstalled, "invalid"} {
-			profile := NormalizeProfilePolicy(RunnerProfile{ManagedBy: owner, RunnerUpdatePolicy: policy})
-			if profile.RunnerUpdatePolicy != policy {
-				t.Fatalf("owner %q: policy %q overwritten with %q", owner, policy, profile.RunnerUpdatePolicy)
-			}
-		}
-	}
-	store := New(t.TempDir())
-	if _, err := store.UpsertProfile(RunnerProfile{Name: "invalid", Labels: []string{"qiniu"}, TemplateID: "private-id", RunnerUpdatePolicy: "invalid"}); err == nil {
-		t.Fatal("omitted template source allowed invalid preparation policy")
 	}
 }
 
@@ -168,6 +199,15 @@ func TestRunnerProfilePolicySQLBackends(t *testing.T) {
 			if err := store.migrate(db); err != nil {
 				t.Fatal(err)
 			}
+			addRetiredRunnerPolicyColumns(t, db)
+			// Model an upgrade from a schema changed before this process started.
+			// Reopen so PostgreSQL does not reuse a pre-ALTER SELECT * plan.
+			closeTestDB(t, db)
+			store = NewWithOptions(store.opts).(*DBStore)
+			db, err = store.dbOrEnsure()
+			if err != nil {
+				t.Fatal(err)
+			}
 			stamp := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 			required := `["qiniu"]`
 			row := runnerProfileRecord{Name: "legacy", LabelsJSON: `["qiniu","ubuntu"]`, RequiredLabelsJSON: &required, DefaultTemplateName: "public-name", TemplateID: "obsolete-id", ManagedBy: "qiniu/ci-runner", MaxConcurrency: 7, Enabled: true, CreatedAt: stamp, UpdatedAt: stamp}
@@ -181,10 +221,10 @@ func TestRunnerProfilePolicySQLBackends(t *testing.T) {
 			if err := db.First(&got, "name = ?", row.Name).Error; err != nil {
 				t.Fatal(err)
 			}
-			if got.TemplateSource != TemplateSourcePublic || !got.Published || got.TemplateID != "" || !got.ForkSponsorship || !got.RequireDocker || got.RunnerUpdatePolicy != RunnerUpdatePreinstalled || got.MaxConcurrency != 7 || !got.UpdatedAt.Equal(stamp) {
+			if got.TemplateSource != TemplateSourcePublic || !got.Published || got.TemplateID != "" || got.MaxConcurrency != 7 || !got.UpdatedAt.Equal(stamp) {
 				t.Fatalf("migration mismatch: %#v", got)
 			}
-			if err := db.Model(&got).Updates(map[string]any{"published": false, "require_docker": false, "runner_update_policy": RunnerUpdateOfficial}).Error; err != nil {
+			if err := db.Model(&got).Updates(map[string]any{"published": false, "max_concurrency": 3}).Error; err != nil {
 				t.Fatal(err)
 			}
 			if err := store.migrate(db); err != nil {
@@ -193,9 +233,10 @@ func TestRunnerProfilePolicySQLBackends(t *testing.T) {
 			if err := db.First(&got, "name = ?", row.Name).Error; err != nil {
 				t.Fatal(err)
 			}
-			if got.Published || got.RequireDocker || got.RunnerUpdatePolicy != RunnerUpdateOfficial {
+			if got.Published || got.MaxConcurrency != 3 {
 				t.Fatalf("restart restored policy: %#v", got)
 			}
+			assertRetiredRunnerPolicyValues(t, db)
 			var count int64
 			if err := db.Model(&auditEventRecord{}).Where("action = ?", "profile.policy_migrate").Count(&count).Error; err != nil || count != 1 {
 				t.Fatalf("migration audit count %d: %v", count, err)

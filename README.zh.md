@@ -247,7 +247,7 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 `404 Not Found`，旧 Admin 书签会重定向到 Runner Specs。它们不再属于受支持的
 配置、匹配或恢复行为；当前代码会忽略任何遗留数据库对象。
 
-数据库是唯一目录来源。启动只转换旧托管行一次，保留管理员策略及运行行为，不再恢复已修改或删除的规格。新安装的目录为空，需要明确创建。`runner_update_policy`、`require_docker` 和 `fork_sponsorship` 与公共目录展示分开维护。字段、迁移和校验详见[平台 Runner 规格管理](docs/zh/platform-runner-specs.md)。
+数据库是唯一目录来源。启动只转换旧托管行一次，保留管理员策略及运行行为，不再恢复已修改或删除的规格。新安装的目录为空，需要明确创建。运行时沿用公共名称和私有 ID 规格原有的准备、Docker 与赞助行为，本次重构不增加这些策略开关。字段、迁移和校验详见[平台 Runner 规格管理](docs/zh/platform-runner-specs.md)。
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
@@ -360,7 +360,7 @@ Sandbox 构建。发布与
 Actions Runner 版本固定值位于 `templates/common/`。
 构建命令先在本机下载并校验官方 Runner 归档，再以较小的 COPY 分片上传，
 远端拼接后会再次校验完整归档。
-该固定版本仍是经过测试的预装基线。`runner_update_policy=preinstalled` 使用该基线并依赖常规模板重建；`runner_update_policy=official` 在注册前解析并校验 GitHub 官方 Runner 归档，
+该固定版本仍是经过测试的预装基线。公共名称规格使用该基线并依赖常规模板重建；私有 ID 规格在注册前解析并校验 GitHub 官方 Runner 归档，
 在当前 Job 能被领取前替换过期的可写副本。两条路径在注册后都继续保留 GitHub
 官方自更新能力。
 

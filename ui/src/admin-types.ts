@@ -82,9 +82,6 @@ export type RunnerJobGroup = {
 export type RunnerSpec = {
   template_source: "public" | "private"
   published: boolean
-  runner_update_policy: "official" | "preinstalled"
-  require_docker: boolean
-  fork_sponsorship: boolean
 
   name: string
   labels: string[]

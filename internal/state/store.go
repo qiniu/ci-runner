@@ -175,11 +175,8 @@ type RunnerEvent struct {
 }
 
 type RunnerProfile struct {
-	TemplateSource     string `json:"template_source"`
-	Published          bool   `json:"published"`
-	RunnerUpdatePolicy string `json:"runner_update_policy"`
-	RequireDocker      bool   `json:"require_docker"`
-	ForkSponsorship    bool   `json:"fork_sponsorship"`
+	TemplateSource string `json:"template_source"`
+	Published      bool   `json:"published"`
 
 	Name                string    `json:"name"`
 	Labels              []string  `json:"labels"`

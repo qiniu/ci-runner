@@ -58,7 +58,7 @@ reassembles them and verifies the complete SHA-256 in the same `RUN` as runtime
 installation, including cache-resumed builds. The checked local archive is
 cached under `.build/`; the chunks under `templates/common/.build/` are ignored
 by Git.
-The pin is the image's preinstalled bootstrap baseline. Specs with `runner_update_policy=preinstalled` use that copy directly; the regular template rebuild process advances it. Specs with `runner_update_policy=official` use a separate registration preflight: runnerd resolves and
+The pin is the image's preinstalled bootstrap baseline. Public-name specs use that copy directly; the regular template rebuild process advances it. Private-ID specs use a separate registration preflight: runnerd resolves and
 validates GitHub's official Linux application descriptors, and a stale Sandbox
 downloads, checksum-verifies, extracts, and version-verifies the selected
 archive before `config.sh`. Both paths leave GitHub's official self-update
@@ -180,7 +180,7 @@ large specs are usable once their Admin entries are enabled and their labels acc
 
 All specs enforce `required_labels ⊆ job_labels ⊆ labels`. Keep `qiniu` plus the exact OS label required for the standard examples; partial or unsupported extra labels must not match. Administrators maintain these fields, enablement and capacity in Admin. Physical image builds and catalog/runtime smoke remain separate release steps.
 
-At bootstrap, `require_docker=true` fails closed if Docker cannot become available. When false, Docker setup remains best effort so non-Docker jobs can run. Runner preparation is independently selected by `runner_update_policy`.
+At bootstrap, public-name specs fail closed if Docker cannot become available. Private-ID specs retain best-effort Docker setup so non-Docker jobs can run. These existing behaviors follow the template binding and are not new admin settings.
 
 ## Software compatibility
 
