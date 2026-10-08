@@ -40,7 +40,8 @@ async function settle() {
 
 const managed = {
   name: "ubuntu-24.04",
-  source: "managed",
+  source: "platform_public",
+  published: true,
   workflow_labels: ["qiniu", "ubuntu-24.04"],
   template_id: "managed-template",
   default_template_name: "ubuntu-24.04-x64",
@@ -135,7 +136,7 @@ describe("UserRunnerSpecsSection", () => {
     const request = async (url) => {
       if (url === "/user/runner-specs") {
         return {
-          items: [managed, disabledManaged, custom],
+          items: [managed, disabledManaged, custom, { ...managed, name: "private-platform", source: "platform_custom", published: false }],
           sandbox_source: "github_installation",
           sandbox_region: "us-south-1",
         }
@@ -158,6 +159,7 @@ describe("UserRunnerSpecsSection", () => {
     expect(platformSection?.textContent).toContain(managed.name)
     expect(platformSection?.textContent).not.toContain(disabledManaged.name)
     expect(container.textContent).not.toContain(custom.name)
+    expect(container.textContent).not.toContain("private-platform")
     expect(platformSection?.textContent).not.toContain("Enabled")
     expect(platformSection?.textContent).not.toContain("Platform managed")
     expect(platformSection?.querySelectorAll('[data-slot="badge"]')).toHaveLength(0)

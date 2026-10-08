@@ -3,13 +3,13 @@ package runnercatalog
 import "github.com/qiniu/ci-runner/internal/state"
 
 const (
-	// ManagerName identifies runner specs owned by the built-in catalog.
+	// ManagerName identifies historical rows from the retired built-in catalog.
 	ManagerName = "qiniu/ci-runner"
-	// CurrentRevision is the schema revision of the built-in catalog rows.
+	// CurrentRevision is the historical revision of the retired catalog fixture.
 	CurrentRevision = 1
 )
 
-// DefaultProfiles returns the managed runner specs reconciled at startup.
+// DefaultProfiles returns historical catalog fixtures for template-contract tests only.
 func DefaultProfiles() []state.RunnerProfile {
 	return []state.RunnerProfile{
 		defaultProfile("qiniu-ubuntu-slim", "ubuntu-slim", "github-runner-ubuntu-slim"),

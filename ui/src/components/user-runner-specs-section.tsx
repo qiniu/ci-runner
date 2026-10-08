@@ -144,7 +144,7 @@ export function UserRunnerSpecsSection({ request, installationID, scopeName, san
   const needsSandboxConfig = scopeLoaded && (sandboxSource === "none" || sandboxSource === "admin_default")
   const canCreate = scopeLoaded && !needsSandboxConfig
   const customItems = useMemo(() => scopeLoaded ? items.filter((item) => item.source === "scoped_custom").sort((a, b) => a.name.localeCompare(b.name)) : [], [items, scopeLoaded])
-  const platformItems = useMemo(() => scopeLoaded ? items.filter((item) => item.source !== "scoped_custom" && item.enabled).sort((a, b) => a.name.localeCompare(b.name)) : [], [items, scopeLoaded])
+  const platformItems = useMemo(() => scopeLoaded ? items.filter((item) => item.source === "platform_public" && item.published === true && item.enabled).sort((a, b) => a.name.localeCompare(b.name)) : [], [items, scopeLoaded])
   const displayScopeName = scopeName?.trim() || t("user.currentScope")
 
   const renderItem = (item: UserRunnerSpec) => <RunnerSpecItem key={`${item.source}:${item.name}`} item={item} copying={copying === item.name} onCopy={(value) => void copyYAML(value)} onEdit={openEdit} onDelete={(value) => void remove(value)} />

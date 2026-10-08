@@ -37,14 +37,12 @@
 
 因此，`[qiniu, ubuntu-24.04]` 和完整声明标签都可以匹配。标签不完整或包含不受支持的标签时不能匹配。large 标签只有在对应的自定义 spec 已启用且其标签配置接受该请求时才会匹配。
 
-## 托管与自定义的所有权
+## 平台规格管理
 
-runnerd 管理标准托管 spec 的名称、标签、必需标签、公共模板名称和优先级。Operator 控制 `enabled`、`max_concurrency` 和 `min_idle`。
+管理员在后台维护全部平台规格，包括标签、必需标签、模板绑定、容量和运行策略。重启保留修改，不会重建已删除规格；新安装须先创建规格。平台目录仅展示已启用、已发布的公共名称规格。
 
-large 及其他自定义 spec 仍由 operator 管理，使用显式 template ID，并可以定义不同的声明标签和必需标签。保存自定义 spec 并不能证明模板在所选 Sandbox 区域中存在或可用。
+注册前，公共名称通过有效账号或组织的 Sandbox endpoint 解析，同一个稳定名称可以在不同区域映射到不同物理 ID。私有绑定使用显式 template ID。保存时通过管理员的 Sandbox 配置校验访问，实际区域可用性仍须用工作流 smoke 验证。
 
-## 模板解析
-
-注册前，runnerd 会通过有效的账号或组织 Sandbox endpoint 解析托管公共模板名称。因此，同一个稳定公共名称可以在不同区域解析为不同 template ID，无需把某个区域的 ID 保存在 spec 中。自定义 large spec 则直接使用 operator 保存的显式 template ID。
+Runner 准备方式（`official` 或 `preinstalled`）、Docker 要求和 Fork 赞助分别配置。私有绑定不能发布或启用赞助。large 规格可以选择任一绑定，进入目录必须使用经过校验的公共名称并明确发布。
 
 托管示例见[运行第一个工作流](/docs/guides/workflow)，完整自定义流程见[构建并使用自定义 Runner 模板](/docs/guides/custom-templates)。

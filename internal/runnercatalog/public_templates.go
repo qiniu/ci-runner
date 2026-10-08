@@ -1,8 +1,12 @@
 package runnercatalog
 
-import "sort"
+import (
+	"sort"
 
-// PublicTemplate is the stable, runnerd-owned metadata for one managed public
+	"github.com/qiniu/ci-runner/internal/state"
+)
+
+// PublicTemplate is the stable metadata for one published public
 // Sandbox template. It intentionally excludes provider and scoped metadata.
 type PublicTemplate struct {
 	DefaultTemplateName string     `json:"default_template_name"`
@@ -10,38 +14,34 @@ type PublicTemplate struct {
 	WorkflowLabels      [][]string `json:"workflow_labels"`
 }
 
-// PublicTemplates derives public template metadata from the managed catalog.
-func PublicTemplates() []PublicTemplate {
+// PublicTemplates projects the database catalog without credentials or physical IDs.
+func PublicTemplates(profiles []state.RunnerProfile) []PublicTemplate {
 	byTemplateName := make(map[string]*PublicTemplate)
-	for _, profile := range DefaultProfiles() {
+	profiles = append([]state.RunnerProfile(nil), profiles...)
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
+	for _, profile := range profiles {
+		if !profile.Enabled || !profile.Published || profile.TemplateSource != state.TemplateSourcePublic || profile.DefaultTemplateName == "" {
+			continue
+		}
 		template := byTemplateName[profile.DefaultTemplateName]
 		if template == nil {
 			template = &PublicTemplate{DefaultTemplateName: profile.DefaultTemplateName}
 			byTemplateName[profile.DefaultTemplateName] = template
 		}
 		template.RunnerSpecNames = append(template.RunnerSpecNames, profile.Name)
-		template.WorkflowLabels = append(template.WorkflowLabels, append([]string(nil), profile.RequiredLabels...))
+		labels := profile.RequiredLabels
+		if len(labels) == 0 {
+			labels = profile.Labels
+		}
+		template.WorkflowLabels = append(template.WorkflowLabels, append([]string(nil), labels...))
 	}
 
 	templates := make([]PublicTemplate, 0, len(byTemplateName))
 	for _, template := range byTemplateName {
-		sort.Strings(template.RunnerSpecNames)
-		sort.Slice(template.WorkflowLabels, func(i, j int) bool {
-			return labelsLess(template.WorkflowLabels[i], template.WorkflowLabels[j])
-		})
 		templates = append(templates, *template)
 	}
 	sort.Slice(templates, func(i, j int) bool {
 		return templates[i].DefaultTemplateName < templates[j].DefaultTemplateName
 	})
 	return templates
-}
-
-func labelsLess(left, right []string) bool {
-	for index := 0; index < len(left) && index < len(right); index++ {
-		if left[index] != right[index] {
-			return left[index] < right[index]
-		}
-	}
-	return len(left) < len(right)
 }

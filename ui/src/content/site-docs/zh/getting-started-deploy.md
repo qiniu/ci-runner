@@ -65,17 +65,13 @@ Bootstrap 命令只更新账号角色并退出，不会启动服务。
 
 Cache S3 也由用户或组织在 Preferences 中配置。管理员需要在 `runnerd.yaml` 的 `sandbox.regions` 中为每个支持缓存的区域同时提供 `s3_region` 和 `s3_endpoint`，并设置 `cache.sts_endpoint`。完整说明见[配置并使用 Cache S3](/docs/guides/cache)。
 
-## 5. 验证托管 Runner Spec
+## 5. 配置平台 Runner Spec
 
-runnerd 会协调 `ubuntu-slim`、`ubuntu-22.04`、`ubuntu-24.04`、预览版 `ubuntu-26.04` 和 `ubuntu-latest` 的托管 spec。Operator 可以控制每个托管 spec 是否启用，以及并发和 idle capacity；catalog 标签和公共模板名称仍由 runnerd 管理。
+全部平台规格在 **Admin → Runner Specs** 维护。新数据库目录为空，启动不自动创建规格；已有公共规格一次性迁移并保留配置。
 
-第一次测试使用：
+首次标准 workflow 可创建 `qiniu-ubuntu-24.04`，声明标签为 `self-hosted,linux,x64,qiniu,ubuntu-24.04`，必需标签为 `qiniu,ubuntu-24.04`，绑定公共名称 `github-runner-ubuntu-24-04` 并启用。先配置后台 Sandbox 服务，使保存操作能校验公共模板。标准镜像应选择预装 Runner 准备方式并要求 Docker；发布后出现在平台目录，仅在需要时允许 Fork 赞助。
 
-```yaml
-runs-on: [qiniu, ubuntu-24.04]
-```
-
-自定义 spec 仍可用于 operator 自有模板和标签，但托管版首次运行不需要创建自定义 spec。
+确认每个有效 Sandbox 区域中该公共名称都存在且可运行。私有规格改为绑定物理 ID，并保持在公共目录之外。详见[Runner 标签与模板映射](/docs/guides/runner-labels)。
 
 ## 6. 执行生产 Smoke
 

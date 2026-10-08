@@ -17,14 +17,12 @@ import (
 	"github.com/qiniu/ci-runner/internal/config"
 	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/redact"
-	"github.com/qiniu/ci-runner/internal/runnercatalog"
 	"github.com/qiniu/ci-runner/internal/server"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
 type startupStateStore interface {
 	Ensure() error
-	ReconcileManagedProfiles([]state.RunnerProfile) ([]state.ManagedProfileConflict, error)
 }
 
 func main() {
@@ -134,21 +132,11 @@ func (g *recoveryGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.next.ServeHTTP(w, r)
 }
 
-func initializeStateStore(store startupStateStore, logger *slog.Logger) error {
+func initializeStateStore(store startupStateStore, _ *slog.Logger) error {
 	if err := store.Ensure(); err != nil {
 		return fmt.Errorf("ensure state store: %w", err)
 	}
-	conflicts, err := store.ReconcileManagedProfiles(runnercatalog.DefaultProfiles())
-	if err != nil {
-		return fmt.Errorf("reconcile managed runner specs: %w", err)
-	}
-	for _, conflict := range conflicts {
-		logger.Warn(
-			"managed runner spec name collision",
-			"name", conflict.Name,
-			"existing_managed_by", conflict.ExistingManagedBy,
-		)
-	}
+
 	return nil
 }
 

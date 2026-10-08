@@ -101,29 +101,40 @@ type manualCreateRequest struct {
 }
 
 type createProfileRequest struct {
-	Name           string   `json:"name"`
-	Labels         []string `json:"labels"`
-	RequiredLabels []string `json:"required_labels"`
-	TemplateID     string   `json:"template_id"`
-	RunnerGroup    string   `json:"runner_group"`
-	MaxConcurrency int      `json:"max_concurrency"`
-	MinIdle        *int     `json:"min_idle"`
-	Priority       *int     `json:"priority"`
-	Enabled        *bool    `json:"enabled"`
+	TemplateSource      string   `json:"template_source"`
+	DefaultTemplateName string   `json:"default_template_name"`
+	Published           bool     `json:"published"`
+	RunnerUpdatePolicy  string   `json:"runner_update_policy"`
+	RequireDocker       bool     `json:"require_docker"`
+	ForkSponsorship     bool     `json:"fork_sponsorship"`
+	Name                string   `json:"name"`
+	Labels              []string `json:"labels"`
+	RequiredLabels      []string `json:"required_labels"`
+	TemplateID          string   `json:"template_id"`
+	RunnerGroup         string   `json:"runner_group"`
+	MaxConcurrency      int      `json:"max_concurrency"`
+	MinIdle             *int     `json:"min_idle"`
+	Priority            *int     `json:"priority"`
+	Enabled             *bool    `json:"enabled"`
 }
 
 type patchProfileRequest struct {
-	Labels         *[]string `json:"labels"`
-	RequiredLabels *[]string `json:"required_labels"`
-	TemplateID     *string   `json:"template_id"`
-	RunnerGroup    *string   `json:"runner_group"`
-	MaxConcurrency *int      `json:"max_concurrency"`
-	MinIdle        *int      `json:"min_idle"`
-	Priority       *int      `json:"priority"`
-	Enabled        *bool     `json:"enabled"`
+	TemplateSource      *string   `json:"template_source"`
+	DefaultTemplateName *string   `json:"default_template_name"`
+	Published           *bool     `json:"published"`
+	RunnerUpdatePolicy  *string   `json:"runner_update_policy"`
+	RequireDocker       *bool     `json:"require_docker"`
+	ForkSponsorship     *bool     `json:"fork_sponsorship"`
+	ExpectedUpdatedAt   string    `json:"expected_updated_at"`
+	Labels              *[]string `json:"labels"`
+	RequiredLabels      *[]string `json:"required_labels"`
+	TemplateID          *string   `json:"template_id"`
+	RunnerGroup         *string   `json:"runner_group"`
+	MaxConcurrency      *int      `json:"max_concurrency"`
+	MinIdle             *int      `json:"min_idle"`
+	Priority            *int      `json:"priority"`
+	Enabled             *bool     `json:"enabled"`
 }
-
-const managedRunnerSpecErrorCode = "managed_runner_spec"
 
 type profileMatchRequest struct {
 	RepositoryFullName string   `json:"repository_full_name"`

@@ -524,6 +524,67 @@ test("reports a preferences failure without treating GitHub accounts as failed",
   await expect(page.getByRole("heading", { name: "alice", exact: true })).toBeVisible()
 })
 
+test("filters the platform spec directory to enabled published public entries", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const diagnostics = observeBrowserDiagnostics(page)
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/**", (route) => {
+    if (new URL(route.request().url()).pathname === "/user/runner-specs") {
+      const base = { workflow_labels: ["qiniu", "ubuntu"], enabled: true, max_concurrency: 4, overrides_global: false, updated_at: "2026-10-01T00:00:00Z" }
+      return route.fulfill({ json: { items: [
+        { ...base, name: "visible-public", source: "platform_public", published: true, default_template_name: "public-template" },
+        { ...base, name: "unpublished-public", source: "platform_public", published: false },
+        { ...base, name: "disabled-public", source: "platform_public", published: true, enabled: false },
+        { ...base, name: "private-business", source: "platform_custom", published: true, template_id: "private-id" },
+        { ...base, name: "scope-custom", source: "scoped_custom", template_id: "scope-id" },
+      ] } })
+    }
+    return route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+  })
+  await page.route("**/sandbox/regions", (route) => route.fulfill({ json: [] }))
+  await page.goto("/runner-specs", { waitUntil: "networkidle" })
+  await expect(page.getByText("visible-public", { exact: true })).toBeVisible()
+  for (const name of ["unpublished-public", "disabled-public", "private-business", "scope-custom", "private-id", "scope-id"]) {
+    await expect(page.getByText(name, { exact: true })).toHaveCount(0)
+  }
+  diagnostics.expectClean()
+})
+
+test("edits former managed specs and clears publication when switching to private binding", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const diagnostics = observeBrowserDiagnostics(page)
+  let profile = { name: "old-managed", labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, managed_by: "qiniu/ci-runner", runner_update_policy: "preinstalled", require_docker: true, fork_sponsorship: true, enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "", updated_at: "2026-10-01T00:00:00Z" }
+  let saved: Record<string, unknown> | undefined
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin" } }))
+  await page.route("**/runner_specs**", (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.startsWith("/admin/")) return route.continue()
+    if (route.request().method() === "PATCH") {
+      saved = route.request().postDataJSON()
+      profile = { ...profile, ...saved }
+      return route.fulfill({ json: profile })
+    }
+    return route.fulfill({ json: [profile] })
+  })
+  await page.goto("/admin/runner_specs", { waitUntil: "networkidle" })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole("button", { name: "Edit old-managed", exact: true }).click()
+  await expect(page.locator("#runner-spec-labels")).toBeEnabled()
+  await expect(page.locator("#runner-spec-default-template")).toBeEnabled()
+  await page.locator("#runner-spec-labels").fill("qiniu,ubuntu,new-label")
+  await page.locator("#runner-spec-template-source").selectOption("private")
+  await expect(page.locator("#runner-spec-published")).not.toBeChecked()
+  await expect(page.locator("#runner-spec-fork_sponsorship")).not.toBeChecked()
+  await expect(page.locator("#runner-spec-published")).toBeDisabled()
+  await page.locator("#runner-spec-template-id").fill("private-template")
+  await page.locator("#runner-spec-update-policy").selectOption("official")
+  await page.getByRole("button", { name: "Save runner spec", exact: true }).click()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+  expect(saved).toMatchObject({ template_source: "private", template_id: "private-template", default_template_name: "", published: false, fork_sponsorship: false, runner_update_policy: "official", expected_updated_at: "2026-10-01T00:00:00Z", labels: ["qiniu", "ubuntu", "new-label"] })
+  await expect(page.getByText("private-template", { exact: true })).toBeVisible()
+  diagnostics.expectClean()
+})
+
 async function routeLocalAnonymousSession(page: Page) {
   const authSessionRoute = getLocalAuthSessionRoute(process.env.RUNNERD_UI_SMOKE_BASE_URL)
   if (!authSessionRoute) return

@@ -7,6 +7,11 @@ import (
 )
 
 func (s *Server) handlePublicRunnerTemplates(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	writeJSON(w, http.StatusOK, runnercatalog.PublicTemplates())
+	profiles, err := s.store.ListProfiles()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list public runner templates")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, runnercatalog.PublicTemplates(profiles))
 }

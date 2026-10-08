@@ -193,6 +193,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+	if err := migrateRunnerProfilePolicies(db); err != nil {
+		return err
+	}
 	if err := backfillRunnerRequestGitHubContext(db); err != nil {
 		return err
 	}

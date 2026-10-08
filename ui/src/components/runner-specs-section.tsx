@@ -34,6 +34,13 @@ import {
 import { cn } from "@/lib/utils"
 
 export type RunnerSpecFormState = {
+  template_source: "public" | "private"
+  default_template_name: string
+  published: boolean
+  runner_update_policy: "official" | "preinstalled"
+  require_docker: boolean
+  fork_sponsorship: boolean
+
   name: string
   labels: string
   required_labels: string
@@ -61,32 +68,12 @@ export function RunnerSpecDialogForm({
   onSubmitRunnerSpec: (event: FormEvent<HTMLFormElement>) => void
 }) {
   const { t } = useTranslation()
-  const managed = Boolean(editingRunnerSpec?.managed_by?.trim())
+  const publicTemplate = runnerSpecForm.template_source === "public"
 
   return (
     <form onSubmit={onSubmitRunnerSpec} aria-busy={savingRunnerSpec}>
       <fieldset className="grid min-w-0 gap-4" disabled={savingRunnerSpec}>
-        {managed ? (
-          <div
-            id="managed-runner-spec-note"
-            className="flex items-start gap-3 rounded-md border bg-muted/35 px-3 py-2.5"
-          >
-            <Badge variant="secondary" className="mt-0.5">{t("admin.managed")}</Badge>
-            <p className="text-sm leading-5 text-muted-foreground">
-              {t("admin.managedSpecDescription")}
-            </p>
-          </div>
-        ) : (
-          <div
-            id="platform-shared-runner-spec-note"
-            className="flex items-start gap-3 rounded-md border border-primary/20 bg-primary/[0.04] px-3 py-2.5"
-          >
-            <Badge variant="outline" className="mt-0.5 border-primary/30 text-primary">{t("admin.platformShared")}</Badge>
-            <p className="text-sm leading-5 text-muted-foreground">
-              {t("admin.platformSharedSpecDescription")}
-            </p>
-          </div>
-        )}
+        <p className="text-sm leading-5 text-muted-foreground">{t("admin.platformSharedSpecDescription")}</p>
 
         <div className="grid gap-2">
           <Label htmlFor="runner-spec-name">{t("common.name")}</Label>
@@ -107,7 +94,6 @@ export function RunnerSpecDialogForm({
               value={runnerSpecForm.labels}
               onChange={(event) => onRunnerSpecFormChange((current) => ({ ...current, labels: event.target.value }))}
               placeholder="self-hosted,e2b"
-              disabled={managed}
             />
           </div>
           <div className="grid gap-2">
@@ -119,22 +105,26 @@ export function RunnerSpecDialogForm({
                 onRunnerSpecFormChange((current) => ({ ...current, required_labels: event.target.value }))
               }
               placeholder="e2b"
-              disabled={managed}
             />
-            {!managed ? (
-              <p className="text-xs text-muted-foreground">{t("admin.requiredLabelsDescription")}</p>
-            ) : null}
+            <p className="text-xs text-muted-foreground">{t("admin.requiredLabelsDescription")}</p>
           </div>
         </div>
 
+        <div className="grid gap-2">
+          <Label htmlFor="runner-spec-template-source">{t("admin.templateBinding")}</Label>
+          <select id="runner-spec-template-source" className="h-9 rounded-md border bg-background px-3 text-sm" value={runnerSpecForm.template_source || "private"} onChange={(event) => onRunnerSpecFormChange((current) => ({ ...current, template_source: event.target.value as "public" | "private", template_id: "", default_template_name: "", published: false, fork_sponsorship: false }))}>
+            <option value="private">{t("admin.privateTemplateID")}</option>
+            <option value="public">{t("admin.publicTemplateName")}</option>
+          </select>
+        </div>
         <div className="grid gap-2 sm:grid-cols-2">
-          {managed ? (
+          {publicTemplate ? (
             <div className="grid gap-2">
               <Label htmlFor="runner-spec-default-template">{t("admin.defaultTemplate")}</Label>
               <Input
                 id="runner-spec-default-template"
-                value={editingRunnerSpec?.default_template_name || ""}
-                disabled
+                value={runnerSpecForm.default_template_name || ""}
+                onChange={(event) => onRunnerSpecFormChange((current) => ({ ...current, default_template_name: event.target.value }))}
               />
             </div>
           ) : (
@@ -166,7 +156,6 @@ export function RunnerSpecDialogForm({
                 onRunnerSpecFormChange((current) => ({ ...current, runner_group: event.target.value }))
               }
               placeholder={t("admin.optionalGitHubRunnerGroup")}
-              disabled={managed}
             />
           </div>
         </div>
@@ -203,9 +192,22 @@ export function RunnerSpecDialogForm({
               onChange={(event) =>
                 onRunnerSpecFormChange((current) => ({ ...current, priority: event.target.value }))
               }
-              disabled={managed}
             />
           </div>
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="runner-spec-update-policy">{t("admin.runnerUpdatePolicy")}</Label>
+          <select id="runner-spec-update-policy" className="h-9 rounded-md border bg-background px-3 text-sm" value={runnerSpecForm.runner_update_policy || "official"} onChange={(event) => onRunnerSpecFormChange((current) => ({ ...current, runner_update_policy: event.target.value as "official" | "preinstalled" }))}>
+            <option value="official">{t("admin.runnerUpdateOfficial")}</option>
+            <option value="preinstalled">{t("admin.runnerUpdatePreinstalled")}</option>
+          </select>
+          <p className="text-xs text-muted-foreground">{t("admin.runnerUpdatePolicyDescription")}</p>
+          {(["published", "require_docker", "fork_sponsorship"] as const).map((key) => <label key={key} className="flex items-center gap-2 text-sm">
+            <input id={`runner-spec-${key}`} type="checkbox" checked={Boolean(runnerSpecForm[key])} disabled={key !== "require_docker" && !publicTemplate} onChange={(event) => onRunnerSpecFormChange((current) => ({ ...current, [key]: event.target.checked }))} />
+            {t({ published: "admin.publishRunnerSpec", require_docker: "admin.requireDocker", fork_sponsorship: "admin.allowForkSponsorship" }[key] as "admin.publishRunnerSpec" | "admin.requireDocker" | "admin.allowForkSponsorship")}
+          </label>)}
+          <p className="text-xs text-muted-foreground">{t("admin.publishRunnerSpecDescription")}</p>
         </div>
 
         <div className="grid gap-2">
@@ -312,23 +314,23 @@ export function RunnerSpecsSection({
             </TableHeader>
             <TableBody>
               {runnerSpecs.map((runnerSpec) => {
-                const managed = Boolean(runnerSpec.managed_by?.trim())
+                const publicTemplate = runnerSpec.template_source === "public"
                 return (
                 <TableRow key={runnerSpec.name} className="cursor-pointer" onClick={() => onEditRunnerSpec(runnerSpec)}>
                   <TableCell>
                     <div className="flex max-w-[240px] items-center gap-2">
                       <span className="truncate">{runnerSpec.name}</span>
-                      {managed ? <Badge variant="secondary">{t("admin.managed")}</Badge> : null}
+                      {runnerSpec.published ? <Badge variant="secondary">{t("admin.publishedSpec")}</Badge> : null}
                     </div>
                   </TableCell>
                   <TableCell><div className="max-w-[260px] truncate">{runnerSpec.labels.join(", ")}</div></TableCell>
                   <TableCell>
                     <div className="max-w-[240px]">
                       <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                        {managed ? t("admin.defaultTemplate") : t("admin.templateID")}
+                        {publicTemplate ? t("admin.defaultTemplate") : t("admin.templateID")}
                       </div>
                       <div className="truncate">
-                        {managed ? runnerSpec.default_template_name || "—" : runnerSpec.template_id}
+                        {publicTemplate ? runnerSpec.default_template_name || "—" : runnerSpec.template_id}
                       </div>
                     </div>
                   </TableCell>
@@ -349,8 +351,7 @@ export function RunnerSpecsSection({
                         <Pencil />
                         {t("common.edit")}
                       </Button>
-                      {!managed ? (
-                        <Button
+                      <Button
                           type="button"
                           variant="outline"
                           size="sm"
@@ -361,8 +362,7 @@ export function RunnerSpecsSection({
                         >
                           <Trash2 />
                           {t("common.delete")}
-                        </Button>
-                      ) : null}
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -378,7 +378,7 @@ export function RunnerSpecsSection({
           if (!savingRunnerSpec) onRunnerSpecOpenChange(open)
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingRunnerSpec ? t("admin.editRunnerSpec") : t("admin.createRunnerSpec")}</DialogTitle>
             <DialogDescription>{t("admin.specDialogDescription")}</DialogDescription>

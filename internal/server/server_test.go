@@ -72,7 +72,13 @@ type fakeSandbox struct {
 }
 
 func TestPublicTemplateCatalogIsAvailableWithoutAuthenticationOrSandboxCredentials(t *testing.T) {
-	srv := newTestServer(t, state.New(t.TempDir()), "", &fakeSandbox{})
+	store := state.New(t.TempDir())
+	for _, p := range publicCatalogFixture() {
+		if _, err := store.UpsertProfile(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := newTestServer(t, store, "", &fakeSandbox{})
 
 	request := func(cookie *http.Cookie) *httptest.ResponseRecorder {
 		t.Helper()
@@ -89,8 +95,8 @@ func TestPublicTemplateCatalogIsAvailableWithoutAuthenticationOrSandboxCredentia
 	if signedOut.Code != http.StatusOK {
 		t.Fatalf("signed-out status = %d, want %d; body=%s", signedOut.Code, http.StatusOK, signedOut.Body.String())
 	}
-	if got := signedOut.Header().Get("Cache-Control"); got != "public, max-age=3600" {
-		t.Fatalf("Cache-Control = %q, want %q", got, "public, max-age=3600")
+	if got := signedOut.Header().Get("Cache-Control"); got != "public, max-age=60" {
+		t.Fatalf("Cache-Control = %q, want %q", got, "public, max-age=60")
 	}
 
 	signedIn := request(testSessionCookie("hubot-id", "hubot", "user"))
@@ -108,8 +114,8 @@ func TestPublicTemplateCatalogIsAvailableWithoutAuthenticationOrSandboxCredentia
 	if len(got) != 4 {
 		t.Fatalf("public template count = %d, want 4: %#v", len(got), got)
 	}
-	if !reflect.DeepEqual(got, runnercatalog.PublicTemplates()) {
-		t.Fatalf("public endpoint payload = %#v, want %#v", got, runnercatalog.PublicTemplates())
+	if !reflect.DeepEqual(got, runnercatalog.PublicTemplates(publicCatalogFixture())) {
+		t.Fatalf("public endpoint payload = %#v, want %#v", got, runnercatalog.PublicTemplates(publicCatalogFixture()))
 	}
 	for _, forbidden := range []string{"template_id", "api_key", "api_url", "qbox", "custom"} {
 		if strings.Contains(strings.ToLower(signedOut.Body.String()), forbidden) {
@@ -7703,14 +7709,10 @@ func TestCreateProfileRejectsManagedMetadata(t *testing.T) {
 		{name: "managed by null", key: "managed_by", value: `null`},
 		{name: "catalog revision value", key: "catalog_revision", value: `99`},
 		{name: "catalog revision null", key: "catalog_revision", value: `null`},
-		{name: "default template name value", key: "default_template_name", value: `"client-template"`},
-		{name: "default template name null", key: "default_template_name", value: `null`},
 		{name: "mixed case managed by value", key: "Managed_By", value: `"client"`},
 		{name: "mixed case managed by null", key: "Managed_By", value: `null`},
 		{name: "mixed case catalog revision value", key: "Catalog_Revision", value: `99`},
 		{name: "mixed case catalog revision null", key: "Catalog_Revision", value: `null`},
-		{name: "mixed case default template name value", key: "Default_Template_Name", value: `"client-template"`},
-		{name: "mixed case default template name null", key: "Default_Template_Name", value: `null`},
 	}
 
 	for _, tt := range metadataFields {
@@ -7834,14 +7836,10 @@ func TestPatchCustomProfileRejectsManagedMetadata(t *testing.T) {
 		{name: "managed by null", key: "managed_by", value: `null`},
 		{name: "catalog revision value", key: "catalog_revision", value: `99`},
 		{name: "catalog revision null", key: "catalog_revision", value: `null`},
-		{name: "default template name value", key: "default_template_name", value: `"client-template"`},
-		{name: "default template name null", key: "default_template_name", value: `null`},
 		{name: "mixed case managed by value", key: "Managed_By", value: `"client"`},
 		{name: "mixed case managed by null", key: "Managed_By", value: `null`},
 		{name: "mixed case catalog revision value", key: "Catalog_Revision", value: `99`},
 		{name: "mixed case catalog revision null", key: "Catalog_Revision", value: `null`},
-		{name: "mixed case default template name value", key: "Default_Template_Name", value: `"client-template"`},
-		{name: "mixed case default template name null", key: "Default_Template_Name", value: `null`},
 	}
 
 	for _, tt := range metadataFields {
@@ -7884,10 +7882,8 @@ func TestPatchCustomProfileRejectsManagedMetadata(t *testing.T) {
 func TestPatchManagedProfileAllowsOnlyOperatorControls(t *testing.T) {
 	store := state.New(t.TempDir())
 	managed := managedProfileForServerTest()
-	if conflicts, err := store.ReconcileManagedProfiles([]state.RunnerProfile{managed}); err != nil {
+	if _, err := store.UpsertProfile(managed); err != nil {
 		t.Fatal(err)
-	} else if len(conflicts) != 0 {
-		t.Fatalf("managed profile conflicts = %#v, want none", conflicts)
 	}
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
 
@@ -7921,118 +7917,29 @@ func TestPatchManagedProfileAllowsOnlyOperatorControls(t *testing.T) {
 	}
 }
 
-func TestPatchManagedProfileRejectsProtectedFieldsByPresence(t *testing.T) {
-	protectedFields := []struct {
-		name  string
-		key   string
-		value string
-		extra string
-	}{
-		{name: "labels value", key: "labels", value: `[]`},
-		{name: "labels null", key: "labels", value: `null`},
-		{name: "required labels value", key: "required_labels", value: `[]`},
-		{name: "required labels null", key: "required_labels", value: `null`},
-		{name: "template id value", key: "template_id", value: `""`},
-		{name: "template id null", key: "template_id", value: `null`},
-		{name: "runner group value", key: "runner_group", value: `""`},
-		{name: "runner group null", key: "runner_group", value: `null`},
-		{name: "priority value", key: "priority", value: `0`},
-		{name: "priority null", key: "priority", value: `null`},
-		{name: "default template name value", key: "default_template_name", value: `"client-template"`},
-		{name: "default template name null", key: "default_template_name", value: `null`},
-		{name: "managed by value", key: "managed_by", value: `"client"`},
-		{name: "managed by null", key: "managed_by", value: `null`},
-		{name: "catalog revision value", key: "catalog_revision", value: `99`},
-		{name: "catalog revision null", key: "catalog_revision", value: `null`},
-		{name: "mixed case labels value", key: "Labels", value: `[]`, extra: `,"enabled":false`},
-		{name: "mixed case labels null", key: "Labels", value: `null`},
-		{name: "mixed case required labels value", key: "Required_Labels", value: `[]`},
-		{name: "mixed case required labels null", key: "Required_Labels", value: `null`},
-		{name: "mixed case template id value", key: "Template_ID", value: `""`},
-		{name: "mixed case template id null", key: "Template_ID", value: `null`},
-		{name: "mixed case runner group value", key: "Runner_Group", value: `""`},
-		{name: "mixed case runner group null", key: "Runner_Group", value: `null`},
-		{name: "mixed case priority value", key: "Priority", value: `0`},
-		{name: "mixed case priority null", key: "Priority", value: `null`},
-		{name: "mixed case default template name value", key: "Default_Template_Name", value: `"client-template"`},
-		{name: "mixed case default template name null", key: "Default_Template_Name", value: `null`},
-		{name: "mixed case managed by value", key: "Managed_By", value: `"client"`},
-		{name: "mixed case managed by null", key: "Managed_By", value: `null`},
-		{name: "mixed case catalog revision value", key: "Catalog_Revision", value: `99`},
-		{name: "mixed case catalog revision null", key: "Catalog_Revision", value: `null`},
-	}
-
-	for _, tt := range protectedFields {
-		t.Run(tt.name, func(t *testing.T) {
-			store := state.New(t.TempDir())
-			managed := managedProfileForServerTest()
-			if conflicts, err := store.ReconcileManagedProfiles([]state.RunnerProfile{managed}); err != nil {
-				t.Fatal(err)
-			} else if len(conflicts) != 0 {
-				t.Fatalf("managed profile conflicts = %#v, want none", conflicts)
-			}
-			srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
-
-			req := adminRequest(
-				http.MethodPatch,
-				"/runner_specs/"+managed.Name,
-				bytes.NewBufferString(`{"`+tt.key+`":`+tt.value+tt.extra+`}`),
-			)
-			rec := httptest.NewRecorder()
-			srv.ServeHTTP(rec, req)
-			if rec.Code != http.StatusConflict {
-				t.Fatalf("status = %d body=%s, want 409", rec.Code, rec.Body.String())
-			}
-			var response struct {
-				Code string `json:"code"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-				t.Fatal(err)
-			}
-			if response.Code != "managed_runner_spec" {
-				t.Fatalf("error code = %q body=%s, want managed_runner_spec", response.Code, rec.Body.String())
-			}
-
-			got, err := store.GetProfile(managed.Name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			managed.CreatedAt = got.CreatedAt
-			managed.UpdatedAt = got.UpdatedAt
-			if !reflect.DeepEqual(got, managed) {
-				t.Fatalf("rejected patch changed managed profile: got %#v want %#v", got, managed)
-			}
-		})
-	}
-}
-
-func TestDeleteManagedProfileReturnsConflict(t *testing.T) {
+func TestLegacyManagedProfileIsEditableAndDeletable(t *testing.T) {
 	store := state.New(t.TempDir())
-	managed := managedProfileForServerTest()
-	if conflicts, err := store.ReconcileManagedProfiles([]state.RunnerProfile{managed}); err != nil {
+	legacy := managedProfileForServerTest()
+	if _, err := store.UpsertProfile(legacy); err != nil {
 		t.Fatal(err)
-	} else if len(conflicts) != 0 {
-		t.Fatalf("managed profile conflicts = %#v, want none", conflicts)
 	}
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
-
-	req := adminRequest(http.MethodDelete, "/runner_specs/"+managed.Name, nil)
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	srv.ServeHTTP(rec, adminRequest(http.MethodPatch, "/runner_specs/"+legacy.Name, strings.NewReader(`{"labels":["self-hosted","qiniu","ubuntu-24.04","extra"],"priority":73,"runner_group":"org-group"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit: %d %s", rec.Code, rec.Body.String())
 	}
-	var response struct {
-		Code string `json:"code"`
+	got, err := store.GetProfile(legacy.Name)
+	if err != nil || got.Priority != 73 || got.RunnerGroup != "org-group" {
+		t.Fatalf("edit lost fields: %#v %v", got, err)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, adminRequest(http.MethodDelete, "/runner_specs/"+legacy.Name, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
 	}
-	if response.Code != "managed_runner_spec" {
-		t.Fatalf("error code = %q body=%s, want managed_runner_spec", response.Code, rec.Body.String())
-	}
-	if _, err := store.GetProfile(managed.Name); err != nil {
-		t.Fatalf("managed profile was deleted: %v", err)
+	if _, err := store.GetProfile(legacy.Name); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("deleted profile remains: %v", err)
 	}
 }
 
@@ -8051,7 +7958,7 @@ func (s *profileLookupErrorStore) DeleteProfile(string) error {
 	return nil
 }
 
-func TestDeleteProfileFailsClosedWhenManagedStatusCannotBeLoaded(t *testing.T) {
+func TestDeleteProfileFailsClosedWhenCurrentProfileCannotBeLoaded(t *testing.T) {
 	store := &profileLookupErrorStore{
 		Store:     state.New(t.TempDir()),
 		lookupErr: errors.New("fixture profile lookup failure"),
@@ -8069,13 +7976,11 @@ func TestDeleteProfileFailsClosedWhenManagedStatusCannotBeLoaded(t *testing.T) {
 	}
 }
 
-func TestCreateProfileCannotOverwriteManagedProfile(t *testing.T) {
+func TestCreateProfileCannotChangePublicBindingWithoutAdminValidation(t *testing.T) {
 	store := state.New(t.TempDir())
 	managed := managedProfileForServerTest()
-	if conflicts, err := store.ReconcileManagedProfiles([]state.RunnerProfile{managed}); err != nil {
+	if _, err := store.UpsertProfile(managed); err != nil {
 		t.Fatal(err)
-	} else if len(conflicts) != 0 {
-		t.Fatalf("managed profile conflicts = %#v, want none", conflicts)
 	}
 	before, err := store.GetProfile(managed.Name)
 	if err != nil {
@@ -8105,8 +8010,8 @@ func TestCreateProfileCannotOverwriteManagedProfile(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != "managed_runner_spec" {
-		t.Fatalf("error code = %q body=%s, want managed_runner_spec", response.Code, rec.Body.String())
+	if response.Code != "sandbox_service_not_configured" {
+		t.Fatalf("error code = %q body=%s, want sandbox_service_not_configured", response.Code, rec.Body.String())
 	}
 	after, err := store.GetProfile(managed.Name)
 	if err != nil {
@@ -8857,8 +8762,16 @@ func testSessionCookie(subject, login, role string) *http.Cookie {
 
 func TestUserRunnerSpecsListRequiresSessionAndReturnsScopedCatalog(t *testing.T) {
 	store := state.New(t.TempDir())
-	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true}); err != nil {
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, DefaultTemplateName: "public-template", ManagedBy: "runnerd", Enabled: true}); err != nil {
 		t.Fatal(err)
+	}
+	for _, profile := range []state.RunnerProfile{
+		{Name: "private-business", Labels: []string{"qiniu", "private"}, TemplateID: "private-secret", Enabled: true},
+		{Name: "unpublished-public", Labels: []string{"qiniu", "hidden"}, TemplateSource: state.TemplateSourcePublic, DefaultTemplateName: "hidden-public", Enabled: true},
+	} {
+		if _, err := store.UpsertProfile(profile); err != nil {
+			t.Fatal(err)
+		}
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	unauthenticated := httptest.NewRequest(http.MethodGet, "/user/runner-specs", nil)
@@ -8877,6 +8790,14 @@ func TestUserRunnerSpecsListRequiresSessionAndReturnsScopedCatalog(t *testing.T)
 	}
 	if !strings.Contains(rec.Body.String(), `"scope_type":"account"`) || !strings.Contains(rec.Body.String(), `"name":"managed"`) {
 		t.Fatalf("unexpected runner spec list response: %s", rec.Body.String())
+	}
+	for _, hidden := range []string{"private-business", "private-secret", "unpublished-public", "hidden-public"} {
+		if strings.Contains(rec.Body.String(), hidden) {
+			t.Fatalf("private/unpublished spec leaked: %s", rec.Body.String())
+		}
+	}
+	if !strings.Contains(rec.Body.String(), `"source":"platform_public"`) || !strings.Contains(rec.Body.String(), `"published":true`) {
+		t.Fatalf("public policy missing: %s", rec.Body.String())
 	}
 }
 
@@ -9059,7 +8980,7 @@ func TestUserPatchRunnerSpecMapsDuplicateLabelsToConflict(t *testing.T) {
 
 func TestUserRunnerSpecsListReportsPlatformPolicyWithoutScopeControls(t *testing.T) {
 	store := state.New(t.TempDir())
-	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true, MaxConcurrency: 3}); err != nil {
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "managed", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, DefaultTemplateName: "public-template", ManagedBy: "runnerd", Enabled: true, MaxConcurrency: 3}); err != nil {
 		t.Fatal(err)
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
@@ -9449,7 +9370,7 @@ func TestUserDeleteCacheConfigRollsBackWhenAuditFails(t *testing.T) {
 
 func TestProfileAtCapacityUsesGlobalCountAcrossScopes(t *testing.T) {
 	store := state.New(t.TempDir())
-	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "managed-capacity", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, TemplateID: "template", ManagedBy: "runnerd", Enabled: true, MaxConcurrency: 2})
+	profile, err := store.UpsertProfile(state.RunnerProfile{Name: "managed-capacity", Labels: []string{"qiniu"}, RequiredLabels: []string{"qiniu"}, DefaultTemplateName: "public-template", ManagedBy: "runnerd", Enabled: true, MaxConcurrency: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9633,4 +9554,16 @@ func githubRunnerAPI(t *testing.T) http.HandlerFunc {
 
 func writeRunnerApplicationsResponse(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`[{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"}]`))
+}
+
+func publicCatalogFixture() []state.RunnerProfile {
+	var profiles []state.RunnerProfile
+	for _, os := range []string{"22.04", "24.04", "26.04", "slim", "latest"} {
+		template := "github-runner-ubuntu-" + strings.ReplaceAll(os, ".", "-")
+		if os == "latest" {
+			template = "github-runner-ubuntu-24-04"
+		}
+		profiles = append(profiles, state.RunnerProfile{Name: "qiniu-ubuntu-" + os, Labels: []string{"self-hosted", "linux", "x64", "qiniu", "ubuntu-" + os}, RequiredLabels: []string{"qiniu", "ubuntu-" + os}, DefaultTemplateName: template, TemplateSource: state.TemplateSourcePublic, Published: true, Enabled: true, RunnerUpdatePolicy: state.RunnerUpdatePreinstalled, RequireDocker: true, ForkSponsorship: true})
+	}
+	return profiles
 }

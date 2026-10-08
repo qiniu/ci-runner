@@ -66,29 +66,14 @@ worker:
 
 如果需要避免敏感值被直接展示，先构建 runnerd，再将每个原值通过 stdin 传给 `./bin/runnerd --obfuscate-config-value`，然后把生成的 `RUNNERD_ENC(v1:...)` 填入 YAML。明文配置仍保持兼容。支持的字段包括 `database.dsn`/`database.url`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password` 和 `github.oauth.client_secret`。运行时包装类型还会在意外的文本格式、结构化日志、JSON 和 YAML 输出中显示掩码。该能力仅用于混淆：解码 key 位于 runnerd 内，能够检查或执行二进制的主机用户仍可恢复原值。
 
-Sandbox service API URL 和 API Key 不在 `runnerd.yaml` 中配置。登录后，`/repositories` 会展示所选账户或组织的有效 Sandbox 来源，但不再内嵌 credential editor。配置缺失时，可管理的 scope 会链接到 `/account/preferences` 或 `/organizations/{login}/preferences`，Settings 是唯一写入入口。组织 installation 可因用户仅拥有仓库权限而可见，但 Sandbox 管理权要求用户具有 GitHub 组织的 active owner membership（`role == admin`）；Settings 只列出当前账户和所有者可管理的组织。普通组织成员、outside collaborator、空或未知 role 只能读取脱敏 readiness（`manageable: false` 和有效来源），不能读取 API URL、密钥状态、Cache S3 字段、继承来源账号元数据、templates、runner-created instances 或 scoped custom Runner Specs。membership 查询失败时，请求会被拒绝，且不会返回组织配置。本地 runnerd admin role 不能绕过 GitHub 组织所有者检查。默认关闭的平台兜底仍由管理员在 `/admin/sandbox_service` 管理。fallback audience 为 `all` 或 `selected`；selected entries 按仓库 owner 的稳定 GitHub account ID 和 type 匹配。API Key 使用 `auth.encryption_key` 加密保存。对于托管 Spec，解析顺序为 runner request 已保存快照、installation custom/inherited 配置、符合条件的个人账户配置、符合条件的组织赞助、已启用且 audience eligible 的 admin default，最后才是未配置错误。赞助会在创建 Sandbox 前重新校验稳定的 Fork/source/owner 身份，以及所选审批、权限或成员模式；它不会提供 Cache S3 或自定义 Spec。测试必须覆盖三种模式、managed-only 边界、容量延后、撤销、fresh retry 清空快照、owner-only 审计 API，以及账户／Organization UI 路由隔离。
+Sandbox service API URL 和 API Key 不在 `runnerd.yaml` 中配置。登录后，`/repositories` 会展示所选账户或组织的有效 Sandbox 来源，但不再内嵌 credential editor。配置缺失时，可管理的 scope 会链接到 `/account/preferences` 或 `/organizations/{login}/preferences`，Settings 是唯一写入入口。组织 installation 可因用户仅拥有仓库权限而可见，但 Sandbox 管理权要求用户具有 GitHub 组织的 active owner membership（`role == admin`）；Settings 只列出当前账户和所有者可管理的组织。普通组织成员、outside collaborator、空或未知 role 只能读取脱敏 readiness（`manageable: false` 和有效来源），不能读取 API URL、密钥状态、Cache S3 字段、继承来源账号元数据、templates、runner-created instances 或 scoped custom Runner Specs。membership 查询失败时，请求会被拒绝，且不会返回组织配置。本地 runnerd admin role 不能绕过 GitHub 组织所有者检查。默认关闭的平台兜底仍由管理员在 `/admin/sandbox_service` 管理。fallback audience 为 `all` 或 `selected`；selected entries 按仓库 owner 的稳定 GitHub account ID 和 type 匹配。API Key 使用 `auth.encryption_key` 加密保存。对于公共名称绑定且 `fork_sponsorship=true` 的规格，解析顺序为 runner request 已保存快照、installation custom/inherited 配置、符合条件的个人账户配置、符合条件的组织赞助、已启用且 audience eligible 的 admin default，最后才是未配置错误。赞助会在创建 Sandbox 前重新校验稳定的 Fork/source/owner 身份，以及所选审批、权限或成员模式；它不会提供 Cache S3 或自定义 Spec。测试必须覆盖三种模式、公共名称与明确赞助开关边界、容量延后、撤销、fresh retry 清空快照、owner-only 审计 API，以及账户／Organization UI 路由隔离。
 
 首次使用产品引导只会在现有账户级 `account_preferences` 表的 `onboarding/product-tour` 下保存版本号、状态和 `tour_seen` 标记，不会保存 Sandbox API Key。记录缺失或版本过旧时返回 `pending` 且 `tour_seen=false`。走完引导浮层后写入 `pending` 且 `tour_seen=true`，因此不会再次自动弹出，但必需的设置仍会保留。当前登录账户能解析到 custom、inherited 或符合条件的 admin default 任一有效 Sandbox 来源后即写入 `completed`。首次引导中显式跳过会写入 `skipped` 并关闭浮层，但不会隐藏必需设置。从账户菜单重播引导不会重置或覆盖已保存状态。
 
 Runner Spec 不是 `runnerd.yaml` 字段。内部 Runner Group 和 Repository Policy 已移除；Spec 上可选的 `runner_group` 仍表示 GitHub Organization Runner Group 注册目标。
-runnerd 启动时会协调 5 个 Qiniu Ubuntu managed specs。其 labels、required
-labels、稳定公共模板名称、priority 和 default availability 由 runnerd 管理，
-operator 控制的 `enabled`、`max_concurrency` 和 `min_idle` 会被保留。自定义
-spec 仍通过 Admin API/UI 管理，需要显式 `template_id`、advertised labels 和
-可选 required labels。新建自定义 spec 或更换模板 ID 前，需要在
-`/admin/sandbox_service` 配置后台 Sandbox endpoint 和 API Key。校验只使用这套
-后台配置，不读取当前登录用户或组织的凭据；运行时默认服务的启用开关和 audience
-不限制管理员校验。
-`GetTemplate` 确认模板存在且可访问，再从所属团队目录或公共默认目录读取实际已上传的
-默认构建 ID。最新重建失败或仍在进行时，旧的可用默认构建仍可通过检查。详情中的
-构建历史不能直接代表可用状态：它有分页、包含其他 tag，且对非所有者隐藏。
-不在公共默认目录中的第三方公共模板无法通过该 API 确认构建状态，会返回
-`template_state_unavailable`。
+所有平台 Runner 规格由数据库保存并在 `/admin/runner_specs` 维护。启动只迁移旧策略一次，不再协调固定目录或补建规格，新数据库的目录为空。详见[平台 Runner 规格管理](platform-runner-specs.md)。
 
-5 个 `-large` workflow labels 有意作为 operator 配置的对外默认 spec，而不是
-managed catalog 条目。需要在 Admin 中单独创建并启用对应 spec，然后在自定义 spec 检查中验证显式
-template ID 和标签契约；它们不应出现在 managed spec reconciliation 列表或公共
-managed-template API 中。
+分别验证公共名称和私有 ID 绑定。公共名称须通过配置的 Admin Sandbox 唯一解析为可运行的公共模板。创建、更换绑定、发布或重新启用已发布规格时远程校验；绑定不变的策略修改和取消发布无需访问 Provider。校验只使用 Admin 凭据，不受运行时 fallback 的 enabled/audience 限制。私有 ID 保留 GetTemplate 和有效默认构建校验。标准与 large 公共绑定均可在校验后发布，不能按名称自动公开。
 
 整个远程检查限时 5 秒。未配置后台服务返回 `409 sandbox_service_not_configured`；
 模板不存在或没有可用默认构建分别返回 `400 template_not_found`、
@@ -97,10 +82,7 @@ managed-template API 中。
 `504 template_validation_timeout`。应修正配置、模板或重试；检查失败不会静默放行，
 也不会将上游响应正文暴露给客户端。拒绝保存时，spec 和审计记录均保持不变。若校验期间其他操作已修改或删除该 spec，条件写入返回 `409 runner_spec_conflict`；应刷新后重试，不会覆盖较新的状态。
 
-PATCH 按去除首尾空白后的模板 ID 判断是否变更。只修改标签、容量或启用状态时不访问
-Sandbox；managed spec 的控制项也不校验模板，继续保持运行时名称解析。已有 spec
-不会被自动重新验证或禁用。实际任务仍使用所属账户或组织的 Sandbox 配置；后台检查
-通过不代表其他作用域拥有访问权限，也不证明镜像包含 Runner 程序，仍需验证真实 workflow。
+PATCH 比较去除首尾空白后的绑定，以及发布／启用转换。验证拒绝或过期保存不修改规格和审计，活动执行配置修改／删除返回 `409 runner_spec_in_use`，而启用、容量和取消发布仍可修改。迁移测试须保留时间戳、策略和索引，审计失败时回滚，并证明重启不会覆盖新策略或恢复已删除行。后台校验不证明镜像内容或其他 scope 的访问权，仍需区域和真实 workflow smoke。
 
 `database.backend` 支持 `sqlite`、`postgres` 和 `mysql`。本地开发优先使用 sqlite；共享数据库的多实例部署需要先用两个 runnerd 进程验证 lease 行为，再作为正式运行方式记录。
 
@@ -373,20 +355,11 @@ curl -fsS -X DELETE -b "$COOKIE_JAR" \
   http://127.0.0.1:25500/admin/api/sandbox-service-default/api-key | jq
 ```
 
-页面源码在 `ui/`，使用 React、Vite、Tailwind CSS、shadcn 风格组件和仓库内主题 CSS。`task build` 会先执行 `task ui-build`，把前端产物写入 `internal/server/ui/` 后再编译 `runnerd`。`/` 始终显示公开产品首页，提供文档和 Jobs 入口，并且不会加载受保护的用户资源；受保护的普通用户 Jobs 首页位于 `/jobs`。未登录访问 `/jobs`、Job 分组深链、账户设置或 Admin 路由时，会显示独立登录页，其 OAuth 链接通过 `return_to` 保留完整的同源目标地址。未知路由显示 404；已登录但没有管理员角色的用户访问 Admin 路由时，会看到明确的无权限页面。`/repositories` 是普通用户统一的 readiness 页面，负责 GitHub App 安装/同步、用户与 App 的授权仓库交集、本地 job activity，以及有效 Sandbox service 状态。`/account/repositories` 和 `/organizations/{login}/repositories` 作为兼容的 scoped deep links，仍由同一页面渲染。账户与组织 Preferences 是普通用户唯一的 Sandbox credential 编辑器；readiness 只在可管理 scope 缺少配置时链接过去。Settings 只为当前账户和所有者可管理的组织保留 Sandbox Service、Sandbox Templates 和 Sandbox Instances 资源管理。首次进入页面时只加载当前路由实际使用的资源。已登录的用户路由会读取一次 `GET /user/onboarding/product-tour` 获取账户级引导状态；该增强请求失败时会被忽略，不会阻断核心 workspace 数据，也不会参与轮询。只有状态为 `pending`、尚未看过引导且精确进入 `/jobs` 首页的账户会自动开始六步引导，深链不会被打断。最后几步会导航到 `/repositories`；有效来源无需操作，缺少且可管理的来源会引导用户进入 Settings。已看过、已完成或跳过的账户都可从账户菜单重播，且不修改已保存状态。Jobs 首页加载第一页 `GET /user/runner_requests?limit=100&offset=0` 并每 5 秒轮询该页，同时保留已经加载的历史；稳定 job-group 路由和 Load older jobs 操作可以加载受限的 500 行历史窗口。API 会拒绝 `limit + offset` 超过 500 的请求，也不会返回不可用的 next link。GitHub App metadata、Preferences 和 onboarding state 都不进入轮询。Admin 路由只加载当前 section 所需的 request/spec/audit 依赖。Overview 与 Runner 请求集合会轮询请求列表；活动中的请求资源每 5 秒轮询自身诊断信息，并在路由切换后忽略过期响应。公共 managed catalog 使用无需登录的 `GET /api/public/runner-templates`，并且只能暴露 runnerd-owned 稳定名称和 workflow labels。Provider catalog 使用 `GET /user/sandbox/templates?region=<id>` 和 `GET /user/sandbox/instances?region=<id>&template_id=<id>`；实例接口只列出 runner 创建的 sandboxes，并使用统一的 scoped/default credential resolver。Installation scope 的目录读取必须属于所有者可管理的组织。测试必须证明未登录与已登录的公共响应完全相同、不包含 provider/scoped metadata，并保证公共与 provider catalog 的加载、重试、失败恢复和 stale response 处理彼此独立。管理面包含 Overview、`/admin/accounts` 的账户列表与角色控制、带 retry/stop 操作及统一事件时间线的 Runner Requests、Runner Specs、`/admin/sandbox_service` 的平台回退、audit、label match test 和运行时 diagnostics，不包含已退役的内部 Runner Group/Policy 管理或 provider resource catalogs。
+页面源码在 `ui/`，使用 React、Vite、Tailwind CSS、shadcn 风格组件和仓库内主题 CSS。`task build` 会先执行 `task ui-build`，把前端产物写入 `internal/server/ui/` 后再编译 `runnerd`。`/` 始终显示公开产品首页，提供文档和 Jobs 入口，并且不会加载受保护的用户资源；受保护的普通用户 Jobs 首页位于 `/jobs`。未登录访问 `/jobs`、Job 分组深链、账户设置或 Admin 路由时，会显示独立登录页，其 OAuth 链接通过 `return_to` 保留完整的同源目标地址。未知路由显示 404；已登录但没有管理员角色的用户访问 Admin 路由时，会看到明确的无权限页面。`/repositories` 是普通用户统一的 readiness 页面，负责 GitHub App 安装/同步、用户与 App 的授权仓库交集、本地 job activity，以及有效 Sandbox service 状态。`/account/repositories` 和 `/organizations/{login}/repositories` 作为兼容的 scoped deep links，仍由同一页面渲染。账户与组织 Preferences 是普通用户唯一的 Sandbox credential 编辑器；readiness 只在可管理 scope 缺少配置时链接过去。Settings 只为当前账户和所有者可管理的组织保留 Sandbox Service、Sandbox Templates 和 Sandbox Instances 资源管理。首次进入页面时只加载当前路由实际使用的资源。已登录的用户路由会读取一次 `GET /user/onboarding/product-tour` 获取账户级引导状态；该增强请求失败时会被忽略，不会阻断核心 workspace 数据，也不会参与轮询。只有状态为 `pending`、尚未看过引导且精确进入 `/jobs` 首页的账户会自动开始六步引导，深链不会被打断。最后几步会导航到 `/repositories`；有效来源无需操作，缺少且可管理的来源会引导用户进入 Settings。已看过、已完成或跳过的账户都可从账户菜单重播，且不修改已保存状态。Jobs 首页加载第一页 `GET /user/runner_requests?limit=100&offset=0` 并每 5 秒轮询该页，同时保留已经加载的历史；稳定 job-group 路由和 Load older jobs 操作可以加载受限的 500 行历史窗口。API 会拒绝 `limit + offset` 超过 500 的请求，也不会返回不可用的 next link。GitHub App metadata、Preferences 和 onboarding state 都不进入轮询。Admin 路由只加载当前 section 所需的 request/spec/audit 依赖。Overview 与 Runner 请求集合会轮询请求列表；活动中的请求资源每 5 秒轮询自身诊断信息，并在路由切换后忽略过期响应。已发布公共目录 使用无需登录的 `GET /api/public/runner-templates`，并且只能暴露 已发布的稳定名称和 workflow labels。Provider catalog 使用 `GET /user/sandbox/templates?region=<id>` 和 `GET /user/sandbox/instances?region=<id>&template_id=<id>`；实例接口只列出 runner 创建的 sandboxes，并使用统一的 scoped/default credential resolver。Installation scope 的目录读取必须属于所有者可管理的组织。测试必须证明未登录与已登录的公共响应完全相同、不包含 provider/scoped metadata，并保证公共与 provider catalog 的加载、重试、失败恢复和 stale response 处理彼此独立。管理面包含 Overview、`/admin/accounts` 的账户列表与角色控制、带 retry/stop 操作及统一事件时间线的 Runner Requests、Runner Specs、`/admin/sandbox_service` 的平台回退、audit、label match test 和运行时 diagnostics，不包含已退役的内部 Runner Group/Policy 管理或 provider resource catalogs。
 
-受保护的 `/runner-specs` 是不带作用域选择的普通用户只读平台目录，只显示已启用的平台规格及可复制的工作流标签；来源／状态 Badge、停用规格、账户／Organization 选择以及启用或并发控制都不在该页面展示。Settings 下的 `/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只显示该作用域自有的自定义规格。三个页面都使用 `/user/runner-specs`；该 API 只接受当前账户或可管理 Organization 作用域，作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
+受保护的 `/runner-specs` 是不带作用域选择的普通用户只读平台目录，只显示已启用且已发布的公共规格及可复制的工作流标签；来源／状态 Badge、停用规格、账户／Organization 选择以及启用或并发控制都不在该页面展示。Settings 下的 `/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只显示该作用域自有的自定义规格。三个页面都使用 `/user/runner-specs`；该 API 只接受当前账户或可管理 Organization 作用域，作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
 
-Runner Spec 回归必须区分三种目录来源：`managed` 条目返回稳定公共模板名，并以只读
-方式返回全局策略；`platform_custom` 条目只读且省略其私有 `template_id`，
-`scoped_custom` 条目只返回当前作用域自己的 `template_id`，并可包含仅供
-Organization 使用的 `runner_group`。精确规范化后的作用域标签会屏蔽同标签集合的
-全局规格，即使作用域规格已停用也不能回退。新建和更换模板的验证发生在带审计事务
-之前；不安全名称和其他无效本地字段必须在任何 provider 调用前拒绝。重复规范化
-标签、过期 revision 和使用中的修改返回稳定 `409`，且不留下部分审计状态。
-Lifecycle 测试还必须在准入后、启动前分别停用一个作用域自定义规格和全局规格，
-并证明两者都不会启动 Sandbox。UI 测试必须让旧的手动刷新或 mutation
-在切换 Organization 后才返回，并证明它不能覆盖新作用域数据或向新作用域提交。
+Runner Spec 回归须区分已发布公共 `platform_public` 条目与 scope 自有的 `scoped_custom` 条目。未发布或私有平台规格不出现在 User 响应中，物理 ID 和 Runner Group 只随所选 scope 自有条目返回。
 
 只运行 UI unit tests 时使用：
 
@@ -433,17 +406,16 @@ allowlist 这两类 warning；它们表示 manual chunk 可能生成浏览器不
 
 `task test` 会重新构建 UI、运行同一套 Bun tests，然后执行带 race detection 和 coverage 的 Go tests。Bun suite 覆盖 helper 和 server-rendered component output；导航、dialog、头像加载/回退，以及角色变更后的权限切换仍需在真实浏览器中验证。修改 onboarding 时还要验证：`/jobs` 自动启动、六个目标、跳转到 `/account/preferences`、遮罩关闭后持续显示设置任务、显式跳过的持久化，以及重播不修改状态。
 
-确认 runnerd 已协调 managed specs：
+确认已配置的公共规格（迁移保留旧行，启动不创建规格）：
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" \
   http://127.0.0.1:25500/runner_specs |
-  jq '.[] | select(.managed_by == "qiniu/ci-runner") |
+  jq '.[] | select(.template_source == "public") |
       {name, required_labels, default_template_name, enabled}'
 ```
 
-结果应恰好包含 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
-`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
+已有标准目录迁移后可包含 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`；后台修改或删除会改变列表。
 验证 5 个 `-large` labels 时，应通过分别配置的自定义 spec 验证向后兼容的
 显式模板路径：
 
@@ -714,7 +686,7 @@ curl -fsS -b "$COOKIE_JAR" \
 
 `/runner_requests/{id}/diagnostics` 仅供管理员按需调用，并使用规范的内部 Request ID。它会汇总请求状态、最新 200 条 `control_log` 生命周期事件和 GitHub Job 证据。Sandbox 就绪后、Runner 启动前，runnerd 会记录所选 Sandbox 区域和解析后的物理模板 ID，再执行一个尽力而为、最多 5 秒的探测，从 `IMAGE_VERSION` 或 `ImageVersion` 取得镜像版本，并通过 `/opt/actions-runner/bin/Runner.Listener --version` 取得预装 GitHub Actions Runner 版本。探测只解码这两个白名单值，每项最多 256 字节，绝不持久化或记录完整环境、代理值、token、key 或 cache credential。Runner 注册会保留 GitHub 官方自更新能力；Job 开始前，固定的 runnerd hook 会验证工作目录中 Runner 副本的版本，并通过受权限保护的一次性 FIFO，把一个有界标记和 `RUNNERD_JOB_STARTED` 发送给外层启动进程；官方 hook stdout 只进入 GitHub Job 日志，Sandbox 命令回调不会收到它。Sandbox 服务只接受外层进程转发的首个合法 Job 前标记，将值冻结在内存中，忽略之后所有 Workflow 输出中的版本证据，并且只通过匹配 Sandbox/PID attempt 的退出回调写入 `effective_runner_version`。hook 会在 Workflow step 开始前删除 FIFO，外层进程也会在清理时删除或停止未使用的通道。即使 provider 清理导致没有命令结果，冻结值仍可保留；如果 runnerd 在捕获后重启，因为恢复流程不会信任 Job 开始后的 Workflow 输出，这个尽力而为字段可能保持为空。探测或捕获失败不会阻塞 Runner 启动、完成或清理；已知区域和模板标识仍会保存，无法取得的值保持为空。重新重试或因 Job 错配重新排队时会清除上一次环境快照。区域物理模板 ID 只保存在 Runner Request，不会写回 managed Runner Spec。现有 SQLite 表只会增量添加可空列，因此历史记录继续有效。
 
-自定义 Runner Spec 还会经过强制注册前更新门禁。runnerd 在申请注册令牌前，从 GitHub 的仓库级或 Organization 级接口取得官方应用描述，校验 GitHub-owned URL、文件名、架构、版本与 SHA-256，且不会把 API 凭证传入 Sandbox。过期的可写 Runner 需要 `curl`、`tar`、`sha256sum`、`mktemp` 和 `timeout`；包含全部重试在内的下载过程采用五分钟硬截止和 512 MiB 上限，并在 `config.sh` 前完成归档及候选版本校验和工作目录替换。候选目录和旧目录备份会放在同一个随机同级更新根目录中，直至切换完成；旧目录移走后若收到可捕获的 HUP、INT 或 TERM，会恢复旧目录；如果恢复本身失败，则保留并报告备份路径。已安装版本与目标一致或更新时，会跳过这些工具和网络要求，且绝不会降级。查询或 Sandbox 预检失败都会阻止注册；服务端查询失败阶段记为 `github_runner_downloads`，归档版本不匹配时会同时报告实际版本和目标版本。由于模板不可变，在用户重建模板前，每个新 Sandbox 都会按预期重复下载。托管 Spec 不走该门禁，继续依赖已测试的固定版本。对刻意使用旧版自定义模板的生产验收，应确认完成 Job 的详情页显示 `runner_version != effective_runner_version`，证明当前任务由刷新后的 Runner 执行。
+`runner_update_policy=official` 的规格会经过强制注册前更新门禁。runnerd 在申请注册令牌前，从 GitHub 的仓库级或 Organization 级接口取得官方应用描述，校验 GitHub-owned URL、文件名、架构、版本与 SHA-256，且不会把 API 凭证传入 Sandbox。过期的可写 Runner 需要 `curl`、`tar`、`sha256sum`、`mktemp` 和 `timeout`；包含全部重试在内的下载过程采用五分钟硬截止和 512 MiB 上限，并在 `config.sh` 前完成归档及候选版本校验和工作目录替换。候选目录和旧目录备份会放在同一个随机同级更新根目录中，直至切换完成；旧目录移走后若收到可捕获的 HUP、INT 或 TERM，会恢复旧目录；如果恢复本身失败，则保留并报告备份路径。已安装版本与目标一致或更新时，会跳过这些工具和网络要求，且绝不会降级。查询或 Sandbox 预检失败都会阻止注册；服务端查询失败阶段记为 `github_runner_downloads`，归档版本不匹配时会同时报告实际版本和目标版本。由于模板不可变，在用户重建模板前，每个新 Sandbox 都会按预期重复下载。`runner_update_policy=preinstalled` 不走该门禁，继续依赖已测试的固定版本。对刻意使用旧版自定义模板的生产验收，应确认完成 Job 的详情页显示 `runner_version != effective_runner_version`，证明当前任务由刷新后的 Runner 执行。
 
 `POST /runner_requests/{id}/network-diagnostics` 是独立的管理员专用操作，只能用于仍为 `running` 且已持久化 Sandbox ID 和 Runner PID 的请求。JSON body 的 `target` 仅接受 `github_api`、`ubuntu_archive` 或 `llvm_apt`；服务端不接受浏览器传入的 URL、host、command、header 或 credential，也不跟随重定向。固定 Sandbox 命令最多记录 8 个 DNS 地址、实际连接 IP、DNS/TCP/TLS/首字节/总耗时、HTTP 状态、退出码，以及最多 512 字节的稳定探测错误类别；原始命令 stderr 和 provider 细节会被丢弃。完整操作上限为 10 秒，连接上限 3 秒、传输上限 8 秒，range 和最大下载量均限制为 65,536 字节。命令 stdout/stderr 合计输出另行限制为 65,536 字节，超过预算会取消命令。同一个 Request ID/Sandbox ID/PID attempt 同时只能运行一个探测，完成后有 30 秒冷却时间。handler 在 provider I/O 期间不持有 Runner 生命周期锁，provider 调用后会重新加载请求；状态或 attempt identity 变化时丢弃结果。安全的结构化结果或通用 provider 失败结果会写入 `control.log` 的 `network_diagnostic` stage；绝不改变请求状态、重试字段、终止归属、清理流程或 GitHub workflow timeout。历史及终态请求仍可查看，但不能执行实时探测。
 

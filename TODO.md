@@ -7,7 +7,7 @@ This file tracks active project work. Completed behavior should move into `READM
 - If the original llgo network failure recurs, capture comparable live GitHub API, Ubuntu archive, and LLVM APT evidence from the same running Sandbox before changing diagnostics again. The original root cause remains unverified without that same-window evidence.
 - Keep a separate downloadable diagnostic bundle out of the active roadmap unless a real need emerges for cross-team handoff without UI access, long-term offline archiving, or repeated manual evidence assembly. The Admin Runner request page and its retained timeline remain the single diagnostic surface.
 - Plan separately authorized cleanup of historical `runner_requests.github_payload_json` after verifying GitHub context and installation-ID backfills on a backup. New requests no longer store raw webhook bodies; existing payloads, the legacy column, and startup backfill remain. Historical request/log retention and repeated-log limits are still undecided.
-- Decide separately whether repository-level Runner Spec overrides need a future product model. Organization fork sponsorship is intentionally limited to managed Specs and must not restore the retired Repository Policy model.
+- Decide separately whether repository-level Runner Spec overrides need a future product model. Organization fork sponsorship is intentionally limited to public-name Specs with explicit sponsorship enabled and must not restore the retired Repository Policy model.
 - Decide whether GitHub token and basic auth remain supported compatibility modes or should be removed in favor of GitHub App-only operation.
 - Add an effective-config diagnostics view or config validation workflow if operators need to inspect runtime config from the UI.
 - Verify DB lease behavior with two runnerd processes sharing the same database before documenting multi-instance support.
@@ -25,11 +25,13 @@ This file tracks active project work. Completed behavior should move into `READM
   than attempting an uncertain automatic rollback.
 - Keep old-schema upgrade coverage whenever state records or GORM tags change; the current migration path is a narrow legacy compatibility pass followed by `AutoMigrate`, with additive-only handling for existing SQLite `runner_requests` and `runner_profiles`, not a full handwritten migration history.
 - Run the scoped Runner Specs release gates when dedicated environments are available: PostgreSQL/MySQL audited-mutation and fresh-schema tests, a production SQLite snapshot migration, and the SQLite down-version startup check against the documented baseline.
-- Extend fixture-backed production UI smoke to cover `/runner-specs`, `/account/runner-specs`, and one Organization scope, including stale-scope response isolation; the current four-test smoke covers public pages and the Jobs layout only.
+- Extend fixture-backed production UI smoke to cover `/account/runner-specs` and one Organization scope, including stale-scope response isolation; `/runner-specs` and Admin catalog editing have local browser coverage.
 - Run one real personal-account and one real Organization GitHub Actions workflow through the scoped Runner Specs path, including Sandbox template validation, cleanup, and the repository-only outsider authorization boundary.
 - Execute the deployment canary for the scoped Runner Specs routes and update `docs/user-scoped-runner-configuration.md` with origin, version, and cleanup evidence; local fixture-backed browser smoke is not a deployment substitute.
 
 ## Maintenance
+
+- Keep [Platform Runner Specs](docs/platform-runner-specs.md) aligned with Admin policy fields and public-directory projection. Production snapshot migration, down-version startup and real regional workflow smoke remain deployment gates.
 
 - Keep Job details focused on the shared Runner event timeline, Web Console, and request details. Jobs and admin request details must use the same event rows and cursor behavior while retaining their authorization boundaries. Workflow step logs remain on GitHub through the Job/Run link; do not restore duplicate log fetching or streaming without a separately validated need. See [Testing: GitHub Actions logs](docs/testing.md#9-how-to-read-github-actions-logs).
 

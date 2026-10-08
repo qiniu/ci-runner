@@ -142,22 +142,14 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" https://<runner
 - 移除 audience entry 会阻止新的 fallback resolution，但不会改变已 snapshot 的 runner request。
 - 禁用 admin default 后，原本未配置的 account 会得到 `sandbox service not configured`。
 
-启动后确认 runnerd 协调了且仅协调了 5 个 managed specs，并且没有自定义名称
-冲突：
+升级后检查数据库目录，确认旧公共名称规格保留标签、容量、发布、Runner 准备方式、Docker 和赞助策略。新安装目录为空，须先由管理员创建规格。详见[平台 Runner 规格管理](platform-runner-specs.md)。
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
-  jq '[.[] | select(.managed_by == "qiniu/ci-runner") |
-      {name, required_labels, default_template_name, enabled}]'
+  jq '[.[] | {name, template_source, published, required_labels, default_template_name, runner_update_policy, require_docker, fork_sponsorship, enabled}]'
 ```
 
-预期名称为 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、
-`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`。
-确认启动日志中不存在 managed-profile name collision。在每个已配置的 Sandbox
-区域运行 `task template-defaults-check` 并保存 8 个物理模板 ID；runnerd 必须通过该
-scoped endpoint 解析相同稳定名称，不能保存某一区域的 ID。
-另外在 Admin 中分别验证已启用的 5 个 `-large` 对外默认 spec；这些 label 由
-operator 配置，不应出现在 managed 条目中。
+已有标准目录的 5 个逻辑名称包括 `qiniu-ubuntu-slim`、`qiniu-ubuntu-22.04`、`qiniu-ubuntu-24.04`、`qiniu-ubuntu-26.04` 和 `qiniu-ubuntu-latest`；这是迁移示例，不是启动时要求的固定数量。每个已配置区域运行 `task template-defaults-check` 并保存 8 个物理模板 ID。公共名称通过该 scope 的 endpoint 解析，不能写回某一区域的 ID。large 规格只有配置经过校验的公共名称并明确发布后才进入公共目录。
 
 运行正向和负向 match tests：
 
@@ -187,8 +179,7 @@ curl -fsS -X POST https://<runnerd-host>/runner_specs/match \
 
 - 不存在的模板返回 `400 template_not_found`，不修改 spec 和审计记录。
 - 没有可用默认构建时返回 `400 template_not_ready`。
-- 缺少后台凭据时返回 `409 sandbox_service_not_configured`；managed 控制项和
-  现有自定义 spec 的非模板参数仍可修改。
+- 缺少后台凭据时返回 `409 sandbox_service_not_configured`；不改变模板的非发布操作仍可修改。
 - 上游权限错误、服务故障和超时均拒绝保存并给出可操作提示；修正后重试可成功。
 - 新构建仍在进行时，已有可用默认构建的模板仍能保存。
 - 自定义 spec 仍可编辑和删除，并单独验证真实任务。
@@ -324,13 +315,13 @@ Workflow 完成后确认：
 - 在 Admin 中禁用 `qiniu-ubuntu-24.04`，重启 runnerd，并确认它仍保持禁用；
   重新启用后确认恢复调度。
 - 降低某个 managed spec 的 concurrency，并触发两个 jobs。
-- 运行 `deployment-custom` spec，确认使用显式 template ID；随后删除它，并
-  确认删除 managed spec 仍返回 conflict。
+- 运行 `deployment-custom` spec，确认使用显式 template ID；清理后删除它。任何活动全局规格的执行参数修改或删除应返回 `409 runner_spec_in_use`；空闲的原托管规格可编辑和删除，重启后修改仍保留且删除条目不会重建。
+- 发布经过校验的公共名称规格，检查 `/runner-specs` 和公共模板 API；取消发布后两处均隐藏（公共 API 缓存最多 60 秒）。私有 ID 不得出现，无效公共名称应拒绝且没有审计记录。
 
 预期结果取决于场景：
 
 - unmatched labels 或 disabled specs 会记录为 admission failures；
-- reconciliation 会在重启后保留 operator 控制的 disabled 状态；
+- 数据库在重启后保留全部管理员修改；
 - concurrency pressure 会让后续 requests 保持 queued，而不是被丢弃；
 - retryable placement 或 rate-limit failures 会填充 `next_retry_at`，并保持后续可处理。
 

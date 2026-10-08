@@ -206,8 +206,8 @@ func (s *DBStore) ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRu
 			globalLabelKeys[labelKey] = struct{}{}
 		}
 		source := "platform_custom"
-		if profile.ManagedBy != "" {
-			source = "managed"
+		if profile.TemplateSource == TemplateSourcePublic {
+			source = "platform_public"
 		}
 		items = append(items, EffectiveRunnerProfile{Source: source, ScopeType: scope.Type, ScopeID: scope.ID, Profile: profile, WorkflowLabels: append([]string(nil), profile.Labels...)})
 	}

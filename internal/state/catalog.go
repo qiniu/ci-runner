@@ -60,7 +60,7 @@ func ValidateProfile(profile RunnerProfile) error {
 	if !labelsMatch(profile.RequiredLabels, profile.Labels) {
 		return fmt.Errorf("required labels must be a subset of labels")
 	}
-	return nil
+	return ValidateProfilePolicy(NormalizeProfilePolicy(profile))
 }
 
 func (s *DBStore) UpsertProfile(profile RunnerProfile) (RunnerProfile, error) {
@@ -78,6 +78,7 @@ func (s *DBStore) saveProfile(profile RunnerProfile, conditional bool, expectedU
 	if err != nil {
 		return RunnerProfile{}, err
 	}
+	profile = NormalizeProfilePolicy(profile)
 	profile.Name = strings.TrimSpace(profile.Name)
 	if err := ValidateProfile(profile); err != nil {
 		return RunnerProfile{}, err
@@ -108,6 +109,11 @@ func (s *DBStore) saveProfile(profile RunnerProfile, conditional bool, expectedU
 		RequiredLabelsJSON:  &requiredLabelsJSONText,
 		TemplateID:          profile.TemplateID,
 		DefaultTemplateName: profile.DefaultTemplateName,
+		TemplateSource:      profile.TemplateSource,
+		Published:           profile.Published,
+		RunnerUpdatePolicy:  profile.RunnerUpdatePolicy,
+		RequireDocker:       profile.RequireDocker,
+		ForkSponsorship:     profile.ForkSponsorship,
 		RunnerGroup:         profile.RunnerGroup,
 		MaxConcurrency:      profile.MaxConcurrency,
 		MinIdle:             profile.MinIdle,
@@ -127,6 +133,11 @@ func (s *DBStore) saveProfile(profile RunnerProfile, conditional bool, expectedU
 		"required_labels_json":  record.RequiredLabelsJSON,
 		"template_id":           record.TemplateID,
 		"default_template_name": record.DefaultTemplateName,
+		"template_source":       record.TemplateSource,
+		"published":             record.Published,
+		"runner_update_policy":  record.RunnerUpdatePolicy,
+		"require_docker":        record.RequireDocker,
+		"fork_sponsorship":      record.ForkSponsorship,
 		"runner_group":          record.RunnerGroup,
 		"max_concurrency":       record.MaxConcurrency,
 		"min_idle":              record.MinIdle,
@@ -161,173 +172,11 @@ func (s *DBStore) saveProfile(profile RunnerProfile, conditional bool, expectedU
 	return s.GetProfile(record.Name)
 }
 
-// ReconcileManagedProfiles creates or upgrades catalog-owned profiles while preserving operator controls.
-func (s *DBStore) ReconcileManagedProfiles(profiles []RunnerProfile) ([]ManagedProfileConflict, error) {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return nil, err
-	}
-	conflicts := make([]ManagedProfileConflict, 0)
-	err = db.Transaction(func(tx *gorm.DB) error {
-		for _, profile := range profiles {
-			profile.Name = strings.TrimSpace(profile.Name)
-			profile.ManagedBy = strings.TrimSpace(profile.ManagedBy)
-			if profile.Name == "" {
-				return fmt.Errorf("profile name is required")
-			}
-			if err := validateProfileName(profile.Name); err != nil {
-				return err
-			}
-			if profile.ManagedBy == "" {
-				return fmt.Errorf("managed profile owner is required")
-			}
-			if !labelsMatch(profile.RequiredLabels, profile.Labels) {
-				return fmt.Errorf("required labels must be a subset of labels")
-			}
-
-			var existing runnerProfileRecord
-			findErr := tx.First(&existing, "name = ?", profile.Name).Error
-			if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
-				return findErr
-			}
-			if findErr == nil {
-				if existing.ManagedBy == "" || existing.ManagedBy != profile.ManagedBy {
-					conflicts = append(conflicts, ManagedProfileConflict{
-						Name:              profile.Name,
-						ExistingManagedBy: existing.ManagedBy,
-					})
-					continue
-				}
-				if existing.CatalogRevision >= profile.CatalogRevision {
-					continue
-				}
-			}
-
-			labelsJSON, requiredLabelsJSON, err := marshalProfileLabels(profile)
-			if err != nil {
-				return err
-			}
-			now := time.Now().UTC()
-			if errors.Is(findErr, gorm.ErrRecordNotFound) {
-				createdAt := profile.CreatedAt
-				if createdAt.IsZero() {
-					createdAt = now
-				}
-				record := runnerProfileRecord{
-					Name:                profile.Name,
-					LabelsJSON:          labelsJSON,
-					RequiredLabelsJSON:  &requiredLabelsJSON,
-					TemplateID:          profile.TemplateID,
-					DefaultTemplateName: profile.DefaultTemplateName,
-					RunnerGroup:         profile.RunnerGroup,
-					MaxConcurrency:      profile.MaxConcurrency,
-					MinIdle:             profile.MinIdle,
-					Priority:            profile.Priority,
-					Enabled:             profile.Enabled,
-					DefaultAvailable:    true,
-					ManagedBy:           profile.ManagedBy,
-					CatalogRevision:     profile.CatalogRevision,
-					CreatedAt:           createdAt,
-					UpdatedAt:           now,
-				}
-				if err := tx.Create(&record).Error; err != nil {
-					return err
-				}
-				if err := appendManagedProfileReconciliationAudit(tx, profile, now); err != nil {
-					return err
-				}
-				continue
-			}
-
-			updates := map[string]any{
-				"labels_json":           labelsJSON,
-				"required_labels_json":  &requiredLabelsJSON,
-				"template_id":           profile.TemplateID,
-				"default_template_name": profile.DefaultTemplateName,
-				"runner_group":          profile.RunnerGroup,
-				"priority":              profile.Priority,
-				"managed_by":            profile.ManagedBy,
-				"catalog_revision":      profile.CatalogRevision,
-				"updated_at":            now,
-			}
-			result := tx.Model(&runnerProfileRecord{}).
-				Where(
-					"name = ? AND managed_by = ? AND catalog_revision < ?",
-					profile.Name,
-					existing.ManagedBy,
-					profile.CatalogRevision,
-				).
-				Updates(updates)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				var current runnerProfileRecord
-				if err := tx.First(&current, "name = ?", profile.Name).Error; err != nil {
-					if errors.Is(err, gorm.ErrRecordNotFound) {
-						continue
-					}
-					return err
-				}
-				if current.ManagedBy == "" || current.ManagedBy != profile.ManagedBy {
-					conflicts = append(conflicts, ManagedProfileConflict{
-						Name:              profile.Name,
-						ExistingManagedBy: current.ManagedBy,
-					})
-				}
-				continue
-			}
-			if err := appendManagedProfileReconciliationAudit(tx, profile, now); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return conflicts, nil
-}
-
 func validateProfileName(name string) error {
 	if strings.Contains(name, "/") || name == "." || name == ".." {
 		return fmt.Errorf("profile name must not contain '/' or be '.' or '..'")
 	}
 	return nil
-}
-
-func appendManagedProfileReconciliationAudit(tx *gorm.DB, profile RunnerProfile, now time.Time) error {
-	payload, err := json.Marshal(map[string]any{
-		"managed_by":       profile.ManagedBy,
-		"catalog_revision": profile.CatalogRevision,
-	})
-	if err != nil {
-		return err
-	}
-	return tx.Create(&auditEventRecord{
-		Actor:        "runnerd_startup",
-		Action:       "profile.reconcile",
-		ResourceType: "runner_profile",
-		ResourceID:   profile.Name,
-		PayloadJSON:  string(payload),
-		CreatedAt:    now,
-	}).Error
-}
-
-func marshalProfileLabels(profile RunnerProfile) (string, string, error) {
-	labelsJSON, err := json.Marshal(profile.Labels)
-	if err != nil {
-		return "", "", err
-	}
-	requiredLabels := profile.RequiredLabels
-	if requiredLabels == nil {
-		requiredLabels = []string{}
-	}
-	requiredLabelsJSON, err := json.Marshal(requiredLabels)
-	if err != nil {
-		return "", "", err
-	}
-	return string(labelsJSON), string(requiredLabelsJSON), nil
 }
 
 func (s *DBStore) DeleteProfile(name string) error {

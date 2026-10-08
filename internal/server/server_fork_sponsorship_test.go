@@ -251,7 +251,7 @@ func TestForkSponsorshipDoesNotHideCorruptSponsorConfigurationWithPlatformDefaul
 	}
 }
 
-func TestForkSponsorshipCapacityAndManagedOnlyBoundary(t *testing.T) {
+func TestForkSponsorshipCapacityAndPublicPolicyBoundary(t *testing.T) {
 	githubServer := forkSponsorshipGitHubServer(t)
 	defer githubServer.Close()
 	store := state.New(t.TempDir())
@@ -285,6 +285,27 @@ func TestForkSponsorshipCapacityAndManagedOnlyBoundary(t *testing.T) {
 	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "custom", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "platform-custom", ProfileSource: "global"})
 	if !errors.Is(err, errSandboxServiceNotConfigured) {
 		t.Fatalf("platform custom profile unexpectedly used sponsorship: %v", err)
+	}
+	profile, err := store.GetProfile("ubuntu-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.ForkSponsorship = false
+	if _, err := store.UpsertProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "no-sponsorship", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "ubuntu-managed", ProfileSource: "global"})
+	if !errors.Is(err, errSandboxServiceNotConfigured) {
+		t.Fatalf("disabled sponsorship used sponsor credentials: %v", err)
+	}
+	profile.ForkSponsorship = true
+	profile.Published = false
+	if _, err := store.UpsertProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "unpublished-sponsorship", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "ubuntu-managed", ProfileSource: "global"})
+	if err != nil || snapshot.Source != sandboxConfigSourceForkSponsorship {
+		t.Fatalf("publication changed independent sponsorship: %#v %v", snapshot, err)
 	}
 }
 

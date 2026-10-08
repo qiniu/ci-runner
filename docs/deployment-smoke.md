@@ -146,24 +146,14 @@ Before creating runner specs, verify Sandbox credential precedence:
 - Removing an audience entry blocks new fallback resolution without changing an already-snapshotted runner request.
 - Disabling the admin default makes an otherwise unconfigured account fail with `sandbox service not configured`.
 
-On startup, confirm runnerd reconciles exactly five managed specs without a
-custom-name conflict:
+After upgrading, inspect the database catalog and confirm that old public-name specs retain their labels, capacity, publication, preparation, Docker and sponsorship policies. Fresh installations have no specs until an administrator creates them. See [Platform Runner Specs](platform-runner-specs.md).
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" https://<runnerd-host>/runner_specs |
-  jq '[.[] | select(.managed_by == "qiniu/ci-runner") |
-      {name, required_labels, default_template_name, enabled}]'
+  jq '[.[] | {name, template_source, published, required_labels, default_template_name, runner_update_policy, require_docker, fork_sponsorship, enabled}]'
 ```
 
-Expected names are `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`,
-`qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`.
-Confirm startup logs contain no managed-profile name collision. In each
-configured Sandbox region, run `task template-defaults-check` and retain the
-eight physical-template IDs; runnerd must resolve the same stable name through that scoped
-endpoint rather than persist one region's ID.
-Separately verify each of the five enabled `-large` public default specs in
-Admin; those labels are operator-configured and must not appear as managed
-entries.
+For an existing standard catalog, the five logical names include `qiniu-ubuntu-slim`, `qiniu-ubuntu-22.04`, `qiniu-ubuntu-24.04`, `qiniu-ubuntu-26.04`, and `qiniu-ubuntu-latest`. These are migration examples, not a required startup count. In each configured Sandbox region, run `task template-defaults-check` and retain the eight physical-template IDs. Public-name bindings resolve through that scoped endpoint without persisting one region's ID. Large specs enter the public directory only after configuring a validated public-name binding and explicitly publishing them.
 
 Run positive and negative match tests:
 
@@ -345,13 +335,13 @@ still under observation:
   disabled. Re-enable it and confirm scheduling resumes.
 - Lower a managed spec's concurrency and trigger two jobs.
 - Run the `deployment-custom` spec, confirm its explicit template ID is used,
-  then delete it and confirm managed-spec delete still returns conflict.
+  then delete it after cleanup. Execution edits and deletion of any active global spec must return `409 runner_spec_in_use`; an idle former managed spec can be edited and deleted. Restart must preserve edits and must not recreate deleted specs.
+- Publish a validated public-name spec and verify `/runner-specs` and the public template API. Unpublish it and confirm both hide it (the public API cache may last 60 seconds). Private IDs must remain absent. Invalid public names must reject without an audit event.
 
 Expected result depends on the scenario:
 
 - unmatched labels or disabled specs are recorded as admission failures;
-- reconciliation preserves the operator-controlled disabled state across
-  restart;
+- the database preserves all operator changes across restart;
 - concurrency pressure leaves later requests queued rather than dropped;
 - retryable placement or rate-limit failures populate `next_retry_at` and remain eligible for later processing.
 

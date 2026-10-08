@@ -10,7 +10,7 @@
 
 - 产品统一使用“Runner Spec／Runner 规格”，不再对用户显示“Runner Type”。
 - Admin 管理全局平台 Runner Spec。其名称、标签、模板映射、启用状态和并发策略均为平台级配置。
-- 普通用户在顶层 `/runner-specs` 只读浏览平台规格并复制 `runs-on` 标签。该页面不选择账户或 Organization，也不提供启用、停用或并发编辑。
+- 普通用户在顶层 `/runner-specs` 只读浏览启用且已发布的公共规格并复制 `runs-on` 标签。该页面不选择账户或 Organization，也不提供启用、停用或并发编辑。
 - 账户在 `/account/runner-specs` 管理自己的自定义规格；Organization 在 `/organizations/{login}/runner-specs` 管理自己的自定义规格。
 - 自定义规格只能被同一作用域 owner 的仓库匹配。对其他仓库只有访问权的外部协作者不能读取或修改该作用域配置。
 - 账户自定义规格不支持 `runner_group`；Organization 自定义规格可以设置 GitHub Runner Group。
@@ -22,7 +22,7 @@
 
 | 页面 | 内容 | 可执行操作 |
 | --- | --- | --- |
-| `/admin/runner_specs` | 全局 managed 与 Admin 自定义平台规格 | Admin 创建、修改、启停、删除和设置全局并发 |
+| `/admin/runner_specs` | 全部数据库平台规格 | Admin 创建、修改、启停、删除和设置全局并发 |
 | `/runner-specs` | 平台规格目录 | 普通用户只读、复制工作流标签 |
 | `/account/runner-specs` | 当前账户自定义规格 | 当前账户创建、修改、启停和删除 |
 | `/organizations/{login}/runner-specs` | Organization 自定义规格 | 具有 active GitHub 组织所有者身份（`role == admin`）的用户创建、修改、启停和删除 |
@@ -32,7 +32,7 @@
 
 - Account 请求只能解析为当前登录账户。
 - Organization 请求必须经过 `accountPreferenceScopeManageable`，仅 active GitHub 组织所有者（`role == admin`）可管理；普通成员、repository-only 用户、失效成员关系或未关联 Installation 均不得读取完整目录或执行 Mutation。
-- `/runner-specs` 在 UI 上没有作用域概念。当前实现通过登录账户调用 `/user/runner-specs` 获取经过脱敏的平台目录，并只渲染 `managed` 与 `platform_custom` 来源。
+- `/runner-specs` 在 UI 上没有作用域概念。当前实现通过登录账户调用 `/user/runner-specs` 获取经过脱敏的平台目录，并只渲染启用、已发布的 `platform_public` 来源。
 - Settings 页面只渲染当前请求作用域自己的 `scoped_custom` 条目。
 - 异步列表、模板加载、Mutation 和后续刷新必须绑定发起请求的 scope；旧 Organization 响应不能覆盖当前页面或向新 scope 提交。
 
@@ -55,12 +55,11 @@ PUT    /user/runner-specs/{name}/control
 DELETE /user/runner-specs/{name}/control
 ```
 
-列表必须区分三种来源：
+列表区分公共平台与 scope 自有来源；私有／未发布平台条目不返回：
 
 | `source` | 含义 | 用户可见字段与能力 |
 | --- | --- | --- |
-| `managed` | runnerd 托管的平台规格 | 稳定公共模板名、工作流标签、全局只读 `enabled` 和 `max_concurrency` |
-| `platform_custom` | Admin 创建的平台自定义规格 | 工作流标签与全局只读策略；不得返回私有 `template_id` |
+| `platform_public` | Admin 已发布的公共模板规格 | 稳定公共模板名、工作流标签、全局只读 `enabled` 和 `max_concurrency` |
 | `scoped_custom` | 当前账户或 Organization 自定义规格 | 当前 scope 自己的 `template_id`、策略和修订时间；Organization 可见 `runner_group` |
 
 响应不得包含早期试验字段：
@@ -183,7 +182,7 @@ scoped custom spec:
 
 ## 9. 向下兼容结论
 
-- Admin `/runner_specs`、Admin UI、全局 `runner_profiles` 和全局匹配合同不变。
+- Admin `/runner_specs` 和全局 `runner_profiles` 统一维护所有平台规格；旧托管策略增量迁移后不再受代码目录维护。详见[平台 Runner 规格管理](zh/platform-runner-specs.md)。
 - 没有 scoped custom 匹配时，现有 workflow 继续使用原全局目录。
 - 历史 request 的空 `profile_source` 继续按 global 处理。
 - 新 schema 只增量添加 scoped custom 与 request 身份字段；不删除历史列或表。

@@ -408,7 +408,7 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid profile payload")
 		return
 	}
-	if payload.containsAny("managed_by", "catalog_revision", "default_template_name") {
+	if payload.containsAny("managed_by", "catalog_revision") {
 		writeError(w, http.StatusBadRequest, "managed runner spec metadata cannot be set by clients")
 		return
 	}
@@ -418,20 +418,12 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
-	if input.TemplateID == "" {
+	if input.TemplateSource != state.TemplateSourcePublic && input.TemplateID == "" {
 		writeError(w, http.StatusBadRequest, "template_id is required")
 		return
 	}
 	existing, err := s.store.GetProfile(input.Name)
-	if err == nil && strings.TrimSpace(existing.ManagedBy) != "" {
-		writeErrorCode(
-			w,
-			http.StatusConflict,
-			managedRunnerSpecErrorCode,
-			"managed runner specs cannot be overwritten",
-		)
-		return
-	}
+
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		s.logger.Error("load runner spec before create", "name", input.Name, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -447,6 +439,9 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	requestedProfile := state.RunnerProfile{
 		Name:           input.Name,
+		TemplateSource: input.TemplateSource, DefaultTemplateName: strings.TrimSpace(input.DefaultTemplateName),
+		Published: input.Published, RunnerUpdatePolicy: input.RunnerUpdatePolicy,
+		RequireDocker: input.RequireDocker, ForkSponsorship: input.ForkSponsorship,
 		Labels:         input.Labels,
 		RequiredLabels: input.RequiredLabels,
 		TemplateID:     input.TemplateID,
@@ -456,22 +451,32 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		Priority:       intValue(input.Priority),
 		Enabled:        enabled,
 	}
+	requestedProfile = state.NormalizeProfilePolicy(requestedProfile)
 	if err := state.ValidateProfile(requestedProfile); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !s.validateAdminProfileTemplate(w, r, requestedProfile.TemplateID) {
+	if !s.validateAdminProfileTemplateBinding(w, r, requestedProfile) {
 		return
 	}
 	var profile state.RunnerProfile
 	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.create", "runner_profile", strings.TrimSpace(requestedProfile.Name), requestedProfile, func(tx state.Store) error {
+		if expectedUpdatedAt != nil && profileExecutionChanged(existing, requestedProfile) {
+			count, countErr := tx.ActiveCountForProfile(requestedProfile.Name)
+			if countErr != nil {
+				return countErr
+			}
+			if count > 0 {
+				return errRunnerSpecInUse
+			}
+		}
 		profile, err = tx.UpsertProfileIfUnchanged(requestedProfile, expectedUpdatedAt)
 		return err
 	})
 	s.admissionMu.Unlock()
 	if err != nil {
-		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
+		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
 		}
 		s.logger.Info("profile create rejected", "name", input.Name, "error", err)
@@ -504,16 +509,14 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "profile not found")
 		return
 	}
+	previous := current
 	payload, err := readProfileRequestPayload(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile payload")
 		return
 	}
-	if strings.TrimSpace(current.ManagedBy) != "" {
-		s.handlePatchManagedProfile(w, current, payload)
-		return
-	}
-	if payload.containsAny("managed_by", "catalog_revision", "default_template_name") {
+
+	if payload.containsAny("managed_by", "catalog_revision") {
 		writeError(w, http.StatusBadRequest, "managed runner spec metadata cannot be set by clients")
 		return
 	}
@@ -528,12 +531,33 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 	if input.RequiredLabels != nil {
 		current.RequiredLabels = *input.RequiredLabels
 	}
-	previousTemplateID := strings.TrimSpace(current.TemplateID)
+	if input.ExpectedUpdatedAt != "" && input.ExpectedUpdatedAt != current.UpdatedAt.UTC().Format(time.RFC3339Nano) {
+		writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner Spec changed while saving; refresh and try again")
+		return
+	}
+	if input.TemplateSource != nil {
+		current.TemplateSource = strings.TrimSpace(*input.TemplateSource)
+	}
+	if input.DefaultTemplateName != nil {
+		current.DefaultTemplateName = strings.TrimSpace(*input.DefaultTemplateName)
+	}
+	if input.Published != nil {
+		current.Published = *input.Published
+	}
+	if input.RunnerUpdatePolicy != nil {
+		current.RunnerUpdatePolicy = strings.TrimSpace(*input.RunnerUpdatePolicy)
+	}
+	if input.RequireDocker != nil {
+		current.RequireDocker = *input.RequireDocker
+	}
+	if input.ForkSponsorship != nil {
+		current.ForkSponsorship = *input.ForkSponsorship
+	}
 	if input.TemplateID != nil {
 		current.TemplateID = *input.TemplateID
 	}
 	current.TemplateID = strings.TrimSpace(current.TemplateID)
-	if current.TemplateID == "" {
+	if current.TemplateSource == state.TemplateSourcePrivate && current.TemplateID == "" {
 		writeError(w, http.StatusBadRequest, "template_id is required")
 		return
 	}
@@ -556,18 +580,27 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if current.TemplateID != previousTemplateID && !s.validateAdminProfileTemplate(w, r, current.TemplateID) {
+	if (current.TemplateID != previous.TemplateID || current.TemplateSource != previous.TemplateSource || current.DefaultTemplateName != previous.DefaultTemplateName || (!previous.Published && current.Published) || (!previous.Enabled && current.Enabled && current.Published)) && !s.validateAdminProfileTemplateBinding(w, r, current) {
 		return
 	}
 	var profile state.RunnerProfile
 	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
+		if profileExecutionChanged(previous, current) {
+			count, countErr := tx.ActiveCountForProfile(current.Name)
+			if countErr != nil {
+				return countErr
+			}
+			if count > 0 {
+				return errRunnerSpecInUse
+			}
+		}
 		profile, err = tx.UpsertProfileIfUnchanged(current, &current.UpdatedAt)
 		return err
 	})
 	s.admissionMu.Unlock()
 	if err != nil {
-		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
+		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
 		}
 		s.logger.Info("profile update rejected", "name", current.Name, "error", err)
@@ -575,60 +608,6 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("profile updated", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
-	s.refreshMetrics()
-	writeJSON(w, http.StatusOK, profile)
-}
-
-func (s *Server) handlePatchManagedProfile(w http.ResponseWriter, current state.RunnerProfile, payload profileRequestPayload) {
-	if payload.containsAny(
-		"labels",
-		"required_labels",
-		"template_id",
-		"runner_group",
-		"priority",
-		"default_template_name",
-		"managed_by",
-		"catalog_revision",
-	) {
-		writeErrorCode(
-			w,
-			http.StatusConflict,
-			managedRunnerSpecErrorCode,
-			"managed runner spec catalog fields cannot be changed",
-		)
-		return
-	}
-	var input patchProfileRequest
-	if err := payload.decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid profile payload")
-		return
-	}
-	if input.MaxConcurrency != nil {
-		current.MaxConcurrency = *input.MaxConcurrency
-	}
-	if input.MinIdle != nil {
-		current.MinIdle = *input.MinIdle
-	}
-	if input.Enabled != nil {
-		current.Enabled = *input.Enabled
-	}
-	var profile state.RunnerProfile
-	s.admissionMu.Lock()
-	err := s.applyMutationWithAudit("admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
-		var mutationErr error
-		profile, mutationErr = tx.UpsertProfileIfUnchanged(current, &current.UpdatedAt)
-		return mutationErr
-	})
-	s.admissionMu.Unlock()
-	if err != nil {
-		if writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Info("managed profile update rejected", "name", current.Name, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.logger.Info("managed profile updated", "name", profile.Name, "max_concurrency", profile.MaxConcurrency, "min_idle", profile.MinIdle, "enabled", profile.Enabled)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusOK, profile)
 }
@@ -670,28 +649,38 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	profile, err := s.store.GetProfile(name)
+	current, err := s.store.GetProfile(name)
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		s.logger.Error("load runner spec before delete", "name", name, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err == nil && strings.TrimSpace(profile.ManagedBy) != "" {
-		writeErrorCode(
-			w,
-			http.StatusConflict,
-			managedRunnerSpecErrorCode,
-			"managed runner specs cannot be deleted",
-		)
-		return
-	}
+
+	profileExists := err == nil
 	s.admissionMu.Lock()
 	err = s.applyMutationWithAudit("admin_api", "profile.delete", "runner_profile", name, map[string]any{"status": "deleted"}, func(tx state.Store) error {
+		count, countErr := tx.ActiveCountForProfile(name)
+		if countErr != nil {
+			return countErr
+		}
+		if count > 0 {
+			return errRunnerSpecInUse
+		}
+		latest, readErr := tx.GetProfile(name)
+		if profileExists {
+			if readErr != nil || !latest.UpdatedAt.Equal(current.UpdatedAt) {
+				return state.ErrConflict
+			}
+		} else if readErr == nil {
+			return state.ErrConflict
+		} else if !errors.Is(readErr, state.ErrNotFound) {
+			return readErr
+		}
 		return tx.DeleteProfile(name)
 	})
 	s.admissionMu.Unlock()
 	if err != nil {
-		if writeMutationAuditError(w, err) {
+		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
 		}
 		s.logger.Error("delete profile", "name", name, "error", err)

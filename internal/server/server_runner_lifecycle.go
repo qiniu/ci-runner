@@ -453,7 +453,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	}
 	templateID := profile.TemplateID
 	var runnerApplications []sandboxrunner.RunnerApplication
-	if strings.TrimSpace(profile.ManagedBy) != "" {
+	if profile.TemplateSource == state.TemplateSourcePublic {
 		catalog, ok := sandboxService.(sandboxrunner.DefaultTemplateCatalog)
 		if !ok {
 			s.failStart(id, st, "template_resolution", newDefaultTemplateResolutionError(
@@ -476,7 +476,8 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			s.failStart(id, st, "template_resolution", err)
 			return
 		}
-	} else {
+	}
+	if profile.RunnerUpdatePolicy != state.RunnerUpdatePreinstalled {
 		s.logger.Info("resolving github runner applications", "id", id)
 		s.store.AppendLog(id, "control.log", []byte("resolving github runner applications for preflight update\n"))
 		applications, err := s.gh.ListRunnerApplications(ctx, req.RepositoryFullName, req.RunnerGroup)
@@ -519,7 +520,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			RunnerGroup:        strings.TrimSpace(req.RunnerGroup),
 			RunnerApplications: runnerApplications,
 			TemplateID:         templateID,
-			RequireDocker:      strings.TrimSpace(profile.ManagedBy) != "",
+			RequireDocker:      profile.RequireDocker,
 			Timeout:            s.cfg.SandboxTimeout,
 			CommandContext:     ctx,
 			OnStdout:           func(data []byte) { s.appendRunnerStdout(id, data) },

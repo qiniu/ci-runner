@@ -28,7 +28,7 @@ Implemented pieces:
 Known boundaries:
 
 - GitHub Enterprise Server is rejected by config validation; only `https://api.github.com` is supported.
-- Runner Specs are managed through the admin API/UI, not through `runnerd.yaml`. Internal Runner Groups and Repository Policies are retired; the optional `runner_group` field remains only as the GitHub Organization Runner Group registration target.
+- The database owns all platform Runner Specs; Admin maintains binding, publication and independent execution policies. Startup performs one-time legacy policy migration without seeding or reconciling fixed defaults. See [Platform Runner Specs](platform-runner-specs.md). Runner Specs are managed through the admin API/UI, not through `runnerd.yaml`. Internal Runner Groups and Repository Policies are retired; the optional `runner_group` field remains only as the GitHub Organization Runner Group registration target.
 - Token and basic auth still exist as compatibility modes. Product policy has not decided whether to keep them for production.
 - Multi-instance behavior should not be advertised until two runnerd processes have been verified against the same database.
 - Sandbox provider catalogs are ordinary-user resources, not admin configuration. `GET /user/sandbox/templates` and `GET /user/sandbox/instances` resolve scoped credentials and then the enabled admin fallback, accept only supported region ids, and keep secrets server-side.
@@ -87,7 +87,7 @@ flowchart TB
 
 ### Runner Request Lifecycle
 
-Admission and capacity are separate steps. Webhooks admit a request only after the repository allowlist and the effective account/Organization Runner Spec label checks pass. Exact scoped custom labels are evaluated before the scope-controlled global catalog, and the selected source, scope, and name are persisted with the request. Capacity is checked later by the worker when it claims a queued request, so over-capacity work remains queued instead of being rejected. Before registration or Sandbox creation, the worker reloads that persisted identity and revalidates the latest enabled state and requested labels.
+Admission and capacity are separate steps. Webhooks admit a request only after the repository allowlist and the effective account/Organization Runner Spec label checks pass. Exact scoped custom labels are evaluated before the global catalog, and the selected source, scope, and name are persisted with the request. Capacity is checked later by the worker when it claims a queued request, so over-capacity work remains queued instead of being rejected. Before registration or Sandbox creation, the worker reloads that persisted identity and revalidates the latest enabled state and requested labels.
 
 ```mermaid
 sequenceDiagram
@@ -196,7 +196,7 @@ stateDiagram-v2
 
 ### Configuration And Secret Boundaries
 
-`runnerd.yaml` configures service behavior, GitHub auth, OAuth login, database, and worker policy. Sandbox service credentials are not file config: ordinary users configure scoped credentials through Preferences, while admins may enable an independent platform fallback at `/admin/sandbox_service`. API keys are stored encrypted. The fallback audience is all repository owners or selected GitHub users/organizations matched by stable owner identity. For managed Specs, resolution order is request snapshot, installation custom/inherited config, eligible personal account config, owner-configured organization sponsorship for a verified fork network, enabled and audience-eligible admin default, then not configured. Sponsorship snapshots only the sponsor service and credential-free provenance; it does not transfer Job ownership, Cache S3, custom Specs, Runner Groups, or provider catalog access.
+`runnerd.yaml` configures service behavior, GitHub auth, OAuth login, database, and worker policy. Sandbox service credentials are not file config: ordinary users configure scoped credentials through Preferences, while admins may enable an independent platform fallback at `/admin/sandbox_service`. API keys are stored encrypted. The fallback audience is all repository owners or selected GitHub users/organizations matched by stable owner identity. For public-name Specs with explicit fork sponsorship enabled, resolution order is request snapshot, installation custom/inherited config, eligible personal account config, owner-configured organization sponsorship for a verified fork network, enabled and audience-eligible admin default, then not configured. Sponsorship snapshots only the sponsor service and credential-free provenance; it does not transfer Job ownership, Cache S3, custom Specs, Runner Groups, or provider catalog access.
 
 ```mermaid
 flowchart LR

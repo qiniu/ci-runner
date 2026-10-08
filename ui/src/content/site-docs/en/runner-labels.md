@@ -45,14 +45,12 @@ required labels ⊆ job labels ⊆ advertised labels
 
 This means `[qiniu, ubuntu-24.04]` and the full advertised managed set both match. Partial or unsupported sets do not. A large label matches only when its corresponding custom spec is enabled and its configured labels accept the request.
 
-## Managed and custom ownership
+## Platform spec management
 
-runnerd owns standard managed names, labels, required labels, public template names, and priority. Operators control `enabled`, `max_concurrency`, and `min_idle`.
+Administrators maintain every platform spec in Admin: labels, required labels, binding, capacity and runtime policies. Startup preserves changes and never recreates deleted specs. Fresh installations need an administrator to create specs first. The platform directory lists only enabled, published public-name specs.
 
-Large and other custom specs remain operator-owned. They use an explicit template ID and may define different advertised and required labels. Saving a custom spec does not prove the template exists or is usable in the selected Sandbox region.
+Public-name bindings resolve through the effective account or organization Sandbox endpoint immediately before registration. The same stable name can resolve to different physical IDs across regions. Private bindings use an explicit template ID. Saving validates access through the administrator's Sandbox configuration; regional workflow smoke still proves runtime usability.
 
-## Template resolution
-
-Immediately before registration, runnerd resolves a managed public template name through the effective account or organization Sandbox endpoint. A stable public name can therefore resolve to different template IDs in different regions without persisting one region's ID in the spec. Custom large specs use the explicit template ID saved by the operator.
+Runner preparation (`official` or `preinstalled`), Docker requirements and fork sponsorship are separate policies. Private bindings cannot publish or enable sponsorship. Large specs may use either binding; directory inclusion requires a validated public name and explicit publication.
 
 See [Run your first workflow](/docs/guides/workflow) for a managed example, or [Build and use a custom runner template](/docs/guides/custom-templates) for the complete custom path.

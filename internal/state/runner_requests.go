@@ -470,7 +470,8 @@ func (s *DBStore) GetRunnerRequestMetrics() (RunnerRequestMetrics, error) {
 	}
 	var metrics RunnerRequestMetrics
 	if err := db.Model(&runnerRequestRecord{}).
-		Select(`
+		Select(
+			`
 			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS queued,
 			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS creating,
 			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS running,
@@ -770,7 +771,7 @@ func (s *DBStore) InFlightCount() (int, error) {
 }
 
 func (s *DBStore) ActiveCountForProfile(name string) (int, error) {
-	return s.countStatesForProfile(name, []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping})
+	return s.countStatesForProfileSource(name, []string{"", "global"}, []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping})
 }
 
 func (s *DBStore) InFlightCountForProfile(name string) (int, error) {
@@ -1096,21 +1097,6 @@ func (s *DBStore) readRecord(id string) (runnerRequestRecord, error) {
 		return runnerRequestRecord{}, err
 	}
 	return record, nil
-}
-
-func (s *DBStore) countStatesForProfile(name string, statuses []string) (int, error) {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return 0, err
-	}
-	var count int64
-	if err := db.Model(&runnerRequestRecord{}).
-		Where("profile_name = ?", strings.TrimSpace(name)).
-		Where("status IN ?", statuses).
-		Count(&count).Error; err != nil {
-		return 0, err
-	}
-	return int(count), nil
 }
 
 func (s *DBStore) countStatesForProfileSource(name string, sources, statuses []string) (int, error) {

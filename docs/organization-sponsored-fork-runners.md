@@ -66,8 +66,7 @@ Managed Runner request resolution order becomes:
 Corrupt fork or personal configuration remains an error and does not fall
 through. A sponsored request keeps organization-sponsorship provenance when its
 credentials come from the platform default. Sponsorship applies only to
-runnerd-managed Runner Specs. Platform custom and scoped custom Specs preserve
-their owning-scope credential contract.
+public-name platform Specs with `fork_sponsorship=true`. Private platform and scoped custom Specs preserve their owning-scope credential contract. Publication is independent of sponsorship.
 
 ## State Model
 
@@ -142,7 +141,7 @@ the existing exact `(installation_id, repository_full_name)` intersection.
 
 Coverage must include GitHub metadata and permission clients; fresh and old
 SQLite schema; PostgreSQL/MySQL-ready audited mutations; all eligibility modes;
-transfer, revocation, capacity and retry behavior; managed-only enforcement;
+transfer, revocation, capacity and retry behavior; explicit public-binding sponsorship enforcement;
 owner/member/collaborator API authorization; UI route isolation; and English /
 Chinese i18n parity.
 

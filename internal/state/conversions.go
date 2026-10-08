@@ -348,22 +348,25 @@ func recordToProfile(record runnerProfileRecord) (RunnerProfile, error) {
 			}
 		}
 	}
-	return RunnerProfile{
+	return NormalizeProfilePolicy(RunnerProfile{
 		Name:                record.Name,
 		Labels:              labels,
 		RequiredLabels:      requiredLabels,
 		TemplateID:          record.TemplateID,
 		DefaultTemplateName: record.DefaultTemplateName,
-		RunnerGroup:         record.RunnerGroup,
-		MaxConcurrency:      record.MaxConcurrency,
-		MinIdle:             record.MinIdle,
-		Priority:            record.Priority,
-		Enabled:             record.Enabled,
-		ManagedBy:           record.ManagedBy,
-		CatalogRevision:     record.CatalogRevision,
-		CreatedAt:           record.CreatedAt,
-		UpdatedAt:           record.UpdatedAt,
-	}, nil
+		TemplateSource:      record.TemplateSource, Published: record.Published,
+		RunnerUpdatePolicy: record.RunnerUpdatePolicy, RequireDocker: record.RequireDocker,
+		ForkSponsorship: record.ForkSponsorship,
+		RunnerGroup:     record.RunnerGroup,
+		MaxConcurrency:  record.MaxConcurrency,
+		MinIdle:         record.MinIdle,
+		Priority:        record.Priority,
+		Enabled:         record.Enabled,
+		ManagedBy:       record.ManagedBy,
+		CatalogRevision: record.CatalogRevision,
+		CreatedAt:       record.CreatedAt,
+		UpdatedAt:       record.UpdatedAt,
+	}), nil
 }
 
 func uniqueTrimmed(values []string) []string {

@@ -36,10 +36,7 @@ Each standard source directory also contains a
 `qshell.sandbox.large.toml` for its `-large` variant. Standard and large configs
 reuse the same Dockerfile and scripts while using distinct physical template
 names. The large variants are documented
-operator-configured Runner Specs: operators enable them through the
-custom-spec path with explicit template IDs. They are not runnerd-managed
-defaults, but all allowed workflows may use their documented labels when the
-corresponding specs are enabled. Each `qshell.sandbox.large.toml` sets
+operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit private template ID. Public directory inclusion additionally requires a validated public-name binding and explicit publication. Each `qshell.sandbox.large.toml` sets
 `disk_size_mb = 81920`, an 80-GiB minimum root disk size for a new template; the
 provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
 Qshell does not send this setting when rebuilding an existing same-name
@@ -61,10 +58,7 @@ reassembles them and verifies the complete SHA-256 in the same `RUN` as runtime
 installation, including cache-resumed builds. The checked local archive is
 cached under `.build/`; the chunks under `templates/common/.build/` are ignored
 by Git.
-The pin is the managed template's preinstalled bootstrap baseline. Managed
-templates use that copy directly, while runnerd periodically advances the pin
-to keep startup predictable and preserve a recently verified fallback. Custom
-Runner Specs use a separate registration preflight: runnerd resolves and
+The pin is the image's preinstalled bootstrap baseline. Specs with `runner_update_policy=preinstalled` use that copy directly; the regular template rebuild process advances it. Specs with `runner_update_policy=official` use a separate registration preflight: runnerd resolves and
 validates GitHub's official Linux application descriptors, and a stale Sandbox
 downloads, checksum-verifies, extracts, and version-verifies the selected
 archive before `config.sh`. Both paths leave GitHub's official self-update
@@ -115,9 +109,7 @@ review instead of attempting an uncertain automatic rollback.
 ## Public catalog API
 
 `GET /api/public/runner-templates` is available to signed-out and signed-in
-clients and returns the same cacheable, runnerd-owned catalog. The response is
-sorted and contains four objects for the standard managed templates with only
-these stable fields:
+clients and returns the same database-backed catalog with a 60-second cache lifetime. The response groups enabled, published public-name specs in stable order and contains only these fields:
 
 ```json
 [
@@ -132,14 +124,7 @@ these stable fields:
 ]
 ```
 
-The example shows one entry; the full response contains the four standard
-managed templates. The API intentionally excludes provider template IDs,
-regions, credentials, endpoints, and private/custom templates, including the
-four large physical templates. Provider-visible
-templates remain behind the credential-bound, account or organization scoped
-`GET /user/sandbox/templates?region=<id>` API. The ordinary-user Sandbox
-Templates page renders these catalogs as independent sections, so a provider
-catalog failure does not hide the public catalog and vice versa.
+The example shows one entry; the count depends on Admin configuration. Private bindings and unpublished/disabled entries are omitted, including private large specs. Published public-name large specs may appear. Provider IDs, regions, credentials and endpoints are always excluded. Provider-visible templates remain behind the credential-bound, account or organization scoped `GET /user/sandbox/templates?region=<id>` API. The two catalogs load independently. See [Platform Runner Specs](platform-runner-specs.md).
 
 ## Workflow labels
 
@@ -191,26 +176,11 @@ minimum disk size:
 
 `ubuntu-latest-large` is a logical public label mapped to the Ubuntu 24.04
 large physical template; it does not add a fifth physical large image. These
-large specs are publicly documented and usable once the operator-managed Admin
-entries are enabled, even though they are not returned by the runnerd-owned
-managed-template API.
+large specs are usable once their Admin entries are enabled and their labels accept the workflow. Public directory inclusion additionally requires a validated public-name binding and explicit publication.
 
-The `qiniu` label is mandatory. Managed matching enforces
-`required_labels ⊆ job_labels ⊆ labels`, so `[ubuntu-24.04]`, `[qiniu]`, and a
-request with unsupported extra labels do not match a managed default.
-Operators can disable one managed spec in Admin; removing `qiniu` from a
-workflow disables managed-default selection from the workflow side. Custom
-specs remain available with operator-defined required labels and explicit
-template IDs. The large workflow labels use the public operator-configured
-default specs after an operator creates and enables the corresponding entries
-in Admin. The physical large templates can still be built, published,
-catalog-checked, and smoke-tested by the same task targets; they simply do not
-appear in this public managed catalog.
+All specs enforce `required_labels ⊆ job_labels ⊆ labels`. Keep `qiniu` plus the exact OS label required for the standard examples; partial or unsupported extra labels must not match. Administrators maintain these fields, enablement and capacity in Admin. Physical image builds and catalog/runtime smoke remain separate release steps.
 
-At runner bootstrap, managed specs fail closed if their template cannot make
-the Docker daemon available because Docker is part of the managed compatibility
-contract. Custom specs retain the legacy best-effort behavior: runnerd logs a
-warning and continues registration so non-Docker jobs can still run.
+At bootstrap, `require_docker=true` fails closed if Docker cannot become available. When false, Docker setup remains best effort so non-Docker jobs can run. Runner preparation is independently selected by `runner_update_policy`.
 
 ## Software compatibility
 

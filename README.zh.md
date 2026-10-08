@@ -75,9 +75,9 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. 打开 `http://<host>:25500/`，使用 GitHub OAuth 登录。公开产品首页提供同域 `/docs` 指南，以及指向 `/jobs` 受保护的 Jobs 控制台入口。用户首次登录访问 `/jobs` 时，会看到介绍 Jobs、Repositories、Settings 和 Sandbox 设置的六步引导；之后可从账户菜单重播。
 6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户，以及 GitHub 返回 active owner membership（`role: admin`）的组织。普通组织成员、outside collaborator 和其他仅有仓库权限的用户只能看到 readiness 只读状态，不能浏览该组织的配置、Sandbox 资源目录或自定义 Runner Specs。管理员可以在 `/admin/sandbox_service` 配置兜底。
-7. 在**管理控制台**中确认 5 个内置 Qiniu managed Runner Specs。4 个标准公共模板已通过双区域 release gate。4 个 `-large` 变体是已文档化、通过自定义 spec 路径配置的 operator Runner Specs；其 `disk_size_mb = 81920` 的物理模板通过区域发布门槛后，再启用供普通 workflow 使用。operator 可调整启用状态、并发与 idle capacity。
+7. 在管理控制台配置平台 Runner 规格。原托管规格保留标签和管理员策略，新安装需明确创建。只有校验过的公共绑定可发布；标准及 large 镜像仍须通过区域发布门槛。
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
-9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用 managed default，或配置自定义 spec 要求的 labels。
+9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用已配置的公共规格，或配置自定义 spec 要求的 labels。
 
 Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 Fork 使用组织的 Sandbox 服务运行托管 Runner 规格。策略按上游仓库的稳定 GitHub ID 绑定，创建后默认关闭，并具有独立的正数并发上限；准入方式可以是精确 Fork 审批、上游仓库写权限或 active 组织成员。Job 与 GitHub Runner 仍归 Fork 所有；组织 Cache S3、自定义 Runner 规格、物理模板 ID、Runner Group、凭据和 Provider 目录不会被继承。平台使用流程见[使用组织 Sandbox 赞助可信 Fork](https://runner.qiniuinc.com/docs/guides/fork-sponsorship)，实现细节见[组织赞助的 Fork Runner](docs/zh/organization-sponsored-fork-runners.md)。
 
@@ -224,7 +224,7 @@ env:
 runs-on: [qiniu, ubuntu-24.04]
 ```
 
-使用 managed defaults 时必须包含 `qiniu` label。自定义 spec 可以定义自己的
+使用已配置的公共规格 时必须包含 `qiniu` label。自定义 spec 可以定义自己的
 advertised labels 和 required labels。
 
 runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflow_run` 事件，runnerd 会列出该 run 下所有排队 job，并将尚未入队的匹配 job 创建 runner request。
@@ -235,52 +235,28 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 
 Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中配置。所有已启用 spec 都可供 `github.allowed_repositories` 放行的仓库按标签匹配。
 
-- **Managed Runner Spec**：runnerd 会协调 `ubuntu-slim`、`ubuntu-22.04`、
-  `ubuntu-24.04`、预览版 `ubuntu-26.04` 和 `ubuntu-latest` 这 5 个内置
-  specs。catalog labels、required labels、公共模板名称和 priority
-  由 runnerd 管理；operator 仍可控制 `enabled`、
-  `max_concurrency` 和 `min_idle`。
-- **自定义 Runner Spec**：由 operator 管理，保存显式 `template_id`、
-  advertised labels、可选 required labels 和 5 个 `-large`
-  workflow labels 是对外可用的 operator 配置默认 spec，使用这条路径；它们不属于
-  runnerd 内置 managed catalog 或公共 managed-template API。新建或更换模板时，
-  使用 `/admin/sandbox_service` 配置的 endpoint 和凭据检查访问权限与可用默认构建，
-  即使运行时默认服务已禁用也可检查。未配置凭据时，只能管理内置默认 spec 或修改
-  现有 spec 的非模板参数。校验失败不会修改 spec 或审计记录；模板未变更时不访问 Sandbox。
+- **公共名称绑定**：Admin 配置稳定公共模板名，Runnerd 按请求的有效 Sandbox 区域解析物理 ID。发布到 `/runner-specs` 是经过校验的明确选择。
+- **私有 ID 绑定**：Admin 配置明确的 `template_id`，该规格不会出现在普通用户或公共目录。所有平台规格的标签、优先级、容量及执行策略均可在后台维护，代码不再维护规格清单。新建绑定或发布需配置 Admin Sandbox 凭据，绑定不变的策略调整无需访问 Provider。
 - **GitHub Runner Group**：spec 设置了 `runner_group` 时，runnerd 会在该 GitHub Group 中创建组织级 runner；否则创建仓库级 runner。它不是已退役的内部 Runner Group 模型。
 
 > **⚠️ 个人账号注意：** `runner_group` 需要调用组织级 GitHub API。如果仓库属于个人账号（而非组织），必须将 `runner_group` 留**空**，否则 runner 注册会返回 404 错误。
 
-匹配始终遵守 `required_labels ⊆ job_labels ⊆ labels`。因此，managed Ubuntu
-spec 同时要求 `qiniu` 和准确的操作系统 label；`[ubuntu-24.04]` 或 `[qiniu]`
-都不能单独匹配。workflow 移除 `qiniu` 后不会选择 managed defaults；operator
-也可以在 Admin 中单独禁用某个 managed spec，而不改变 runnerd 协调的 catalog
-identity。
+匹配始终遵守 `required_labels ⊆ job_labels ⊆ labels`。迁移后的 Ubuntu 规格保留 `qiniu` 与准确 OS label 的要求，管理员修改目录时也会改变 workflow 契约。启用与公开发布是独立开关。
 
 内部 Runner Group 和 Repository Policy 已移除。旧管理 API 现在统一返回
 `404 Not Found`，旧 Admin 书签会重定向到 Runner Specs。它们不再属于受支持的
 配置、匹配或恢复行为；当前代码会忽略任何遗留数据库对象。
 
-Managed spec 保存稳定的公共模板名称。runnerd 会在创建 Runner 前，使用
-repository owner 对应的 scoped Sandbox endpoint 解析该名称，因此不同区域可以
-返回不同的 template ID。自定义 spec 仍直接使用保存的 `template_id`。当前
-catalog revision 中，`ubuntu-latest` 映射到 Ubuntu 24.04；修改映射前必须评审
-catalog 更新并取得新的区域 smoke 证据。
+数据库是唯一目录来源。启动只转换旧托管行一次，保留管理员策略及运行行为，不再恢复已修改或删除的规格。新安装的目录为空，需要明确创建。`runner_update_policy`、`require_docker` 和 `fork_sponsorship` 与公共目录展示分开维护。字段、迁移和校验详见[平台 Runner 规格管理](docs/zh/platform-runner-specs.md)。
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
-`GET /api/public/runner-templates` 无需登录即可返回 runnerd 管理的 4 个标准公共
-模板。稳定响应只包含公共模板名称、对应的逻辑 Runner Spec 名称和支持的 workflow
-label 组合，不包含 provider template ID、credential、endpoint，也不会暴露 operator
-配置的 large 或其他自定义模板。对外 runner-labels 指南仍会列出 large 默认规格及其
-资源契约。依赖 credential 的
-`GET /user/sandbox/templates?region=<id>` 仍是独立的 scoped resource。
+`GET /api/public/runner-templates` 无需登录即可返回数据库中启用且已发布的公共绑定，包含管理员配置并验证后的 large 规格。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，缓存 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
 
 普通用户在 `/runner-specs` 只读浏览平台 Runner 规格及其工作流标签；该页面不提供
 个人账号／Organization 选择，也不能修改平台规格的启用状态或并发策略。在
 `/account/runner-specs` 或 `/organizations/{login}/runner-specs` 只管理对应作用域自有的
-自定义规格。需要登录的 `/user/runner-specs` API 会组合 runnerd 管理的规格、只读的
-平台自定义规格，以及当前账户或可管理 Organization 自有的自定义规格。平台规格的
+自定义规格。需要登录的 `/user/runner-specs` API 会组合已发布的公共平台规格，以及当前账户或可管理 Organization 自有的自定义规格。平台规格的
 可用性和并发仍由 Admin 全局管理。作用域自定义
 规格使用精确规范化后的 workflow labels，可以覆盖相同标签集合的全局规格；新建或
 更换 template ID 时，只使用当前作用域显式配置或合法继承的 Sandbox credential
@@ -289,10 +265,7 @@ label 组合，不包含 provider template ID、credential、endpoint，也不�
 排队请求在启动前会重新加载并校验原先持久化的 source 与 scope，因此等待期间被
 停用的规格不会启动 Runner。
 
-Admin 创建的自定义 Runner Spec 是平台共享规格，会以只读形式出现在每个可管理的
-账户和 Organization 目录中。因此 Admin 创建界面会明确提示平台范围，并且只使用
-Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用的环境应创建为
-作用域自定义规格。
+Admin 创建时分别维护平台执行配置和公共可见性。只应服务单个账户或 Organization 的环境应创建为作用域自定义规格。
 
 对于自定义 spec，`template_id` 应指向包含 GitHub runner 镜像的 Qiniu Sandbox 模板。创建沙箱时会使用 **Repositories → Runner readiness** 中显示的仓库 owner 有效 Sandbox service 检查模板访问权限。
 
@@ -309,7 +282,7 @@ Admin Sandbox 服务校验模板。只应由单个账户或 Organization 使用�
 | `/admin/runner_requests` | Runner Request 历史、服务端筛选、游标分页滚动加载、全局状态指标、操作，以及按 Runner Name 或内部 Request ID 精确查找 |
 | `/runner_request_metrics` | 仅限管理员访问的全局 Runner Request 状态和 Runner Spec 统计，不受列表筛选影响 |
 | `/admin/runner_requests/{id}` | 单个 Runner Request 资源，聚合持久化状态、生命周期时间与清理耗时、启动环境快照（Sandbox 区域、解析后的物理模板 ID、模板版本与预装 Runner 版本）、经过自定义模板预检或官方自更新后的尽力而为实际运行 Runner 版本、结构化终止来源与可选进程退出码、诊断结论、带来源／采集时间的 GitHub Job 终态快照（历史记录回退到实时查询）、运行中 Sandbox 的有界按需网络探测和游标分页的完整时间线；每条 control/stdout/stderr 事件及其可选阶段标识都按时间顺序直接展示 |
-| `/admin/runner_specs`    | 托管和自定义全局 Runner Spec 管理 |
+| `/admin/runner_specs`    | 平台 Runner 规格管理与公开发布 |
 | `/runner-specs` | 只读的平台 Runner 规格目录与工作流标签 |
 | `/account/runner-specs`、`/organizations/{login}/runner-specs` | 管理个人或可管理 Organization 自有的自定义 Runner 规格 |
 | `/organizations/{login}/fork-sponsorship` | 由 owner 管理可信 Fork 使用组织 Sandbox 执行托管 Runner 的赞助策略 |
@@ -387,8 +360,7 @@ Sandbox 构建。发布与
 Actions Runner 版本固定值位于 `templates/common/`。
 构建命令先在本机下载并校验官方 Runner 归档，再以较小的 COPY 分片上传，
 远端拼接后会再次校验完整归档。
-该固定版本仍是经过测试的预装基线。托管模板直接使用该基线，并继续按常规节奏
-重建。对于自定义模板，runnerd 会在注册前解析并校验 GitHub 官方 Runner 归档，
+该固定版本仍是经过测试的预装基线。`runner_update_policy=preinstalled` 使用该基线并依赖常规模板重建；`runner_update_policy=official` 在注册前解析并校验 GitHub 官方 Runner 归档，
 在当前 Job 能被领取前替换过期的可写副本。两条路径在注册后都继续保留 GitHub
 官方自更新能力。
 

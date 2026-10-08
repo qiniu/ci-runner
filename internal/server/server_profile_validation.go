@@ -14,19 +14,17 @@ import (
 
 const profileTemplateValidationTimeout = 5 * time.Second
 
-// validateAdminProfileTemplate runs before the audited write transaction. Admin
-// configuration is the only credential source: runtime audience/enabled flags
-// govern fallback for jobs, not an administrator's ability to inspect templates.
-// Callers must trim templateID and reject an empty value with a client error
-// before invoking this helper, alongside the other local profile constraints.
-func (s *Server) validateAdminProfileTemplate(w http.ResponseWriter, r *http.Request, templateID string) bool {
+// validateAdminProfileTemplateBinding runs before the audited transaction.
+// Admin credentials validate bindings independently of runtime fallback controls.
+// Callers validate local fields first; provider responses never reach clients.
+func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *http.Request, profile state.RunnerProfile) bool {
 	defaultConfig, err := s.store.GetSandboxServiceDefault()
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		writeErrorCode(w, http.StatusInternalServerError, "sandbox_service_config_error", "Cannot load the admin Sandbox service configuration")
 		return false
 	}
 	if strings.TrimSpace(defaultConfig.APIURL) == "" || strings.TrimSpace(defaultConfig.APIKeyEncrypted) == "" {
-		writeErrorCode(w, http.StatusConflict, "sandbox_service_not_configured", "Configure the admin Sandbox service before creating a custom Runner Spec or changing its template; managed default specs remain available")
+		writeErrorCode(w, http.StatusConflict, "sandbox_service_not_configured", "Configure the admin Sandbox service before creating a Runner Spec, publishing it, or changing its template")
 		return false
 	}
 	svc, err := s.sandboxServiceForConfig(sandboxServiceConfigSnapshot{
@@ -39,7 +37,24 @@ func (s *Server) validateAdminProfileTemplate(w http.ResponseWriter, r *http.Req
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), profileTemplateValidationTimeout)
 	defer cancel()
-	err = svc.ValidateTemplate(ctx, templateID)
+	if profile.TemplateSource == state.TemplateSourcePublic {
+		catalog, ok := svc.(sandboxrunner.DefaultTemplateCatalog)
+		if !ok {
+			writeErrorCode(w, http.StatusServiceUnavailable, "public_template_catalog_unavailable", "The admin Sandbox service cannot list public templates")
+			return false
+		}
+		var templates []sandboxrunner.CatalogTemplate
+		templates, err = catalog.ListDefaultTemplates(ctx)
+		if err == nil {
+			_, err = resolveDefaultTemplateID(profile.DefaultTemplateName, templates)
+			if err != nil {
+				writeErrorCode(w, http.StatusBadRequest, "public_template_invalid", "Public template name must resolve uniquely to a public, runnable template")
+				return false
+			}
+		}
+	} else {
+		err = svc.ValidateTemplate(ctx, profile.TemplateID)
+	}
 	if err == nil {
 		err = ctx.Err()
 	}
@@ -71,5 +86,17 @@ func writeProfileConflict(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner Spec changed while saving; refresh and try again")
+	return true
+}
+
+func profileExecutionChanged(a, b state.RunnerProfile) bool {
+	return !sameStringSlice(a.Labels, b.Labels) || !sameStringSlice(a.RequiredLabels, b.RequiredLabels) || a.TemplateSource != b.TemplateSource || a.TemplateID != b.TemplateID || a.DefaultTemplateName != b.DefaultTemplateName || a.RunnerGroup != b.RunnerGroup || a.RunnerUpdatePolicy != b.RunnerUpdatePolicy || a.RequireDocker != b.RequireDocker || a.ForkSponsorship != b.ForkSponsorship
+}
+
+func writeProfileInUse(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, errRunnerSpecInUse) {
+		return false
+	}
+	writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "Runner Spec cannot change its execution settings or be deleted while active requests use it")
 	return true
 }

@@ -29,10 +29,7 @@ large workflow 矩阵；catalog 和生产证据保留在
 
 每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`
 变体使用。标准和 large 配置复用同一份 Dockerfile 与脚本，但使用不同的物理模板
-名称。large 变体是已文档化的 operator 配置 Runner Spec：operator 通过自定义
-spec 路径在 Admin 中创建并启用带显式 template ID 的条目。它们不属于 runnerd
-managed defaults，但对应 spec 启用后，所有允许的 workflow 都可以使用文档中的
-labels。每份 `qshell.sandbox.large.toml` 都设置了
+名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式私有 ID。进入公共目录还要求经过校验的公共名称绑定和明确发布。每份 `qshell.sandbox.large.toml` 都设置了
 `disk_size_mb = 81920`，表示新模板的根磁盘容量下限为 80 GiB；原地重建前，
 provider 团队的 `DiskMb` 必须至少为 81,920 MiB。qshell 重建同名模板时不会发送
 此字段，因此构建脚本允许旧总容量较小的模板进入 rebuild；发布与 catalog 检查
@@ -49,9 +46,7 @@ Actions Runner 版本、Linux x64 归档校验和及归档大小，仅在 `runti
 安装，缓存续跑无需恢复 `/tmp` 中间文件。本机已校验的归档缓存在 `.build/`，
 分片位于被 Git 忽略的 `templates/common/.build/`。`common/` 是共享源码目录，并非新的
 Sandbox 物理模板。
-该固定版本是托管模板的预装启动基线。托管模板直接使用该副本；runnerd 仍需定期
-推进固定版本，以保持启动耗时可预测，并保留近期完成验证的回退基线。自定义 Runner
-Spec 使用独立的注册前预检：runnerd 解析并严格校验 GitHub 官方 Linux 应用描述，
+该固定版本是镜像的预装启动基线。`runner_update_policy=preinstalled` 使用该副本，常规模板重建流程负责推进版本。`runner_update_policy=official` 使用独立的注册前预检：runnerd 解析并严格校验 GitHub 官方 Linux 应用描述，
 过期的 Sandbox 会在 `config.sh` 前下载归档、校验 SHA-256、解包并再次核对版本。
 两条路径在注册后都继续保留 GitHub 官方自更新能力。
 2.337.0 基线已完成双区域、8 模板重建、catalog、标准 workflow 与 large
@@ -91,7 +86,7 @@ operator 当前 shell 中，不进入 GitHub Actions；结果不确定时停止�
 ## 公共 Catalog API
 
 未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`，并取得相同的、
-可缓存的 runnerd-owned catalog。响应按稳定顺序返回 4 个标准托管模板对象，且只包含以下字段：
+数据库目录，缓存时间为 60 秒。响应按稳定顺序将已启用、已发布的公共名称规格分组，只包含以下字段：
 
 ```json
 [
@@ -106,13 +101,7 @@ operator 当前 shell 中，不进入 GitHub Actions；结果不确定时停止�
 ]
 ```
 
-示例只展示其中一项；完整响应包含 4 个标准托管模板。该 API 不包含 provider
-template ID、region、credential、endpoint，也不会暴露私有、自定义或 4 个 large
-物理模板。Provider
-可见模板仍通过依赖 credential、按账户或组织 scope 隔离的
-`GET /user/sandbox/templates?region=<id>` API 获取。普通用户的 Sandbox Templates
-页面把两个 catalog 作为独立 section 渲染，因此 provider catalog 失败不会隐藏
-公共 catalog，反之亦然。
+示例只展示一项，数量由 Admin 配置决定。私有绑定以及未发布或禁用的条目均不出现，包括私有 large 规格；明确发布的公共名称 large 规格可以出现。响应始终排除物理 ID、区域、凭据和 endpoint。Provider 可见模板仍通过按账号或组织隔离的 `GET /user/sandbox/templates?region=<id>` 获取，两种目录独立加载。详见[平台 Runner 规格管理](platform-runner-specs.md)。
 
 ## Workflow labels
 
@@ -161,22 +150,11 @@ jobs:
 | `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
 | `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
 
-`ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。这些 large spec 已在公共文档中列出；只要 operator 在 Admin 中启用对应条目，所有允许的 workflow 都可以使用，虽然它们不会出现在 runnerd-owned managed-template API 中。
+`ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。large 规格启用后，标签接受该请求的工作流可以使用它。进入公共目录还要求经过校验的公共名称绑定和明确发布。
 
-`qiniu` label 是必需项。Managed 匹配遵守
-`required_labels ⊆ job_labels ⊆ labels`，因此 `[ubuntu-24.04]`、`[qiniu]`
-和带有不受支持额外 labels 的请求都不会匹配 managed default。Operator 可以在
-Admin 中禁用单个 managed spec；从 workflow 中移除 `qiniu` 则会从 workflow
-侧阻止 managed-default selection。自定义 spec 仍可使用 operator 定义的
-required labels 和显式 template ID。
+全部规格保持 `required_labels ⊆ job_labels ⊆ labels`。标准示例应要求 `qiniu` 与准确的 OS 标签，部分标签或不受支持的额外标签不能匹配。管理员在后台维护这些字段、启用状态和容量；物理镜像构建与真实 Sandbox smoke 仍属于独立发布步骤。
 
-large workflow labels 使用 operator 配置的对外默认 spec；需要先在 Admin 中创建并
-启用对应条目。4 个 large 物理模板仍可通过相同的 task targets 构建、发布、catalog
-检查和 smoke 验证，但不会出现在这个公共 managed catalog 中。
-
-Runner 启动时，如果模板无法使 Docker daemon 可用，managed spec 会直接失败，
-因为 Docker 属于 managed 兼容性契约。自定义 spec 保留原有的 best-effort 行为：
-runnerd 记录 warning 后继续注册，使不依赖 Docker 的 jobs 仍可运行。
+启动时，`require_docker=true` 要求 Docker 可用，否则拒绝启动；为 false 时保留尽力配置，非 Docker 任务可继续。Runner 准备方式由独立的 `runner_update_policy` 决定。
 
 ## 软件兼容性
 

@@ -175,6 +175,12 @@ type RunnerEvent struct {
 }
 
 type RunnerProfile struct {
+	TemplateSource     string `json:"template_source"`
+	Published          bool   `json:"published"`
+	RunnerUpdatePolicy string `json:"runner_update_policy"`
+	RequireDocker      bool   `json:"require_docker"`
+	ForkSponsorship    bool   `json:"fork_sponsorship"`
+
 	Name                string    `json:"name"`
 	Labels              []string  `json:"labels"`
 	RequiredLabels      []string  `json:"required_labels"`
@@ -189,12 +195,6 @@ type RunnerProfile struct {
 	CatalogRevision     int       `json:"catalog_revision,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
-}
-
-// ManagedProfileConflict reports a catalog name already owned by another source.
-type ManagedProfileConflict struct {
-	Name              string
-	ExistingManagedBy string
 }
 
 type ProfileMatch struct {
@@ -451,7 +451,6 @@ type RunnerCatalogStore interface {
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
-	ReconcileManagedProfiles(profiles []RunnerProfile) ([]ManagedProfileConflict, error)
 	DeleteProfile(name string) error
 	MatchProfile(repositoryFullName string, labels []string) (ProfileMatch, error)
 	ListEffectiveProfiles(scope RunnerProfileScope) ([]EffectiveRunnerProfile, error)

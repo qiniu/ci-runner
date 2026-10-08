@@ -6,6 +6,7 @@ Use these docs alongside the root `README.md`.
 
 The public, bilingual end-user guides are served at [runner.qiniuinc.com/docs](https://runner.qiniuinc.com/docs). They cover hosted onboarding, runnerd deployment, managed workflows, organization fork sponsorship, custom template build-to-use lifecycle, and troubleshooting. Their paired Markdown sources live under `ui/src/content/site-docs/{en,zh}/` so the deployed UI and its guide navigation ship together.
 
+- [Platform Runner Specs](platform-runner-specs.md): database authority, public/private bindings, publication, runtime policy, migration and compatibility.
 - [Local Testing And GitHub Setup](testing.md): local configuration, GitHub App/OAuth setup, webhook forwarding, admin API examples, and troubleshooting.
 - [Deployment Smoke Checklist](deployment-smoke.md): production-style smoke checklist for a real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics.
 - [Public Runner Templates](default-runner-templates.md): qshell requirements, two-region build and publication order, Sandbox smoke evidence, ownership, and rollback.

@@ -44,8 +44,7 @@ Managed Runner request 的解析顺序变为：request 快照、Fork installatio
 赞助组织的平台默认值）、赞助缺失或不符合条件时适用于 Fork installation 的平台默认值、
 未配置错误。通过平台默认值完成的赞助请求仍保留组织赞助来源。
 
-Fork 或个人配置损坏时继续报错，不能回退。赞助只适用于 runnerd-managed Runner
-Specs；platform custom 和 scoped custom Specs 继续使用所属作用域凭据。
+Fork 或个人配置损坏时继续报错，不能回退。赞助只适用于公共名称绑定且 `fork_sponsorship=true` 的平台规格；私有平台规格和 scoped custom Specs 继续使用所属作用域凭据。目录发布与赞助开关相互独立。
 
 ## 状态模型
 
@@ -105,7 +104,7 @@ Organization Settings 增加 **Fork sponsorship** 标签页，个人账户不显
 ## 验证
 
 覆盖必须包含 GitHub 元数据／权限客户端、fresh／旧 SQLite schema、可用于
-PostgreSQL/MySQL 的审计事务、三种准入模式、转移／撤销／容量／retry、managed-only
+PostgreSQL/MySQL 的审计事务、三种准入模式、转移／撤销／容量／retry、公共名称与明确赞助开关
 限制、owner/member/collaborator API 鉴权、UI 路由隔离和中英文 i18n 一致性。
 
 本地门禁为 `go test ./internal/state -count=1`、GitHub/server 聚焦测试、

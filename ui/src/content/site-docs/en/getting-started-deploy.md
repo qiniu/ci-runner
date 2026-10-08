@@ -65,17 +65,13 @@ Do not put ordinary-user Sandbox credentials in `runnerd.yaml`. The application 
 
 Cache S3 is also user- or organization-owned in Preferences. Operators must set both `s3_region` and `s3_endpoint` on each cache-capable entry in `sandbox.regions`, plus `cache.sts_endpoint`. See [Configure and use Cache S3](/docs/guides/cache).
 
-## 5. Verify managed runner specs
+## 5. Configure a platform Runner Spec
 
-runnerd reconciles managed specs for `ubuntu-slim`, `ubuntu-22.04`, `ubuntu-24.04`, preview `ubuntu-26.04`, and `ubuntu-latest`. Operators control whether each managed spec is enabled plus its concurrency and idle capacity. The catalog labels and public template names remain runnerd-owned.
+All platform specs are maintained in **Admin → Runner Specs**. A fresh database starts empty; startup does not create specs. Existing public specs are migrated once and retain their configuration.
 
-For the first test, use:
+For the first standard workflow, create `qiniu-ubuntu-24.04` with advertised labels `self-hosted,linux,x64,qiniu,ubuntu-24.04`, required labels `qiniu,ubuntu-24.04`, public-name binding `github-runner-ubuntu-24-04`, and enable it. Configure the Admin Sandbox service first so saving can validate the public template. Choose preinstalled Runner preparation and require Docker for the standard image contract. Publish it to show it in the platform catalog; enable fork sponsorship only when needed.
 
-```yaml
-runs-on: [qiniu, ubuntu-24.04]
-```
-
-Custom specs remain available for operator-owned templates and labels, but they are not required for the managed first run.
+Verify the same public name exists and is runnable in every effective Sandbox region. Private specs instead bind a physical template ID and remain outside the public directory. See [Runner labels and template mapping](/docs/guides/runner-labels).
 
 ## 6. Run the production smoke
 

@@ -1,0 +1,29 @@
+# 平台 Runner 规格管理
+
+数据库是平台 Runner 规格的权威来源。管理员在 `/admin/runner_specs` 维护所有规格，启动不再创建或协调代码内置目录。新安装的目录为空，需要恢复数据库备份或在后台创建规格后再提交 workflow。
+
+## 模板绑定与公开发布
+
+| 字段 | 约束 |
+| --- | --- |
+| `template_source` | `public` 绑定稳定公共名称；`private` 绑定明确的物理 ID。 |
+| `default_template_name` | 公共绑定必填；每个请求按有效 Sandbox 区域独立解析。 |
+| `template_id` | 私有绑定必填；公共绑定必须为空。 |
+| `published` | 明确选择发布到公共目录；私有绑定不能发布。 |
+| `runner_update_policy` | `official` 在注册前校验和更新 Runner；`preinstalled` 使用镜像预装基线。两种方式均保留官方自动更新。 |
+| `require_docker` | 独立控制启动时是否要求 Docker 可用。 |
+| `fork_sponsorship` | 独立允许公共绑定使用组织赞助；仍须通过精确组织策略、身份、权限和容量检查。 |
+
+新建规格默认使用私有绑定、不发布、官方更新准备，不要求 Docker，也不允许赞助。公开展示不会授予仓库凭据访问权或自动开启赞助。
+
+创建、更换绑定、发布、重新启用已发布规格时，只使用配置的 **Admin** Sandbox endpoint/key 校验，即使运行时 fallback 已关闭。公共名称必须唯一解析到 `public: true` 且状态为 `ready` 或 `uploaded` 的模板；私有 ID 保留原来的访问权限和有效默认构建检查。本地字段先校验，远程调用总计限时 5 秒，并位于审计事务之外。拒绝或过期保存不修改规格和审计记录。
+
+`/runner-specs` 仅展示启用且已发布的公共规格。`/user/runner-specs` 以 `platform_public` 返回已发布公共条目，并返回所选 scope 自有的 `scoped_custom` 条目，省略未发布或私有的平台规格。只有 scope 自定义条目可返回物理 ID 和 GitHub Runner Group。`GET /api/public/runner-templates` 按稳定名称汇总启用且已发布的公共规格，只公开名称和 workflow labels，缓存 60 秒。Provider 目录仍是独立、受凭据约束的资源。Large 规格配置并通过公共名称校验后也可发布，不能仅根据名称自动归入公共目录。
+
+## 修改与升级兼容
+
+名称保持为稳定资源标识。Admin 可编辑标签、必需标签、模板绑定、GitHub Runner Group、优先级、启用状态、容量及上述策略。匹配继续遵守 `required_labels ⊆ job_labels ⊆ labels` 和 scope 精确覆盖。全局规格仍有 queued、creating、running 或 stopping 请求时，修改执行配置或删除会返回 `409 runner_spec_in_use`；容量、启用状态和发布状态仍可调整。CAS 拒绝过期保存，数据修改与审计事件原子提交。
+
+增量迁移只转换尚无策略字段的旧行，保留标签、名称、管理员策略、时间戳和索引。绑定公共名称的旧托管行保留公开展示、预装 Runner、Docker 和赞助行为，清空已无用途的物理模板 ID。旧私有行保持不公开并使用官方更新准备。旧 `managed_by`、`catalog_revision` 列和值保留为不参与行为判断的兼容元数据。历史空／global 请求来源和保存的 Sandbox 快照仍有效。后续修改和删除在重启后保持，迁移不补建缺失规格，也不自动提升私有 large 规格。
+
+升级前备份数据库。旧版本不理解新增策略字段，降级行为需要单独验证。修改公共别名后需验证 workflow 和区域运行 smoke，因为元数据校验不证明镜像内容。镜像构建、版本 pin 和发布仍由模板发布流程维护。

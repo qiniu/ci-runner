@@ -4,6 +4,8 @@
 
 本文记录塑造 runnerd 的设计对比。它应被视为历史背景和当前基线，而不是待实现计划。
 
+平台 Runner 规格统一由数据库和后台管理，启动只迁移旧策略一次，不创建或协调固定目录。公共目录仅展示启用且已发布的公共名称规格；详见[平台 Runner 规格管理](platform-runner-specs.md)。
+
 ## 当前基线
 
 runnerd 是单个 Go 服务：接收 GitHub `workflow_job` webhooks，根据 repository 和 labels 准入匹配的 jobs，创建 Qiniu sandboxes，注册临时 GitHub Actions self-hosted runners，并在完成或停止后清理它们。
@@ -196,7 +198,7 @@ stateDiagram-v2
 
 ### 配置和密钥边界
 
-`runnerd.yaml` 配置 service behavior、GitHub auth、OAuth login、database 和 worker policy。Sandbox service credentials 不是 file config：普通用户通过 Preferences 配置 scoped credentials，管理员可在 `/admin/sandbox_service` 启用独立的平台回退。API keys 加密后存储。fallback audience 可以是全部 repository owners，或按 stable owner identity 匹配的 selected GitHub users/organizations。对于托管 Spec，解析顺序为 request snapshot、installation custom/inherited 配置、符合条件的个人账户配置、owner 为已验证 Fork 网络配置的组织赞助、已启用且 audience eligible 的 admin default，最后是未配置错误。赞助只保存 sponsor service 和不含凭据的来源快照，不转移 Job 所有权，也不共享 Cache S3、自定义 Spec、Runner Group 或 Provider 目录访问。
+`runnerd.yaml` 配置 service behavior、GitHub auth、OAuth login、database 和 worker policy。Sandbox service credentials 不是 file config：普通用户通过 Preferences 配置 scoped credentials，管理员可在 `/admin/sandbox_service` 启用独立的平台回退。API keys 加密后存储。fallback audience 可以是全部 repository owners，或按 stable owner identity 匹配的 selected GitHub users/organizations。对于公共名称绑定且明确允许 Fork 赞助的规格，解析顺序为 request snapshot、installation custom/inherited 配置、符合条件的个人账户配置、owner 为已验证 Fork 网络配置的组织赞助、已启用且 audience eligible 的 admin default，最后是未配置错误。赞助只保存 sponsor service 和不含凭据的来源快照，不转移 Job 所有权，也不共享 Cache S3、自定义 Spec、Runner Group 或 Provider 目录访问。
 
 ```mermaid
 flowchart LR

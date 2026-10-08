@@ -19,24 +19,22 @@ export async function submitRunnerSpecChanges({
   parseLabels: (value: string) => string[]
 }) {
   const name = editingRunnerSpec?.name || runnerSpecForm.name.trim()
-  const managed = Boolean(editingRunnerSpec?.managed_by?.trim())
-  const payload = managed
-    ? {
-        max_concurrency: Number(runnerSpecForm.max_concurrency) || 0,
-        min_idle: Number(runnerSpecForm.min_idle) || 0,
-        enabled: runnerSpecForm.enabled,
-      }
-    : {
-        ...(editingRunnerSpec ? {} : { name }),
-        labels: parseLabels(runnerSpecForm.labels),
-        required_labels: parseLabels(runnerSpecForm.required_labels),
-        template_id: runnerSpecForm.template_id.trim(),
-        runner_group: runnerSpecForm.runner_group.trim(),
-        max_concurrency: Number(runnerSpecForm.max_concurrency) || 0,
-        min_idle: Number(runnerSpecForm.min_idle) || 0,
-        priority: Number(runnerSpecForm.priority) || 0,
-        enabled: runnerSpecForm.enabled,
-      }
+  const publicTemplate = runnerSpecForm.template_source === "public"
+  const payload = {
+    ...(editingRunnerSpec ? { expected_updated_at: editingRunnerSpec.updated_at } : { name }),
+    labels: parseLabels(runnerSpecForm.labels), required_labels: parseLabels(runnerSpecForm.required_labels),
+    template_source: runnerSpecForm.template_source || "private",
+    template_id: publicTemplate ? "" : runnerSpecForm.template_id.trim(),
+    default_template_name: publicTemplate ? (runnerSpecForm.default_template_name || "").trim() : "",
+    published: publicTemplate && Boolean(runnerSpecForm.published),
+    runner_update_policy: runnerSpecForm.runner_update_policy || "official",
+    require_docker: Boolean(runnerSpecForm.require_docker),
+    fork_sponsorship: publicTemplate && Boolean(runnerSpecForm.fork_sponsorship),
+    runner_group: runnerSpecForm.runner_group.trim(),
+    max_concurrency: Number(runnerSpecForm.max_concurrency) || 0,
+    min_idle: Number(runnerSpecForm.min_idle) || 0, priority: Number(runnerSpecForm.priority) || 0,
+    enabled: runnerSpecForm.enabled,
+  }
   await request(editingRunnerSpec ? `/runner_specs/${encodeURIComponent(name)}` : "/runner_specs", {
     method: editingRunnerSpec ? "PATCH" : "POST",
     headers: { "Content-Type": "application/json" },
@@ -62,6 +60,8 @@ export function useRunnerCatalog({
   const savingRunnerSpecRef = useRef(false)
   const [editingRunnerSpec, setEditingRunnerSpec] = useState<RunnerSpec | null>(null)
   const [runnerSpecForm, setRunnerSpecForm] = useState<RunnerSpecFormState>({
+    template_source: "private", default_template_name: "", published: false,
+    runner_update_policy: "official", require_docker: false, fork_sponsorship: false,
     name: "",
     labels: "self-hosted,e2b",
     required_labels: "",
@@ -76,7 +76,9 @@ export function useRunnerCatalog({
   const resetRunnerSpecForm = () => {
     setEditingRunnerSpec(null)
     setRunnerSpecForm({
-      name: "",
+      template_source: "private", default_template_name: "", published: false,
+    runner_update_policy: "official", require_docker: false, fork_sponsorship: false,
+    name: "",
       labels: "self-hosted,e2b",
       required_labels: "",
       template_id: "",
@@ -115,6 +117,8 @@ export function useRunnerCatalog({
     setSection("runner_specs")
     setEditingRunnerSpec(runnerSpec)
     setRunnerSpecForm({
+      template_source: runnerSpec.template_source, default_template_name: runnerSpec.default_template_name || "", published: runnerSpec.published,
+      runner_update_policy: runnerSpec.runner_update_policy, require_docker: runnerSpec.require_docker, fork_sponsorship: runnerSpec.fork_sponsorship,
       name: runnerSpec.name,
       labels: runnerSpec.labels.join(","),
       required_labels: runnerSpec.required_labels.join(","),

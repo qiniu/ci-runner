@@ -75,7 +75,7 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. Open `http://<host>:25500/` and sign in with GitHub OAuth. The public product landing page links to the same-origin `/docs` guides and the protected Jobs console at `/jobs`. On the first authenticated visit to `/jobs`, a six-step product tour introduces Jobs, Repositories, Settings, and Sandbox setup; it can be replayed from the account menu.
 6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where GitHub reports an active owner membership (`role: admin`). Organization members, outside collaborators, and other repository-only users receive only read-only readiness and cannot browse that organization's configuration, Sandbox catalogs, or custom Runner Specs. Administrators can provide a fallback at `/admin/sandbox_service`.
-7. Confirm the five built-in managed Qiniu Runner Specs in the **Admin Console**. The four standard public templates have passed the two-region release gate. The four `-large` variants are documented operator-configured Runner Specs that use the custom-spec path; enable them for ordinary workflows only after their physical templates with `disk_size_mb = 81920` pass the regional release gate. Operators can adjust the enabled state, concurrency, and idle capacity.
+7. Configure platform Runner Specs in Admin. Existing managed specs migrate with their labels and operator controls preserved; fresh installations require explicit creation. Publish only verified public bindings. Standard and large template builds retain their regional release gates.
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
 9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
 
@@ -224,7 +224,7 @@ In your GitHub App settings (**Settings → Developer settings → GitHub Apps �
 runs-on: [qiniu, ubuntu-24.04]
 ```
 
-The `qiniu` label is mandatory for managed defaults. A custom spec can define
+The `qiniu` label is required by the standard spec examples. A custom spec can define
 its own advertised and required labels instead.
 
 runnerd handles `queued`, `in_progress`, and `completed` actions. For `workflow_run`, it lists all queued jobs in the run and enqueues any matching jobs not already seen.
@@ -235,62 +235,31 @@ New runner requests, including admission rejections, store the parsed GitHub con
 
 Runner specs are managed through the admin API and console — not through `runnerd.yaml`. Every enabled spec is eligible for repositories admitted by `github.allowed_repositories`; labels select the spec.
 
-- **Managed Runner Spec**: runnerd reconciles five built-in specs for
-  `ubuntu-slim`, `ubuntu-22.04`, `ubuntu-24.04`, preview `ubuntu-26.04`, and
-  `ubuntu-latest`. Their catalog labels, required labels, public template name,
-  and priority are managed by runnerd. Operators retain
-  `enabled`, `max_concurrency`, and `min_idle`.
-- **Custom Runner Spec**: an operator-owned spec with an explicit
-  `template_id`, advertised labels, and optional required labels and
-  `runner_group`. The five `-large` workflow labels are public
-  operator-configured default specs using this path; they are not part of
-  runnerd's built-in managed catalog or public managed-template API.
-  Creating a custom spec or changing its template validates access and a usable
-  default build with the endpoint/key configured at
-  `/admin/sandbox_service` (also when runtime fallback is disabled). Without
-  those credentials, only managed defaults and unchanged-template edits are
-  available. Validation failure rejects the save without a profile/audit change.
-  Updating controls without changing the template does not contact Sandbox.
+- **Public-name binding**: Admin configures a stable public template name. Runnerd resolves its physical ID through the request's effective Sandbox region. Publication in `/runner-specs` is an explicit, validated choice.
+- **Private-ID binding**: Admin configures an explicit `template_id`. The spec remains absent from ordinary-user/public catalogs. Every platform spec's labels, priority, capacity and execution policies are editable in Admin; the code no longer maintains a catalog. New binding/publication requires the configured admin Sandbox credentials; unchanged-binding policy edits remain available without provider access.
 - **GitHub Runner Group**: when a spec sets `runner_group`, runnerd creates an organization-level runner in that GitHub group; otherwise it creates a repository-level runner. This is not the retired internal Runner Group model.
 
 > **⚠️ Personal accounts:** `runner_group` requires the organization-level GitHub API. If the repository belongs to a personal account (not an organization), leave `runner_group` **empty** — otherwise runner registration will fail with a 404 error.
-Matching always enforces `required_labels ⊆ job_labels ⊆ labels`. Managed
-Ubuntu specs therefore require both `qiniu` and the exact OS label: neither
-`[ubuntu-24.04]` nor `[qiniu]` is sufficient. Removing `qiniu` from a workflow
-prevents managed-default routing; an operator can also disable an individual
-managed spec in Admin without changing its reconciled catalog identity.
+Matching always enforces `required_labels ⊆ job_labels ⊆ labels`. Migrated Ubuntu specs preserve their `qiniu` and exact OS required labels; changing the catalog in Admin changes the workflow contract. Enablement and publication are separate controls.
 
 Internal Runner Groups and Repository Policies have been removed. Their legacy
 management APIs now return `404 Not Found`, while old Admin bookmarks redirect
 to Runner Specs. They are not part of supported configuration, matching, or
 recovery behavior; any legacy database artifacts are ignored by current code.
 
-Managed specs store a stable public template name. Immediately before runner
-creation, runnerd resolves that name against the repository owner's scoped
-Sandbox endpoint, so different regions can return different template IDs.
-Custom specs continue to send their stored `template_id` directly.
-`ubuntu-latest` maps to Ubuntu 24.04 in the current catalog revision; changing
-that mapping requires a reviewed catalog update and new regional smoke
-evidence.
+The database is the single catalog authority. Startup migrates old managed rows once, preserves their operator settings and runtime behavior, and never restores edited/deleted specs. A fresh installation starts with an empty catalog. `runner_update_policy`, `require_docker` and `fork_sponsorship` are independent of public-directory visibility. See [Platform Runner Specs](docs/platform-runner-specs.md) for fields, migration and validation.
 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes the four standard runnerd-managed
-public templates without authentication. Its stable response contains only each
-public template name, logical Runner Spec names, and supported workflow label
-sets; it never includes provider template IDs, credentials, endpoints, or
-operator-configured large/custom templates. The public runner-labels guide still
-documents those large defaults and their resource contract. The credential-bound
-`GET /user/sandbox/templates?region=<id>` catalog remains a separate scoped
-resource.
+`GET /api/public/runner-templates` exposes enabled, published public bindings from the database without authentication, including validated large specs when configured. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials; cache lifetime is 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
 
 Ordinary users browse the read-only platform Runner Spec catalog at
 `/runner-specs`. That page has no account/Organization selector or user-editable
 availability and concurrency policy. Users manage only owned custom Specs under
 `/account/runner-specs` or
 `/organizations/{login}/runner-specs`. The authenticated `/user/runner-specs`
-API combines runnerd-managed specs, read-only platform custom specs, and custom
+API combines published public platform specs and custom
 specs owned by that account or owner-manageable Organization. Platform availability
 and concurrency remain global Admin policy. Scoped custom specs use exact
 normalized workflow labels, may override a global spec with the same label set,
@@ -301,11 +270,7 @@ caller's own scoped custom spec, never for a platform custom spec. A queued
 request reloads and validates the same persisted source and scope immediately
 before startup, so a spec disabled while waiting cannot launch a runner.
 
-An Admin-created custom Runner Spec is a platform-shared spec: it is available
-read-only in every manageable account and Organization catalog. Admin creation
-therefore uses explicit platform-wide copy and validates the template only with
-the Admin Sandbox service. Use a scoped custom spec instead when an environment
-must remain private to one account or Organization.
+Admin creation controls platform execution separately from public visibility. Use a scoped custom spec when an environment must serve only one account or Organization.
 
 For custom specs, `template_id` should point to a Qiniu Sandbox template containing the GitHub runner image. Template access is checked against the repository owner's effective Sandbox service shown under **Repositories → Runner readiness** at sandbox creation time.
 
@@ -322,7 +287,7 @@ The built-in web UI provides:
 | `/admin/runner_requests` | Runner request history with server-side filters, cursor-based infinite scrolling, global status metrics, controls, and exact lookup by Runner Name or internal request ID |
 | `/runner_request_metrics` | Admin-only global Runner request status and Runner Spec counts; independent of list filters |
 | `/admin/runner_requests/{id}` | One Runner request resource with persisted state, lifecycle timestamps and cleanup duration, a startup environment snapshot (Sandbox region, resolved physical template ID, template version, and preinstalled Runner version), a best-effort effective Runner version captured after any custom-template preflight or official self-update, typed termination source and optional process exit code, diagnostic findings, a retained terminal GitHub Job result with a historical live-lookup fallback, a bounded on-demand network probe for running Sandboxes, and a cursor-paged timeline that shows every control/stdout/stderr event and its optional stage directly in chronological order |
-| `/admin/runner_specs` | Managed and custom global Runner Spec administration |
+| `/admin/runner_specs` | Platform Runner Spec administration and public publication |
 | `/runner-specs` | Read-only platform Runner Spec catalog and workflow labels |
 | `/account/runner-specs` and `/organizations/{login}/runner-specs` | Custom Runner Specs owned by an account or owner-manageable Organization |
 | `/organizations/{login}/fork-sponsorship` | Owner-only policies for organization-sponsored managed Runner execution in trusted forks |
@@ -402,9 +367,7 @@ cache-resume guidance after a remote build time limit, plus publication and
 smoke commands. Shared setup code and the Actions Runner version pin live in
 `templates/common/`. Build tasks verify the official Runner archive locally,
 upload it as small COPY chunks, and verify it again before installation.
-The pin remains the tested preinstalled baseline. Managed templates run that
-baseline and continue to follow the regular rebuild cadence. For custom
-templates, runnerd resolves and verifies GitHub's official Runner archive before
+The pin remains the tested preinstalled baseline. Specs with `runner_update_policy=preinstalled` use it and rely on regular template rebuilds. Specs with `runner_update_policy=official` resolve and verify GitHub's official Runner archive before
 registration and replaces a stale writable copy before the current Job can be
 accepted. Official self-update remains enabled after registration for both
 paths.

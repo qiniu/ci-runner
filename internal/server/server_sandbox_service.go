@@ -123,7 +123,7 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
 	}
 	profile, profileErr := s.profileForRunnerRequest(req)
-	if profileErr == nil && strings.TrimSpace(profile.ManagedBy) != "" {
+	if profileErr == nil && profile.TemplateSource == state.TemplateSourcePublic && profile.ForkSponsorship {
 		svc, snapshot, sponsorshipErr := s.sandboxServiceForForkSponsorship(ctx, req)
 		if sponsorshipErr == nil {
 			return svc, snapshot, nil

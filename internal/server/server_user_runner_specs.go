@@ -17,6 +17,7 @@ import (
 type userRunnerSpecResponse struct {
 	Name                string   `json:"name"`
 	Source              string   `json:"source"`
+	Published           bool     `json:"published"`
 	WorkflowLabels      []string `json:"workflow_labels"`
 	TemplateID          string   `json:"template_id,omitempty"`
 	DefaultTemplateName string   `json:"default_template_name,omitempty"`
@@ -114,7 +115,10 @@ func (s *Server) writeUserRunnerSpecList(w http.ResponseWriter, scope state.Runn
 	}
 	response := userRunnerSpecListResponse{ScopeType: scope.Type, ScopeID: scope.ID, SandboxSource: sandboxSource, SandboxRegion: sandboxRegion, Items: make([]userRunnerSpecResponse, 0, len(items))}
 	for _, item := range items {
-		responseItem := userRunnerSpecResponse{Name: item.Profile.Name, Source: item.Source, WorkflowLabels: append([]string(nil), item.WorkflowLabels...), DefaultTemplateName: item.Profile.DefaultTemplateName, Enabled: item.Profile.Enabled, MaxConcurrency: item.Profile.MaxConcurrency, OverridesGlobal: item.OverridesGlobal, UpdatedAt: item.Profile.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+		if item.Source != "scoped_custom" && (!item.Profile.Published || item.Profile.TemplateSource != state.TemplateSourcePublic) {
+			continue
+		}
+		responseItem := userRunnerSpecResponse{Name: item.Profile.Name, Source: item.Source, Published: item.Profile.Published, WorkflowLabels: append([]string(nil), item.WorkflowLabels...), DefaultTemplateName: item.Profile.DefaultTemplateName, Enabled: item.Profile.Enabled, MaxConcurrency: item.Profile.MaxConcurrency, OverridesGlobal: item.OverridesGlobal, UpdatedAt: item.Profile.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 		if item.Source == "scoped_custom" {
 			responseItem.TemplateID = item.Profile.TemplateID
 			responseItem.RunnerGroup = item.Profile.RunnerGroup

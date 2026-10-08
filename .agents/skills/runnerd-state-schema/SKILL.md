@@ -29,6 +29,8 @@ Keep runnerd's database schema model-driven through GORM while preserving known 
 - Avoid `default:true` on business booleans when zero-value preservation matters.
 - Fresh database tests are not enough for required-column changes; add or preserve old-schema upgrade coverage.
 
+- Platform Runner Spec policy migration updates only rows with an empty `template_source`, commits each update and audit together, preserves timestamps and indexes, and never seeds missing specs. Explicit policies take precedence over inert legacy ownership fields. Test restart, deletion, audit rollback and both SQL dialects; see `docs/platform-runner-specs.md`.
+
 ## Workflow
 
 1. Inspect current state records and migration helpers:
@@ -69,7 +71,7 @@ databases whose names end in `_test`:
 RUNNERD_CATALOG_BACKEND_TESTS=1 \
 RUNNERD_POSTGRES_TEST_DSN='<dedicated postgres test DSN>' \
 RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
-  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema)SQLBackends' -count=1 -v
+  go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy)SQLBackends' -count=1 -v
 ```
 
 6. If callers or server behavior changed, also run:
