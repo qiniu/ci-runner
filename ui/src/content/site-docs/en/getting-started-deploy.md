@@ -69,9 +69,11 @@ Cache S3 is also user- or organization-owned in Preferences. Operators must set 
 
 All platform specs are maintained in **Admin → Runner Specs**. A fresh database starts empty; startup does not create specs. Existing public specs are migrated once and retain their configuration.
 
-For the first standard workflow, create `qiniu-ubuntu-24.04` with advertised labels `self-hosted,linux,x64,qiniu,ubuntu-24.04`, required labels `qiniu,ubuntu-24.04`, public-name binding `github-runner-ubuntu-24-04`, and enable it. Configure the Admin Sandbox service first so saving can validate the public template. Choose preinstalled Runner preparation and require Docker for the standard image contract. Publish it to show it in the platform catalog; enable fork sponsorship only when needed.
+For the first standard workflow, create `qiniu-ubuntu-24.04` with advertised labels `self-hosted,linux,x64,qiniu,ubuntu-24.04`, required labels `qiniu,ubuntu-24.04`, public-name binding `github-runner-ubuntu-24-04`, and enable it. Configure the Admin Sandbox service first so saving can validate the public template. Publish it to show it in the platform catalog.
 
-Verify the same public name exists and is runnable in every effective Sandbox region. Private specs instead bind a physical template ID and remain outside the public directory. See [Runner labels and template mapping](/docs/guides/runner-labels).
+Public-name bindings automatically use the template's preinstalled Runner and require Docker readiness at startup. These behaviors have no separate Admin switches. Organization fork sponsorship requires an organization owner's repository policy and the existing authorization and capacity checks; it is not enabled through a spec setting. See [Organization-sponsored fork runners](/docs/guides/fork-sponsorship).
+
+Verify the same public name exists and is runnable in every effective Sandbox region. Private specs instead bind a physical template ID and remain outside the public directory. See [Runner labels and template mapping](/docs/reference/runner-labels).
 
 ## 6. Run the production smoke
 

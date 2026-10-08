@@ -19,9 +19,9 @@ Confirm all of the following:
 - the organization installation has approved **Members: Read-only**;
 - the signed-in policy administrator is an active organization owner;
 - the organization has an effective Sandbox service, either from its own Preferences or an eligible platform default;
-- the workflow uses a public-name platform Runner Spec with fork sponsorship enabled, such as `[qiniu, ubuntu-24.04]`.
+- the workflow uses a public-name platform Runner Spec, such as `[qiniu, ubuntu-24.04]`.
 
-Fork sponsorship does not apply to private platform or scoped custom Runner Specs. Directory publication and sponsorship are independent controls.
+Fork sponsorship does not apply to private platform or scoped custom Runner Specs. There is no sponsorship switch on a spec; eligibility is controlled by the organization repository policy and its authorization and capacity checks. Directory publication does not change those rules.
 
 ## Choose an eligibility rule
 

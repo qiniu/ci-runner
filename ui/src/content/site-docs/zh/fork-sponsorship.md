@@ -19,9 +19,9 @@ Job、workflow 历史记录和临时 GitHub Runner 仍归 Fork 所有。组织�
 - 组织 installation 已批准 **Members: Read-only** 权限；
 - 管理策略的当前登录用户是 active 组织所有者；
 - 组织具备有效的 Sandbox 服务，来源可以是组织自己的 Preferences，也可以是符合条件的平台默认配置；
-- workflow 使用公共名称绑定且明确允许 Fork 赞助的平台 Runner 规格，例如 `[qiniu, ubuntu-24.04]`。
+- workflow 使用公共名称绑定的平台 Runner 规格，例如 `[qiniu, ubuntu-24.04]`。
 
-Fork 赞助不适用于私有平台规格或 scope 自定义规格；目录发布与赞助是独立开关。
+Fork 赞助不适用于私有平台规格或 scope 自定义规格。规格上没有赞助开关；赞助资格由组织仓库策略及其授权和容量检查控制，目录发布不改变这些规则。
 
 ## 选择准入方式
 

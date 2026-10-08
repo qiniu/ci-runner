@@ -47,10 +47,10 @@ This means `[qiniu, ubuntu-24.04]` and the full advertised managed set both matc
 
 ## Platform spec management
 
-Administrators maintain every platform spec in Admin: labels, required labels, binding, capacity and runtime policies. Startup preserves changes and never recreates deleted specs. Fresh installations need an administrator to create specs first. The platform directory lists only enabled, published public-name specs.
+Administrators maintain every platform spec in Admin: labels, required labels, binding, capacity, priority, enabled state and publication. Startup preserves changes and never recreates deleted specs. Fresh installations need an administrator to create specs first. The platform directory lists only enabled, published public-name specs.
 
 Public-name bindings resolve through the effective account or organization Sandbox endpoint immediately before registration. The same stable name can resolve to different physical IDs across regions. Private bindings use an explicit template ID. Saving validates access through the administrator's Sandbox configuration; regional workflow smoke still proves runtime usability.
 
-Runner preparation (`official` or `preinstalled`), Docker requirements and fork sponsorship are separate policies. Private bindings cannot publish or enable sponsorship. Large specs may use either binding; directory inclusion requires a validated public name and explicit publication.
+Runtime behavior follows the binding, with no separate Runner preparation, Docker or sponsorship switches. Public-name bindings use the preinstalled Runner and require Docker readiness. Private-ID bindings check and update the official Runner before registration when needed, keep Docker setup best effort, and cannot publish or use sponsorship. Both retain GitHub Runner self-update. Public-name specs may use [organization fork sponsorship](/docs/guides/fork-sponsorship) only under the existing organization repository policy, authorization and capacity checks. Large specs may use either binding; directory inclusion requires a validated public name and explicit publication.
 
 See [Run your first workflow](/docs/guides/workflow) for a managed example, or [Build and use a custom runner template](/docs/guides/custom-templates) for the complete custom path.
