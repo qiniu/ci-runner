@@ -1017,18 +1017,6 @@ func TestListUserInstallationRepositoriesFollowsPagination(t *testing.T) {
 	}
 }
 
-func textResponse(status int, body string, headers map[string]string) *http.Response {
-	resp := &http.Response{
-		StatusCode: status,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(body)),
-	}
-	for key, value := range headers {
-		resp.Header.Set(key, value)
-	}
-	return resp
-}
-
 func testPrivateKeyFile(t *testing.T) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

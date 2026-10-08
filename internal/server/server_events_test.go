@@ -21,6 +21,10 @@ func TestUserRunnerEventsMatchesAdminPagination(t *testing.T) {
 		writeJSON(w, http.StatusOK, map[string]any{"repositories": []map[string]string{{"full_name": "o/r"}}})
 	}))
 	defer gh.Close()
+	// A terminal fixture cannot acquire new events from the background worker.
+	if _, _, err := store.CreateRejectedRequest(state.RunnerRequest{ID: "events-job", GitHubInstallationID: 987, RepositoryFullName: "o/r"}, nil, "event fixture"); err != nil {
+		t.Fatal(err)
+	}
 	srv := newTestServer(t, store, gh.URL, &fakeSandbox{})
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
 	if err != nil {
@@ -30,9 +34,6 @@ func TestUserRunnerEventsMatchesAdminPagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
-	if _, _, err := store.CreateRequest(state.RunnerRequest{ID: "events-job", GitHubInstallationID: 987, RepositoryFullName: "o/r"}, nil); err != nil {
-		t.Fatal(err)
-	}
 	for i := 0; i < 205; i++ {
 		store.AppendStagedLog("events-job", []string{"control.log", "stdout.log", "stderr.log"}[i%3], "runner_hook", []byte(fmt.Sprintf("event %d\n", i)))
 	}
@@ -107,6 +108,9 @@ func TestUserRunnerEventsAuthorization(t *testing.T) {
 				writeJSON(w, http.StatusOK, map[string]any{"repositories": []map[string]string{{"full_name": "o/r"}}})
 			}))
 			defer gh.Close()
+			if _, _, err := store.CreateRejectedRequest(state.RunnerRequest{ID: "private-events", GitHubInstallationID: tc.installation, RepositoryFullName: tc.repository}, nil, "event fixture"); err != nil {
+				t.Fatal(err)
+			}
 			srv := newTestServer(t, store, gh.URL, &fakeSandbox{})
 			account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
 			if err != nil {
@@ -117,9 +121,6 @@ func TestUserRunnerEventsAuthorization(t *testing.T) {
 			}
 			if tc.token != "" {
 				saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), tc.token)
-			}
-			if _, _, err := store.CreateRequest(state.RunnerRequest{ID: "private-events", GitHubInstallationID: tc.installation, RepositoryFullName: tc.repository}, nil); err != nil {
-				t.Fatal(err)
 			}
 			store.AppendLog("private-events", "stdout.log", []byte("private output"))
 			req := httptest.NewRequest(http.MethodGet, "/user/runner_requests/private-events/events", nil)
