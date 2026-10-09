@@ -77,7 +77,7 @@ cp runnerd.yaml.example runnerd.yaml
 6. Open **Repositories** to review **Runner readiness** for the account or organization. Ready sources are shown without configuration controls. If Sandbox setup is missing and you can manage that scope, use **Configure Sandbox** to open the exact account or organization **Preferences** page and configure **Sandbox Service** credentials. Settings lists only your account and organizations where GitHub reports an active owner membership (`role: admin`). Organization members, outside collaborators, and other repository-only users receive only read-only readiness and cannot browse that organization's configuration, Sandbox catalogs, or custom Runner Specs. Administrators can provide a fallback at `/admin/sandbox_service`.
 7. Configure platform Runner Specs in Admin. Existing managed specs migrate with their labels and operator controls preserved; fresh installations require explicit creation. Publish only verified public bindings. Standard and large template builds retain their regional release gates.
 8. Configure a GitHub webhook → `POST http://<host>:25500/webhooks/github`.
-9. Use `runs-on: [qiniu, ubuntu-24.04]` for a managed default, or use the labels required by your custom spec.
+9. Use the labels configured for an enabled Runner Spec, for example `runs-on: [qiniu, ubuntu-24.04]` if an administrator has created a matching spec. Fresh installations do not create this example spec automatically.
 
 Organization owners can open **Settings → Fork sponsorship** to let trusted personal forks use the organization's Sandbox service for managed Runner Specs. A policy is bound to the upstream repository's stable GitHub ID, starts disabled, has its own positive concurrency limit, and can require an exact fork approval, upstream write permission, or active organization membership. The Job and GitHub Runner remain owned by the fork; organization Cache S3, custom Runner Specs, physical template IDs, Runner Groups, credentials, and provider catalogs are never inherited. See [Sponsor trusted forks with an organization Sandbox](https://runner.qiniuinc.com/docs/guides/fork-sponsorship) for the platform workflow and [Organization-Sponsored Fork Runners](docs/organization-sponsored-fork-runners.md) for implementation details.
 
@@ -218,7 +218,7 @@ In your GitHub App settings (**Settings → Developer settings → GitHub Apps �
 ## Webhook & Workflow Setup
 
 1. Ensure the GitHub App webhook is configured as described in [Webhook Events](#webhook-events) above, with the `webhook_secret` matching `github.webhook_secret` in your config.
-2. Use a verified managed label pair, for example:
+2. Use labels that match an enabled Runner Spec configured in Admin. For example, after configuring the corresponding public spec:
 
 ```yaml
 runs-on: [qiniu, ubuntu-24.04]

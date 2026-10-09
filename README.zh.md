@@ -77,7 +77,7 @@ cp runnerd.yaml.example runnerd.yaml
 6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户，以及 GitHub 返回 active owner membership（`role: admin`）的组织。普通组织成员、outside collaborator 和其他仅有仓库权限的用户只能看到 readiness 只读状态，不能浏览该组织的配置、Sandbox 资源目录或自定义 Runner Specs。管理员可以在 `/admin/sandbox_service` 配置兜底。
 7. 在管理控制台配置平台 Runner 规格。原托管规格保留标签和管理员策略，新安装需明确创建。只有校验过的公共绑定可发布；标准及 large 镜像仍须通过区域发布门槛。
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
-9. 在 workflow 中配置 `runs-on: [qiniu, ubuntu-24.04]` 使用已配置的公共规格，或配置自定义 spec 要求的 labels。
+9. 在 workflow 中使用已启用的 Runner 规格所配置的 labels。例如，管理员已创建匹配规格时，可使用 `runs-on: [qiniu, ubuntu-24.04]`。新安装不会自动创建该示例规格。
 
 Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 Fork 使用组织的 Sandbox 服务运行托管 Runner 规格。策略按上游仓库的稳定 GitHub ID 绑定，创建后默认关闭，并具有独立的正数并发上限；准入方式可以是精确 Fork 审批、上游仓库写权限或 active 组织成员。Job 与 GitHub Runner 仍归 Fork 所有；组织 Cache S3、自定义 Runner 规格、物理模板 ID、Runner Group、凭据和 Provider 目录不会被继承。平台使用流程见[使用组织 Sandbox 赞助可信 Fork](https://runner.qiniuinc.com/docs/guides/fork-sponsorship)，实现细节见[组织赞助的 Fork Runner](docs/zh/organization-sponsored-fork-runners.md)。
 
@@ -218,13 +218,13 @@ env:
 ## Webhook 与 Workflow 配置
 
 1. 确保已按上述 [Webhook 事件订阅](#webhook-事件订阅) 配置好 GitHub App webhook，且 `webhook_secret` 与配置文件中的 `github.webhook_secret` 一致。
-2. 使用已验证的 managed label 组合，例如：
+2. 使用与管理后台已配置并启用的 Runner 规格匹配的 labels。例如，配置相应公共规格后可使用：
 
 ```yaml
 runs-on: [qiniu, ubuntu-24.04]
 ```
 
-使用已配置的公共规格 时必须包含 `qiniu` label。自定义 spec 可以定义自己的
+上述标准规格示例必须包含 `qiniu` label。自定义 spec 可以定义自己的
 advertised labels 和 required labels。
 
 runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflow_run` 事件，runnerd 会列出该 run 下所有排队 job，并将尚未入队的匹配 job 创建 runner request。
