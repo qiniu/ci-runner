@@ -3878,7 +3878,6 @@ func TestPublicTemplateCheckedDownloadsResumeAcrossTransientFailures(t *testing.
 
 func TestPublicTemplatesRetryPythonInstallersAfterTransientNetworkFailures(t *testing.T) {
 	root := repositoryRoot(t)
-	var retryInstaller string
 	for _, image := range []string{
 		"ubuntu-slim",
 		"ubuntu-22.04",
@@ -3897,18 +3896,11 @@ func TestPublicTemplatesRetryPythonInstallersAfterTransientNetworkFailures(t *te
 				t.Fatal(err)
 			}
 			script := string(append(commonTemplateSetup(t), scriptBytes...))
-			functionStart := strings.Index(script, "run_retryable_upstream_installer() {")
-			functionEnd := strings.Index(script, "\nrun_upstream_installer() {")
-			if functionStart < 0 || functionEnd < functionStart {
-				t.Fatal("setup must define a retryable upstream installer helper")
-			}
-			retryInstaller = script[functionStart:functionEnd]
 			for _, required := range []string{
 				`RUNNER_TEMPLATE_UPSTREAM_INSTALL_ATTEMPTS:-3`,
 				`RUNNER_TEMPLATE_UPSTREAM_INSTALL_RETRY_DELAY:-2`,
 				`PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}"`,
 				`PIP_RETRIES="${PIP_RETRIES:-10}"`,
-				`install-python.sh | install-pipx-packages.sh)`,
 			} {
 				if !strings.Contains(script, required) {
 					t.Fatalf("setup must retry Python installers with %q", required)
@@ -3920,11 +3912,23 @@ func TestPublicTemplatesRetryPythonInstallersAfterTransientNetworkFailures(t *te
 		})
 	}
 
-	tempDir := t.TempDir()
-	attemptFile := filepath.Join(tempDir, "attempts")
-	installer := filepath.Join(tempDir, "install-python.sh")
-	writeExecutable(t, installer, `#!/usr/bin/env bash
+	for _, installerName := range []string{"install-python.sh", "install-pipx-packages.sh"} {
+		for _, succeedOnAttempt := range []int{2, 4} {
+			t.Run(fmt.Sprintf("%s/succeed-on-attempt-%d", installerName, succeedOnAttempt), func(t *testing.T) {
+				tempDir := t.TempDir()
+				attemptFile := filepath.Join(tempDir, "attempts")
+				executedInstallerFile := filepath.Join(tempDir, "executed-installer")
+				installer := filepath.Join(tempDir, installerName)
+				// Exercise the real dispatcher, rewrite and retries without installing
+				// software on the host; the Docker regression covers real pipx setup.
+				writeExecutable(t, installer, `#!/usr/bin/env bash
 set -euo pipefail
+if [ "$INSTALLER_NAME" = install-python.sh ]; then
+  grep -Fx 'python3 -m venv /opt/pipx-bootstrap' "$0" >/dev/null
+  grep -Fx '/opt/pipx-bootstrap/bin/python -m pip install pipx' "$0" >/dev/null
+  grep -Fx '/opt/pipx-bootstrap/bin/pipx ensurepath' "$0" >/dev/null
+fi
+printf '%s\n' "$0" >"$EXECUTED_INSTALLER_FILE"
 attempt=0
 if [ -f "$ATTEMPT_FILE" ]; then
   attempt="$(cat "$ATTEMPT_FILE")"
@@ -3933,28 +3937,54 @@ attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >"$ATTEMPT_FILE"
 test "$PIP_DEFAULT_TIMEOUT" = 120
 test "$PIP_RETRIES" = 10
-test "$attempt" -ge 2
+test "$attempt" -ge "$SUCCEED_ON_ATTEMPT"
+exit 0
+python3 -m pip install pipx
+python3 -m pipx ensurepath
 `)
-	testScript := filepath.Join(tempDir, "retry-installer.sh")
-	writeExecutable(t, testScript, "#!/usr/bin/env bash\nset -euo pipefail\n"+
-		retryInstaller+"\nrun_retryable_upstream_installer \"$1\"\n")
-	output, err := runCommand(
-		t,
-		"bash",
-		[]string{testScript, installer},
-		"ATTEMPT_FILE="+attemptFile,
-		"RUNNER_TEMPLATE_UPSTREAM_INSTALL_ATTEMPTS=3",
-		"RUNNER_TEMPLATE_UPSTREAM_INSTALL_RETRY_DELAY=0",
-	)
-	if err != nil {
-		t.Fatalf("retryable installer failed: %v\n%s", err, output)
-	}
-	attempts, err := os.ReadFile(attemptFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimSpace(string(attempts)); got != "2" {
-		t.Fatalf("installer attempts = %s, want 2", got)
+				testScript := filepath.Join(tempDir, "retry-installer.sh")
+				writeExecutable(t, testScript, "#!/usr/bin/env bash\nset -euo pipefail\n"+
+					"source \"$1\"\nrun_upstream_installer \"$2\"\n")
+				output, err := runCommand(
+					t,
+					"bash",
+					[]string{testScript, filepath.Join(root, "templates", "common", "scripts", "setup-common.sh"), installer},
+					"ATTEMPT_FILE="+attemptFile,
+					"EXECUTED_INSTALLER_FILE="+executedInstallerFile,
+					"INSTALLER_NAME="+installerName,
+					fmt.Sprintf("SUCCEED_ON_ATTEMPT=%d", succeedOnAttempt),
+					"PIP_DEFAULT_TIMEOUT=120",
+					"PIP_RETRIES=10",
+					"RUNNER_TEMPLATE_UPSTREAM_INSTALL_ATTEMPTS=3",
+					"RUNNER_TEMPLATE_UPSTREAM_INSTALL_RETRY_DELAY=0",
+				)
+				wantAttempts := succeedOnAttempt
+				if succeedOnAttempt > 3 {
+					wantAttempts = 3
+					if err == nil {
+						t.Fatalf("installer must fail after exhausting retries\n%s", output)
+					}
+				} else if err != nil {
+					t.Fatalf("retryable installer failed: %v\n%s", err, output)
+				}
+				attempts, err := os.ReadFile(attemptFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := strings.TrimSpace(string(attempts)); got != fmt.Sprint(wantAttempts) {
+					t.Fatalf("installer attempts = %s, want %d", got, wantAttempts)
+				}
+				if installerName == "install-python.sh" {
+					executedInstaller, err := os.ReadFile(executedInstallerFile)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := os.Stat(strings.TrimSpace(string(executedInstaller))); !os.IsNotExist(err) {
+						t.Fatalf("isolated installer must be removed after execution, got %v", err)
+					}
+				}
+			})
+		}
 	}
 }
 
