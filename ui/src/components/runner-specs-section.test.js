@@ -21,16 +21,16 @@ const disabled = (html, id) => /\sdisabled(?:=""|(?=[\s/>]))/.test(input(html, i
  describe("Admin Runner Specs", () => {
   test("legacy ownership does not prevent editing or deleting a public spec", () => {
     const html = render(RunnerSpecsSection, sectionProps)
-    expect(html).toContain(">Published<")
+    expect(html).toContain(">Catalog display<")
     expect(html).not.toContain(">Managed<")
     expect(html).toContain(spec.default_template_name)
-    expect(html).toContain(">Delete</button>")
+    expect(html).toContain('aria-label="Delete ubuntu-24.04"')
     const edit = render(RunnerSpecDialogForm, formProps)
     expect(disabled(edit, "runner-spec-name")).toBe(true)
     for (const id of ["labels", "required-labels", "default-template", "github-group", "priority", "max-concurrency", "min-idle", "enabled", "published"]) {
       expect(disabled(edit, `runner-spec-${id}`)).toBe(false)
     }
-    expect(edit).toContain("Only published public-template specs")
+    expect(edit).toContain("Only enabled public-template specs with catalog display turned on")
     for (const id of ["update-policy", "require_docker", "fork_sponsorship"]) {
       expect(edit).not.toContain(`id="runner-spec-${id}"`)
     }

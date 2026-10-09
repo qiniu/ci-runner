@@ -598,6 +598,47 @@ test("edits former managed specs and clears publication when switching to privat
   diagnostics.expectClean()
 })
 
+test("requires confirmation before deleting an admin Runner Spec", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "Local fixture-backed admin coverage")
+  const diagnostics = observeBrowserDiagnostics(page)
+  const base = { labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "", updated_at: "2026-10-01T00:00:00Z" }
+  let profiles = [{ ...base, name: "delete-me" }, { ...base, name: "keep-me" }]
+  const deletions: string[] = []
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin" } }))
+  await page.route("**/runner_specs**", (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.startsWith("/admin/")) return route.continue()
+    if (route.request().method() === "DELETE") {
+      deletions.push(url.pathname)
+      profiles = profiles.filter((profile) => profile.name !== "delete-me")
+      return route.fulfill({ json: {} })
+    }
+    return route.fulfill({ json: profiles })
+  })
+  await page.goto("/admin/runner_specs", { waitUntil: "networkidle" })
+  const remove = page.getByRole("button", { name: "Delete delete-me", exact: true })
+  await expect(remove).toHaveText("")
+  await expect(page.getByRole("button", { name: "Edit delete-me", exact: true })).toHaveText("")
+  await remove.click()
+  const confirmation = page.getByRole("dialog", { name: "Delete Runner Spec", exact: true })
+  await expect(confirmation).toContainText('Delete Runner Spec "delete-me"?')
+  expect(deletions).toEqual([])
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect(confirmation).toHaveCount(0)
+  expect(deletions).toEqual([])
+  await remove.click()
+  await page.keyboard.press("Escape")
+  await expect(confirmation).toHaveCount(0)
+  expect(deletions).toEqual([])
+  await remove.click()
+  await confirmation.getByRole("button", { name: "Delete", exact: true }).click()
+  await expect(remove).toHaveCount(0)
+  await expect(confirmation).toHaveCount(0)
+  expect(deletions).toEqual(["/runner_specs/delete-me"])
+  await expect(page.getByRole("button", { name: "Delete keep-me", exact: true })).toBeVisible()
+  diagnostics.expectClean()
+})
+
 async function routeLocalAnonymousSession(page: Page) {
   const authSessionRoute = getLocalAuthSessionRoute(process.env.RUNNERD_UI_SMOKE_BASE_URL)
   if (!authSessionRoute) return

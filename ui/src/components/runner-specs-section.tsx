@@ -3,6 +3,7 @@ import {
   type Dispatch,
   type FormEvent,
   type SetStateAction,
+  useState,
 } from "react"
 import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -373,6 +374,9 @@ export function RunnerSpecsSection({
   onDeleteRunnerSpec: (name: string) => void
 }) {
   const t = i18n.t
+  const [deletingRunnerSpecName, setDeletingRunnerSpecName] = useState<
+    string | null
+  >(null)
   return (
     <div className="grid gap-4">
       <Card className="min-w-0">
@@ -409,11 +413,15 @@ export function RunnerSpecsSection({
             <TableHeader>
               <TableRow>
                 <TableHead>{t("common.name")}</TableHead>
+                <TableHead>{t("common.status")}</TableHead>
+                <TableHead>{t("admin.publishedSpec")}</TableHead>
                 <TableHead>{t("common.labels")}</TableHead>
                 <TableHead>{t("common.template")}</TableHead>
                 <TableHead>{t("admin.githubGroup")}</TableHead>
-                <TableHead>{t("admin.limit")}</TableHead>
-                <TableHead className="w-44">
+                <TableHead>{t("admin.maxConcurrency")}</TableHead>
+                <TableHead>{t("admin.minIdle")}</TableHead>
+                <TableHead>{t("admin.priority")}</TableHead>
+                <TableHead className="w-24">
                   <span className="sr-only">{t("common.actions")}</span>
                 </TableHead>
               </TableRow>
@@ -430,15 +438,31 @@ export function RunnerSpecsSection({
                     <TableCell>
                       <div className="flex max-w-[240px] items-center gap-2">
                         <span className="truncate">{runnerSpec.name}</span>
-                        {runnerSpec.published ? (
-                          <Badge variant="secondary">
-                            {t("admin.publishedSpec")}
-                          </Badge>
-                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="max-w-[260px] truncate">
+                      <Badge
+                        variant={runnerSpec.enabled ? "success" : "secondary"}
+                      >
+                        {runnerSpec.enabled
+                          ? t("common.enabled")
+                          : t("common.disabled")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={runnerSpec.published ? "secondary" : "outline"}
+                      >
+                        {runnerSpec.published
+                          ? t("admin.catalogDisplayOn")
+                          : t("admin.catalogDisplayOff")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div
+                        className="max-w-[176px] truncate"
+                        title={runnerSpec.labels.join(", ")}
+                      >
                         {runnerSpec.labels.join(", ")}
                       </div>
                     </TableCell>
@@ -449,7 +473,14 @@ export function RunnerSpecsSection({
                             ? t("admin.defaultTemplate")
                             : t("admin.templateID")}
                         </div>
-                        <div className="truncate">
+                        <div
+                          className="truncate"
+                          title={
+                            publicTemplate
+                              ? runnerSpec.default_template_name || "—"
+                              : runnerSpec.template_id
+                          }
+                        >
                           {publicTemplate
                             ? runnerSpec.default_template_name || "—"
                             : runnerSpec.template_id}
@@ -462,13 +493,19 @@ export function RunnerSpecsSection({
                       </div>
                     </TableCell>
                     <TableCell>{runnerSpec.max_concurrency}</TableCell>
+                    <TableCell>{runnerSpec.min_idle}</TableCell>
+                    <TableCell>{runnerSpec.priority}</TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button
                           type="button"
                           variant="outline"
-                          size="sm"
+                          size="icon"
+                          className="size-8"
                           aria-label={t("admin.editNamedRunnerSpec", {
+                            name: runnerSpec.name,
+                          })}
+                          title={t("admin.editNamedRunnerSpec", {
                             name: runnerSpec.name,
                           })}
                           onClick={(event) => {
@@ -477,19 +514,24 @@ export function RunnerSpecsSection({
                           }}
                         >
                           <Pencil />
-                          {t("common.edit")}
                         </Button>
                         <Button
                           type="button"
                           variant="outline"
-                          size="sm"
+                          size="icon"
+                          className="size-8"
+                          aria-label={t("admin.deleteNamedRunnerSpec", {
+                            name: runnerSpec.name,
+                          })}
+                          title={t("admin.deleteNamedRunnerSpec", {
+                            name: runnerSpec.name,
+                          })}
                           onClick={(event) => {
                             event.stopPropagation()
-                            onDeleteRunnerSpec(runnerSpec.name)
+                            setDeletingRunnerSpecName(runnerSpec.name)
                           }}
                         >
                           <Trash2 />
-                          {t("common.delete")}
                         </Button>
                       </div>
                     </TableCell>
@@ -500,6 +542,44 @@ export function RunnerSpecsSection({
           </Table>
         </CardContent>
       </Card>
+      <Dialog
+        open={deletingRunnerSpecName !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletingRunnerSpecName(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("admin.deleteRunnerSpecTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("admin.confirmDeleteRunnerSpec", {
+                name: deletingRunnerSpecName || "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeletingRunnerSpecName(null)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (deletingRunnerSpecName !== null) {
+                  onDeleteRunnerSpec(deletingRunnerSpecName)
+                  setDeletingRunnerSpecName(null)
+                }
+              }}
+            >
+              {t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={runnerSpecOpen}
         onOpenChange={(open) => {
