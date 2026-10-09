@@ -305,6 +305,27 @@ run_retryable_upstream_installer() {
   return 1
 }
 
+install_python_with_isolated_pipx() {
+  local installer_path="$1"
+  local isolated_installer
+  local result=0
+
+  # Keep upstream apt setup, environment and tests, but never let pip replace
+  # Debian-owned dependencies (which have no pip RECORD) to install pipx.
+  test "$(grep -Fxc 'python3 -m pip install pipx' "$installer_path")" -eq 1 || return 1
+  test "$(grep -Fxc 'python3 -m pipx ensurepath' "$installer_path")" -eq 1 || return 1
+  isolated_installer="$(mktemp /tmp/qiniu-install-python.XXXXXX)" || return 1
+  sed \
+    -e 's|^python3 -m pip install pipx$|python3 -m venv /opt/pipx-bootstrap\n/opt/pipx-bootstrap/bin/python -m pip install pipx\nln -sfn /opt/pipx-bootstrap/bin/pipx /usr/local/bin/pipx|' \
+    -e 's|^python3 -m pipx ensurepath$|/opt/pipx-bootstrap/bin/pipx ensurepath|' \
+    "$installer_path" >"$isolated_installer" || result=$?
+  if [ "$result" -eq 0 ]; then
+    run_retryable_upstream_installer "$isolated_installer" || result=$?
+  fi
+  rm -f "$isolated_installer"
+  return "$result"
+}
+
 run_upstream_installer() {
   local installer_path="$1"
   local installer_name="${installer_path##*/}"
@@ -353,7 +374,11 @@ run_upstream_installer() {
       install_ninja_from_checked_archive
       return
       ;;
-    install-python.sh | install-pipx-packages.sh)
+    install-python.sh)
+      install_python_with_isolated_pipx "$installer_path"
+      return
+      ;;
+    install-pipx-packages.sh)
       if run_retryable_upstream_installer "$installer_path"; then
         return 0
       fi

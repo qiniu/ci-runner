@@ -80,6 +80,10 @@ Use `task smee` for standalone GitHub webhook forwarding. It reads `.smee-url` a
 Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`.
 
 Public runner templates are built with `qiniu/qshell` 2.19.13 or newer.
+pipx itself must use the isolated `/opt/pipx-bootstrap` virtual environment and
+`/usr/local/bin/pipx` entry point, preserving `/opt/pipx` and `/opt/pipx_bin` for
+tools. Never force pip to uninstall or overwrite apt-owned Python dependencies.
+Use `task template-python-test` for the Docker/network isolation regression.
 All eight public builds use `templates/` as their Docker context. Shared setup
 functions, helper scripts, and the sole Actions Runner version/SHA-256/size pin
 live in `templates/common/`; retain per-Ubuntu setup differences and keep the

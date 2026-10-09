@@ -352,6 +352,8 @@ task release-check # 验证发布构建
 对外的 `ubuntu-latest-large` Runner Spec 是映射到
 `github-runner-ubuntu-24-04-large` 物理模板的逻辑标签，不会新增源码目录或构建目标。
 
+修改 Python/pipx 安装方式时，运行 `task template-python-test`，通过 Docker 和网络验证
+pipx 与 apt 管理的 Python 包相互隔离。
 先运行 `task template-check-all`，再通过 `task template-build-all` 串行构建全部
 8 个模板，或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
 Sandbox 构建。发布与

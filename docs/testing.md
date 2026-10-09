@@ -718,6 +718,14 @@ Each accepted process-exit watcher is bound to the Sandbox ID and PID of its exe
 
 Release C removed the temporary catalog migration readiness endpoint and UI after the matcher cutover completed. The retired Runner Group and Policy APIs return `404`, and no active state, server, or UI behavior depends on those removed models.
 
+### Python/pipx template regression
+
+Run `task template-python-test` after changing Python/pipx setup. It requires
+Docker and network access, executes the pinned upstream installer on the pinned
+Ubuntu 26.04 rootfs, and checks apt-owned `packaging` stays unchanged, pipx tools
+retain their directories, ordinary users can invoke pipx, and installer failures
+still stop the build. This does not replace regional Sandbox build/smoke gates.
+
 ## 11. Official References
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow

@@ -293,6 +293,12 @@ runner version, official archive checksum, and compatibility verification
 together. Python and pipx upstream installers use bounded retries
 and longer pip read timeouts because remote template builds must tolerate
 transient package-index failures without retrying unrelated installers.
+pipx itself runs from `/opt/pipx-bootstrap`, an isolated virtual environment,
+through `/usr/local/bin/pipx`; tool environments and commands remain in
+`/opt/pipx` and `/opt/pipx_bin`. This prevents pip from uninstalling apt-owned
+Python dependencies. `task template-python-test` checks this boundary against
+the pinned Ubuntu 26.04 rootfs and upstream installer using Docker and network
+access; it does not build or publish a Sandbox template.
 The Docker check imports a minimal root filesystem from the Sandbox itself and
 runs it with networking disabled. This verifies daemon, socket, image-import,
 and container execution behavior without conflating template correctness with
