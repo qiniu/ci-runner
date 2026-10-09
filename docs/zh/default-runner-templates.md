@@ -214,6 +214,11 @@ common 文件固定的预装 Runner 精确版本，以及持久化到 Sandbox �
 检查固定的 Azure CLI 精确版本，因此 Dockerfile 中的版本、官方校验和与
 compatibility verification 必须同步更新。Python 和 pipx 安装会对软件包索引的
 瞬时失败执行有限重试；其他上游安装器可能不具备幂等性，因此不会自动重试。
+pipx 本身安装在独立虚拟环境 `/opt/pipx-bootstrap` 中，通过
+`/usr/local/bin/pipx` 使用，工具目录仍为 `/opt/pipx` 和 `/opt/pipx_bin`。
+这样可避免 pip 尝试卸载缺少 `RECORD` 文件的 apt 管理的 Python 依赖。
+运行 `task template-python-test` 可通过 Docker 和网络，针对固定的 Ubuntu 26.04
+根文件系统与上游安装器进行回归验证；区域构建和 smoke 验证仍须单独完成。
 
 ```bash
 task template-build-all

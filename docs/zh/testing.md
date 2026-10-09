@@ -702,6 +702,13 @@ Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精
 
 Release C 在 matcher 切换完成后移除了临时 catalog migration readiness API 与界面。已退役的 Runner Group 和 Policy API 返回 `404`，当前 state、server 和 UI 行为都不依赖这些已移除模型。
 
+### Python/pipx 模板回归
+
+修改 Python/pipx 安装逻辑后，运行 `task template-python-test`。该检查需要
+Docker 和网络，在固定的 Ubuntu 26.04 根文件系统中执行固定的上游安装器，验证
+apt 管理的 `packaging` 保持不变、pipx 工具目录兼容、普通用户可执行 pipx，
+以及安装失败仍会阻止构建。该检查不能替代区域 Sandbox 构建与 smoke 门禁。
+
 ## 11. 官方参考
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow

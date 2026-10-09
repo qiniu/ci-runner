@@ -252,7 +252,13 @@ conformance also checks the exact pinned Azure CLI version, so Dockerfile
 versions, official checksums, and compatibility verification must be updated
 together. Python and pipx installation has bounded retries for transient
 package-index failures; other upstream installers are not retried automatically
-because they may not be idempotent.
+because they may not be idempotent. pipx is installed in the isolated
+`/opt/pipx-bootstrap` virtual environment, exposed through `/usr/local/bin/pipx`,
+while tools retain `/opt/pipx` and `/opt/pipx_bin`. This avoids pip attempting
+to uninstall apt-owned Python dependencies without a `RECORD` file. Run
+`task template-python-test` for the Docker/network regression against the
+pinned Ubuntu 26.04 rootfs and upstream installer; regional build and smoke
+verification remain separate.
 
 ```bash
 task template-build-all

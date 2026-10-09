@@ -258,6 +258,11 @@ tasks:
         cmd: |
           docker build --check --platform=linux/amd64 -f "templates/{{.ITEM}}/Dockerfile" templates
 
+  template-python-test:
+    desc: Check isolated pipx installation against the Ubuntu 26.04 rootfs (requires Docker and network)
+    cmds:
+      - bash scripts/test-runner-template-python.sh
+
   template-runner-update-test:
     desc: Test the verified Actions Runner pin updater
     cmds:

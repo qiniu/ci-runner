@@ -359,6 +359,8 @@ The public `ubuntu-latest-large` Runner Spec is a logical label mapped to the
 `github-runner-ubuntu-24-04-large` physical template; it does not add another
 source directory or build target.
 
+Run `task template-python-test` when changing Python/pipx installation; it uses
+Docker and network access to verify isolation from apt-owned Python packages.
 Run `task template-check-all`, then use `task template-build-all` to build all
 eight templates sequentially, or use an individual `task template-build-ubuntu-*`
 target for one real qshell Sandbox build. See

@@ -147,6 +147,11 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
 
 ## Docker, Templates, And Release
 
+- Python/pipx setup changes require `task template-python-test` (Docker and
+  network): preserve apt-owned dependencies, tool directories, ordinary-user
+  execution and fail-closed installation. This is local regression evidence,
+  not a real regional Sandbox template build or publication.
+
 - Service Dockerfile-only validation: `task docker-check`; use
   `task template-check-all` for the public template Dockerfiles.
 - Actions Runner pin updater changes require
