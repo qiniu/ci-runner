@@ -29,7 +29,7 @@ large workflow 矩阵；catalog 和生产证据保留在
 
 每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`
 变体使用。标准和 large 配置复用同一份 Dockerfile 与脚本，但使用不同的物理模板
-名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式私有 ID。进入公共目录还要求经过校验的公共名称绑定和明确发布。每份 `qshell.sandbox.large.toml` 都设置了
+名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式物理 ID。进入公共目录还要求经过校验的公共模板（名称或物理 ID）和明确开启目录展示。每份 `qshell.sandbox.large.toml` 都设置了
 `disk_size_mb = 81920`，表示新模板的根磁盘容量下限为 80 GiB；原地重建前，
 provider 团队的 `DiskMb` 必须至少为 81,920 MiB。qshell 重建同名模板时不会发送
 此字段，因此构建脚本允许旧总容量较小的模板进入 rebuild；发布与 catalog 检查
@@ -150,7 +150,7 @@ jobs:
 | `[qiniu, ubuntu-26.04-large]` | `github-runner-ubuntu-26-04-large` | 80 GiB |
 | `[qiniu, ubuntu-latest-large]` | `github-runner-ubuntu-24-04-large` | 80 GiB |
 
-`ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。large 规格启用后，标签接受该请求的工作流可以使用它。进入公共目录还要求经过校验的公共名称绑定和明确发布。
+`ubuntu-latest-large` 是映射到 Ubuntu 24.04 large 物理模板的对外逻辑标签，不会新增第 5 个物理 large 镜像。large 规格启用后，标签接受该请求的工作流可以使用它。进入公共目录还要求经过校验的公共模板（名称或物理 ID）和明确开启目录展示。
 
 全部规格保持 `required_labels ⊆ job_labels ⊆ labels`。标准示例应要求 `qiniu` 与准确的 OS 标签，部分标签或不受支持的额外标签不能匹配。管理员在后台维护这些字段、启用状态和容量；物理镜像构建与真实 Sandbox smoke 仍属于独立发布步骤。
 

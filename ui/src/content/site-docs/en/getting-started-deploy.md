@@ -73,7 +73,7 @@ For the first standard workflow, create `qiniu-ubuntu-24.04` with advertised lab
 
 Public-name bindings automatically use the template's preinstalled Runner and require Docker readiness at startup. These behaviors have no separate Admin switches. Organization fork sponsorship requires an organization owner's repository policy and the existing authorization and capacity checks; it is not enabled through a spec setting. See [Organization-sponsored fork runners](/docs/guides/fork-sponsorship).
 
-Verify the same public name exists and is runnable in every effective Sandbox region. Private specs instead bind a physical template ID and remain outside the public directory. See [Runner labels and template mapping](/docs/reference/runner-labels).
+Verify the same public name exists and is runnable in every effective Sandbox region. Fixed-ID specs may also opt into the directory when the actual template is verified public and runnable; the ID remains hidden there. See [Runner labels and template mapping](/docs/reference/runner-labels).
 
 ## 6. Run the production smoke
 

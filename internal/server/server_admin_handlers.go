@@ -456,7 +456,7 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !s.validateAdminProfileTemplateBinding(w, r, requestedProfile) {
+	if !s.validateAdminProfileTemplateBinding(w, r, requestedProfile, true) {
 		return
 	}
 	var profile state.RunnerProfile
@@ -572,7 +572,11 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if (current.TemplateID != previous.TemplateID || current.TemplateSource != previous.TemplateSource || current.DefaultTemplateName != previous.DefaultTemplateName || (!previous.Published && current.Published) || (!previous.Enabled && current.Enabled && current.Published)) && !s.validateAdminProfileTemplateBinding(w, r, current) {
+	bindingChanged := current.TemplateID != previous.TemplateID || current.TemplateSource != previous.TemplateSource || current.DefaultTemplateName != previous.DefaultTemplateName
+	// Display policy is independent of readiness; new bindings and re-enabled
+	// displayed specs must still have a usable default before they can run.
+	requireRunnable := bindingChanged || (!previous.Enabled && current.Enabled && current.Published)
+	if (requireRunnable || (!previous.Published && current.Published)) && !s.validateAdminProfileTemplateBinding(w, r, current, requireRunnable) {
 		return
 	}
 	var profile state.RunnerProfile

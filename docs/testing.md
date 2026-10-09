@@ -75,11 +75,11 @@ The first-use product tour stores only a version, status, and `tour_seen` marker
 Runner Specs are not `runnerd.yaml` fields. Internal Runner Groups and Repository Policies have been removed; the optional `runner_group` on a Spec remains a GitHub Organization Runner Group registration target.
 All platform Runner Specs are database-owned and editable at `/admin/runner_specs`. Startup migrates legacy policies once and does not recreate or reconcile a fixed catalog; fresh databases have no specs. See [Platform Runner Specs](platform-runner-specs.md).
 
-Verify public-name and private-ID binding separately. Public names must resolve uniquely to a runnable public template through the configured admin Sandbox service. Creating/changing a binding, publishing or re-enabling a published spec performs remote validation; unchanged-binding edits and unpublishing do not. Validation uses only admin credentials, independently of runtime fallback enabled/audience controls. Private IDs retain GetTemplate and effective-default-build validation. Standard and large public bindings may be published after validation; no name-based promotion is allowed.
+Verify public-name and fixed-ID references separately; IDs can refer to public templates. Public names must resolve uniquely to a runnable public template through the configured admin Sandbox service. Creating/changing a binding and re-enabling a displayed spec require a nonzero effective default BuildID. Publishing an unchanged spec checks publicness alone. These actions perform remote validation; unchanged-binding edits and unpublishing do not. Validation uses only admin credentials, independently of runtime fallback enabled/audience controls. Fixed IDs retain GetTemplate and effective-default-build validation; publication additionally requires the actual public flag. Cover public/private IDs, unknown metadata, pending/stale form responses and no-audit rejection. Standard and large public templates may display using existing IDs; publication must preserve runtime behavior and ID redaction. No new migration or automatic publication is needed.
 
 The total provider check is limited to five seconds. Missing admin configuration
 returns `409 sandbox_service_not_configured`; a missing template or no usable
-default build returns `400 template_not_found` or `400 template_not_ready`.
+default build during binding/re-enable validation returns `400 template_not_found` or `400 template_not_ready`.
 Provider 401/403 produces `502 sandbox_template_access_denied`, other upstream
 failures produce `502 template_validation_unavailable`, and cancellation/deadline
 returns `504 template_validation_timeout`. Fix the configuration/template or retry;
@@ -368,7 +368,7 @@ Public-catalog cache tests cover concurrent read coalescing, expiry, recovery af
 
 The protected `/runner-specs` route is the scope-free, read-only ordinary-user platform catalog. It shows only enabled, published public Specs with copyable workflow labels; source/status badges, disabled Specs, account/Organization selectors, and enabled or concurrency controls stay out of this page. Settings routes `/account/runner-specs` and `/organizations/{login}/runner-specs` show only custom Specs owned by that scope. All three surfaces use `/user/runner-specs`, which requires the signed-in account or an owner-manageable Organization scope; scoped custom templates are validated with that scope's Sandbox credentials and never the admin fallback.
 
-Runner Spec regression coverage must distinguish published public `platform_public` entries from scope-owned `scoped_custom` entries. Unpublished/private platform entries are absent from user responses; physical IDs and Runner Groups appear only on the selected scope's own entries.
+Runner Spec regression coverage must distinguish published public `platform_public` or `platform_custom` entries from scope-owned `scoped_custom` entries. Unpublished platform entries are absent from user responses; physical IDs and Runner Groups appear only on the selected scope's own entries.
 
 For focused UI unit tests, run:
 
@@ -399,6 +399,8 @@ bundle in Chromium:
 ```bash
 task ui-production-smoke
 ```
+
+Local admin fixtures also cover Runner Spec cards, complete labels, independent template loading and retry, shared-template request reuse, refresh, narrow-screen wrapping, editing and delete confirmation. These fixtures do not prove real Sandbox service behavior.
 
 The task installs the matching Chromium runtime, builds `internal/server/ui/`,
 and starts Vite preview on port `4173`. Playwright opens `/` to catch JavaScript
@@ -637,7 +639,7 @@ Common issues:
   not match. For a custom spec, use its advertised and required labels.
 - `template_resolution` admission failure: confirm the repository owner's
   scoped Sandbox endpoint exposes exactly one public default template with the
-  managed stable name in `ready` or `uploaded` state.
+  managed stable name with a nonzero effective default BuildID, including when the latest rebuild failed.
 - sandbox creation fails: confirm the account/organization Preferences or enabled admin default has a complete Sandbox service config matching the template and local environment; the Runner detail shows which source was selected.
 - `template-smoke` reports insufficient runtime root disk size: verify the
   fresh Sandbox root disk meets `disk_size_mb` from the selected TOML.

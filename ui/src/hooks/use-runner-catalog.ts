@@ -19,19 +19,35 @@ export async function submitRunnerSpecChanges({
   parseLabels: (value: string) => string[]
 }) {
   const name = editingRunnerSpec?.name || runnerSpecForm.name.trim()
-  const publicTemplate = runnerSpecForm.template_source === "public"
+  const template = runnerSpecForm.template.trim()
+  const originalTemplate =
+    editingRunnerSpec?.default_template_name || editingRunnerSpec?.template_id
+  // Keep an unchanged reference and its execution behavior, even when provider
+  // metadata is temporarily unavailable. New references are resolved by the server.
+  const binding =
+    editingRunnerSpec && template === originalTemplate
+      ? {
+          template_source: editingRunnerSpec.template_source,
+          template_id: editingRunnerSpec.template_id,
+          default_template_name: editingRunnerSpec.default_template_name || "",
+        }
+      : ((await request(
+          `/runner_specs/templates/status?template=${encodeURIComponent(template)}`,
+        )) as {
+          template_source: "public" | "private"
+          template_id: string
+          default_template_name: string
+        })
   const payload = {
     ...(editingRunnerSpec
       ? { expected_updated_at: editingRunnerSpec.updated_at }
       : { name }),
     labels: parseLabels(runnerSpecForm.labels),
     required_labels: parseLabels(runnerSpecForm.required_labels),
-    template_source: runnerSpecForm.template_source || "private",
-    template_id: publicTemplate ? "" : runnerSpecForm.template_id.trim(),
-    default_template_name: publicTemplate
-      ? (runnerSpecForm.default_template_name || "").trim()
-      : "",
-    published: publicTemplate && Boolean(runnerSpecForm.published),
+    template_source: binding.template_source,
+    template_id: binding.template_id,
+    default_template_name: binding.default_template_name,
+    published: Boolean(runnerSpecForm.published),
     runner_group: runnerSpecForm.runner_group.trim(),
     max_concurrency: Number(runnerSpecForm.max_concurrency) || 0,
     min_idle: Number(runnerSpecForm.min_idle) || 0,
@@ -70,13 +86,11 @@ export function useRunnerCatalog({
     null,
   )
   const [runnerSpecForm, setRunnerSpecForm] = useState<RunnerSpecFormState>({
-    template_source: "private",
-    default_template_name: "",
+    template: "",
     published: false,
     name: "",
     labels: "self-hosted,e2b",
     required_labels: "",
-    template_id: "",
     runner_group: "",
     max_concurrency: "10",
     min_idle: "0",
@@ -87,13 +101,11 @@ export function useRunnerCatalog({
   const resetRunnerSpecForm = () => {
     setEditingRunnerSpec(null)
     setRunnerSpecForm({
-      template_source: "private",
-      default_template_name: "",
+      template: "",
       published: false,
       name: "",
       labels: "self-hosted,e2b",
       required_labels: "",
-      template_id: "",
       runner_group: "",
       max_concurrency: "10",
       min_idle: "0",
@@ -133,13 +145,11 @@ export function useRunnerCatalog({
     setSection("runner_specs")
     setEditingRunnerSpec(runnerSpec)
     setRunnerSpecForm({
-      template_source: runnerSpec.template_source,
-      default_template_name: runnerSpec.default_template_name || "",
+      template: runnerSpec.default_template_name || runnerSpec.template_id,
       published: runnerSpec.published,
       name: runnerSpec.name,
       labels: runnerSpec.labels.join(","),
       required_labels: runnerSpec.required_labels.join(","),
-      template_id: runnerSpec.template_id,
       runner_group: runnerSpec.runner_group || "",
       max_concurrency: String(runnerSpec.max_concurrency),
       min_idle: String(runnerSpec.min_idle),

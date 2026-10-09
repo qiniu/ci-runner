@@ -535,7 +535,8 @@ test("filters the platform spec directory to enabled published public entries", 
         { ...base, name: "visible-public", source: "platform_public", published: true, default_template_name: "public-template" },
         { ...base, name: "unpublished-public", source: "platform_public", published: false },
         { ...base, name: "disabled-public", source: "platform_public", published: true, enabled: false },
-        { ...base, name: "private-business", source: "platform_custom", published: true, template_id: "private-id" },
+        { ...base, name: "public-fixed-id", source: "platform_custom", published: true },
+        { ...base, name: "private-business", source: "platform_custom", published: false },
         { ...base, name: "scope-custom", source: "scoped_custom", template_id: "scope-id" },
       ] } })
     }
@@ -544,13 +545,14 @@ test("filters the platform spec directory to enabled published public entries", 
   await page.route("**/sandbox/regions", (route) => route.fulfill({ json: [] }))
   await page.goto("/runner-specs", { waitUntil: "networkidle" })
   await expect(page.getByText("visible-public", { exact: true })).toBeVisible()
+  await expect(page.getByText("public-fixed-id", { exact: true })).toBeVisible()
   for (const name of ["unpublished-public", "disabled-public", "private-business", "scope-custom", "private-id", "scope-id"]) {
     await expect(page.getByText(name, { exact: true })).toHaveCount(0)
   }
   diagnostics.expectClean()
 })
 
-test("edits former managed specs and clears publication when switching to private binding", async ({ page }) => {
+test("checks template visibility independently of reference type and preserves runtime bindings", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
   const diagnostics = observeBrowserDiagnostics(page)
   let profile = { name: "old-managed", labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, managed_by: "qiniu/ci-runner", enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "", updated_at: "2026-10-01T00:00:00Z" }
@@ -559,6 +561,11 @@ test("edits former managed specs and clears publication when switching to privat
   await page.route("**/runner_specs**", (route) => {
     const url = new URL(route.request().url())
     if (url.pathname.startsWith("/admin/")) return route.continue()
+    if (url.pathname === "/runner_specs/templates/status") {
+      const template = url.searchParams.get("template") || ""
+      if (template === "unavailable") return route.fulfill({ contentType: "application/json", body: "unavailable" })
+      return route.fulfill({ json: { template: { template_id: template === "public-fixed-id" ? "public-fixed-id" : "resolved-id", names: ["team/ubuntu-24.04"], cpu_count: 8, memory_mb: 16384, disk_size_mb: 81920, envd_version: "0.5.1", build_status: "failed", created_at: "2026-01-02T03:04:05Z", updated_at: "2026-10-09T06:00:00Z" }, public: template !== "private-template", runnable: template !== "no-default-build", template_source: template === "public-fixed-id" || template === "private-template" ? "private" : "public", template_id: template === "public-fixed-id" || template === "private-template" ? template : "", default_template_name: template === "public-fixed-id" || template === "private-template" ? "" : template } })
+    }
     if (route.request().method() === "PATCH") {
       saved = route.request().postDataJSON()
       profile = { ...profile, ...saved }
@@ -570,14 +577,16 @@ test("edits former managed specs and clears publication when switching to privat
   await page.setViewportSize({ width: 1485, height: 1000 })
   await page.getByRole("button", { name: "Edit old-managed", exact: true }).click()
   await expect(page.locator("#runner-spec-labels")).toBeEnabled()
-  await expect(page.locator("#runner-spec-default-template")).toBeEnabled()
+  await expect(page.locator("#runner-spec-template")).toBeEnabled()
+  await expect(page.locator("#runner-spec-template-source")).toHaveCount(0)
+  await expect(page.locator("#runner-spec-published")).toBeEnabled()
   await expect(page.locator("#runner-spec-update-policy, #runner-spec-require_docker, #runner-spec-fork_sponsorship")).toHaveCount(0)
   const longLabels = `self-hosted,linux,x64,qiniu,ubuntu-24.04,${"long-label-".repeat(12)}`
   const longTemplate = `github-runner-ubuntu-24-04-${"extended-".repeat(12)}`
   await page.locator("#runner-spec-labels").fill(longLabels)
-  await page.locator("#runner-spec-default-template").fill(longTemplate)
+  await page.locator("#runner-spec-template").fill(longTemplate)
   const assertWrappedFields = async () => {
-    await expect.poll(() => page.locator("#runner-spec-labels, #runner-spec-default-template").evaluateAll((fields) => fields.every((field) => field.scrollWidth <= field.clientWidth + 1 && field.scrollHeight <= field.clientHeight + 1))).toBe(true)
+    await expect.poll(() => page.locator("#runner-spec-labels, #runner-spec-template").evaluateAll((fields) => fields.every((field) => field.scrollWidth <= field.clientWidth + 1 && field.scrollHeight <= field.clientHeight + 1))).toBe(true)
     expect(await page.getByRole("dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth + 1)).toBe(true)
   }
   await assertWrappedFields()
@@ -585,17 +594,144 @@ test("edits former managed specs and clears publication when switching to privat
   await page.setViewportSize({ width: 390, height: 844 })
   await assertWrappedFields()
   await expect(page.locator("#runner-spec-labels")).toHaveValue(longLabels)
-  await expect(page.locator("#runner-spec-default-template")).toHaveValue(longTemplate)
+  await expect(page.locator("#runner-spec-template")).toHaveValue(longTemplate)
   await page.locator("#runner-spec-labels").fill("qiniu,ubuntu,new-label")
-  await page.locator("#runner-spec-template-source").selectOption("private")
+  await page.locator("#runner-spec-template").fill("private-template")
   await expect(page.locator("#runner-spec-published")).not.toBeChecked()
   await expect(page.locator("#runner-spec-published")).toBeDisabled()
-  await page.locator("#runner-spec-template-id").fill("private-template")
+  await expect(page.getByRole("dialog").getByText("This template is not public and cannot be shown in the catalog.")).toBeVisible()
+  await page.locator("#runner-spec-template").fill("unavailable")
+  await expect(page.getByRole("dialog").getByText(/Cannot verify template visibility/)).toBeVisible()
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toHaveCount(0)
+  await expect(page.locator("#runner-spec-published")).toBeDisabled()
+  await page.locator("#runner-spec-template").fill("no-default-build")
+  await expect(page.getByRole("dialog").getByText(/No usable default build is available yet/)).toBeVisible()
+  await expect(page.locator("#runner-spec-published")).toBeEnabled()
+  await page.locator("#runner-spec-published").check()
+  await page.locator("#runner-spec-template").fill("public-fixed-id")
+  await expect(page.locator("#runner-spec-published")).toBeEnabled()
+  await expect(page.getByRole("dialog").getByText("The latest template build failed, but a usable default build is still available.")).toBeVisible()
+  await expect(page.getByRole("dialog").getByText(/No usable default build is available yet/)).toHaveCount(0)
+  const details = page.getByRole("dialog").getByRole("definition").filter({ hasText: "0.5.1" })
+  await expect(details).toBeVisible()
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toContainText("team/ubuntu-24.04")
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toContainText("8 vCPU · 16384 MB RAM · 81920 MB disk")
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toContainText("public-fixed-id")
+  await assertWrappedFields()
+  for (const label of ["Template name", "Template ID", "Configuration", "ENVD version", "Public template", "Created at", "Updated at"]) {
+    await expect(page.getByRole("dialog").getByLabel("Sandbox template details").getByText(label, { exact: true })).toHaveCount(1)
+  }
+  await page.setViewportSize({ width: 1485, height: 1566 })
+  await page.screenshot({ path: "test-results/admin-template-details.png", fullPage: true })
+  await page.locator("#runner-spec-published").check()
   await page.getByRole("button", { name: "Save runner spec", exact: true }).click()
   await expect(page.getByRole("dialog")).toHaveCount(0)
-  expect(saved).toMatchObject({ template_source: "private", template_id: "private-template", default_template_name: "", published: false, expected_updated_at: "2026-10-01T00:00:00Z", labels: ["qiniu", "ubuntu", "new-label"] })
-  await expect(page.getByText("private-template", { exact: true })).toBeVisible()
+  expect(saved).toMatchObject({ template_source: "private", template_id: "public-fixed-id", default_template_name: "", published: true, expected_updated_at: "2026-10-01T00:00:00Z", labels: ["qiniu", "ubuntu", "new-label"] })
+  await expect(page.getByRole("article", { name: "old-managed", exact: true })).toContainText("public-fixed-id")
   diagnostics.expectClean()
+})
+
+test("explains missing admin template credentials and retries name and ID details", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  const profile = { name: "existing-spec", labels: ["qiniu", "ubuntu"], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "public-template", template_id: "", published: true, enabled: true, max_concurrency: 7, min_idle: 0, priority: 1, runner_group: "" }
+  let configured = false
+  const lookups: string[] = []
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin" } }))
+  await page.route("**/runner_specs**", (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.startsWith("/admin/")) return route.continue()
+    if (url.pathname === "/runner_specs/templates/status") {
+      lookups.push(url.search)
+      if (!configured) return route.fulfill({ status: 409, json: { code: "sandbox_service_not_configured", error: "Configure the admin Sandbox service" } })
+      return route.fulfill({ json: { public: true, runnable: true, template: { template_id: "physical-id", names: ["public-template"], cpu_count: 4, memory_mb: 8192, disk_size_mb: 20480, envd_version: "0.5.1", created_at: "2026-01-02T03:04:05Z", updated_at: "2026-10-09T06:00:00Z" } } })
+    }
+    return route.fulfill({ json: [profile] })
+  })
+  await page.goto("/admin/runner_specs", { waitUntil: "networkidle" })
+  await page.getByRole("button", { name: "Edit existing-spec", exact: true }).click()
+  await expect(page.getByRole("dialog").getByText(/The admin Sandbox service has no endpoint or API key configured/)).toBeVisible()
+  await expect(page.getByRole("dialog").getByRole("link", { name: "Configure Sandbox service" })).toHaveAttribute("href", "/admin/sandbox_service")
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toHaveCount(0)
+  await expect(page.locator("#runner-spec-published")).toBeChecked()
+  const previousLookups = lookups.length
+  configured = true
+  await page.getByRole("dialog").getByRole("button", { name: "Retry lookup" }).click()
+  const details = page.getByRole("dialog").getByLabel("Sandbox template details")
+  await expect(details).toContainText("physical-id")
+  await expect(details).toContainText("4 vCPU · 8192 MB RAM · 20480 MB disk")
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Retry lookup" })).toHaveCount(0)
+  expect(lookups).toHaveLength(previousLookups + 1)
+  expect(lookups.at(-1)).toBe(lookups[0])
+  expect(lookups[0]).toContain("reference_type=name")
+  await page.locator("#runner-spec-template").fill("physical-id")
+  await expect.poll(() => lookups.length).toBe(previousLookups + 2)
+  await expect(details).toContainText("public-template")
+  await expect(page.locator("#runner-spec-published")).toBeEnabled()
+  expect(pageErrors).toEqual([])
+})
+
+test("shows complete admin spec cards while template lookups load or fail", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const errors: string[] = []
+  page.on("pageerror", (error) => errors.push(error.message))
+  const longLabel = "extra-label-".repeat(20)
+  const base = { labels: ["self-hosted", "qiniu", "ubuntu", longLabel], required_labels: ["qiniu", "ubuntu"], template_source: "public", default_template_name: "shared-template", template_id: "", published: true, enabled: true, max_concurrency: 7, min_idle: 2, priority: 100, runner_group: "organization-runners" }
+  const profiles = [{ ...base, name: "standard" }, { ...base, name: "disabled", enabled: false }, { ...base, name: "private", published: false, template_source: "private", default_template_name: "", template_id: "private-id" }]
+  let releasePublic!: () => void
+  const publicReady = new Promise<void>((resolve) => { releasePublic = resolve })
+  let publicLookups = 0
+  let privateRecovered = false
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin" } }))
+  await page.route("**/runner_specs**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.startsWith("/admin/")) return route.continue()
+    if (url.pathname === "/runner_specs/templates/status") {
+      const isPrivate = url.searchParams.get("template") === "private-id"
+      if (isPrivate && !privateRecovered) return route.fulfill({ status: 504, json: { code: "template_validation_timeout", error: "Template lookup timed out" } })
+      if (!isPrivate) { publicLookups++; await publicReady }
+      return route.fulfill({ json: { public: !isPrivate, runnable: true, template: { template_id: isPrivate ? "private-id" : "shared-id", names: [isPrivate ? "team/private" : "team/shared-template"], cpu_count: 8, memory_mb: 8192, disk_size_mb: 20480, envd_version: "0.5.6", created_at: "2026-08-03T09:18:03Z", updated_at: "2026-09-21T08:59:00Z" } } })
+    }
+    return route.fulfill({ json: profiles })
+  })
+  await page.goto("/admin/runner_specs", { waitUntil: "domcontentloaded" })
+  const standard = page.getByRole("article", { name: "standard", exact: true })
+  const disabled = page.getByRole("article", { name: "disabled", exact: true })
+  const privateSpec = page.getByRole("article", { name: "private", exact: true })
+  await expect(page.getByRole("article")).toHaveCount(3)
+  await expect(page.getByRole("table")).toHaveCount(0)
+  await expect(standard).toContainText(longLabel)
+  await expect(standard).toContainText("Required labels")
+  await expect(standard).toContainText("Max concurrency7")
+  await expect(standard).toContainText("Min idle2")
+  await expect(standard).toContainText("Priority100")
+  await expect(standard).toContainText("organization-runners")
+  await expect(disabled.getByText("Disabled", { exact: true })).toBeVisible()
+  await expect(standard.getByText(/Checking template visibility/)).toBeVisible()
+  await expect(privateSpec.getByText(/template lookup timed out/)).toBeVisible()
+  await expect.poll(() => publicLookups).toBe(1)
+  await standard.getByRole("button", { name: "Edit standard", exact: true }).click()
+  releasePublic()
+  await expect(page.getByRole("dialog").getByLabel("Sandbox template details")).toContainText("shared-id")
+  expect(publicLookups).toBe(1)
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect(standard.getByLabel("Sandbox template details")).toContainText("0.5.6")
+  privateRecovered = true
+  await privateSpec.getByRole("button", { name: "Retry lookup", exact: true }).click()
+  await expect(privateSpec.getByLabel("Sandbox template details")).toContainText("team/private")
+  await expect(privateSpec).toContainText("Catalog display: Off")
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect.poll(() => publicLookups).toBe(2)
+  await expect(standard.getByLabel("Sandbox template details")).toContainText("shared-id")
+  for (const width of [961, 390]) {
+    await page.setViewportSize({ width, height: 1034 })
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth <= window.innerWidth)).toBe(true)
+    expect(await page.getByRole("article").evaluateAll((cards) => cards.every((card) => card.scrollWidth <= card.clientWidth))).toBe(true)
+  }
+  await page.setViewportSize({ width: 961, height: 1034 })
+  await page.screenshot({ path: "test-results/admin-spec-cards.png", fullPage: true })
+  expect(errors).toEqual([])
 })
 
 test("requires confirmation before deleting an admin Runner Spec", async ({ page }) => {

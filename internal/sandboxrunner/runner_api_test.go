@@ -102,6 +102,7 @@ func TestValidateTemplateEffectiveDefaultBuild(t *testing.T) {
 		{name: "uploaded default", owner: true, buildID: usableID, status: "uploaded"},
 		{name: "ready default", owner: true, buildID: usableID, status: "ready"},
 		{name: "rebuilding keeps uploaded default", owner: true, buildID: usableID, status: "building", history: []string{"building"}},
+		{name: "failed provider rebuild keeps uploaded default", owner: true, buildID: usableID, status: "failed"},
 		{name: "failed rebuild keeps uploaded default", owner: true, buildID: usableID, status: "error"},
 		{name: "no builds", owner: true, buildID: "00000000-0000-0000-0000-000000000000", status: "waiting", wantErr: ErrTemplateNotReady},
 		{name: "other tag is ready but default is not", owner: true, status: "building", history: []string{"ready", "uploaded"}, wantErr: ErrTemplateNotReady},
@@ -224,7 +225,7 @@ func TestE2BServiceListDefaultTemplates(t *testing.T) {
 			t.Fatalf("request path = %q, want %q", r.URL.Path, "/default-templates")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"templateID":"tpl-public-runner","names":["github-runner-ubuntu-24-04"],"buildStatus":"ready","cpuCount":2,"memoryMB":4096,"diskSizeMB":20480,"public":true,"spawnCount":3,"updatedAt":"2024-01-01T00:00:00Z"}]`))
+		_, _ = w.Write([]byte(`[{"templateID":"tpl-public-runner","buildID":"00000000-0000-0000-0000-000000000001","names":["github-runner-ubuntu-24-04"],"buildStatus":"ready","cpuCount":2,"memoryMB":4096,"diskSizeMB":20480,"public":true,"spawnCount":3,"updatedAt":"2024-01-01T00:00:00Z"}]`))
 	}))
 	defer ts.Close()
 
@@ -243,10 +244,39 @@ func TestE2BServiceListDefaultTemplates(t *testing.T) {
 	if len(got.Names) != 1 || got.Names[0] != "github-runner-ubuntu-24-04" {
 		t.Errorf("Names = %#v, want [github-runner-ubuntu-24-04]", got.Names)
 	}
+	if !got.Runnable() || got.BuildID != "00000000-0000-0000-0000-000000000001" {
+		t.Fatalf("effective default lost: %#v", got)
+	}
 	if got.BuildStatus != "ready" {
 		t.Errorf("BuildStatus = %q, want %q", got.BuildStatus, "ready")
 	}
 	if !got.Public {
 		t.Error("Public = false, want true")
+	}
+}
+
+func TestInspectTemplateMetadataFallsBackToEffectiveCatalog(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/templates/tpl":
+			w.Write([]byte(`{"templateID":"tpl","isOwner":true,"public":true}`))
+		case "/templates":
+			w.Write([]byte(`[{"templateID":"tpl","names":["team/public"],"cpuCount":16,"memoryMB":32768,"diskSizeMB":81920,"envdVersion":"0.5.1","createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-10-09T06:00:00Z","buildID":"00000000-0000-0000-0000-000000000001"}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	info, err := newTestService(t, ts).InspectTemplate(context.Background(), "tpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Public || !info.Runnable || info.Template == nil {
+		t.Fatalf("inspection: %#v", info)
+	}
+	details := info.Template
+	if details.TemplateID != "tpl" || len(details.Names) != 1 || details.Names[0] != "team/public" || details.CPUCount != 16 || details.MemoryMB != 32768 || details.DiskSizeMB != 81920 || details.EnvdVersion != "0.5.1" || details.CreatedAt != "2026-01-02T03:04:05Z" || details.UpdatedAt != "2026-10-09T06:00:00Z" {
+		t.Fatalf("provider metadata: %#v", details)
 	}
 }

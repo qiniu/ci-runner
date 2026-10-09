@@ -14,18 +14,16 @@ import (
 
 const profileTemplateValidationTimeout = 5 * time.Second
 
-// validateAdminProfileTemplateBinding runs before the audited transaction.
-// Admin credentials validate bindings independently of runtime fallback controls.
-// Callers validate local fields first; provider responses never reach clients.
-func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *http.Request, profile state.RunnerProfile) bool {
+// Admin credentials validate templates independently of runtime fallback controls.
+func (s *Server) adminProfileTemplateService(w http.ResponseWriter) (sandboxrunner.Service, bool) {
 	defaultConfig, err := s.store.GetSandboxServiceDefault()
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		writeErrorCode(w, http.StatusInternalServerError, "sandbox_service_config_error", "Cannot load the admin Sandbox service configuration")
-		return false
+		return nil, false
 	}
 	if strings.TrimSpace(defaultConfig.APIURL) == "" || strings.TrimSpace(defaultConfig.APIKeyEncrypted) == "" {
 		writeErrorCode(w, http.StatusConflict, "sandbox_service_not_configured", "Configure the admin Sandbox service before creating a Runner Spec, publishing it, or changing its template")
-		return false
+		return nil, false
 	}
 	svc, err := s.sandboxServiceForConfig(sandboxServiceConfigSnapshot{
 		APIURL: defaultConfig.APIURL, EncryptedAPIKey: defaultConfig.APIKeyEncrypted,
@@ -33,8 +31,19 @@ func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *h
 	})
 	if err != nil {
 		writeErrorCode(w, http.StatusInternalServerError, "sandbox_service_config_error", "Cannot initialize the admin Sandbox service; check its endpoint and credentials")
+		return nil, false
+	}
+	return svc, true
+}
+
+// Callers validate local fields first; provider I/O stays outside the audited transaction.
+func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *http.Request, profile state.RunnerProfile, requireRunnable bool) bool {
+	svc, ok := s.adminProfileTemplateService(w)
+	if !ok {
 		return false
 	}
+	var err error
+
 	ctx, cancel := context.WithTimeout(r.Context(), profileTemplateValidationTimeout)
 	defer cancel()
 	if profile.TemplateSource == state.TemplateSourcePublic {
@@ -46,11 +55,34 @@ func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *h
 		var templates []sandboxrunner.CatalogTemplate
 		templates, err = catalog.ListDefaultTemplates(ctx)
 		if err == nil {
-			_, err = resolveDefaultTemplateID(profile.DefaultTemplateName, templates)
+			if requireRunnable {
+				_, err = resolveDefaultTemplateID(profile.DefaultTemplateName, templates)
+			} else {
+				var match sandboxrunner.CatalogTemplate
+				match, err = findDefaultTemplate(profile.DefaultTemplateName, templates)
+				if err == nil && !match.Public {
+					err = newDefaultTemplateResolutionError(profile.DefaultTemplateName, defaultTemplateResolutionReasonPrivate)
+				}
+			}
 			if err != nil {
-				writeErrorCode(w, http.StatusBadRequest, "public_template_invalid", "Public template name must resolve uniquely to a public, runnable template")
+				writeErrorCode(w, http.StatusBadRequest, "public_template_invalid", "Public template name must resolve uniquely to a public template with a usable default build when binding or enabling a Runner Spec")
 				return false
 			}
+		}
+	} else if profile.Published {
+		inspector, ok := svc.(sandboxrunner.TemplateInspector)
+		if !ok {
+			writeErrorCode(w, http.StatusServiceUnavailable, "template_state_unavailable", "The admin Sandbox service cannot verify template visibility")
+			return false
+		}
+		var info sandboxrunner.TemplateInspection
+		info, err = inspector.InspectTemplate(ctx, profile.TemplateID)
+		if err == nil && !info.Public {
+			writeErrorCode(w, http.StatusBadRequest, "template_not_public", "Only public templates can be shown in the Runner Spec catalog")
+			return false
+		}
+		if err == nil && requireRunnable && !info.Runnable {
+			err = sandboxrunner.ErrTemplateNotReady
 		}
 	} else {
 		err = svc.ValidateTemplate(ctx, profile.TemplateID)
@@ -61,6 +93,11 @@ func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *h
 	if err == nil {
 		return true
 	}
+	writeAdminTemplateError(w, err)
+	return false
+}
+
+func writeAdminTemplateError(w http.ResponseWriter, err error) {
 	// Never forward provider bodies or transport errors: they may contain
 	// credentials or other information outside the admin template contract.
 	var apiErr *qnsandbox.APIError
@@ -78,7 +115,6 @@ func (s *Server) validateAdminProfileTemplateBinding(w http.ResponseWriter, r *h
 		code, message = "sandbox_template_access_denied", "The admin Sandbox credentials cannot access this template; check the API key and template permissions"
 	}
 	writeErrorCode(w, status, code, message)
-	return false
 }
 
 func writeProfileConflict(w http.ResponseWriter, err error) bool {

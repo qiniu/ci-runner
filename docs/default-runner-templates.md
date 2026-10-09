@@ -36,7 +36,7 @@ Each standard source directory also contains a
 `qshell.sandbox.large.toml` for its `-large` variant. Standard and large configs
 reuse the same Dockerfile and scripts while using distinct physical template
 names. The large variants are documented
-operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit private template ID. Public directory inclusion additionally requires a validated public-name binding and explicit publication. Each `qshell.sandbox.large.toml` sets
+operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit physical template ID. Public directory inclusion additionally requires a verified public template (name or physical ID) and explicit catalog display. Each `qshell.sandbox.large.toml` sets
 `disk_size_mb = 81920`, an 80-GiB minimum root disk size for a new template; the
 provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
 Qshell does not send this setting when rebuilding an existing same-name
@@ -176,7 +176,7 @@ minimum disk size:
 
 `ubuntu-latest-large` is a logical public label mapped to the Ubuntu 24.04
 large physical template; it does not add a fifth physical large image. These
-large specs are usable once their Admin entries are enabled and their labels accept the workflow. Public directory inclusion additionally requires a validated public-name binding and explicit publication.
+large specs are usable once their Admin entries are enabled and their labels accept the workflow. Public directory inclusion additionally requires a verified public template (name or physical ID) and explicit catalog display.
 
 All specs enforce `required_labels ⊆ job_labels ⊆ labels`. Keep `qiniu` plus the exact OS label required for the standard examples; partial or unsupported extra labels must not match. Administrators maintain these fields, enablement and capacity in Admin. Physical image builds and catalog/runtime smoke remain separate release steps.
 

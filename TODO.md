@@ -19,8 +19,7 @@ This file tracks active project work. Completed behavior should move into `READM
   real Actions Runner release: after the automated source PR merges, use the
   existing local Task targets to sequentially rebuild and publish all eight
   templates in both regions, check both catalogs, run real Sandbox smoke, and
-  retain the build/catalog/smoke evidence in Issue #68 and
-  [qbox/sandbox#485](https://github.com/qbox/sandbox/issues/485). Keep production
+  retain the build/catalog/smoke evidence in Issue #68. Keep production
   Sandbox credentials out of GitHub Actions and stop for operator review rather
   than attempting an uncertain automatic rollback.
 - Keep old-schema upgrade coverage whenever state records or GORM tags change; the current migration path is a narrow legacy compatibility pass followed by `AutoMigrate`, with additive-only handling for existing SQLite `runner_requests` and `runner_profiles`, not a full handwritten migration history.
@@ -31,7 +30,7 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Maintenance
 
-- Keep [Platform Runner Specs](docs/platform-runner-specs.md) aligned with Admin template binding and directory fields, existing execution behavior, public-directory projection and the per-process cache invalidation contract. Preserve upgrade coverage for legacy private bindings with unused public names. Production snapshot migration, down-version startup and real regional workflow smoke remain deployment gates.
+- Keep [Platform Runner Specs](docs/platform-runner-specs.md) aligned with Admin unified template references and provider-validated directory fields, existing execution behavior, public-directory projection and the per-process cache invalidation contract. Preserve upgrade coverage for legacy ID references with unused public names, displayed public IDs across restarts, and unchanged runtime behavior. The visibility adjustment needs no additional data migration. Production snapshot migration, down-version startup and real regional workflow smoke remain deployment gates.
 
 - Keep Job details focused on the shared Runner event timeline, Web Console, and request details. Jobs and admin request details must use the same event rows and cursor behavior while retaining their authorization boundaries. Workflow step logs remain on GitHub through the Job/Run link; do not restore duplicate log fetching or streaming without a separately validated need. See [Testing: GitHub Actions logs](docs/testing.md#9-how-to-read-github-actions-logs).
 

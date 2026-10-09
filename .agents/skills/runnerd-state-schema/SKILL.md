@@ -29,7 +29,7 @@ Keep runnerd's database schema model-driven through GORM while preserving known 
 - Avoid `default:true` on business booleans when zero-value preservation matters.
 - Fresh database tests are not enough for required-column changes; add or preserve old-schema upgrade coverage.
 
-- Platform Runner Spec policy migration updates only rows with an empty `template_source`, commits each update and audit together, preserves timestamps and indexes, and never seeds missing specs. Explicit template bindings take precedence over inert legacy ownership fields; Runner preparation, Docker readiness and sponsorship keep the existing public/private behavior without separate policy fields. Test restart, deletion, audit rollback and both SQL dialects; see `docs/platform-runner-specs.md`.
+- Platform Runner Spec policy migration updates only rows with an empty `template_source`, commits each update and audit together, preserves timestamps and indexes, and never seeds missing specs. Explicit template bindings take precedence over inert legacy ownership fields; Runner preparation, Docker readiness and sponsorship keep the existing name-reference/fixed-ID behavior independently of provider visibility or catalog display; public fixed-ID specs may display after validation without a new schema migration without separate policy fields. Test restart, deletion, audit rollback and both SQL dialects; see `docs/platform-runner-specs.md`.
 
 ## Workflow
 

@@ -25,10 +25,10 @@ func (e *defaultTemplateResolutionError) Error() string {
 	return fmt.Sprintf("default template %q cannot be resolved: %s", e.RequestedName, e.Reason)
 }
 
-func resolveDefaultTemplateID(requestedName string, templates []sandboxrunner.CatalogTemplate) (string, error) {
+func findDefaultTemplate(requestedName string, templates []sandboxrunner.CatalogTemplate) (sandboxrunner.CatalogTemplate, error) {
 	requestedName = strings.TrimSpace(requestedName)
 	if requestedName == "" {
-		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonMissing)
+		return sandboxrunner.CatalogTemplate{}, newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonMissing)
 	}
 	matches := make([]sandboxrunner.CatalogTemplate, 0, 1)
 	for _, template := range templates {
@@ -42,24 +42,30 @@ func resolveDefaultTemplateID(requestedName string, templates []sandboxrunner.Ca
 	}
 
 	if len(matches) == 0 {
-		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonMissing)
+		return sandboxrunner.CatalogTemplate{}, newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonMissing)
 	}
 	if len(matches) > 1 {
-		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonDuplicate)
+		return sandboxrunner.CatalogTemplate{}, newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonDuplicate)
 	}
 
-	match := matches[0]
+	return matches[0], nil
+}
+
+func resolveDefaultTemplateID(requestedName string, templates []sandboxrunner.CatalogTemplate) (string, error) {
+	requestedName = strings.TrimSpace(requestedName)
+	match, err := findDefaultTemplate(requestedName, templates)
+	if err != nil {
+		return "", err
+	}
 	if !match.Public {
 		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonPrivate)
-	}
-	switch strings.TrimSpace(match.BuildStatus) {
-	case "ready", "uploaded":
-	default:
-		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonNonRunnable)
 	}
 	templateID := strings.TrimSpace(match.TemplateID)
 	if templateID == "" {
 		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonEmptyID)
+	}
+	if !match.Runnable() {
+		return "", newDefaultTemplateResolutionError(requestedName, defaultTemplateResolutionReasonNonRunnable)
 	}
 	return templateID, nil
 }

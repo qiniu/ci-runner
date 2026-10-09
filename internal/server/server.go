@@ -474,6 +474,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /runner_specs", s.handleListProfiles)
 	s.mux.HandleFunc("POST /runner_specs", s.handleCreateProfile)
 	s.mux.HandleFunc("POST /runner_specs/match", s.handleMatchProfile)
+	s.mux.HandleFunc("GET /runner_specs/templates/status", s.handleProfileTemplateStatus)
 	s.mux.HandleFunc("GET /runner_specs/{name}", s.handleGetProfile)
 	s.mux.HandleFunc("PATCH /runner_specs/{name}", s.handlePatchProfile)
 	s.mux.HandleFunc("DELETE /runner_specs/{name}", s.handleDeleteProfile)

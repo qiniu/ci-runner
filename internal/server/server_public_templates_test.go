@@ -169,7 +169,7 @@ func TestPublicRunnerTemplatesCacheInvalidatedByAdminMutations(t *testing.T) {
 	srv := newTestServer(t, state.New(t.TempDir()), "", &fakeSandbox{})
 	configureAdminProfileTemplateService(t, srv, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildStatus":"ready"}]`))
+		w.Write([]byte(`[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`))
 	}))
 	if rec := publicTemplatesResponse(srv); strings.Contains(rec.Body.String(), "new-public") {
 		t.Fatal("unexpected pre-create entry")
@@ -198,6 +198,7 @@ func TestPublicRunnerTemplatesCacheInvalidatedByAdminMutations(t *testing.T) {
 
 func TestPublicRunnerTemplatesCacheRetainedAfterRejectedAdminMutation(t *testing.T) {
 	srv := newTestServer(t, state.New(t.TempDir()), "", &fakeSandbox{})
+	configureAdminProfileTemplateService(t, srv, nil, "base")
 	if rec := publicTemplatesResponse(srv); rec.Code != http.StatusOK {
 		t.Fatalf("warm cache: %d", rec.Code)
 	}

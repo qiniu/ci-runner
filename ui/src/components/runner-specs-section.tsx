@@ -4,17 +4,22 @@ import {
   type FormEvent,
   type SetStateAction,
   useState,
+  useMemo,
 } from "react"
 import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { type RunnerSpec } from "@/admin-types"
-import i18n from "@/i18n"
+import { AdminTemplateInfo } from "@/components/admin-template-info"
+import {
+  createTemplateLookup,
+  useAdminTemplateStatus,
+  type TemplateLookup,
+} from "@/hooks/use-admin-template-status"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -29,25 +34,15 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
 export type RunnerSpecFormState = {
-  template_source: "public" | "private"
-  default_template_name: string
+  template: string
   published: boolean
 
   name: string
   labels: string
   required_labels: string
-  template_id: string
   runner_group: string
   max_concurrency: string
   min_idle: string
@@ -74,6 +69,8 @@ function RunnerSpecTextField(props: ComponentProps<"textarea">) {
 }
 
 export function RunnerSpecDialogForm({
+  request,
+  templateLookup,
   savingRunnerSpec = false,
   editingRunnerSpec,
   runnerSpecForm,
@@ -81,6 +78,8 @@ export function RunnerSpecDialogForm({
   onRunnerSpecOpenChange,
   onSubmitRunnerSpec,
 }: {
+  request: (url: string, options?: RequestInit) => Promise<unknown>
+  templateLookup?: TemplateLookup
   savingRunnerSpec?: boolean
   editingRunnerSpec: RunnerSpec | null
   runnerSpecForm: RunnerSpecFormState
@@ -89,7 +88,24 @@ export function RunnerSpecDialogForm({
   onSubmitRunnerSpec: (event: FormEvent<HTMLFormElement>) => void
 }) {
   const { t } = useTranslation()
-  const publicTemplate = runnerSpecForm.template_source === "public"
+  const originalTemplate =
+    editingRunnerSpec?.default_template_name || editingRunnerSpec?.template_id
+  const template = runnerSpecForm.template.trim()
+  const referenceType =
+    editingRunnerSpec && template === originalTemplate
+      ? editingRunnerSpec.default_template_name
+        ? "name"
+        : "id"
+      : ""
+  const { status, retry } = useAdminTemplateStatus(
+    request,
+    template,
+    referenceType,
+    templateLookup,
+    0,
+    300,
+  )
+  const publicTemplate = status?.public === true && !status.error
 
   return (
     <form onSubmit={onSubmitRunnerSpec} aria-busy={savingRunnerSpec}>
@@ -153,76 +169,29 @@ export function RunnerSpecDialogForm({
           </div>
         </div>
 
-        <div className="grid gap-2">
-          <Label htmlFor="runner-spec-template-source">
-            {t("admin.templateBinding")}
-          </Label>
-          <select
-            id="runner-spec-template-source"
-            className="h-9 rounded-md border bg-background px-3 text-sm"
-            value={runnerSpecForm.template_source || "private"}
-            onChange={(event) =>
-              onRunnerSpecFormChange((current) => ({
-                ...current,
-                template_source: event.target.value as "public" | "private",
-                template_id: "",
-                default_template_name: "",
-                published: false,
-              }))
-            }
-          >
-            <option value="private">{t("admin.privateTemplateID")}</option>
-            <option value="public">{t("admin.publicTemplateName")}</option>
-          </select>
-        </div>
         <div className="grid gap-4">
-          {publicTemplate ? (
-            <div className="grid gap-2">
-              <Label htmlFor="runner-spec-default-template">
-                {t("admin.defaultTemplate")}
-              </Label>
-              <RunnerSpecTextField
-                id="runner-spec-default-template"
-                value={runnerSpecForm.default_template_name || ""}
-                onChange={(event) =>
-                  onRunnerSpecFormChange((current) => ({
-                    ...current,
-                    default_template_name: event.target.value,
-                  }))
-                }
-              />
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              <Label htmlFor="runner-spec-template-id">
-                {t("admin.templateID")}
-              </Label>
-              <RunnerSpecTextField
-                id="runner-spec-template-id"
-                value={runnerSpecForm.template_id}
-                onChange={(event) =>
-                  onRunnerSpecFormChange((current) => ({
-                    ...current,
-                    template_id: event.target.value,
-                  }))
-                }
-                placeholder={t("admin.templateIDPlaceholder")}
-                aria-describedby="runner-spec-template-help"
-              />
-              <p
-                id="runner-spec-template-help"
-                className="text-xs text-muted-foreground"
-              >
-                {t("admin.templateValidationDescription")}{" "}
-                <a
-                  href="/admin/sandbox_service"
-                  className="underline underline-offset-2"
-                >
-                  {t("admin.configureTemplateValidation")}
-                </a>
-              </p>
-            </div>
-          )}
+          <div className="grid gap-2">
+            <Label htmlFor="runner-spec-template">{t("common.template")}</Label>
+            <RunnerSpecTextField
+              id="runner-spec-template"
+              value={runnerSpecForm.template}
+              onChange={(event) =>
+                onRunnerSpecFormChange((current) => ({
+                  ...current,
+                  template: event.target.value,
+                  published: false,
+                }))
+              }
+              aria-describedby="runner-spec-template-help"
+              placeholder={t("admin.templateReferencePlaceholder")}
+            />
+            <AdminTemplateInfo
+              status={status}
+              empty={!template}
+              onRetry={retry}
+              helpID="runner-spec-template-help"
+            />
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="runner-spec-github-group">
               {t("admin.githubRunnerGroup")}
@@ -294,7 +263,7 @@ export function RunnerSpecDialogForm({
               id="runner-spec-published"
               type="checkbox"
               checked={runnerSpecForm.published}
-              disabled={!publicTemplate}
+              disabled={!publicTemplate && !runnerSpecForm.published}
               onChange={(event) =>
                 onRunnerSpecFormChange((current) => ({
                   ...current,
@@ -344,7 +313,126 @@ export function RunnerSpecDialogForm({
   )
 }
 
+function RunnerSpecCard({
+  runnerSpec,
+  request,
+  templateLookup,
+  refreshVersion,
+  onEdit,
+  onDelete,
+}: {
+  runnerSpec: RunnerSpec
+  request: (url: string, options?: RequestInit) => Promise<unknown>
+  templateLookup: TemplateLookup
+  refreshVersion: number
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const template = runnerSpec.default_template_name || runnerSpec.template_id
+  const { status, retry } = useAdminTemplateStatus(
+    request,
+    template,
+    runnerSpec.default_template_name ? "name" : "id",
+    templateLookup,
+    refreshVersion,
+  )
+  return (
+    <article
+      aria-label={runnerSpec.name}
+      className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 text-card-foreground sm:p-5"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="min-w-0 text-base font-semibold [overflow-wrap:anywhere]">
+            {runnerSpec.name}
+          </h2>
+          <Badge variant={runnerSpec.enabled ? "success" : "secondary"}>
+            {runnerSpec.enabled ? t("common.enabled") : t("common.disabled")}
+          </Badge>
+          <Badge variant={runnerSpec.published ? "success" : "outline"}>
+            {t("admin.catalogDisplayStatus", {
+              status: runnerSpec.published
+                ? t("admin.catalogDisplayOn")
+                : t("admin.catalogDisplayOff"),
+            })}
+          </Badge>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label={t("admin.editNamedRunnerSpec", {
+              name: runnerSpec.name,
+            })}
+            title={t("admin.editNamedRunnerSpec", { name: runnerSpec.name })}
+            onClick={onEdit}
+          >
+            <Pencil />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label={t("admin.deleteNamedRunnerSpec", {
+              name: runnerSpec.name,
+            })}
+            title={t("admin.deleteNamedRunnerSpec", { name: runnerSpec.name })}
+            onClick={onDelete}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </div>
+      <dl className="grid min-w-0 gap-x-6 gap-y-2 text-sm sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        {[
+          [t("common.labels"), runnerSpec.labels.join(", ")],
+          [
+            t("admin.requiredLabels"),
+            runnerSpec.required_labels.join(", ") || "—",
+          ],
+        ].map(([label, value]) => (
+          <div
+            key={label}
+            className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3"
+          >
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 [overflow-wrap:anywhere]">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <dl className="flex min-w-0 flex-wrap gap-x-6 gap-y-2 text-sm">
+        {[
+          [t("admin.maxConcurrency"), runnerSpec.max_concurrency],
+          [t("admin.minIdle"), runnerSpec.min_idle],
+          [t("admin.priority"), runnerSpec.priority],
+          [t("admin.githubRunnerGroup"), runnerSpec.runner_group || "—"],
+        ].map(([label, value]) => (
+          <div key={label} className="flex min-w-0 gap-x-2">
+            <dt className="shrink-0 text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 [overflow-wrap:anywhere]">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="grid min-w-0 gap-2 border-t pt-3">
+        <AdminTemplateInfo
+          status={status}
+          empty={!template}
+          onRetry={retry}
+          showSuccessMessage={false}
+          reference={template || "—"}
+          variant="plain"
+        />
+      </div>
+    </article>
+  )
+}
+
 export function RunnerSpecsSection({
+  request,
   savingRunnerSpec = false,
   loading,
   runnerSpecs,
@@ -359,6 +447,7 @@ export function RunnerSpecsSection({
   onEditRunnerSpec,
   onDeleteRunnerSpec,
 }: {
+  request: (url: string, options?: RequestInit) => Promise<unknown>
   savingRunnerSpec?: boolean
   loading: boolean
   runnerSpecs: RunnerSpec[]
@@ -373,7 +462,9 @@ export function RunnerSpecsSection({
   onEditRunnerSpec: (runnerSpec: RunnerSpec) => void
   onDeleteRunnerSpec: (name: string) => void
 }) {
-  const t = i18n.t
+  const { t } = useTranslation()
+  const templateLookup = useMemo(() => createTemplateLookup(request), [request])
+  const [refreshVersion, setRefreshVersion] = useState(0)
   const [deletingRunnerSpecName, setDeletingRunnerSpecName] = useState<
     string | null
   >(null)
@@ -400,7 +491,11 @@ export function RunnerSpecsSection({
               type="button"
               variant="outline"
               size="icon"
-              onClick={onRefresh}
+              onClick={() => {
+                templateLookup.invalidate()
+                setRefreshVersion((current) => current + 1)
+                onRefresh()
+              }}
               disabled={loading}
               title={t("common.refresh")}
             >
@@ -408,140 +503,28 @@ export function RunnerSpecsSection({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("common.name")}</TableHead>
-                <TableHead>{t("common.status")}</TableHead>
-                <TableHead>{t("admin.publishedSpec")}</TableHead>
-                <TableHead>{t("common.labels")}</TableHead>
-                <TableHead>{t("common.template")}</TableHead>
-                <TableHead>{t("admin.githubGroup")}</TableHead>
-                <TableHead>{t("admin.maxConcurrency")}</TableHead>
-                <TableHead>{t("admin.minIdle")}</TableHead>
-                <TableHead>{t("admin.priority")}</TableHead>
-                <TableHead className="w-24">
-                  <span className="sr-only">{t("common.actions")}</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runnerSpecs.map((runnerSpec) => {
-                const publicTemplate = runnerSpec.template_source === "public"
-                return (
-                  <TableRow
-                    key={runnerSpec.name}
-                    className="cursor-pointer"
-                    onClick={() => onEditRunnerSpec(runnerSpec)}
-                  >
-                    <TableCell>
-                      <div className="flex max-w-[240px] items-center gap-2">
-                        <span className="truncate">{runnerSpec.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={runnerSpec.enabled ? "success" : "secondary"}
-                      >
-                        {runnerSpec.enabled
-                          ? t("common.enabled")
-                          : t("common.disabled")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={runnerSpec.published ? "secondary" : "outline"}
-                      >
-                        {runnerSpec.published
-                          ? t("admin.catalogDisplayOn")
-                          : t("admin.catalogDisplayOff")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div
-                        className="max-w-[176px] truncate"
-                        title={runnerSpec.labels.join(", ")}
-                      >
-                        {runnerSpec.labels.join(", ")}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="max-w-[240px]">
-                        <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                          {publicTemplate
-                            ? t("admin.defaultTemplate")
-                            : t("admin.templateID")}
-                        </div>
-                        <div
-                          className="truncate"
-                          title={
-                            publicTemplate
-                              ? runnerSpec.default_template_name || "—"
-                              : runnerSpec.template_id
-                          }
-                        >
-                          {publicTemplate
-                            ? runnerSpec.default_template_name || "—"
-                            : runnerSpec.template_id}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="max-w-[220px] truncate">
-                        {runnerSpec.runner_group || "-"}
-                      </div>
-                    </TableCell>
-                    <TableCell>{runnerSpec.max_concurrency}</TableCell>
-                    <TableCell>{runnerSpec.min_idle}</TableCell>
-                    <TableCell>{runnerSpec.priority}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="size-8"
-                          aria-label={t("admin.editNamedRunnerSpec", {
-                            name: runnerSpec.name,
-                          })}
-                          title={t("admin.editNamedRunnerSpec", {
-                            name: runnerSpec.name,
-                          })}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onEditRunnerSpec(runnerSpec)
-                          }}
-                        >
-                          <Pencil />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="size-8"
-                          aria-label={t("admin.deleteNamedRunnerSpec", {
-                            name: runnerSpec.name,
-                          })}
-                          title={t("admin.deleteNamedRunnerSpec", {
-                            name: runnerSpec.name,
-                          })}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setDeletingRunnerSpecName(runnerSpec.name)
-                          }}
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </CardContent>
       </Card>
+      <div className="grid min-w-0 gap-4" aria-busy={loading}>
+        {runnerSpecs.map((runnerSpec) => (
+          <RunnerSpecCard
+            key={runnerSpec.name}
+            runnerSpec={runnerSpec}
+            request={request}
+            templateLookup={templateLookup}
+            refreshVersion={refreshVersion}
+            onEdit={() => onEditRunnerSpec(runnerSpec)}
+            onDelete={() => setDeletingRunnerSpecName(runnerSpec.name)}
+          />
+        ))}
+        {!runnerSpecs.length ? (
+          <p
+            className="py-8 text-center text-sm text-muted-foreground"
+            role="status"
+          >
+            {loading ? t("common.loading") : t("admin.noRunnerSpecs")}
+          </p>
+        ) : null}
+      </div>
       <Dialog
         open={deletingRunnerSpecName !== null}
         onOpenChange={(open) => {
@@ -598,6 +581,8 @@ export function RunnerSpecsSection({
             </DialogDescription>
           </DialogHeader>
           <RunnerSpecDialogForm
+            request={request}
+            templateLookup={templateLookup}
             savingRunnerSpec={savingRunnerSpec}
             editingRunnerSpec={editingRunnerSpec}
             runnerSpecForm={runnerSpecForm}

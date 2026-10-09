@@ -75,7 +75,7 @@ cp runnerd.yaml.example runnerd.yaml
 
 5. 打开 `http://<host>:25500/`，使用 GitHub OAuth 登录。公开产品首页提供同域 `/docs` 指南，以及指向 `/jobs` 受保护的 Jobs 控制台入口。用户首次登录访问 `/jobs` 时，会看到介绍 Jobs、Repositories、Settings 和 Sandbox 设置的六步引导；之后可从账户菜单重播。
 6. 打开 **Repositories** 查看账户或组织的 **Runner readiness**。有效来源只显示状态，不提供配置控件；缺少 Sandbox 且用户可管理该 scope 时，通过 **Configure Sandbox** 进入精确的账户或组织 **Preferences** 页面并配置 **Sandbox Service** 凭据。Settings 只列出个人账户，以及 GitHub 返回 active owner membership（`role: admin`）的组织。普通组织成员、outside collaborator 和其他仅有仓库权限的用户只能看到 readiness 只读状态，不能浏览该组织的配置、Sandbox 资源目录或自定义 Runner Specs。管理员可以在 `/admin/sandbox_service` 配置兜底。
-7. 在管理控制台配置平台 Runner 规格。原托管规格保留标签和管理员策略，新安装需明确创建。只有校验过的公共绑定可发布；标准及 large 镜像仍须通过区域发布门槛。
+7. 在管理控制台配置平台 Runner 规格。原托管规格保留标签和管理员策略，新安装需明确创建。只有经校验为 public 的模板可开启目录展示，名称和 ID 引用均支持；标准及 large 镜像仍须通过区域发布门槛。
 8. 配置 GitHub webhook → `POST http://<host>:25500/webhooks/github`。
 9. 在 workflow 中使用已启用的 Runner 规格所配置的 labels。例如，管理员已创建匹配规格时，可使用 `runs-on: [qiniu, ubuntu-24.04]`。新安装不会自动创建该示例规格。
 
@@ -236,7 +236,7 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中配置。所有已启用 spec 都可供 `github.allowed_repositories` 放行的仓库按标签匹配。
 
 - **公共名称绑定**：Admin 配置稳定公共模板名，Runnerd 按请求的有效 Sandbox 区域解析物理 ID。发布到 `/runner-specs` 是经过校验的明确选择。
-- **私有 ID 绑定**：Admin 配置明确的 `template_id`，该规格不会出现在普通用户或公共目录。所有平台规格的标签、优先级、容量及执行策略均可在后台维护，代码不再维护规格清单。新建绑定或发布需配置 Admin Sandbox 凭据，绑定不变的策略调整无需访问 Provider。
+- **固定 ID 引用**：Admin 配置明确的 `template_id`，它也可能指向公共模板。后台只保留一个“模板”字段，目录展示须验证模板实际为 public。新绑定及运行时启动须有非零的有效默认 BuildID；最新重建失败不会使已有默认构建失效。所有平台规格的标签、优先级和容量均可在后台维护，代码不再维护规格清单。新建绑定或发布需配置 Admin Sandbox 凭据，绑定不变的策略调整无需访问 Provider。
 - **GitHub Runner Group**：spec 设置了 `runner_group` 时，runnerd 会在该 GitHub Group 中创建组织级 runner；否则创建仓库级 runner。它不是已退役的内部 Runner Group 模型。
 
 > **⚠️ 个人账号注意：** `runner_group` 需要调用组织级 GitHub API。如果仓库属于个人账号（而非组织），必须将 `runner_group` 留**空**，否则 runner 注册会返回 404 错误。
@@ -247,11 +247,11 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 `404 Not Found`，旧 Admin 书签会重定向到 Runner Specs。它们不再属于受支持的
 配置、匹配或恢复行为；当前代码会忽略任何遗留数据库对象。
 
-数据库是唯一目录来源。启动只转换旧托管行一次，保留管理员策略及运行行为，不再恢复已修改或删除的规格。旧私有规格保留物理模板 ID，并清空不参与运行的公共名称，避免后续编辑校验失败。新安装的目录为空，需要明确创建。运行时沿用公共名称和私有 ID 规格原有的准备、Docker 与赞助行为，本次重构不增加这些策略开关。字段、迁移和校验详见[平台 Runner 规格管理](docs/zh/platform-runner-specs.md)。
+数据库是唯一目录来源。启动只转换旧托管行一次，保留管理员策略及运行行为，不再恢复已修改或删除的规格。旧私有规格保留物理模板 ID，并清空不参与运行的公共名称，避免后续编辑校验失败。新安装的目录为空，需要明确创建。本次公开性调整不新增表结构或数据迁移，已有名称、ID 和展示开关保持不变。运行时沿用名称和 ID 规格原有的准备、Docker 与赞助行为，本次重构不增加这些策略开关。字段、迁移和校验详见[平台 Runner 规格管理](docs/zh/platform-runner-specs.md)。
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
-`GET /api/public/runner-templates` 无需登录即可返回数据库中启用且已发布的公共绑定，包含管理员配置并验证后的 large 规格。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，每个服务进程将公开投影缓存 60 秒，并合并并发加载；Admin 成功保存或删除规格后会使当前进程缓存失效，浏览器仍可缓存响应 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
+`GET /api/public/runner-templates` 无需登录即可返回数据库中已启用且开启展示的公共名称引用，包含配置并验证后的 large 名称引用。固定 ID 规格通过公开性验证后可进入受保护的 `/runner-specs` 目录，但不进入这个稳定名称 API。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，每个服务进程将公开投影缓存 60 秒，并合并并发加载；Admin 成功保存或删除规格后会使当前进程缓存失效，浏览器仍可缓存响应 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
 
 普通用户在 `/runner-specs` 只读浏览平台 Runner 规格及其工作流标签；该页面不提供
 个人账号／Organization 选择，也不能修改平台规格的启用状态或并发策略。在

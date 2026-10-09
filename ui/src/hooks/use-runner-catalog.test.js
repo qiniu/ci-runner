@@ -81,7 +81,8 @@ describe("useRunnerCatalog", () => {
         name: "owner/spec",
         labels: "self-hosted,path-name",
         required_labels: "path-name",
-        template_id: "path-name-template",
+        template: "path-name-template",
+        published: false,
         runner_group: "",
         max_concurrency: "10",
         min_idle: "0",
@@ -109,9 +110,9 @@ describe("useRunnerCatalog", () => {
     const getCatalog = mountRunnerCatalog(() => {
       requests += 1
       if (requests === 1) return new Promise((_, reject) => { rejectRequest = reject })
-      return Promise.resolve({})
+      return Promise.resolve({ template_source: "private", template_id: "fixed-id", default_template_name: "" })
     }, async () => {})
-    act(() => getCatalog().setRunnerSpecOpen(true))
+    act(() => { getCatalog().setRunnerSpecForm((form) => ({ ...form, name: "new-spec", template: "fixed-id" })); getCatalog().setRunnerSpecOpen(true) })
     let pending
     act(() => {
       pending = getCatalog().saveRunnerSpec({ preventDefault() {} })
@@ -126,7 +127,7 @@ describe("useRunnerCatalog", () => {
     expect(getCatalog().savingRunnerSpec).toBe(false)
     expect(getCatalog().runnerSpecOpen).toBe(true)
     await act(async () => { await getCatalog().saveRunnerSpec({ preventDefault() {} }) })
-    expect(requests).toBe(2)
+    expect(requests).toBe(3)
     expect(getCatalog().savingRunnerSpec).toBe(false)
     expect(getCatalog().runnerSpecOpen).toBe(false)
   })

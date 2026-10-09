@@ -115,7 +115,7 @@ func (s *Server) writeUserRunnerSpecList(w http.ResponseWriter, scope state.Runn
 	}
 	response := userRunnerSpecListResponse{ScopeType: scope.Type, ScopeID: scope.ID, SandboxSource: sandboxSource, SandboxRegion: sandboxRegion, Items: make([]userRunnerSpecResponse, 0, len(items))}
 	for _, item := range items {
-		if item.Source != "scoped_custom" && (!item.Profile.Published || item.Profile.TemplateSource != state.TemplateSourcePublic) {
+		if item.Source != "scoped_custom" && !item.Profile.Published {
 			continue
 		}
 		responseItem := userRunnerSpecResponse{Name: item.Profile.Name, Source: item.Source, Published: item.Profile.Published, WorkflowLabels: append([]string(nil), item.WorkflowLabels...), DefaultTemplateName: item.Profile.DefaultTemplateName, Enabled: item.Profile.Enabled, MaxConcurrency: item.Profile.MaxConcurrency, OverridesGlobal: item.OverridesGlobal, UpdatedAt: item.Profile.UpdatedAt.UTC().Format(time.RFC3339Nano)}

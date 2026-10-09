@@ -576,7 +576,7 @@ export function UserRunnerSpecsSection({
         ? items
             .filter(
               (item) =>
-                item.source === "platform_public" &&
+                item.source !== "scoped_custom" &&
                 item.published === true &&
                 item.enabled,
             )

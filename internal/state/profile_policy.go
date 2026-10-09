@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	// Legacy values describe the reference/runtime path, not provider visibility.
 	TemplateSourcePublic  = "public"
 	TemplateSourcePrivate = "private"
 )
@@ -40,10 +41,7 @@ func ValidateProfilePolicy(p RunnerProfile) error {
 		}
 	case TemplateSourcePrivate:
 		if strings.TrimSpace(p.DefaultTemplateName) != "" {
-			return fmt.Errorf("private templates must use a physical template ID, not a public template name")
-		}
-		if p.Published {
-			return fmt.Errorf("private templates cannot be published")
+			return fmt.Errorf("ID references must use a physical template ID, not a public template name")
 		}
 	default:
 		return fmt.Errorf("invalid template source")

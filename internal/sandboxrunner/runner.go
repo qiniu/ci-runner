@@ -153,9 +153,12 @@ type ExitResult struct {
 }
 
 type CatalogTemplate struct {
+	EnvdVersion string    `json:"envd_version,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 	TemplateID  string    `json:"template_id"`
 	Aliases     []string  `json:"aliases"`
 	Names       []string  `json:"names"`
+	BuildID     string    `json:"-"`
 	BuildStatus string    `json:"build_status"`
 	CPUCount    int32     `json:"cpu_count"`
 	MemoryMB    int32     `json:"memory_mb"`
@@ -163,6 +166,12 @@ type CatalogTemplate struct {
 	Public      bool      `json:"public"`
 	SpawnCount  int64     `json:"spawn_count"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Runnable uses the selected default build, not the latest build attempt.
+func (t CatalogTemplate) Runnable() bool {
+	buildID := strings.TrimSpace(t.BuildID)
+	return strings.TrimSpace(t.TemplateID) != "" && buildID != "" && buildID != "00000000-0000-0000-0000-000000000000"
 }
 
 type CatalogSandbox struct {
@@ -240,18 +249,72 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	return &E2BService{client: client}, nil
 }
 
+// TemplateDetails allowlists credential-free provider metadata for the admin form.
+type TemplateDetails struct {
+	TemplateID  string   `json:"template_id"`
+	BuildStatus string   `json:"build_status,omitempty"`
+	Names       []string `json:"names"`
+	CPUCount    int32    `json:"cpu_count"`
+	MemoryMB    int32    `json:"memory_mb"`
+	DiskSizeMB  int32    `json:"disk_size_mb"`
+	EnvdVersion string   `json:"envd_version"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+func (t CatalogTemplate) Details() *TemplateDetails {
+	names := t.Names
+	if len(names) == 0 {
+		names = t.Aliases
+	}
+	timestamp := func(value time.Time) string {
+		if value.IsZero() {
+			return ""
+		}
+		return value.UTC().Format(time.RFC3339Nano)
+	}
+	return &TemplateDetails{TemplateID: t.TemplateID, BuildStatus: t.BuildStatus, Names: names, CPUCount: t.CPUCount, MemoryMB: t.MemoryMB, DiskSizeMB: t.DiskSizeMB, EnvdVersion: t.EnvdVersion, CreatedAt: timestamp(t.CreatedAt), UpdatedAt: timestamp(t.UpdatedAt)}
+}
+
+// TemplateInspection separates provider visibility from a spec's reference/runtime path.
+type TemplateInspection struct {
+	Template *TemplateDetails `json:"template,omitempty"`
+	Public   bool             `json:"public"`
+	Runnable bool             `json:"runnable"`
+}
+
+type TemplateInspector interface {
+	InspectTemplate(context.Context, string) (TemplateInspection, error)
+}
+
 func (s *E2BService) ValidateTemplate(ctx context.Context, templateID string) error {
+	info, err := s.InspectTemplate(ctx, templateID)
+	if err != nil {
+		return err
+	}
+	if !info.Runnable {
+		return ErrTemplateNotReady
+	}
+	return nil
+}
+
+func (s *E2BService) InspectTemplate(ctx context.Context, templateID string) (TemplateInspection, error) {
 	templateID = strings.TrimSpace(templateID)
 	if templateID == "" {
-		return ErrTemplateRequired
+		return TemplateInspection{}, ErrTemplateRequired
 	}
 	template, err := s.client.GetTemplate(ctx, templateID, nil)
 	if err != nil {
 		var apiErr *qnsandbox.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			return ErrTemplateNotFound
+			return TemplateInspection{}, ErrTemplateNotFound
 		}
-		return err
+		return TemplateInspection{}, err
+	}
+	// Some providers accept aliases on the detail route. This method validates
+	// an exact physical ID; the admin form resolves names separately.
+	if template.TemplateID != "" && template.TemplateID != templateID {
+		return TemplateInspection{}, ErrTemplateNotFound
 	}
 	// Detail builds are paginated history (including other tags) and hidden
 	// from non-owners. The catalog's BuildID instead identifies the uploaded
@@ -264,22 +327,29 @@ func (s *E2BService) ValidateTemplate(ctx context.Context, templateID string) er
 	case template.Public:
 		templates, err = s.client.ListDefaultTemplates(ctx)
 	default:
-		return ErrTemplateStateUnavailable
+		return TemplateInspection{}, ErrTemplateStateUnavailable
 	}
 	if err != nil {
-		return err
+		return TemplateInspection{}, err
 	}
 	for _, item := range templates {
 		if item.TemplateID != templateID {
 			continue
 		}
-		buildID := strings.TrimSpace(item.BuildID)
-		if buildID == "" || buildID == "00000000-0000-0000-0000-000000000000" {
-			return ErrTemplateNotReady
+		metadata := CatalogTemplate{TemplateID: item.TemplateID, BuildID: item.BuildID, BuildStatus: string(item.BuildStatus), Names: template.Names, Aliases: template.Aliases, CPUCount: item.CPUCount, MemoryMB: item.MemoryMB, DiskSizeMB: item.DiskSizeMB, EnvdVersion: item.EnvdVersion, CreatedAt: template.CreatedAt, UpdatedAt: template.UpdatedAt}
+		if len(metadata.Names) == 0 && len(metadata.Aliases) == 0 {
+			metadata.Names = item.Names
+			metadata.Aliases = item.Aliases
 		}
-		return nil
+		if metadata.CreatedAt.IsZero() {
+			metadata.CreatedAt = item.CreatedAt
+		}
+		if metadata.UpdatedAt.IsZero() {
+			metadata.UpdatedAt = item.UpdatedAt
+		}
+		return TemplateInspection{Public: template.Public, Runnable: metadata.Runnable(), Template: metadata.Details()}, nil
 	}
-	return ErrTemplateStateUnavailable
+	return TemplateInspection{}, ErrTemplateStateUnavailable
 }
 
 func (s *E2BService) ListTemplates(ctx context.Context) ([]CatalogTemplate, error) {
@@ -291,6 +361,9 @@ func (s *E2BService) ListTemplates(ctx context.Context) ([]CatalogTemplate, erro
 	for _, item := range items {
 		result = append(result, CatalogTemplate{
 			TemplateID:  item.TemplateID,
+			BuildID:     item.BuildID,
+			EnvdVersion: item.EnvdVersion,
+			CreatedAt:   item.CreatedAt,
 			Aliases:     item.Aliases,
 			BuildStatus: string(item.BuildStatus),
 			CPUCount:    item.CPUCount,
@@ -314,6 +387,9 @@ func (s *E2BService) ListDefaultTemplates(ctx context.Context) ([]CatalogTemplat
 	for _, item := range items {
 		result = append(result, CatalogTemplate{
 			TemplateID:  item.TemplateID,
+			BuildID:     item.BuildID,
+			EnvdVersion: item.EnvdVersion,
+			CreatedAt:   item.CreatedAt,
 			Names:       item.Names,
 			BuildStatus: string(item.BuildStatus),
 			CPUCount:    item.CPUCount,

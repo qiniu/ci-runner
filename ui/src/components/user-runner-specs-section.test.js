@@ -136,7 +136,7 @@ describe("UserRunnerSpecsSection", () => {
     const request = async (url) => {
       if (url === "/user/runner-specs") {
         return {
-          items: [managed, disabledManaged, custom, { ...managed, name: "private-platform", source: "platform_custom", published: false }],
+          items: [managed, { ...managed, name: "public-fixed-id", source: "platform_custom", default_template_name: "", template_id: "" }, disabledManaged, custom, { ...managed, name: "private-platform", source: "platform_custom", published: false }],
           sandbox_source: "github_installation",
           sandbox_region: "us-south-1",
         }
@@ -160,6 +160,7 @@ describe("UserRunnerSpecsSection", () => {
     expect(platformSection?.textContent).not.toContain(disabledManaged.name)
     expect(container.textContent).not.toContain(custom.name)
     expect(container.textContent).not.toContain("private-platform")
+    expect(container.textContent).toContain("public-fixed-id")
     expect(platformSection?.textContent).not.toContain("Enabled")
     expect(platformSection?.textContent).not.toContain("Platform managed")
     expect(platformSection?.querySelectorAll('[data-slot="badge"]')).toHaveLength(0)

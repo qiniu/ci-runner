@@ -37,11 +37,11 @@ func TestPublicSpecPublicationValidatesProviderAndUpdatesDatabaseCatalog(t *test
 		name, body string
 		status     int
 	}{
-		{"public", `[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildStatus":"ready"}]`, 201},
-		{"private", `[{"templateID":"physical-secret","names":["public-name"],"public":false,"buildStatus":"ready"}]`, 400},
+		{"public", `[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`, 201},
+		{"private", `[{"templateID":"physical-secret","names":["public-name"],"public":false,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`, 400},
 		{"missing", `[]`, 400},
 		{"building", `[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildStatus":"building"}]`, 400},
-		{"ambiguous", `[{"templateID":"one","names":["public-name"],"public":true,"buildStatus":"ready"},{"templateID":"two","names":["public-name"],"public":true,"buildStatus":"ready"}]`, 400},
+		{"ambiguous", `[{"templateID":"one","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"},{"templateID":"two","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`, 400},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := state.New(t.TempDir())
@@ -97,10 +97,11 @@ func TestPublicSpecPublicationValidatesProviderAndUpdatesDatabaseCatalog(t *test
 	}
 }
 
-func TestPrivateSpecCannotPublishAndActiveSpecCannotChangeExecutionOrDelete(t *testing.T) {
+func TestNonPublicSpecCannotPublishAndActiveSpecCannotChangeExecutionOrDelete(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	before, _ := store.GetProfile("default")
+	configureAdminProfileTemplateService(t, srv, nil, "base")
 	for _, body := range []string{`{"published":true}`} {
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(body)))

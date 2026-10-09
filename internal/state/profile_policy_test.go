@@ -143,9 +143,8 @@ func TestLegacyRunnerProfilePolicyMigrationPreservesControlsAndDoesNotReseed(t *
 	}
 }
 
-func TestProfilePolicyRejectsPrivatePublicationAndInvalidBindings(t *testing.T) {
+func TestProfilePolicyRejectsInvalidBindings(t *testing.T) {
 	for _, p := range []RunnerProfile{
-		{TemplateSource: TemplateSourcePrivate, Published: true},
 		{TemplateSource: TemplateSourcePublic, DefaultTemplateName: "public", TemplateID: "region-id"},
 		{TemplateSource: TemplateSourcePublic},
 		{TemplateSource: "unknown"},
@@ -288,5 +287,22 @@ func TestGlobalProfileActiveGuardExcludesScopedAttempts(t *testing.T) {
 	}
 	if count, err := store.ActiveCountForProfile("same-name"); err != nil || count != 2 {
 		t.Fatalf("global active attempts %d: %v", count, err)
+	}
+}
+
+func TestPublishedIDReferenceSurvivesRestart(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	p, err := store.UpsertProfile(RunnerProfile{Name: "public-id", Labels: []string{"qiniu"}, TemplateID: "fixed-id", Published: true, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeTestDB(t, db)
+	got, err := NewWithOptions(store.opts).GetProfile(p.Name)
+	if err != nil || !got.Published || got.TemplateSource != TemplateSourcePrivate || got.TemplateID != p.TemplateID || !got.UpdatedAt.Equal(p.UpdatedAt) {
+		t.Fatalf("publication changed reference/runtime on restart: %#v %v", got, err)
 	}
 }

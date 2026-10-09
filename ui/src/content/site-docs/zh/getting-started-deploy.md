@@ -73,7 +73,7 @@ Cache S3 也由用户或组织在 Preferences 中配置。管理员需要在 `ru
 
 公共名称绑定自动使用模板预装的 Runner，并要求启动时 Docker 就绪；后台没有独立配置这两项行为的开关。组织 Fork 赞助须由组织所有者配置仓库策略，并通过原有的授权和容量检查，不通过规格上的开关启用。详见[组织赞助 Fork Runner](/docs/guides/fork-sponsorship)。
 
-确认每个有效 Sandbox 区域中该公共名称都存在且可运行。私有规格改为绑定物理 ID，并保持在公共目录之外。详见[Runner 标签与模板映射](/docs/reference/runner-labels)。
+确认每个有效 Sandbox 区域中该公共名称都存在且可运行。固定 ID 规格也可在模板实际为 public 且可运行时开启目录展示；目录不会公开该物理 ID。详见[Runner 标签与模板映射](/docs/reference/runner-labels)。
 
 ## 6. 执行生产 Smoke
 

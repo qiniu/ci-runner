@@ -73,7 +73,7 @@ Sandbox service API URL 和 API Key 不在 `runnerd.yaml` 中配置。登录后�
 Runner Spec 不是 `runnerd.yaml` 字段。内部 Runner Group 和 Repository Policy 已移除；Spec 上可选的 `runner_group` 仍表示 GitHub Organization Runner Group 注册目标。
 所有平台 Runner 规格由数据库保存并在 `/admin/runner_specs` 维护。启动只迁移旧策略一次，不再协调固定目录或补建规格，新数据库的目录为空。详见[平台 Runner 规格管理](platform-runner-specs.md)。
 
-分别验证公共名称和私有 ID 绑定。公共名称须通过配置的 Admin Sandbox 唯一解析为可运行的公共模板。创建、更换绑定、发布或重新启用已发布规格时远程校验；绑定不变的策略修改和取消发布无需访问 Provider。校验只使用 Admin 凭据，不受运行时 fallback 的 enabled/audience 限制。私有 ID 保留 GetTemplate 和有效默认构建校验。标准与 large 公共绑定均可在校验后发布，不能按名称自动公开。
+分别验证公共名称和固定 ID 引用；ID 也可能指向公共模板。公共名称须通过配置的 Admin Sandbox 唯一解析为可运行的公共模板。创建、更换绑定及重新启用已展示规格时要求有效默认构建；已有规格只开启展示时仅验证公开性。这些操作均远程校验；绑定不变的策略修改和取消发布无需访问 Provider。校验只使用 Admin 凭据，不受运行时 fallback 的 enabled/audience 限制。固定 ID 保留 GetTemplate 和有效默认构建校验，开启展示还要求模板实际为 public。覆盖公共／非公共 ID、无法确认状态、表单 pending／过期响应及拒绝保存无审计变更。标准和 large 公共模板可保留现有 ID 开启展示，且不得改变运行行为或泄露 ID。本次无需新迁移，不自动开启展示。
 
 整个远程检查限时 5 秒。未配置后台服务返回 `409 sandbox_service_not_configured`；
 模板不存在或没有可用默认构建分别返回 `400 template_not_found`、
@@ -361,7 +361,7 @@ curl -fsS -X DELETE -b "$COOKIE_JAR" \
 
 受保护的 `/runner-specs` 是不带作用域选择的普通用户只读平台目录，只显示已启用且已发布的公共规格及可复制的工作流标签；来源／状态 Badge、停用规格、账户／Organization 选择以及启用或并发控制都不在该页面展示。Settings 下的 `/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只显示该作用域自有的自定义规格。三个页面都使用 `/user/runner-specs`；该 API 只接受当前账户或可管理 Organization 作用域，作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
 
-Runner Spec 回归须区分已发布公共 `platform_public` 条目与 scope 自有的 `scoped_custom` 条目。未发布或私有平台规格不出现在 User 响应中，物理 ID 和 Runner Group 只随所选 scope 自有条目返回。
+Runner Spec 回归须区分已展示公共 `platform_public` 或 `platform_custom` 条目与 scope 自有的 `scoped_custom` 条目。未开启展示的平台规格不出现在 User 响应中，物理 ID 和 Runner Group 只随所选 scope 自有条目返回。
 
 只运行 UI unit tests 时使用：
 
@@ -388,6 +388,8 @@ branch protection 或 ruleset 中将它设为 required check 后，它才会阻�
 ```bash
 task ui-production-smoke
 ```
+
+本地管理后台 fixtures 还覆盖 Runner 规格卡片、完整标签、模板独立加载和重试、相同模板请求复用、刷新、窄屏换行、编辑及删除确认。这些 fixtures 不证明真实 Sandbox 服务行为。
 
 该任务会安装匹配的 Chromium runtime，构建 `internal/server/ui/`，并在 `4173`
 端口启动 Vite preview。Playwright 会打开 `/`，检查 JavaScript 异常、console
@@ -622,7 +624,7 @@ curl -fsS -b "$COOKIE_JAR" \
   自定义 spec 则使用它自己的 advertised labels 和 required labels。
 - 出现 `template_resolution` admission failure：确认 repository owner 对应的
   scoped Sandbox endpoint 中，managed stable name 恰好对应 1 个公共的
-  `ready` 或 `uploaded` 模板。
+  具有非零有效默认 BuildID 的模板；覆盖最新重建失败但默认构建仍可用的情况。
 - sandbox 创建失败：确认账户/组织 Preferences 或已启用的 admin default 具有与 template 和本地环境匹配的完整 Sandbox service 配置；Runner detail 会显示实际选择的来源。
 - `template-smoke` 报告运行时根磁盘容量不足：检查新建 Sandbox 的根磁盘容量是否
   达到所选 TOML 中的 `disk_size_mb`。确认 provider 团队的 `DiskMb` 后，按

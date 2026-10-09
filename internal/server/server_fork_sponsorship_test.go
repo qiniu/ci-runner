@@ -279,7 +279,7 @@ func TestForkSponsorshipCapacityAndPublicPolicyBoundary(t *testing.T) {
 	if !errors.Is(err, errForkSponsorshipAtCapacity) {
 		t.Fatalf("capacity error = %v", err)
 	}
-	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "platform-custom", Labels: []string{"self-hosted"}, RequiredLabels: []string{"self-hosted"}, TemplateID: "private-template", Enabled: true}); err != nil {
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "platform-custom", Labels: []string{"self-hosted"}, RequiredLabels: []string{"self-hosted"}, TemplateID: "private-template", Published: true, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "custom", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "platform-custom", ProfileSource: "global"})

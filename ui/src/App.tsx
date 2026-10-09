@@ -1427,6 +1427,7 @@ function App() {
 
           {section === "runner_specs" ? (
             <RunnerSpecsSection
+              request={request}
               savingRunnerSpec={savingRunnerSpec}
               loading={loading}
               runnerSpecs={runnerSpecs}

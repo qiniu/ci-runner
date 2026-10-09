@@ -32,6 +32,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 			templates: []sandboxrunner.CatalogTemplate{{
 				TemplateID:  "tpl-ready",
 				Names:       []string{" github-runner-ubuntu-24-04 "},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "ready",
 				Public:      true,
 			}},
@@ -43,11 +44,26 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 			templates: []sandboxrunner.CatalogTemplate{{
 				TemplateID:  "tpl-uploaded",
 				Names:       []string{"tenant/github-runner-ubuntu-24-04"},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "uploaded",
 				Public:      true,
 			}},
 			wantID: "tpl-uploaded",
 		},
+
+		{
+			name: "failed rebuild retains default", requestedName: "public-name",
+			templates: []sandboxrunner.CatalogTemplate{{TemplateID: "tpl-old", Names: []string{"public-name"}, Public: true, BuildID: "00000000-0000-0000-0000-000000000001", BuildStatus: "failed"}}, wantID: "tpl-old",
+		},
+		{
+			name: "ready without default is not runnable", requestedName: "public-name",
+			templates: []sandboxrunner.CatalogTemplate{{TemplateID: "tpl", Names: []string{"public-name"}, Public: true, BuildStatus: "ready"}}, wantReason: defaultTemplateResolutionReasonNonRunnable,
+		},
+		{
+			name: "uploaded with zero default is not runnable", requestedName: "public-name",
+			templates: []sandboxrunner.CatalogTemplate{{TemplateID: "tpl", Names: []string{"public-name"}, Public: true, BuildID: "00000000-0000-0000-0000-000000000000", BuildStatus: "uploaded"}}, wantReason: defaultTemplateResolutionReasonNonRunnable,
+		},
+
 		{
 			name:          "missing does not match alias or substring",
 			requestedName: "github-runner-ubuntu-24-04",
@@ -55,6 +71,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 				TemplateID:  "tpl-alias",
 				Aliases:     []string{"github-runner-ubuntu-24-04"},
 				Names:       []string{"prefix-github-runner-ubuntu-24-04-suffix"},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "ready",
 				Public:      true,
 			}},
@@ -66,6 +83,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 			templates: []sandboxrunner.CatalogTemplate{{
 				TemplateID:  "tpl-namespace",
 				Names:       []string{"tenant/"},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "ready",
 				Public:      true,
 			}},
@@ -78,12 +96,14 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 				{
 					TemplateID:  "tpl-one",
 					Names:       []string{"github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      true,
 				},
 				{
 					TemplateID:  "tpl-two",
 					Names:       []string{"tenant/github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      true,
 				},
@@ -97,12 +117,14 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 				{
 					TemplateID:  "tpl-valid",
 					Names:       []string{"github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      true,
 				},
 				{
 					TemplateID:  "tpl-private",
 					Names:       []string{"tenant/github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      false,
 				},
@@ -116,6 +138,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 				{
 					TemplateID:  "tpl-valid",
 					Names:       []string{"github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "uploaded",
 					Public:      true,
 				},
@@ -135,12 +158,14 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 				{
 					TemplateID:  "tpl-valid",
 					Names:       []string{"github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      true,
 				},
 				{
 					TemplateID:  "",
 					Names:       []string{"tenant/github-runner-ubuntu-24-04"},
+					BuildID:     "00000000-0000-0000-0000-000000000001",
 					BuildStatus: "ready",
 					Public:      true,
 				},
@@ -153,6 +178,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 			templates: []sandboxrunner.CatalogTemplate{{
 				TemplateID:  "tpl-private",
 				Names:       []string{"github-runner-ubuntu-24-04"},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "ready",
 				Public:      false,
 			}},
@@ -175,6 +201,7 @@ func TestResolveDefaultTemplateID(t *testing.T) {
 			templates: []sandboxrunner.CatalogTemplate{{
 				TemplateID:  "  ",
 				Names:       []string{"github-runner-ubuntu-24-04"},
+				BuildID:     "00000000-0000-0000-0000-000000000001",
 				BuildStatus: "ready",
 				Public:      true,
 			}},
@@ -225,7 +252,7 @@ func TestClassifyRetryableErrorPrefersWrappedDefaultTemplateResolutionReason(t *
 	}
 }
 
-func TestRunnerLifecycleCustomTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
+func TestRunnerLifecyclePublishedIDTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
 	events := &lifecycleEventRecorder{}
 	ghServer := newLifecycleGitHubServer(t, events)
 	defer ghServer.Close()
@@ -235,6 +262,7 @@ func TestRunnerLifecycleCustomTemplateUsesStoredIDWithoutCatalog(t *testing.T) {
 		Name:           "custom",
 		Labels:         []string{"self-hosted", "custom"},
 		TemplateID:     "custom-template-id",
+		Published:      true,
 		MaxConcurrency: 10,
 		Enabled:        true,
 	})
@@ -288,7 +316,7 @@ func TestStartRunnerManagedRunnerApplicationsSkipsDownloadLookup(t *testing.T) {
 	sandbox := &managedLifecycleSandboxService{
 		lifecycleSandboxService: &lifecycleSandboxService{},
 		templates: []sandboxrunner.CatalogTemplate{{
-			TemplateID: "resolved-template-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildStatus: "ready", Public: true,
+			TemplateID: "resolved-template-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildID: "00000000-0000-0000-0000-000000000001", BuildStatus: "ready", Public: true,
 		}},
 	}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
@@ -648,7 +676,8 @@ func TestRunnerLifecycleManagedDefaultResolvesBeforeRegistration(t *testing.T) {
 		templates: []sandboxrunner.CatalogTemplate{{
 			TemplateID:  "scoped-template-id",
 			Names:       []string{"region/github-runner-ubuntu-24-04"},
-			BuildStatus: "uploaded",
+			BuildID:     "00000000-0000-0000-0000-000000000001",
+			BuildStatus: "failed",
 			Public:      true,
 		}},
 	}
@@ -678,7 +707,7 @@ func TestRunnerLifecycleDatabasePublicBindingPreservesStartupBehavior(t *testing
 	profile := state.NormalizeProfilePolicy(lifecycleManagedProfile("old-id"))
 	profile.ManagedBy = ""
 	upsertLifecycleProfile(t, store, profile)
-	sandbox := &managedLifecycleSandboxService{lifecycleSandboxService: &lifecycleSandboxService{events: events}, templates: []sandboxrunner.CatalogTemplate{{TemplateID: "scoped-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildStatus: "ready", Public: true}}}
+	sandbox := &managedLifecycleSandboxService{lifecycleSandboxService: &lifecycleSandboxService{events: events}, templates: []sandboxrunner.CatalogTemplate{{TemplateID: "scoped-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildID: "00000000-0000-0000-0000-000000000001", BuildStatus: "ready", Public: true}}}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "database-public", "managed", 987)
 	go srv.startRunner(context.Background(), "database-public", "worker-test")
@@ -954,6 +983,7 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 		templates: []sandboxrunner.CatalogTemplate{{
 			TemplateID:  "region-a-template-id",
 			Names:       []string{"github-runner-ubuntu-24-04"},
+			BuildID:     "00000000-0000-0000-0000-000000000001",
 			BuildStatus: "ready",
 			Public:      true,
 		}},
@@ -969,6 +999,7 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 		templates: []sandboxrunner.CatalogTemplate{{
 			TemplateID:  "region-b-template-id",
 			Names:       []string{"github-runner-ubuntu-24-04"},
+			BuildID:     "00000000-0000-0000-0000-000000000001",
 			BuildStatus: "ready",
 			Public:      true,
 		}},
