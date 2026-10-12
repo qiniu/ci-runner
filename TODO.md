@@ -26,8 +26,8 @@ This file tracks active project work. Completed behavior should move into `READM
   than attempting an uncertain automatic rollback.
 - Keep old-schema upgrade coverage whenever state records or GORM tags change; the current migration path is a narrow legacy compatibility pass followed by `AutoMigrate`, with additive-only handling for existing SQLite `runner_requests` and `runner_profiles`, not a full handwritten migration history.
 - Run the scoped Runner Specs release gates when dedicated environments are available: PostgreSQL/MySQL audited-mutation and fresh-schema tests, a production SQLite snapshot migration, and the SQLite down-version startup check against the documented baseline.
-- Extend fixture-backed production UI smoke to cover `/account/runner-specs` and one Organization scope, including stale-scope response isolation; `/runner-specs` and Admin catalog editing have local browser coverage.
-- Run one real personal-account and one real Organization GitHub Actions workflow through the scoped Runner Specs path, including Sandbox template validation, cleanup, and the repository-only outsider authorization boundary.
+- Extend the existing fixture-backed account/Organization Runner Spec form coverage with broader scope-switching browser scenarios; stale-scope response isolation currently has component coverage.
+- Run one real personal-account and one real Organization GitHub Actions workflow through the scoped Runner Specs path, including Sandbox template validation, cleanup, and the repository-only outsider authorization boundary. For organization Runner groups, verify allowed and denied repository preflight, group + labels routing, GitHub workflow restrictions and cleanup; see [the group contract](docs/platform-runner-specs.md#github-runner-groups).
 - Execute the deployment canary for the scoped Runner Specs routes and update `docs/user-scoped-runner-configuration.md` with origin, version, and cleanup evidence; local fixture-backed browser smoke is not a deployment substitute.
 
 ## Maintenance

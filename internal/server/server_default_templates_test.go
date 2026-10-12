@@ -590,7 +590,7 @@ func TestProfileForRunnerRequestUsesDirectScopedLookup(t *testing.T) {
 	}
 }
 
-func TestRunnerLifecycleRetryUsesPersistedSpecWithoutPolicyOrGroupReads(t *testing.T) {
+func TestRunnerLifecycleRetryUsesPersistedSpecWithoutLegacyPolicyOrGroupReads(t *testing.T) {
 	// Characterization test: a retry starts from its admitted Runner Spec. It
 	// catches a migration that rematches a stored request through retired policy
 	// or internal-group tables.
@@ -626,6 +626,10 @@ func TestRunnerLifecycleRetryUsesPersistedSpecWithoutPolicyOrGroupReads(t *testi
 	}
 
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runner-groups" {
+			_, _ = w.Write([]byte(`{"total_count":1,"runner_groups":[{"id":1,"name":"Default"}]}`))
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads" {
 			writeRunnerApplicationsResponse(w)
 			return

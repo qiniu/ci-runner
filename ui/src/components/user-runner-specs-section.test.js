@@ -1,9 +1,12 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test"
 import { Window } from "happy-dom"
-import { act, createElement } from "react"
+import { act, createElement, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
+import { toast } from "sonner"
 
+import { GitHubRunnerRegistration } from "./github-runner-registration"
+import { load as loadYAML } from "js-yaml"
 import { RunnerSpecForm, RunnerSpecItem, UserRunnerSpecsSection } from "./user-runner-specs-section"
 import { newRunnerSpecFormState, runnerSpecCatalogRegion, runnerSpecDialogDescriptionKey, runnerSpecOverridesGlobal, runnerSpecWorkflowYAML } from "./user-runner-specs-utils"
 
@@ -14,6 +17,7 @@ for (const [key, value] of Object.entries(domGlobals)) Object.defineProperty(glo
 const mountedRoots = []
 
 afterEach(async () => {
+  for (const item of toast.getToasts()) toast.dismiss(item.id)
   for (const { root, container } of mountedRoots.splice(0)) {
     await act(async () => root.unmount())
     container.remove()
@@ -69,6 +73,109 @@ const disabledManaged = {
 }
 
 describe("UserRunnerSpecsSection", () => {
+
+  test("quotes groups and preserves label routing in YAML", () => {
+    const group = 'build: #gpu "team"\nnext'
+    const labels = ["qiniu", "gpu: fast"]
+    expect(loadYAML(runnerSpecWorkflowYAML(labels, group))).toEqual({ "runs-on": { group, labels } })
+    expect(runnerSpecWorkflowYAML(labels, "  ")).toBe(runnerSpecWorkflowYAML(labels))
+  })
+
+  test("loads groups only when enabled, links management, and keeps selection in the preview", async () => {
+    const calls = []
+    const request = async (url) => {
+      calls.push(url)
+      return { organization: "octo-org", groups: [{ id: 1, name: "Build", restricted_to_workflows: true }] }
+    }
+    function Form() {
+      const [form, setForm] = useState({ ...newRunnerSpecFormState(), labels: "qiniu, gpu" })
+      return createElement(RunnerSpecForm, { mode: "create", form, templates: [], saving: false, allowRunnerGroup: true, installationID: 987, request, onChange: (next) => setForm((old) => ({ ...old, ...next })), onSubmit() {}, onClose() {} })
+    }
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    await act(async () => root.render(createElement(Form)))
+    expect(calls).toHaveLength(0)
+    expect(container.textContent).toContain("Repository that triggered the job")
+    const toggle = [...container.querySelectorAll('input[type="checkbox"]')].find((input) => input.parentElement.textContent.includes("Use an organization Runner group"))
+    await act(async () => toggle.click())
+    await settle()
+    expect(calls).toEqual(["/user/github-runner-groups?installation_id=987"])
+    const select = container.querySelector("#user-runner-group")
+    expect(select.required).toBe(true)
+    expect(select.checkValidity()).toBe(false)
+    await act(async () => { select.value = "Build"; select.dispatchEvent(new Event("change", { bubbles: true })) })
+    expect(container.textContent).toContain('group: "Build"')
+    expect(container.textContent).toContain('labels: ["qiniu", "gpu"]')
+    expect(container.textContent).toContain("Organization octo-org · group Build")
+    expect(container.textContent).toContain("This group restricts workflows")
+    expect(container.querySelector('a[href="https://github.com/organizations/octo-org/settings/actions/runner-groups"]')).not.toBeNull()
+    await act(async () => toggle.click())
+    expect(container.querySelector("#user-runner-group")).toBeNull()
+    expect(container.textContent).not.toContain('group: "Build"')
+    expect(container.textContent).toContain('runs-on: ["qiniu", "gpu"]')
+  })
+
+  test("ignores a late group list after changing organizations", async () => {
+    const old = deferred()
+    const request = (url) => url.endsWith("=1") ? old.promise : Promise.resolve({ organization: "second", groups: [{ id: 2, name: "Second" }] })
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    const props = { group: "Saved", id: "group", onChange() {}, request }
+    await act(async () => root.render(createElement(GitHubRunnerRegistration, { ...props, installationID: 1 })))
+    await act(async () => root.render(createElement(GitHubRunnerRegistration, { ...props, installationID: 2 })))
+    await settle()
+    await act(async () => old.resolve({ organization: "first", groups: [{ id: 1, name: "Old private group" }] }))
+    await settle()
+    expect(container.textContent).toContain("Second")
+    expect(container.textContent).not.toContain("Old private group")
+    expect(container.textContent).toContain("Saved (not in the current list)")
+  })
+
+  test("preserves an existing group on permission failure and supports retry", async () => {
+    let calls = 0
+    const request = async () => {
+      if (++calls === 1) throw Object.assign(new Error("raw provider details"), { code: "runner_group_permission_denied" })
+      return { organization: "org", groups: [{ id: 1, name: "Saved" }] }
+    }
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    await act(async () => root.render(createElement(GitHubRunnerRegistration, { group: "Saved", id: "group", onChange() {}, request, installationID: 1 })))
+    await settle()
+    expect(container.querySelector('[role="alert"]').textContent).toContain("Self-hosted runners permission")
+    expect(container.textContent).not.toContain("raw provider details")
+    expect(container.querySelector("select").value).toBe("Saved")
+    await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Refresh Runner groups").click())
+    await settle()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(container.querySelector("select").value).toBe("Saved")
+  })
+
+  test("copy YAML includes the configured organization group", async () => {
+    let copied = ""
+    const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard")
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text) => { copied = text } } })
+    try {
+      const request = async () => ({ items: [{ ...custom, runner_group: "Build" }], sandbox_source: "github_installation" })
+      const container = document.createElement("div")
+      document.body.append(container)
+      const root = createRoot(container)
+      mountedRoots.push({ root, container })
+      await act(async () => root.render(createElement(UserRunnerSpecsSection, { request, installationID: 987 })))
+      await settle()
+      await act(async () => container.querySelector('button[aria-label="Copy runs-on YAML"]').click())
+      expect(loadYAML(copied)).toEqual({ "runs-on": { group: "Build", labels: custom.workflow_labels } })
+    } finally {
+      if (previous) Object.defineProperty(navigator, "clipboard", previous)
+      else Reflect.deleteProperty(navigator, "clipboard")
+    }
+  })
+
   test("uses the configured Sandbox region for the scoped catalog", () => {
     expect(runnerSpecCatalogRegion("cn-yangzhou-1")).toBe("cn-yangzhou-1")
     expect(runnerSpecCatalogRegion("unknown-region")).toBe("us-south-1")
@@ -253,7 +360,8 @@ describe("UserRunnerSpecsSection", () => {
 
     expect(html).toContain("runs-on labels")
     expect(html).toContain("GPU builder · gpu-template")
-    expect(html).toContain('runs-on: [\&quot;qiniu\&quot;, \&quot;gpu\&quot;]')
+    expect(html).toContain('group: &quot;org-runners&quot;')
+    expect(html).toContain('labels: [&quot;qiniu&quot;, &quot;gpu&quot;]')
     expect(html).toContain('href="/organizations/qiniu/sandbox-templates"')
     expect(html).toContain("org-runners")
   })

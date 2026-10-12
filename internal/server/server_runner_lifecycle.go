@@ -437,6 +437,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		return
 	}
 
+	if strings.TrimSpace(req.RunnerGroup) != "" {
+		if err := s.gh.ValidateRunnerGroup(ctx, req.GitHubInstallationID, req.RepositoryFullName, req.RunnerGroup); err != nil {
+			s.failStart(id, st, "github_runner_group", newRunnerGroupValidationFailure(err))
+			return
+		}
+	}
+
 	sandboxService, sandboxConfig, err := s.sandboxServiceAndConfigForRunnerRequestContext(ctx, req)
 	if err != nil {
 		s.failStart(id, st, "sandbox_config", err)
@@ -1752,6 +1759,10 @@ func isQueueDeferFailure(code string) bool {
 func classifyRetryableError(stage string, err error) (string, bool) {
 	if err == nil {
 		return "", false
+	}
+	var groupErr *runnerGroupValidationFailure
+	if errors.As(err, &groupErr) {
+		return groupErr.code, groupErr.retryable
 	}
 	var resolutionErr *defaultTemplateResolutionError
 	if errors.As(err, &resolutionErr) {

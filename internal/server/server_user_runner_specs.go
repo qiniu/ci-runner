@@ -152,6 +152,10 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "invalid runner spec payload")
 		return
 	}
+	if err := s.validateScopedRunnerGroup(r.Context(), scope, input.RunnerGroup); err != nil {
+		writeRunnerGroupError(w, err)
+		return
+	}
 	if err := s.validateScopedProfileTemplate(r.Context(), prefScope, input.TemplateID); err != nil {
 		s.writeScopedTemplateValidationError(w, err)
 		return
@@ -245,16 +249,22 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	if input.MaxConcurrency != nil && *input.MaxConcurrency < 0 {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "max concurrency must not be negative")
+		return
+	}
+	if runnerGroupChanged || (input.Enabled != nil && *input.Enabled && !current.Enabled) {
+		if err := s.validateScopedRunnerGroup(r.Context(), scope, current.RunnerGroup); err != nil {
+			writeRunnerGroupError(w, err)
+			return
+		}
+	}
 	if templateChanged {
 		if err := s.validateScopedProfileTemplate(r.Context(), prefScope, *input.TemplateID); err != nil {
 			s.writeScopedTemplateValidationError(w, err)
 			return
 		}
 		current.TemplateID = strings.TrimSpace(*input.TemplateID)
-	}
-	if input.MaxConcurrency != nil && *input.MaxConcurrency < 0 {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_runner_spec", "max concurrency must not be negative")
-		return
 	}
 	if input.MaxConcurrency != nil {
 		current.MaxConcurrency = *input.MaxConcurrency

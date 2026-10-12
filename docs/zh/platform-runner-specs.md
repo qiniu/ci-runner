@@ -25,6 +25,26 @@
 
 `/runner-specs` 展示启用且开启目录展示的规格，包括通过验证的公共模板固定 ID 规格。`/user/runner-specs` 保留名称引用的 `platform_public` 和 ID 引用的 `platform_custom` 来源，两者均可展示，同时返回 scope 自有 `scoped_custom` 条目；未开启展示的平台规格被省略。只有 scope 自定义条目返回物理 ID 和 GitHub Runner Group；全局 ID 条目省略模板详情，不编造稳定名称。匿名 `GET /api/public/runner-templates` 保留仅汇总稳定名称的契约，不包含只有 ID 的规格，只返回已启用、开启展示的名称引用及其 workflow labels。每进程缓存 60 秒并合并并发加载，Admin 成功保存／删除后使当前进程缓存失效；浏览器仍可缓存 60 秒。Provider 目录保持独立且受凭据约束。Large 规格可直接使用现有公共模板 ID 明确开启受保护目录展示，名称本身不会自动触发展示。
 
+## GitHub Runner 组
+
+GitHub Runner 默认注册到触发 Job 的仓库。组织自定义规格可以开启 **使用组织 Runner 组**，选择已有组、刷新列表或进入 GitHub 管理组。表单、自定义规格详情和 Job 详情会显示注册目标。选择组后，Workflow 预览和复制的 YAML 同时包含两项：
+
+```yaml
+runs-on:
+  group: "build-runners"
+  labels: ["qiniu", "gpu"]
+```
+
+请保留规格匹配所需的标签：仅指定组无法确定 Runner 规格。组上的 Workflow 限制仍由 GitHub 执行。模板可见性及 Sandbox API Key 的访问权限与 GitHub Runner 组相互独立。
+
+组列表只允许组织所有者管理的 scope 访问，并要求 GitHub App 的组织 **Self-hosted runners** 权限。`GET /user/github-runner-groups?installation_id=<本地关联安装记录ID>` 返回该组织的 `{organization, groups}`，不缓存；不接受浏览器指定组织，也不使用用户 OAuth token 读取组。此路径注册组织级 Runner，因此不提供企业继承组。GitHub 查询限时 5 秒，最多 10 页、每页 100 项及 1 MiB；不完整或超限结果会报错，不会显示为空列表。权限不足、频率限制、超时和不可用分别返回明确错误，不包含上游响应正文。
+
+创建组织自定义规格、修改组或重新启用时，在审计事务前验证组是否存在。不改组的策略编辑、停用和清空组在 GitHub 不可用时仍可执行。启动前再次检查组，并使用 GitHub 的 `visible_to_repository` 过滤验证精确目标仓库的访问资格；校验发生在注册和创建 Sandbox 之前。无效组或仓库无权访问会直接失败，临时查询失败沿用现有的有界重试策略。这些检查不授予仓库或 Sandbox 权限，也不替代 GitHub 最终的 Workflow 调度规则。
+
+Admin 平台规格没有单一组织上下文，因此保留手动组名：每个目标组织均须存在该组，运行时执行相同预检。个人仓库须留空。已有组名保持兼容，不需要 schema 迁移。
+
+GitHub 上游契约见[组路由指南](https://docs.github.com/zh/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow)和 [Runner 组 REST API](https://docs.github.com/en/rest/actions/self-hosted-runner-groups)。
+
 ## 修改与升级兼容
 
 名称保持为稳定资源标识。Admin 可编辑标签、必需标签、模板引用、GitHub Runner Group、优先级、启用状态、容量及目录展示设置。匹配继续遵守 `required_labels ⊆ job_labels ⊆ labels` 和 scope 精确覆盖。全局规格仍有 queued、creating、running 或 stopping 请求时，修改执行配置或删除会返回 `409 runner_spec_in_use`；容量、启用状态和发布状态仍可调整。CAS 拒绝过期保存，数据修改与审计事件原子提交。

@@ -121,6 +121,16 @@ Missing configuration, missing/unready templates, permission errors, or a failed
 
 Jobs still use the repository owner's effective Sandbox configuration. Ensure that scope can access the same template; save-time validation does not check runner binaries or replace the sandbox smoke test above.
 
+An empty group registers the Runner to the triggering repository, including organization repositories. To use an organization group, keep both routing fields in the workflow:
+
+```yaml
+runs-on:
+  group: "build-runners"
+  labels: ["acme-linux-x64"]
+```
+
+Keep labels that match the spec; group-only routing cannot select a template. Organization custom-spec settings provide a live group selector, refresh and a link to GitHub settings. Admin platform specs keep manual group names because different target organizations must each have the named group. Startup checks group existence and repository access before creating a Sandbox. Group workflow restrictions remain enforced by GitHub.
+
 ## Use the custom labels
 
 Runner matching preserves `required labels ⊆ job labels ⊆ advertised labels`. The workflow must include every required label and must not request a label that the spec does not advertise.

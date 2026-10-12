@@ -193,6 +193,8 @@ curl -fsS -X POST https://<runnerd-host>/runner_specs \
   -d '{"name":"deployment-custom","labels":["self-hosted","deployment-custom"],"required_labels":["deployment-custom"],"template_id":"<private-template-id>","max_concurrency":1,"enabled":true}' | jq
 ```
 
+使用组织组规格前，以具有有效成员身份的组织所有者身份打开组织 Runner Specs，开启组注册，选择或刷新真实组，核对注册目标及复制的 `group` + `labels` YAML。在允许的仓库运行匹配 Workflow，验证接单与清理；另行验证无权使用组的仓库在 `github_runner_group` 阶段失败且未创建 Sandbox，非所有者不能读取 `/user/github-runner-groups`。Workflow 限制由 GitHub 执行。此真实门禁独立于 fixture-backed 浏览器验证。
+
 ## 4. Webhook Delivery
 
 在 GitHub App 或目标 repository 的 webhook 设置中重发最近一次 delivery，或触发一个新 workflow。

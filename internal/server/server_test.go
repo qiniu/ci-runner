@@ -477,6 +477,8 @@ func TestOrgRunnerPassesMatchedRunnerGroupToSandbox(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runner-groups":
+			w.Write([]byte(`{"total_count":1,"runner_groups":[{"id":1,"name":"default","visibility":"all"}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads":
 			writeRunnerApplicationsResponse(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/orgs/o/actions/runners/registration-token":
@@ -8634,6 +8636,10 @@ func TestSweeperKeepsRunnerAfterJobStarted(t *testing.T) {
 func TestProfileConcurrencyLimitAppliesBeforeCreate(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runner-groups" {
+			_, _ = w.Write([]byte(`{"total_count":1,"runner_groups":[{"id":1,"name":"default"}]}`))
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/orgs/o/actions/runners/downloads" {
 			writeRunnerApplicationsResponse(w)
 			return

@@ -80,6 +80,8 @@ RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
 - UI tests must cover Organization-only Runner Group input, exact global-label override confirmation, pending-save suppression, and stale manual-refresh or mutation completion after switching scope. An old response must not replace current items, close the current dialog, or trigger a refresh for the new scope.
 - Local `task ui-production-smoke` covers public pages, fixture-backed Jobs, positive public-directory filtering at `/runner-specs`, editable former managed specs, long template references in a narrow dialog, and independent public/private/unavailable template visibility with fixed-ID publication. Admin card coverage includes full labels, independent template loading/retry, shared request reuse, refresh, narrow layouts and delete confirmation. Account/Organization custom routes still need separate browser scope acceptance; fixtures do not prove deployment or provider behavior.
 
+- For GitHub Runner groups, cover owner-only lists, exact installation credentials, five-second and page/body bounds, stale organization responses, quoted group + labels YAML and copy behavior, missing/denied groups before provisioning, redacted transient errors, rejected mutation/audit invariance and unchanged-group/disable/clear compatibility. Include the local production Organization/account form smoke; live group pickup, workflow policy and cleanup remain deployment gates.
+
 ## Admin Template Validation
 
 - Extend existing provider/server/UI tests for custom create and changed-template PATCH; use httptest with real SDK decoding, never a production validation bypass.

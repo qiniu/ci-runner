@@ -237,9 +237,9 @@ Runner specs are managed through the admin API and console — not through `runn
 
 - **Public-name binding**: Admin configures a stable public template name. Runnerd resolves its physical ID through the request's effective Sandbox region. Publication in `/runner-specs` is an explicit, validated choice.
 - **Fixed-ID reference**: Admin configures an explicit `template_id`, which may refer to a public template. Admin uses one Template field; catalog display requires verified public visibility. New bindings and runtime startup require a nonzero effective default BuildID; a failed latest rebuild does not invalidate an existing default. Every platform spec's labels, priority and capacity are editable in Admin; the code no longer maintains a catalog. New binding/publication requires the configured admin Sandbox credentials; unchanged-binding policy edits remain available without provider access.
-- **GitHub Runner Group**: when a spec sets `runner_group`, runnerd creates an organization-level runner in that GitHub group; otherwise it creates a repository-level runner. This is not the retired internal Runner Group model.
+- **GitHub Runner Group**: when a spec sets `runner_group`, runnerd creates an organization-level runner in that GitHub group; otherwise it creates a repository-level runner. This is not the retired internal Runner Group model. Organization forms explain repository-level registration, offer a live group selector, and generate `group` + `labels` YAML. New/changed groups and re-enablement are validated before saving; startup checks group and exact repository access before provisioning. Admin platform specs retain manual names for their multiple organization contexts. See [GitHub Runner groups](docs/platform-runner-specs.md#github-runner-groups).
 
-> **⚠️ Personal accounts:** `runner_group` requires the organization-level GitHub API. If the repository belongs to a personal account (not an organization), leave `runner_group` **empty** — otherwise runner registration will fail with a 404 error.
+> **⚠️ Personal accounts:** `runner_group` requires the organization-level GitHub API. If the repository belongs to a personal account (not an organization), leave `runner_group` **empty** — otherwise the organization-group preflight will reject startup.
 Matching always enforces `required_labels ⊆ job_labels ⊆ labels`. Migrated Ubuntu specs preserve their `qiniu` and exact OS required labels; changing the catalog in Admin changes the workflow contract. Enablement and publication are separate controls.
 
 Internal Runner Groups and Repository Policies have been removed. Their legacy
@@ -307,7 +307,7 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | Symptom | Likely Cause | Fix |
 | --- | --- | --- |
 | Job stays **queued** forever, no webhook in runnerd logs | GitHub App has no subscribed events | Go to GitHub App settings → Subscribe to **Workflow jobs** event |
-| `github registration token: status 404` | `runner_group` is set but the repo owner is a personal account | Clear `runner_group` in the runner spec to use repository-level registration |
+| `runner_group_permission_denied` (legacy: `github registration token: status 404`) | Group lookup cannot access the owner organization, including personal-account owners or missing App permissions | Leave `runner_group` empty for personal repositories; for organizations, check the App installation and Self-hosted runners permission |
 | `invalid signature` in logs | Webhook secret mismatch | Ensure `github.webhook_secret` matches the secret in GitHub App/repo webhook settings |
 | `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |

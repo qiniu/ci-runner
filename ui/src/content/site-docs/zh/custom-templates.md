@@ -121,6 +121,16 @@ fi
 
 实际任务继续使用仓库 owner 的有效 Sandbox 配置。请确保该作用域可以访问同一模板；保存校验不检查 Runner 程序文件，也不能替代前面的沙箱冒烟测试。
 
+组留空时，Runner 注册到触发 Job 的仓库，组织仓库同样适用。使用组织组时，请在 Workflow 中同时保留两项路由条件：
+
+```yaml
+runs-on:
+  group: "build-runners"
+  labels: ["acme-linux-x64"]
+```
+
+请保留规格匹配所需的标签；仅组路由不能选择模板。组织自定义规格设置提供实时组选择器、刷新及 GitHub 管理入口。Admin 平台规格保留手动组名，每个目标组织均须存在该组。创建 Sandbox 前会检查组存在性及仓库访问资格；组上的 Workflow 限制仍由 GitHub 执行。
+
 ## 使用自定义标签
 
 Runner 匹配始终保持 `required labels ⊆ Job 标签 ⊆ 声明标签`。Workflow 必须包含所有 required labels，同时不能请求 spec 未声明的标签。

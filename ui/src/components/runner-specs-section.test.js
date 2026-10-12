@@ -20,12 +20,19 @@ const input = (html, id) => html.match(new RegExp(`<(?:input|textarea)[^>]*id="$
 const disabled = (html, id) => /\sdisabled(?:=""|(?=[\s/>]))/.test(input(html, id))
 
  describe("Admin Runner Specs", () => {
+  test("manual organization groups show a target and YAML with the required labels", () => {
+    const html = render(RunnerSpecDialogForm, { ...formProps, runnerSpecForm: { ...form, runner_group: "Build" } })
+    expect(html).toContain("Repository owner’s organization · group Build")
+    expect(html).toContain('group: &quot;Build&quot;')
+    expect(html).toContain('labels: [&quot;qiniu&quot;, &quot;ubuntu-24.04&quot;]')
+    expect(html).toContain("The group must exist in each target organization")
+  })
   test("legacy ownership does not prevent editing or deleting a public spec", () => {
     const html = render(RunnerSpecsSection, sectionProps)
     expect(html).toContain('aria-label="ubuntu-24.04"')
     expect(html).toContain("Catalog display")
     expect(html).not.toContain("<table")
-    for (const label of ["Required labels", "Max concurrency", "Min idle", "Priority", "GitHub runner group"]) expect(html).toContain(label)
+    for (const label of ["Required labels", "Max concurrency", "Min idle", "Priority", "GitHub Runner registration"]) expect(html).toContain(label)
     expect(html).not.toContain(">Managed<")
     expect(html).toContain(spec.default_template_name)
     expect(html).toContain('aria-label="Delete ubuntu-24.04"')

@@ -25,6 +25,26 @@ Display does not change execution: name references retain preinstalled Runner pr
 
 `/runner-specs` shows enabled entries with catalog display on, including verified public fixed-ID templates. `/user/runner-specs` retains `platform_public` for name references and `platform_custom` for ID references; both can be displayed, alongside scope-owned `scoped_custom` entries. Unpublished platform entries are omitted. Only scoped custom entries expose physical IDs and GitHub Runner Groups. Global ID entries omit template details rather than inventing a stable name. The anonymous `GET /api/public/runner-templates` keeps its stable-name-only contract, so ID-only specs are absent there; it groups enabled, displayed name references and exposes names and workflow labels only. Its per-process cache lasts 60 seconds and coalesces fills; successful Admin saves/deletes invalidate that process cache. Browser caches may retain responses for 60 seconds. Provider catalogs remain separate credential-bound resources. Large specs can opt into the protected directory with their existing public template IDs; names alone never imply publication.
 
+## GitHub Runner groups
+
+GitHub Runner registration defaults to the repository that triggered the Job. Organization custom specs can enable **Use an organization Runner group**, select an existing group, refresh the list, and open GitHub group settings. The registration target is shown in forms, custom-spec details and Job details. With a group selected, workflow previews and copied YAML include both fields:
+
+```yaml
+runs-on:
+  group: "build-runners"
+  labels: ["qiniu", "gpu"]
+```
+
+Keep the spec's matching labels: group-only routing does not identify a Runner Spec. GitHub also enforces any workflow restrictions configured on the group. Template visibility and Sandbox API Key access remain independent of GitHub Runner groups.
+
+Group lists require an owner-manageable organization and the GitHub App's organization **Self-hosted runners** permission. `GET /user/github-runner-groups?installation_id=<local-linked-installation-id>` returns `{organization, groups}` for that organization only, without caching; it never accepts a browser-supplied organization or uses the user's OAuth token to read groups. Enterprise-inherited groups are omitted because this path registers organization runners. GitHub queries have a five-second deadline, at most ten 100-item pages and 1 MiB per page; incomplete or oversized results fail instead of appearing empty. Permission, rate-limit, timeout and unavailable responses are distinct and contain no upstream body.
+
+Creating an organization custom spec, changing its group or re-enabling it validates the group's existence before the audited mutation. Unchanged-group policy edits, disabling and clearing the group remain possible during GitHub outages. Before registering or creating a Sandbox, startup checks the group again and checks the exact repository with GitHub's `visible_to_repository` filter. Invalid groups and denied access fail without provisioning; transient lookup failures use the existing bounded retry policy. These checks do not grant repository or Sandbox access and do not replace GitHub's final workflow scheduling rules.
+
+Admin platform specs retain a manual group name because they have no single organization context: the group must exist for each target organization, and runtime performs the same preflight. Leave it empty for personal repositories. Existing group names are preserved; no schema migration is required.
+
+See GitHub's [group routing guide](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow) and [Runner group REST API](https://docs.github.com/en/rest/actions/self-hosted-runner-groups) for the upstream contract.
+
 ## Edits and compatibility
 
 Names remain stable resource identifiers. Admin can edit labels, required labels, template reference, GitHub Runner Group, priority, enabled state, capacity and directory settings. Matching retains `required_labels ⊆ job_labels ⊆ labels` and scoped overrides. Execution-setting changes and deletion return `409 runner_spec_in_use` while queued/creating/running/stopping requests use that global spec; capacity, enabled state and publication may still change. CAS rejects stale writes. Mutations and audit events commit atomically.

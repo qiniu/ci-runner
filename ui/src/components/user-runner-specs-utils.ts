@@ -12,8 +12,12 @@ export function runnerSpecCatalogRegion(regionID: string, regions: readonly Sand
 	return catalog.some((region) => region.id === regionID) ? regionID : catalog[0].id
 }
 
-export function runnerSpecWorkflowYAML(labels: string[]) {
-  return `runs-on: [${labels.map((label) => JSON.stringify(label)).join(", ")}]`
+export function runnerSpecWorkflowYAML(labels: string[], runnerGroup = "") {
+  const values = `[${labels.map((label) => JSON.stringify(label)).join(", ")}]`
+  const group = runnerGroup.trim()
+  return group
+    ? `runs-on:\n  group: ${JSON.stringify(group)}\n  labels: ${values}`
+    : `runs-on: ${values}`
 }
 
 export function runnerSpecOverridesGlobal(labels: string[], items: UserRunnerSpec[]) {

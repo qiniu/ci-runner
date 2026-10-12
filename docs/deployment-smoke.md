@@ -201,6 +201,8 @@ curl -fsS -X POST https://<runnerd-host>/runner_specs \
   -d '{"name":"deployment-custom","labels":["self-hosted","deployment-custom"],"required_labels":["deployment-custom"],"template_id":"<private-template-id>","max_concurrency":1,"enabled":true}' | jq
 ```
 
+Before using an organization-group spec, open Organization Runner Specs as an active organization owner. Enable group registration, select/refresh a real group and verify the displayed target and copied `group` + `labels` YAML. Run a matching workflow from a repository allowed by the group and verify pickup and cleanup. Separately verify a disallowed repository fails at `github_runner_group` before Sandbox creation, and non-owners cannot read `/user/github-runner-groups`. Workflow-specific restrictions are enforced by GitHub. This live gate is separate from fixture-backed browser coverage.
+
 ## 4. Webhook Delivery
 
 In the GitHub App or target repository webhook settings, send a recent delivery or trigger a new workflow.

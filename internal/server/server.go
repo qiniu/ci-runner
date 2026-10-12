@@ -446,6 +446,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /user/preferences/cache", s.handleUserDeleteCacheConfig)
 	s.mux.HandleFunc("GET /user/sandbox/templates", s.handleListSandboxTemplates)
 	s.mux.HandleFunc("GET /user/sandbox/instances", s.handleListSandboxes)
+	s.mux.HandleFunc("GET /user/github-runner-groups", s.handleUserListGitHubRunnerGroups)
 	s.mux.HandleFunc("GET /user/runner-specs", s.handleUserListRunnerSpecs)
 	s.mux.HandleFunc("POST /user/runner-specs", s.handleUserCreateRunnerSpec)
 	s.mux.HandleFunc("PATCH /user/runner-specs/{name}", s.handleUserPatchRunnerSpec)

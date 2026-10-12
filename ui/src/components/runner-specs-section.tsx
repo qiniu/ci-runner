@@ -10,6 +10,8 @@ import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { type RunnerSpec } from "@/admin-types"
+import { GitHubRunnerRegistration, RunnerRegistrationTarget } from "@/components/github-runner-registration"
+import { runnerSpecWorkflowYAML } from "@/components/user-runner-specs-utils"
 import { AdminTemplateInfo } from "@/components/admin-template-info"
 import {
   createTemplateLookup,
@@ -106,6 +108,9 @@ export function RunnerSpecDialogForm({
     300,
   )
   const publicTemplate = status?.public === true && !status.error
+  const parseLabels = (value: string) => value.split(",").map((label) => label.trim()).filter(Boolean)
+  const requiredLabels = parseLabels(runnerSpecForm.required_labels)
+  const workflowLabels = requiredLabels.length ? requiredLabels : parseLabels(runnerSpecForm.labels)
 
   return (
     <form onSubmit={onSubmitRunnerSpec} aria-busy={savingRunnerSpec}>
@@ -192,22 +197,15 @@ export function RunnerSpecDialogForm({
               helpID="runner-spec-template-help"
             />
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="runner-spec-github-group">
-              {t("admin.githubRunnerGroup")}
-            </Label>
-            <RunnerSpecTextField
-              id="runner-spec-github-group"
-              value={runnerSpecForm.runner_group}
-              onChange={(event) =>
-                onRunnerSpecFormChange((current) => ({
-                  ...current,
-                  runner_group: event.target.value,
-                }))
-              }
-              placeholder={t("admin.optionalGitHubRunnerGroup")}
-            />
-          </div>
+          <GitHubRunnerRegistration
+            id="runner-spec-github-group"
+            group={runnerSpecForm.runner_group}
+            platform
+            onChange={(runner_group) => onRunnerSpecFormChange((current) => ({ ...current, runner_group }))}
+          />
+          <pre className="min-w-0 whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-xs" aria-label={t("user.workflowPreview")}>
+            {runnerSpecWorkflowYAML(workflowLabels, runnerSpecForm.runner_group)}
+          </pre>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -409,13 +407,18 @@ function RunnerSpecCard({
           [t("admin.maxConcurrency"), runnerSpec.max_concurrency],
           [t("admin.minIdle"), runnerSpec.min_idle],
           [t("admin.priority"), runnerSpec.priority],
-          [t("admin.githubRunnerGroup"), runnerSpec.runner_group || "—"],
         ].map(([label, value]) => (
           <div key={label} className="flex min-w-0 gap-x-2">
             <dt className="shrink-0 text-muted-foreground">{label}</dt>
             <dd className="min-w-0 [overflow-wrap:anywhere]">{value}</dd>
           </div>
         ))}
+        <div className="flex min-w-0 gap-x-2">
+          <dt className="shrink-0 text-muted-foreground">{t("user.registrationTarget")}</dt>
+          <dd className="min-w-0 [overflow-wrap:anywhere]">
+            <RunnerRegistrationTarget group={runnerSpec.runner_group} />
+          </dd>
+        </div>
       </dl>
       <div className="grid min-w-0 gap-2 border-t pt-3">
         <AdminTemplateInfo

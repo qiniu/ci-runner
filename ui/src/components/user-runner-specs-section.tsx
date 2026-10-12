@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { GitHubRunnerRegistration, RunnerRegistrationTarget } from "@/components/github-runner-registration"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
@@ -53,7 +54,7 @@ function sandboxTemplateOptionLabel(template: SandboxTemplate) {
   return alias ? `${alias} · ${template.template_id}` : template.template_id
 }
 
-export function RunnerSpecDetails({ item }: { item: UserRunnerSpec }) {
+export function RunnerSpecDetails({ item, organization }: { item: UserRunnerSpec; organization?: string }) {
   const { t } = useTranslation()
   const template = item.default_template_name || item.template_id || "-"
   if (item.source === "scoped_custom") {
@@ -66,11 +67,9 @@ export function RunnerSpecDetails({ item }: { item: UserRunnerSpec }) {
         <span>
           {t("common.template")}: {template}
         </span>
-        {item.runner_group ? (
-          <span>
-            {t("user.runnerGroup")}: {item.runner_group}
-          </span>
-        ) : null}
+        <span className="break-words sm:col-span-2">
+          {t("user.registrationTarget")}: <RunnerRegistrationTarget group={item.runner_group} organization={organization} />
+        </span>
       </div>
     )
   }
@@ -87,12 +86,14 @@ export function RunnerSpecItem({
   onEdit,
   onDelete,
   copying,
+  organization,
 }: {
   item: UserRunnerSpec
   onCopy: (item: UserRunnerSpec) => void
   onEdit: (item: UserRunnerSpec) => void
   onDelete: (item: UserRunnerSpec) => void
   copying: boolean
+  organization?: string
 }) {
   const { t } = useTranslation()
   return (
@@ -114,10 +115,10 @@ export function RunnerSpecItem({
             </>
           ) : null}
         </div>
-        <div className="mt-1 break-words font-mono text-xs text-muted-foreground">
-          {t("user.runsOn")}: [{item.workflow_labels.join(", ")}]
-        </div>
-        <RunnerSpecDetails item={item} />
+        <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+          {runnerSpecWorkflowYAML(item.workflow_labels, item.runner_group)}
+        </pre>
+        <RunnerSpecDetails item={item} organization={organization} />
       </div>
       <div className="flex items-center gap-1">
         <Button
@@ -166,6 +167,9 @@ export function RunnerSpecForm({
   templates,
   saving,
   allowRunnerGroup = false,
+  request,
+  installationID,
+  scopeName,
   sandboxTemplatesHref,
   onChange,
   onSubmit,
@@ -176,13 +180,16 @@ export function RunnerSpecForm({
   templates: SandboxTemplate[]
   saving: boolean
   allowRunnerGroup?: boolean
+  request?: RequestFn
+  installationID?: number
+  scopeName?: string
   sandboxTemplatesHref?: string
   onChange: (next: Partial<FormState>) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const workflowPreview = runnerSpecWorkflowYAML(parseLabels(form.labels))
+  const workflowPreview = runnerSpecWorkflowYAML(parseLabels(form.labels), allowRunnerGroup ? form.runnerGroup : "")
   const submitLabel =
     mode === "create" ? t("user.createCustomRunnerSpec") : t("user.saveChanges")
 
@@ -222,7 +229,7 @@ export function RunnerSpecForm({
             <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               {t("user.workflowPreview")}
             </span>
-            <code className="min-w-0 break-all text-right text-xs leading-5">
+            <code className="min-w-0 whitespace-pre-wrap break-all text-left text-xs leading-5">
               {workflowPreview}
             </code>
           </div>
@@ -291,15 +298,10 @@ export function RunnerSpecForm({
       </div>
 
       {allowRunnerGroup ? (
-        <div className="grid gap-1.5">
-          <Label htmlFor="user-runner-group">{t("user.runnerGroup")}</Label>
-          <Input
-            id="user-runner-group"
-            value={form.runnerGroup}
-            onChange={(event) => onChange({ runnerGroup: event.target.value })}
-          />
-        </div>
-      ) : null}
+        <GitHubRunnerRegistration key={installationID || "account"} request={request} installationID={installationID} organization={scopeName} id="user-runner-group" group={form.runnerGroup} onChange={(runnerGroup) => onChange({ runnerGroup })} />
+      ) : (
+        <p className="text-xs text-muted-foreground">{t("user.registrationTarget")}: <RunnerRegistrationTarget /></p>
+      )}
 
       <label className="flex cursor-pointer items-start gap-3 rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
         <input
@@ -545,7 +547,7 @@ export function UserRunnerSpecsSection({
     setCopying(item.name)
     try {
       await navigator.clipboard?.writeText(
-        runnerSpecWorkflowYAML(item.workflow_labels),
+        runnerSpecWorkflowYAML(item.workflow_labels, item.runner_group),
       )
       toast.success(t("user.runnerSpecCopied"))
     } catch {
@@ -591,6 +593,7 @@ export function UserRunnerSpecsSection({
       key={`${item.source}:${item.name}`}
       item={item}
       copying={copying === item.name}
+      organization={installationID ? scopeName : undefined}
       onCopy={(value) => void copyYAML(value)}
       onEdit={openEdit}
       onDelete={(value) => void remove(value)}
@@ -731,6 +734,9 @@ export function UserRunnerSpecsSection({
             templates={templates}
             saving={saving}
             allowRunnerGroup={Boolean(installationID)}
+            request={request}
+            installationID={installationID}
+            scopeName={scopeName}
             sandboxTemplatesHref={sandboxTemplatesHref}
             onChange={(next) => setForm((current) => ({ ...current, ...next }))}
             onSubmit={submit}

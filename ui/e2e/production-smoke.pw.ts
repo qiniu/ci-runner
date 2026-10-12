@@ -775,6 +775,66 @@ test("requires confirmation before deleting an admin Runner Spec", async ({ page
   diagnostics.expectClean()
 })
 
+test("selects an organization Runner group and saves matching workflow YAML", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const diagnostics = observeBrowserDiagnostics(page)
+  let groupReads = 0
+  let saved: Record<string, unknown> | undefined
+  let items: Record<string, unknown>[] = []
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-owner", role: "user" } }))
+  await page.route("**/sandbox/regions", (route) => route.fulfill({ json: [] }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/github-app") {
+      return route.fulfill({ json: { setup_url: "/github-app/setup", settings_manageability: true, installations: [{ id: 1, account_id: 1, installation_id: 987, account_login: "fixture-org", account_type: "organization", manageable: true, repositories: ["fixture-org/repo"], created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" }] } })
+    }
+    if (url.pathname === "/user/preferences") return route.fulfill({ json: { cache: { configured: false }, sandbox: { mode: "custom", resolved_source: "custom", api_url: "", manageable: true, api_key: { configured: true } } } })
+    if (url.pathname === "/user/onboarding/product-tour") return route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    if (url.pathname === "/user/sandbox/templates") return route.fulfill({ json: [{ template_id: "gpu-template", aliases: ["GPU builder"] }] })
+    if (url.pathname === "/user/github-runner-groups") {
+      expect(url.searchParams.get("installation_id")).toBe("1")
+      groupReads++
+      return route.fulfill({ json: { organization: "fixture-org", groups: [{ id: 1, name: "Build", restricted_to_workflows: true }] } })
+    }
+    if (url.pathname === "/user/runner-specs") {
+      if (route.request().method() === "POST") {
+        saved = route.request().postDataJSON()
+        items = [{ ...saved, source: "scoped_custom", updated_at: "2026-10-12T00:00:00Z" }]
+      }
+      return route.fulfill({ json: { scope_type: "github_installation", scope_id: 987, sandbox_source: "github_installation", items } })
+    }
+    return route.fulfill({ status: 404, body: "fixture route not found" })
+  })
+  await page.goto("/organizations/fixture-org/runner-specs", { waitUntil: "networkidle" })
+  await page.getByRole("button", { name: "Create custom runner spec", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await page.locator("#user-runner-name").fill("gpu")
+  await page.locator("#user-runner-labels").fill("qiniu, gpu")
+  await page.locator("#user-runner-template").selectOption("gpu-template")
+  expect(groupReads).toBe(0)
+  await expect(dialog).toContainText("Repository that triggered the job")
+  await dialog.getByRole("checkbox", { name: "Use an organization Runner group" }).check()
+  await page.locator("#user-runner-group").selectOption("Build")
+  await expect(dialog).toContainText('group: "Build"')
+  await expect(dialog).toContainText('labels: ["qiniu", "gpu"]')
+  await expect(dialog).toContainText("Organization fixture-org · group Build")
+  await expect(dialog.getByRole("link", { name: "Manage groups on GitHub" })).toHaveAttribute("href", "https://github.com/organizations/fixture-org/settings/actions/runner-groups")
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: "test-results/organization-runner-group.png", fullPage: true })
+  await dialog.getByRole("button", { name: "Create custom runner spec", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(saved).toMatchObject({ runner_group: "Build", workflow_labels: ["qiniu", "gpu"] })
+  await page.getByRole("button", { name: "Copy runs-on YAML" }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('runs-on:\n  group: "Build"\n  labels: ["qiniu", "gpu"]')
+  await page.goto("/account/runner-specs", { waitUntil: "networkidle" })
+  await page.getByRole("button", { name: "Create custom runner spec", exact: true }).click()
+  await expect(page.getByRole("checkbox", { name: "Use an organization Runner group" })).toHaveCount(0)
+  await expect(page.getByRole("dialog")).toContainText("Repository that triggered the job")
+  diagnostics.expectClean()
+})
+
 async function routeLocalAnonymousSession(page: Page) {
   const authSessionRoute = getLocalAuthSessionRoute(process.env.RUNNERD_UI_SMOKE_BASE_URL)
   if (!authSessionRoute) return

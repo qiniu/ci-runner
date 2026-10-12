@@ -14,6 +14,7 @@
 - 账户在 `/account/runner-specs` 管理自己的自定义规格；Organization 在 `/organizations/{login}/runner-specs` 管理自己的自定义规格。
 - 自定义规格只能被同一作用域 owner 的仓库匹配。对其他仓库只有访问权的外部协作者不能读取或修改该作用域配置。
 - 账户自定义规格不支持 `runner_group`；Organization 自定义规格可以设置 GitHub Runner Group。
+- Organization 表单默认仓库级注册；开启组织组后提供实时选择、刷新和 GitHub 管理入口，Workflow 预览及复制同时输出 `group` 与 `labels`。创建、修改组或重新启用时先校验组存在性，启动前检查目标仓库访问资格；原样策略编辑、停用和清空组保持可用。仅组路由不参与规格匹配，具体契约见 [GitHub Runner 组](zh/platform-runner-specs.md#github-runner-组)。
 - 自定义规格最大并发默认值为 `10`；`0` 仍保留为“不额外限制”的显式高级值，运行时还受 runnerd 全局容量约束。
 
 平台页坚持只读，避免同一个平台规格在不同页面呈现互相冲突的状态，也避免用户把平台容量误解为账户配额。如果以后需要租户配额，应设计独立的配额产品和数据模型，而不是复用 Runner Spec 的启用字段。

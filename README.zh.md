@@ -237,9 +237,9 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 
 - **公共名称绑定**：Admin 配置稳定公共模板名，Runnerd 按请求的有效 Sandbox 区域解析物理 ID。发布到 `/runner-specs` 是经过校验的明确选择。
 - **固定 ID 引用**：Admin 配置明确的 `template_id`，它也可能指向公共模板。后台只保留一个“模板”字段，目录展示须验证模板实际为 public。新绑定及运行时启动须有非零的有效默认 BuildID；最新重建失败不会使已有默认构建失效。所有平台规格的标签、优先级和容量均可在后台维护，代码不再维护规格清单。新建绑定或发布需配置 Admin Sandbox 凭据，绑定不变的策略调整无需访问 Provider。
-- **GitHub Runner Group**：spec 设置了 `runner_group` 时，runnerd 会在该 GitHub Group 中创建组织级 runner；否则创建仓库级 runner。它不是已退役的内部 Runner Group 模型。
+- **GitHub Runner Group**：spec 设置了 `runner_group` 时，runnerd 会在该 GitHub Group 中创建组织级 runner；否则创建仓库级 runner。它不是已退役的内部 Runner Group 模型。组织表单说明仓库级默认注册，提供实时组选择器，并生成 `group` + `labels` YAML。创建、修改组及重新启用时会先校验；启动前检查组及精确目标仓库的访问资格。Admin 平台规格面向多个组织，保留手动组名。详见 [GitHub Runner 组](docs/zh/platform-runner-specs.md#github-runner-组)。
 
-> **⚠️ 个人账号注意：** `runner_group` 需要调用组织级 GitHub API。如果仓库属于个人账号（而非组织），必须将 `runner_group` 留**空**，否则 runner 注册会返回 404 错误。
+> **⚠️ 个人账号注意：** `runner_group` 需要调用组织级 GitHub API。如果仓库属于个人账号（而非组织），必须将 `runner_group` 留**空**，否则组织组预检会拒绝启动。
 
 匹配始终遵守 `required_labels ⊆ job_labels ⊆ labels`。迁移后的 Ubuntu 规格保留 `qiniu` 与准确 OS label 的要求，管理员修改目录时也会改变 workflow 契约。启用与公开发布是独立开关。
 
@@ -302,7 +302,7 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | 现象                                                 | 可能原因                                 | 解决方法                                                                           |
 | ---------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------- |
 | Job 一直卡在 **queued**，runnerd 日志无 webhook 记录 | GitHub App 未订阅事件                    | 进入 GitHub App 设置 → 勾选 **Workflow jobs** 事件                                 |
-| `github registration token: status 404`              | 设置了 `runner_group` 但仓库属于个人账号 | 清空 runner spec 中的 `runner_group`，改用仓库级注册                               |
+| `runner_group_permission_denied`（旧版：`github registration token: status 404`） | 无法访问 owner 组织的组，包括个人 owner 或 App 缺少权限 | 个人仓库清空 `runner_group`；组织仓库检查 App 安装及 Self-hosted runners 权限 |
 | 日志中出现 `invalid signature`                       | Webhook secret 不匹配                    | 确保 `github.webhook_secret` 与 GitHub App/仓库 webhook 设置中的 secret 一致       |
 | `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
