@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { runnerRegistrationTargetLabel } from "@/components/runner-registration-utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -11,11 +12,7 @@ type RequestFn = (url: string, options?: RequestInit) => Promise<unknown>
 
 export function RunnerRegistrationTarget({ group = "", organization }: { group?: string; organization?: string }) {
   const { t } = useTranslation()
-  return <span>{group.trim()
-    ? organization
-      ? t("user.organizationRegistration", { organization, group: group.trim() })
-      : t("user.ownerOrganizationRegistration", { group: group.trim() })
-    : t("user.repositoryRegistration")}</span>
+  return <span>{runnerRegistrationTargetLabel(t, group, organization)}</span>
 }
 
 export function GitHubRunnerRegistration({ group, onChange, id, organization, platform = false, request, installationID }: {

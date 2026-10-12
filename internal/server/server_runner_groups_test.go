@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,27 @@ import (
 
 	"github.com/qiniu/ci-runner/internal/state"
 )
+
+func TestRunnerGroupRejectsNonOrganizationScope(t *testing.T) {
+	store := state.New(t.TempDir())
+	if _, err := store.UpsertGitHubInstallationOwner(123, state.GitHubInstallationAccount{GitHubAccountID: 321, AccountType: "User", AccountLogin: "personal"}); err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{store: store}
+	for _, scope := range []state.RunnerProfileScope{
+		{Type: state.AccountScopeTypeAccount, ID: 1},
+		{Type: state.AccountScopeTypeGitHubInstall, ID: 123},
+	} {
+		err := srv.validateScopedRunnerGroup(t.Context(), scope, "Build")
+		if !errors.Is(err, errRunnerGroupScopeNotOrganization) {
+			t.Fatalf("scope=%+v err=%v", scope, err)
+		}
+		status, code, _ := runnerGroupError(err)
+		if status != 400 || code != "runner_group_not_supported" {
+			t.Fatalf("scope=%+v status=%d code=%s", scope, status, code)
+		}
+	}
+}
 
 func TestRunnerGroupLookupErrorContract(t *testing.T) {
 	for _, tc := range []struct {

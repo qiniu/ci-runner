@@ -629,7 +629,7 @@ curl -fsS -b "$COOKIE_JAR" \
 - `template-smoke` 报告运行时根磁盘容量不足：检查新建 Sandbox 的根磁盘容量是否
   达到所选 TOML 中的 `disk_size_mb`。确认 provider 团队的 `DiskMb` 后，按
   [同名原地重建步骤](default-runner-templates.md)处理并重新执行 smoke。
-- registration token 失败：检查 [GitHub App 权限表](../../README.zh.md#所需权限)。未配置 `runner_group` 的 spec 需要 repository `Administration`；配置了 `runner_group` 的 spec 需要 organization `Self-hosted runners`。组查询也需要该组织权限。`runner_group_not_found` 表示组不存在或属于企业继承组；`runner_group_repository_denied` 表示目标仓库无权使用该组。`runner_group_permission_denied`、`runner_group_rate_limited`、`runner_group_timeout` 和 `runner_group_unavailable` 分别表示查询权限、频率、超时和不可用错误，不包含上游正文。表单、YAML 和校验行为见 [GitHub Runner 组](platform-runner-specs.md#github-runner-组)。
+- registration token 失败：检查 [GitHub App 权限表](../../README.zh.md#所需权限)。未配置 `runner_group` 的 spec 需要 repository `Administration`；配置了 `runner_group` 的 spec 需要 organization `Self-hosted runners`。组查询也需要该组织权限。`runner_group_not_supported` 表示作用域不是组织。`runner_group_not_found` 表示组不存在或属于企业继承组；`runner_group_repository_denied` 表示目标仓库无权使用该组。`runner_group_permission_denied`、`runner_group_rate_limited`、`runner_group_timeout` 和 `runner_group_unavailable` 分别表示查询权限、频率、超时和不可用错误，不包含上游正文。表单、YAML 和校验行为见 [GitHub Runner 组](platform-runner-specs.md#github-runner-组)。
 
 ## 9. GitHub Actions 日志怎么看
 

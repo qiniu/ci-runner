@@ -128,31 +128,31 @@ func (c *Client) ValidateRunnerGroup(ctx context.Context, installationID int64, 
 			return err
 		}
 	}
-	groups, err := c.ListOrganizationRunnerGroups(ctx, installationID, organization, "")
-	if err != nil {
-		return err
-	}
-	var selected *RunnerGroup
-	for i := range groups {
-		if strings.EqualFold(groups[i].Name, name) {
-			selected = &groups[i]
-			break
-		}
-	}
-	if selected == nil {
-		return ErrRunnerGroupNotFound
-	}
-	if selected.Inherited {
-		return ErrRunnerGroupInherited
-	}
 	visible, err := c.ListOrganizationRunnerGroups(ctx, installationID, organization, repository)
 	if err != nil {
 		return err
 	}
 	for _, group := range visible {
-		if group.ID == selected.ID && group.Name == selected.Name && !group.Inherited {
+		if strings.EqualFold(group.Name, name) {
+			if group.Inherited {
+				return ErrRunnerGroupInherited
+			}
 			return nil
 		}
 	}
-	return ErrRunnerGroupRepositoryDenied
+	// Only rejected starts need the full catalog to distinguish a missing group
+	// from an existing group that does not allow this repository.
+	groups, err := c.ListOrganizationRunnerGroups(ctx, installationID, organization, "")
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if strings.EqualFold(group.Name, name) {
+			if group.Inherited {
+				return ErrRunnerGroupInherited
+			}
+			return ErrRunnerGroupRepositoryDenied
+		}
+	}
+	return ErrRunnerGroupNotFound
 }

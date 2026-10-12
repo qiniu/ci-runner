@@ -55,14 +55,21 @@ func TestRunnerGroupValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, group, response, visible string
 		want                           error
+		queries                        []string
 	}{
-		{"allowed", "build", `{"id":4,"name":"Build"}`, `{"id":4,"name":"Build"}`, nil},
-		{"missing", "missing", `{"id":4,"name":"Build"}`, `{"id":4,"name":"Build"}`, ErrRunnerGroupNotFound},
-		{"repository denied", "Build", `{"id":4,"name":"Build"}`, "", ErrRunnerGroupRepositoryDenied},
-		{"inherited", "Build", `{"id":4,"name":"Build","inherited":true}`, "", ErrRunnerGroupInherited},
+		{"allowed", "build", `{"id":4,"name":"Build"}`, `{"id":4,"name":"Build"}`, nil, []string{"repo"}},
+		{"missing", "missing", `{"id":4,"name":"Build"}`, `{"id":4,"name":"Build"}`, ErrRunnerGroupNotFound, []string{"repo", ""}},
+		{"repository denied", "Build", `{"id":4,"name":"Build"}`, "", ErrRunnerGroupRepositoryDenied, []string{"repo", ""}},
+		{"inherited", "Build", `{"id":4,"name":"Build","inherited":true}`, "", ErrRunnerGroupInherited, []string{"repo", ""}},
+		{"visible inherited", "Build", "", `{"id":4,"name":"Build","inherited":true}`, ErrRunnerGroupInherited, []string{"repo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				index := int(calls.Add(1)) - 1
+				if index >= len(tc.queries) || r.URL.Query().Get("visible_to_repository") != tc.queries[index] {
+					t.Errorf("unexpected query %d: %s", index, r.URL.RawQuery)
+				}
 				value := tc.response
 				if r.URL.Query().Get("visible_to_repository") != "" {
 					value = tc.visible
@@ -77,6 +84,9 @@ func TestRunnerGroupValidation(t *testing.T) {
 			err := NewClient(ts.URL, ts.Client()).ValidateRunnerGroup(t.Context(), 1, "org/repo", tc.group)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err=%v want %v", err, tc.want)
+			}
+			if int(calls.Load()) != len(tc.queries) {
+				t.Fatalf("calls=%d want %d", calls.Load(), len(tc.queries))
 			}
 		})
 	}
@@ -115,6 +125,29 @@ func TestRunnerGroupValidationResolvesManualAppInstallation(t *testing.T) {
 				t.Fatalf("unexpected dynamic lookups=%d", lookups.Load())
 			}
 		})
+	}
+}
+
+func TestRunnerGroupValidationDoesNotCacheRepositoryAccess(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 || r.URL.Query().Get("visible_to_repository") == "" {
+			fmt.Fprint(w, `{"total_count":1,"runner_groups":[{"id":4,"name":"Build"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"total_count":0,"runner_groups":[]}`)
+	}))
+	defer ts.Close()
+	client := NewClient(ts.URL, ts.Client())
+	if err := client.ValidateRunnerGroup(t.Context(), 1, "org/repo", "Build"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ValidateRunnerGroup(t.Context(), 1, "org/repo", "Build"); !errors.Is(err, ErrRunnerGroupRepositoryDenied) {
+		t.Fatalf("revoked repository access was not rejected: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("calls=%d want 3", calls.Load())
 	}
 }
 

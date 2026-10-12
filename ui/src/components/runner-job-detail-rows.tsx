@@ -5,6 +5,7 @@ import type { RunnerState } from "@/admin-types"
 import { formatTime } from "@/admin-format"
 import type { AppTFunction } from "@/i18n"
 import { workflowRunURL } from "@/components/runner-github-links"
+import { runnerRegistrationTargetLabel } from "@/components/runner-registration-utils"
 
 export type RunnerJobDetailRow = {
   id: string
@@ -22,11 +23,7 @@ export function runnerJobDetailRows(
     { id: "status", label: t("common.status"), value: runnerStatusLabel(job.status, t) },
     { id: "repository", label: t("common.repository"), value: job.repository_full_name },
     { id: "runner_spec", label: t("common.runnerSpec"), value: job.runner_spec_name || t("user.matchedByLabels") },
-    { id: "runner_group", label: t("user.registrationTarget"), value: job.runner_group
-      ? job.repository_full_name?.split("/")[0]
-        ? t("user.organizationRegistration", { organization: job.repository_full_name.split("/")[0], group: job.runner_group })
-        : t("user.ownerOrganizationRegistration", { group: job.runner_group })
-      : t("user.repositoryRegistration") },
+    { id: "runner_group", label: t("user.registrationTarget"), value: runnerRegistrationTargetLabel(t, job.runner_group, job.repository_full_name?.split("/")[0]) },
     { id: "sandbox", label: t("common.sandbox"), value: job.sandbox_id },
     { id: "pid", label: "PID", value: job.process_pid },
     { id: "job", label: t("user.jobName"), value: job.assigned_job_name || job.assigned_job_id || job.workflow_job_id },

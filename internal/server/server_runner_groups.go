@@ -11,9 +11,11 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
+var errRunnerGroupScopeNotOrganization = errors.New("organization scope is required for runner groups")
+
 func (s *Server) organizationRunnerGroups(ctx context.Context, scope state.RunnerProfileScope) (string, []github.RunnerGroup, error) {
 	if scope.Type != state.AccountScopeTypeGitHubInstall {
-		return "", nil, github.ErrRunnerGroupNotFound
+		return "", nil, errRunnerGroupScopeNotOrganization
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -22,7 +24,7 @@ func (s *Server) organizationRunnerGroups(ctx context.Context, scope state.Runne
 		return "", nil, err
 	}
 	if !strings.EqualFold(owner.AccountType, "organization") {
-		return "", nil, github.ErrRunnerGroupNotFound
+		return "", nil, errRunnerGroupScopeNotOrganization
 	}
 	groups, err := s.gh.ListOrganizationRunnerGroups(ctx, scope.ID, owner.AccountLogin, "")
 	if err != nil {
@@ -48,7 +50,7 @@ func (s *Server) handleUserListGitHubRunnerGroups(w http.ResponseWriter, r *http
 		return
 	}
 	if scope.Type != state.AccountScopeTypeGitHubInstall {
-		writeErrorCode(w, http.StatusBadRequest, "runner_group_not_supported", "Runner groups are available only for organization scopes")
+		writeRunnerGroupError(w, errRunnerGroupScopeNotOrganization)
 		return
 	}
 	organization, groups, err := s.organizationRunnerGroups(r.Context(), scope)
@@ -82,6 +84,8 @@ func (s *Server) validateScopedRunnerGroup(ctx context.Context, scope state.Runn
 func runnerGroupError(err error) (int, string, string) {
 	status, hasStatus := github.ErrorStatus(err)
 	switch {
+	case errors.Is(err, errRunnerGroupScopeNotOrganization):
+		return http.StatusBadRequest, "runner_group_not_supported", "Runner groups are available only for organization scopes"
 	case errors.Is(err, github.ErrRunnerGroupNotFound), errors.Is(err, github.ErrRunnerGroupInherited):
 		return http.StatusBadRequest, "runner_group_not_found", "Select an existing organization Runner group that accepts organization runners"
 	case errors.Is(err, github.ErrRunnerGroupRepositoryDenied):
