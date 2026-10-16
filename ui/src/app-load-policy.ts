@@ -1,3 +1,4 @@
+import { githubContextFromPath } from "@/github-context-routes"
 import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
@@ -189,6 +190,8 @@ export function adminPollingResources(section: AdminSection): AdminDataResource[
 
 export function userDataResources(path: string): UserDataResource[] {
   if (isUserJobsRoute(path)) return ["github_app", "runner_requests", "onboarding"]
+  if (path === "/deployments/new") return ["github_app"]
+  if (isDeploymentRoute(path)) return []
   if (path === "/repositories") return ["github_app", "preferences", "onboarding"]
   if (path === "/runner-specs") return []
   if (isAccountSettingsRoute(path)) return ["github_app", "preferences", "onboarding"]
@@ -226,7 +229,8 @@ export function userRunnerRequestsPath(limit: number, offset: number): string {
   return `/user/runner_requests?limit=${limit}&offset=${offset}`
 }
 
-export function appRouteAccess(path: string): AppRouteAccess {
+export function appRouteAccess(path: string, search = ""): AppRouteAccess {
+  if (githubContextFromPath(path) && !githubContextFromPath(path, search)) return "not-found"
   if (path === "/" || isSiteDocumentPath(path)) return "public"
   if (isAdminRoute(path)) return "admin"
   if (isUserRoute(path)) return "user"
@@ -251,6 +255,7 @@ export function signInURL(path: string, search = ""): string {
 export function isUserJobsRoute(path: string): boolean {
   return (
     path === "/jobs" ||
+    (path.endsWith("/jobs") && Boolean(githubContextFromPath(path))) ||
     /^\/github\/(pulls|runs)\/[^/]+\/[^/]+\/[^/]+\/jobs$/.test(path) ||
     /^\/github\/branches\/[^/]+\/[^/]+\/.+\/jobs$/.test(path) ||
     /^\/jobs\/(pulls|runs)\/[^/]+\/[^/]+\/\d+$/.test(path) ||
@@ -290,7 +295,20 @@ function isUserRoute(path: string): boolean {
     isUserJobsRoute(path) ||
     /^\/jobs\/[^/]+$/.test(path) ||
     path === "/repositories" ||
+    isDeploymentRoute(path) ||
     path === "/runner-specs" ||
     isAccountSettingsRoute(path)
   )
+}
+
+export function isDeploymentRoute(path: string): boolean {
+  return path === "/deployments" || /^\/deployments\/[^/]+$/.test(path) || (/\/deployments(?:\/[^/]+)?$/.test(path) && Boolean(githubContextFromPath(path)))
+}
+
+export function deploymentIDFromPath(path: string): string | undefined {
+  if (githubContextFromPath(path)) return path.match(/\/deployments\/([a-zA-Z0-9_-]+)$/)?.[1]
+  if (path === "/deployments/new") return undefined
+  const match = path.match(/^\/deployments\/([^/]+)$/)
+  if (!match) return undefined
+  try { return decodeURIComponent(match[1]) } catch { return match[1] }
 }

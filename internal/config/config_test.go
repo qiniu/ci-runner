@@ -72,6 +72,9 @@ worker:
 	if !cfg.RepositoryAllowed("octo/repo") || cfg.RepositoryAllowed("other/repo") {
 		t.Fatalf("unexpected repository allowlist behavior: %#v", cfg.GitHubAllowedRepositories)
 	}
+	if cfg.DeploymentMaxConcurrent != 3 || cfg.DeploymentRetention.Hours() != 168 {
+		t.Fatalf("unexpected deployment limits: max=%d retention=%s", cfg.DeploymentMaxConcurrent, cfg.DeploymentRetention)
+	}
 }
 
 func TestLoadFileSupportsDynamicGitHubAppInstallation(t *testing.T) {

@@ -1,3 +1,4 @@
+import { githubContextFromPath } from "@/github-context-routes"
 import { ArrowLeft, Github, LoaderCircle, SearchX, ShieldX } from "lucide-react"
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
@@ -172,6 +173,7 @@ function signInURLFromReturnTo(returnTo: string): string {
 }
 
 type ProtectedDestinationKey =
+  | "user.deployments"
   | "auth.pullRequestJobs"
   | "auth.workflowRunJobs"
   | "auth.branchJobs"
@@ -182,6 +184,12 @@ type ProtectedDestinationKey =
   | "auth.jobs"
 
 function protectedDestinationLabel(returnTo: string): ProtectedDestinationKey {
+  const [path, query = ""] = returnTo.split("?")
+  const context = githubContextFromPath(path, query)
+  if (path === "/deployments" || path.startsWith("/deployments/") || (context && /\/deployments(?:\/[^/]+)?$/.test(path))) return "user.deployments"
+  if (context?.kind === "pulls") return "auth.pullRequestJobs"
+  if (context?.kind === "runs") return "auth.workflowRunJobs"
+  if (context?.kind === "branches") return "auth.branchJobs"
   if (returnTo.startsWith("/github/pulls/")) return "auth.pullRequestJobs"
   if (returnTo.startsWith("/github/runs/")) return "auth.workflowRunJobs"
   if (returnTo.startsWith("/github/branches/")) return "auth.branchJobs"

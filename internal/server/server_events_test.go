@@ -26,6 +26,10 @@ func (s *eventStateReadCountingStore) ReadState(id string) (state.RunnerState, e
 func TestUserRunnerEventsMatchesAdminPagination(t *testing.T) {
 	store := &eventStateReadCountingStore{Store: state.New(t.TempDir())}
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.URL.Path != "/user/installations/987/repositories" || r.Header.Get("Authorization") != "Bearer user-token" {
 			t.Errorf("unexpected GitHub authorization request: %s", r.URL.Path)
 		}

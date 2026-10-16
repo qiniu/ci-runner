@@ -572,6 +572,10 @@ func TestManagementEndpointsRequireAdminAuth(t *testing.T) {
 
 func TestUserGitHubAppConfigurationAndRunnerList(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/987":
@@ -753,6 +757,10 @@ func TestUserGitHubAppConfigurationAndRunnerList(t *testing.T) {
 
 func TestUserRunnerAuthorizationUsesRepositoryIntersection(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -872,6 +880,10 @@ func TestUserRunnerAuthorizationUsesRepositoryIntersection(t *testing.T) {
 
 func TestUserRunnerListPagination(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1019,6 +1031,10 @@ func TestUserRunnerAuthorizationRequiresReauthenticationForUnreadableGitHubOAuth
 
 func TestUserRunnerAuthorizationRejectsInvalidGitHubOAuthToken(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1064,6 +1080,10 @@ func TestUserRunnerAuthorizationRejectsInvalidGitHubOAuthToken(t *testing.T) {
 
 func TestUserRunnerAuthorizationDoesNotReauthenticateOnGitHubRateLimit(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1119,6 +1139,10 @@ func TestUserRunnerAuthorizationSkipsInaccessibleInstallation(t *testing.T) {
 	for _, inaccessibleStatus := range []int{http.StatusNotFound, http.StatusForbidden} {
 		t.Run(http.StatusText(inaccessibleStatus), func(t *testing.T) {
 			ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveActiveInstallationFixture(w, r, 654, 987) {
+					return
+				}
+
 				switch r.URL.Path {
 				case "/user/installations/987/repositories":
 					w.WriteHeader(inaccessibleStatus)
@@ -1208,6 +1232,10 @@ func TestUserRunnerAuthorizationCachesNoInstallations(t *testing.T) {
 func TestUserRunnerAuthorizationCachesRepositoryAccess(t *testing.T) {
 	var permissionRequests int
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1262,6 +1290,10 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 	refreshStarted := make(chan struct{})
 	releaseRefresh := make(chan struct{})
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1355,7 +1387,10 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 	var calls int
 	rejected := make(chan struct{})
 	var rejectOnce sync.Once
-	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
 		calls++
 		if calls == 1 {
 			w.Header().Set("Content-Type", "application/json")
@@ -1424,6 +1459,10 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 	releaseStaleRefresh := make(chan struct{})
 	releaseRefresh := func() { release.Do(func() { close(releaseStaleRefresh) }) }
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1523,6 +1562,10 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	releaseStaleRefresh := make(chan struct{})
 	releaseRefresh := func() { release.Do(func() { close(releaseStaleRefresh) }) }
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1610,6 +1653,10 @@ func TestUserRunnerAuthorizationSharedRefreshSurvivesCallerCancellation(t *testi
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1836,6 +1883,10 @@ func TestUserSyncGitHubInstallationsRejectsInvalidOAuthTokenCode(t *testing.T) {
 
 func TestUserRunnerDetailLogAndTerminal(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 		}
@@ -1956,6 +2007,10 @@ func TestUserRunnerDetailLogAndTerminal(t *testing.T) {
 
 func TestUserRunnerSiblings(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/user/installations/987/repositories":
@@ -8689,6 +8744,20 @@ func TestProfileConcurrencyLimitAppliesBeforeCreate(t *testing.T) {
 	}
 }
 
+// Repository fixtures also provide current installation metadata; GitHub's
+// repository response alone does not establish that an installation is active.
+func serveActiveInstallationFixture(w http.ResponseWriter, r *http.Request, ids ...int64) bool {
+	if r.URL.Path != "/user/installations" {
+		return false
+	}
+	items := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, map[string]any{"id": id, "suspended_at": nil})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"installations": items})
+	return true
+}
+
 func newTestServer(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox) *Server {
 	t.Helper()
 	return newTestServerWithLimit(t, store, ghURL, fake, 10)
@@ -9450,7 +9519,9 @@ func testServerPrivateKeyFile(t *testing.T) string {
 
 func waitForState(t *testing.T, store state.Store, id, want string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// Race-enabled SQLite and worker scheduling can exceed two seconds on a
+	// contended host. Keep the wait bounded and return as soon as state matches.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		st, err := store.ReadState(id)
 		if err == nil && st.Status == want {

@@ -169,6 +169,9 @@ describe("app load policy", () => {
     ["/github/branches/octo/repo/deadbeef/jobs", ["github_app", "runner_requests", "onboarding"]],
     ["/jobs/manual/octo/repo/manual-1", ["github_app", "runner_requests", "onboarding"]],
     ["/repositories", ["github_app", "preferences", "onboarding"]],
+    ["/deployments", []],
+    ["/deployments/new", ["github_app"]],
+    ["/deployments/deployment-123", []],
     ["/runner-specs", []],
     ["/account/repositories", ["github_app", "preferences", "onboarding"]],
     ["/organizations/octo/repositories", ["github_app", "preferences", "onboarding"]],
@@ -227,6 +230,12 @@ describe("app load policy", () => {
     expect(appPolicy.appRouteAccess?.("/jobs/job-1")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/github/pulls/octo/repo/12/jobs")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/runner-specs")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/deployments")).toBe("user")
+    expect(appPolicy.appRouteAccess?.("/deployments/new")).toBe("user")
+    expect(appPolicy.deploymentIDFromPath("/deployments/new")).toBeUndefined()
+    expect(appPolicy.appRouteAccess?.("/deployments/deployment-123")).toBe("user")
+    expect(appPolicy.deploymentIDFromPath("/deployments/deployment-123")).toBe("deployment-123")
+    expect(appPolicy.appRouteAccess?.("/deployments/deployment-123/unknown")).toBe("not-found")
     expect(appPolicy.appRouteAccess?.("/account/preferences")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/account/runner-specs")).toBe("user")
     expect(appPolicy.appRouteAccess?.("/organizations/octo/runner-specs")).toBe("user")

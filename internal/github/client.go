@@ -151,13 +151,14 @@ type Runner struct {
 }
 
 type Installation struct {
-	ID            int64    `json:"id"`
-	AccountID     int64    `json:"account_id,omitempty"`
-	AccountType   string   `json:"account_type,omitempty"`
-	AccountLogin  string   `json:"account_login,omitempty"`
-	AccountName   string   `json:"account_name,omitempty"`
-	AccountAvatar string   `json:"account_avatar,omitempty"`
-	Repositories  []string `json:"repositories"`
+	ID            int64      `json:"id"`
+	AccountID     int64      `json:"account_id,omitempty"`
+	AccountType   string     `json:"account_type,omitempty"`
+	AccountLogin  string     `json:"account_login,omitempty"`
+	AccountName   string     `json:"account_name,omitempty"`
+	AccountAvatar string     `json:"account_avatar,omitempty"`
+	Repositories  []string   `json:"repositories"`
+	SuspendedAt   *time.Time `json:"suspended_at,omitempty"`
 }
 
 type Account struct {
@@ -402,6 +403,22 @@ func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, toke
 	if installationID <= 0 {
 		return nil, fmt.Errorf("installation id is required")
 	}
+	// GitHub may return repository membership even while its installation is
+	// suspended. Check current installation metadata before granting access.
+	installations, err := c.ListUserInstallations(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	active := false
+	for _, installation := range installations {
+		if installation.ID == installationID && installation.SuspendedAt == nil {
+			active = true
+			break
+		}
+	}
+	if !active {
+		return nil, &apiError{Operation: "github user installation", StatusCode: http.StatusNotFound, Body: "installation is unavailable"}
+	}
 	nextURL := fmt.Sprintf("%s/user/installations/%d/repositories?per_page=100", c.baseURL, installationID)
 	var repositories []Repository
 	for nextURL != "" {
@@ -475,8 +492,9 @@ func (c *Client) ListUserInstallations(ctx context.Context, token string) ([]Ins
 		}
 		var out struct {
 			Installations []struct {
-				ID      int64 `json:"id"`
-				Account struct {
+				ID          int64      `json:"id"`
+				SuspendedAt *time.Time `json:"suspended_at"`
+				Account     struct {
 					ID        int64  `json:"id"`
 					Type      string `json:"type"`
 					Login     string `json:"login"`
@@ -494,6 +512,7 @@ func (c *Client) ListUserInstallations(ctx context.Context, token string) ([]Ins
 			}
 			installations = append(installations, Installation{
 				ID:            item.ID,
+				SuspendedAt:   item.SuspendedAt,
 				AccountID:     item.Account.ID,
 				AccountType:   normalizeGitHubAccountType(item.Account.Type),
 				AccountLogin:  item.Account.Login,
@@ -1068,6 +1087,163 @@ func (c *Client) GetRepository(ctx context.Context, repositoryFullName string) (
 	return repository, nil
 }
 
+// ListRepositoryRefs returns one bounded page of branch or tag names using the
+// repository's App installation. The caller must authorize user access first.
+func (c *Client) ListRepositoryRefs(ctx context.Context, repositoryFullName, source string, page int) ([]string, bool, error) {
+	repositoryFullName = c.repositoryFullName(repositoryFullName)
+	resource := "branches"
+	if source == "tag" {
+		resource = "tags"
+	} else if source != "branch" {
+		return nil, false, errors.New("invalid repository ref source")
+	}
+	if repositoryFullName == "" || page <= 0 || page > 1000 {
+		return nil, false, errors.New("invalid repository ref request")
+	}
+	requestURL := fmt.Sprintf("%s/repos/%s/%s?per_page=100&page=%d", c.baseURL, repositoryFullName, resource, page)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	setGitHubHeaders(req)
+	resp, err := c.do(req, repositoryFullName)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) > 2<<20 {
+		return nil, false, errors.New("github refs response exceeds limit")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false, &apiError{
+			Operation:          "github repository refs",
+			StatusCode:         resp.StatusCode,
+			Body:               strings.TrimSpace(string(body)),
+			RetryAfter:         resp.Header.Get("Retry-After"),
+			RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining"),
+		}
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, false, err
+	}
+	if len(entries) > 100 {
+		return nil, false, errors.New("github refs page exceeds limit")
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if name := strings.TrimSpace(entry.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, page < 1000 && nextLink(resp.Header.Get("Link")) != "", nil
+}
+
+// ResolveCommit resolves a branch, tag, or commit reference to the full commit SHA.
+// The request uses the App installation selected for the repository.
+func (c *Client) ResolveCommit(ctx context.Context, repositoryFullName, ref string) (string, error) {
+	repositoryFullName = c.repositoryFullName(repositoryFullName)
+	ref = strings.TrimSpace(ref)
+	if repositoryFullName == "" || ref == "" {
+		return "", fmt.Errorf("repository and ref are required")
+	}
+	requestURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.baseURL, repositoryFullName, url.PathEscape(ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return "", err
+	}
+	setGitHubHeaders(req)
+	resp, err := c.do(req, repositoryFullName)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read github commit response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("github commit: status %d", resp.StatusCode)
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(payload.SHA)
+	if len(sha) != 40 || strings.ToLower(sha) != sha {
+		return "", fmt.Errorf("github commit response missing full sha")
+	}
+	if _, err := hex.DecodeString(sha); err != nil {
+		return "", fmt.Errorf("github commit response has invalid sha")
+	}
+	return sha, nil
+}
+
+// ReadRepositoryFile reads a bounded file from an immutable repository commit.
+func (c *Client) ReadRepositoryFile(ctx context.Context, repositoryFullName, filePath, commitSHA string, maxBytes int64) ([]byte, error) {
+	repositoryFullName = c.repositoryFullName(repositoryFullName)
+	filePath = strings.Trim(strings.TrimSpace(filePath), "/")
+	commitSHA = strings.TrimSpace(commitSHA)
+	if repositoryFullName == "" || filePath == "" || commitSHA == "" || maxBytes <= 0 {
+		return nil, fmt.Errorf("repository, file path, commit, and byte limit are required")
+	}
+	requestURL := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", c.baseURL, repositoryFullName, strings.ReplaceAll(url.PathEscape(filePath), "+", "%20"), url.QueryEscape(commitSHA))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	setGitHubHeaders(req)
+	resp, err := c.do(req, repositoryFullName)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	// The Contents API wraps the base64 payload in JSON, so allow a bounded
+	// envelope while still keeping the decoded file limit authoritative.
+	// Reading one extra byte lets callers distinguish a truncated response.
+	jsonLimit := maxBytes + maxBytes/2 + 8<<10 + 1
+	if jsonLimit < maxBytes || jsonLimit <= 0 {
+		return nil, fmt.Errorf("github repository file byte limit is too large")
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, jsonLimit))
+	if err != nil {
+		return nil, fmt.Errorf("read github file response: %w", err)
+	}
+	if int64(len(body)) >= jsonLimit {
+		return nil, fmt.Errorf("github repository file response exceeds byte limit")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github repository file: status %d", resp.StatusCode)
+	}
+	var payload struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Type != "file" || payload.Encoding != "base64" {
+		return nil, fmt.Errorf("github repository path is not a regular file")
+	}
+	content, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(payload.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("decode github repository file: %w", err)
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, fmt.Errorf("github repository file exceeds byte limit")
+	}
+	return content, nil
+}
+
 func (c *Client) GetRepositoryCollaboratorPermission(ctx context.Context, repositoryFullName, username string) (CollaboratorPermission, error) {
 	startedAt := time.Now()
 	result := "error"
@@ -1505,6 +1681,7 @@ type PullRequest struct {
 }
 
 type PullRequestRef struct {
+	SHA        string     `json:"sha"`
 	Ref        string     `json:"ref"`
 	Repository Repository `json:"repo"`
 }

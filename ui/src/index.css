@@ -55,6 +55,14 @@ samp {
   font-family: var(--font-mono) !important;
 }
 
+.deployment-console {
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Noto Sans Mono CJK SC', 'Microsoft YaHei', monospace;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
 .brand-home {
   font-family: var(--font-sans);
 }

@@ -331,3 +331,74 @@ Workflow 完成后确认：
 自定义 specs。回滚时不要删除公共模板或自定义 specs。
 
 如果部署说明包含 private hosts、account names、channel URLs、secrets 或 cookie data，请记录在仓库外部。
+
+## 9. Sandbox Deploy 验收
+
+使用真实私有仓库、GitHub App Installation、可用的独立 Deploy 模板，以及账号或
+组织 Sandbox 配置执行本节。开始前确认 App 具有仓库 Contents 读取权限。仓库成员可以部署；
+管理组织设置与私有模板目录需要 Members 读取权限和 active owner membership。生成的 ID 和时间戳只记录在仓库外部的验收
+记录中。
+
+1. 在已知 Commit 写入 `.qiniu/deploy.yaml`，从 branch 发起手动部署，确认 API 保存完整
+   SHA、不可变 spec hash、一小时默认 TTL（或限定范围内的请求 TTL），且响应不含命令或凭证。
+2. 确认部署进入 `running`，HTTPS endpoint 的 health path 可访问，响应包含
+   `endpoint_access: public`；UI 应提示该地址没有应用层鉴权。
+   对 Vite preview，确认原仓库无需修改，启动时传入当前 Sandbox 的精确域名，保留 Host 校验，
+   不使用通配符白名单。主动启用的公开 worker 验证命令见 [Testing](testing.md#sandbox-deploy-验证)。
+3. 确认源 GitHub Job 和 Runner 清理完成后服务仍可访问；Deploy 不得注册 GitHub Runner。
+   [Testing](testing.md#sandbox-deploy-验证) 中可选的 CI Run／attempt 验收要求实际观察
+   相同 Commit 的并行运行，并由 Provider 确认 Runner 清理。
+4. 使用同一个 `Idempotency-Key` 重复提交，并人为制造 provider 创建超时。确认系统按精确的
+   `qiniu-deployd` metadata 补偿查询，重试不会创建第二个 Sandbox。
+   [Testing](testing.md#sandbox-deploy-验证) 中主动启用的 `create-timeout` worker 子测试
+   可重复验证真实资源创建响应丢失及首次查询不可用的恢复。`TestDeploymentLivePublicAPI`
+   则针对已运行的本地 runnerd 验证并发认证提交、终态重放、DELETE 与配额释放，命令见同一 Testing 小节。
+   补偿清理成功后，部署及版本必须保留原始失败阶段与原因。
+5. 服务运行期间重启 runnerd，确认恢复相同 Sandbox ID、runtime process tag、endpoint 和
+   到期时间；旧 attempt 回调不能修改当前部署。
+6. 分别执行 stop、DELETE、TTL 到期和启动失败，确认 provider 证据最终表明 Sandbox 已释放；
+   清理失败保持可见并继续重试。主动启用的 `start-failure` worker 模式以退出码 23 的
+   合成启动计划验证真实资源清理。
+7. 验证匿名用户与没有精确 Installation＋仓库权限的用户不能读取或修改部署。有相同仓库
+   权限的其他成员应能查看历史／日志，以及创建、重新部署、停止和删除。OAuth 缺失或被拒绝
+   时失败关闭；热缓存读取复用 Jobs 授权。确认成员只能选择公共模板，私有目录和 Sandbox
+   设置仍由 owner 管理；检查 revision 执行凭据与每个用户的终端隔离。
+   经 owner 明确批准后临时暂停并恢复测试 Installation：30 秒缓存到期后，仓库列表应
+   排除它，详情／日志／操作应拒绝访问，即使 GitHub 仍返回其仓库。恢复后确认可以重新
+   访问；将此证据与单仓库移除、OAuth Token 撤销分别记录。
+   经账号明确批准后，独立撤销该本地 App 当前 OAuth Token，等待缓存到期，确认 Jobs／
+   Deploy 的读取与操作返回 `403 / REAUTH_REQUIRED`；正常浏览器 OAuth 应恢复有效
+   Token，回到原详情且保留历史。
+   创建足够的活动部署后应收到
+   `429 deployment_quota_exceeded`；释放一个后准入恢复。超过保留期后终态部署行／事件应清理，
+   审计证据仍保留。
+
+2026-10-14 的公开 API、启动失败与保留期加速验收结果见
+[部署配置](deployment.md#实现迭代方案)。保留期仅修改一个已结束测试记录的时间戳，
+并非自然等待七天。
+
+分别记录本地单元／集成检查、浏览器/UI 检查和真实 Sandbox provider 运行三类证据。Local fake
+和 preview fixture 不能替代本节验收。
+
+
+在真实浏览器中确认 `/deployments` 只展示列表及“创建部署”链接，点击进入
+`/deployments/new` 并刷新，确认只展示表单。列表页不读取表单目录，创建页不读取历史。
+切换“版本来源”的分支／Tag，确认加载对应的真实引用列表，再选择当前
+scope 的可用模板。引用为空或加载失败时不能提交旧版本，并可刷新重试。
+创建部署后确认跳转到仓库／PR 上下文中的 `/deployments/{id}` 详情路径，ID 不放在查询参数中。
+在执行中和就绪后刷新该地址，必须保留同一部署及阶段、stdout／stderr 日志。验证更早日志
+分页和事件读取失败时保留历史。缺少模板或作用域凭据时，创建应被拒绝并给出可操作提示。
+幂等重放和重试必须保留所选模板 ID。
+
+部署版本验证需覆盖首次 #1、新版与审计原子提交及回滚、旧版状态保留、版本内游标分页、旧版迟到输出拒绝、旧 SQLite 重复升级、Postgres/MySQL 迁移及事务、URL 版本恢复与迟到响应隔离。确认窄屏下历史和日志上下排列，读取无需 Provider 请求。
+
+指定公开 fork PR 时，使用 [Testing](testing.md#sandbox-deploy-验证) 的真实 API 验收参数，
+指定仓库、来源、Commit 和 HTML 标记。推进 PR head 后部署历史完整 SHA，核对保存的 fork
+身份、旧版页面内容及 DELETE 后的 Provider 资源不存在。真实 GitHub 权限撤销、私有仓库
+Contents 权限及第二个用户的访问保持独立验收。
+
+对已有 PR 部署，还需核对真实标题及分支／PR／Tag 的 GitHub 链接。
+[Testing](testing.md#sandbox-deploy-验证) 中主动启用的
+`TestDeploymentLivePullRequestMetadata` 检查认证元数据、匿名拒绝与生命周期保留，
+不创建或停止 Sandbox；它可能回填旧记录缺失的标题。API 证据应与已登录 Chrome 的
+页面渲染、OAuth 过期及回跳验证分别记录；临时签名会话不证明浏览器登录成功。

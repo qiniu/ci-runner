@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,11 +17,37 @@ const workflowJobLookupTimeout = 5 * time.Second
 func (s *Server) startBackgroundLoops() {
 	s.startOnce.Do(func() {
 		s.logger.Info("starting background loops", "worker_id", s.workerID, "max_concurrent_runners", s.cfg.MaxConcurrentRunners)
-		s.loopWG.Add(3)
+		loopCount := 4
+		s.loopWG.Add(loopCount)
 		go s.workerLoop(s.loopCtx)
 		go s.sweeperLoop(s.loopCtx)
 		go s.reconcilerLoop(s.loopCtx)
+		go s.deploymentLoop(s.loopCtx)
 	})
+}
+
+func (s *Server) deploymentLoop(ctx context.Context) {
+	defer s.loopWG.Done()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-s.deploymentNotify:
+		}
+		if err := s.deploymentWorker.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			s.logger.Error("process deployments", "error", err)
+		}
+	}
+}
+
+func (s *Server) signalDeployments() {
+	select {
+	case s.deploymentNotify <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Server) workerLoop(ctx context.Context) {

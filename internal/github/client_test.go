@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -850,6 +851,55 @@ func TestListUserInstallationsUsesOAuthToken(t *testing.T) {
 	}
 }
 
+func TestUserInstallationRepositoryAccessRequiresActiveInstallation(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		metadata         string
+		metadataStatus   int
+		wantStatus       int
+		wantRepositories bool
+	}{
+		{"active", `{"installations":[{"id":987,"suspended_at":null}]}`, 200, 0, true},
+		{"suspended", `{"installations":[{"id":987,"suspended_at":"2026-10-16T07:10:00Z"}]}`, 200, 404, false},
+		{"unavailable", `{"installations":[{"id":988,"suspended_at":null}]}`, 200, 404, false},
+		{"rejected_token", `{"message":"Bad credentials"}`, 401, 401, false},
+		{"rate_limit", `{"message":"rate limit"}`, 429, 429, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var repositoryCalls int
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer user-token" {
+					t.Error("authorization must use the user token")
+				}
+				switch r.URL.Path {
+				case "/user/installations":
+					w.WriteHeader(tc.metadataStatus)
+					fmt.Fprint(w, tc.metadata)
+				case "/user/installations/987/repositories":
+					repositoryCalls++
+					// GitHub still returns repositories while the installation is suspended.
+					fmt.Fprint(w, `{"repositories":[{"id":42,"full_name":"acme/project"}]}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer api.Close()
+			client := NewClient(api.URL, api.Client())
+			repositories, err := client.ListUserInstallationRepositoryDetails(t.Context(), "user-token", 987)
+			if tc.wantRepositories {
+				if err != nil || len(repositories) != 1 || repositories[0].ID != 42 || repositoryCalls != 1 {
+					t.Fatalf("active access: repositories=%v err=%v calls=%d", repositories, err, repositoryCalls)
+				}
+			} else {
+				status, ok := ErrorStatus(err)
+				if !ok || status != tc.wantStatus || len(repositories) != 0 || repositoryCalls != 0 {
+					t.Fatalf("denied access: status=%d err=%v repositories=%v calls=%d", status, err, repositories, repositoryCalls)
+				}
+			}
+		})
+	}
+}
+
 func TestListUserInstallationsReturnsStructuredAPIError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations" {
@@ -901,6 +951,10 @@ func TestListUserOrganizationMembershipsUsesOAuthToken(t *testing.T) {
 
 func TestListUserInstallationRepositoriesUsesOAuthToken(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}
@@ -927,6 +981,10 @@ func TestListUserInstallationRepositoriesUsesOAuthToken(t *testing.T) {
 
 func TestListUserInstallationRepositoryDetailsPreservesSourceMetadata(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}
@@ -945,8 +1003,59 @@ func TestListUserInstallationRepositoryDetailsPreservesSourceMetadata(t *testing
 	}
 }
 
+func TestResolveCommitUsesRepositoryRefAndValidatesFullSHA(t *testing.T) {
+	const wantSHA = "0123456789abcdef0123456789abcdef01234567"
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Query().Get("unexpected") != "" {
+			t.Fatal("unexpected query parameter")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"sha":"`+wantSHA+`"}`)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	sha, err := client.ResolveCommit(t.Context(), "owner/repo", "feature/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha != wantSHA || gotPath != "/repos/owner/repo/commits/feature/test" {
+		t.Fatalf("resolved commit=%q path=%q", sha, gotPath)
+	}
+}
+
+func TestReadRepositoryFileDecodesAndBoundsContentsResponse(t *testing.T) {
+	content := []byte("version: 1\nstart_command: ./server\n")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/contents/.qiniu/deploy.yaml" || r.URL.Query().Get("ref") != strings.Repeat("a", 40) {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"type":"file","encoding":"base64","content":%q}`, base64.StdEncoding.EncodeToString(content))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	got, err := client.ReadRepositoryFile(t.Context(), "owner/repo", "/.qiniu/deploy.yaml/", strings.Repeat("a", 40), int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("decoded content=%q", got)
+	}
+	if _, err := client.ReadRepositoryFile(t.Context(), "owner/repo", ".qiniu/deploy.yaml", strings.Repeat("a", 40), int64(len(content)-1)); err == nil {
+		t.Fatal("expected decoded content limit error")
+	}
+}
+
 func TestListUserInstallationRepositoriesClassifiesRateLimitResponse(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}
@@ -988,6 +1097,10 @@ func TestRateLimitHelpersHandleWrappedAPIError(t *testing.T) {
 func TestListUserInstallationRepositoriesFollowsPagination(t *testing.T) {
 	var ts *httptest.Server
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+
 		if r.Method != http.MethodGet || r.URL.Path != "/user/installations/987/repositories" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}
@@ -1017,6 +1130,18 @@ func TestListUserInstallationRepositoriesFollowsPagination(t *testing.T) {
 	}
 }
 
+func serveActiveInstallationFixture(w http.ResponseWriter, r *http.Request, ids ...int64) bool {
+	if r.URL.Path != "/user/installations" {
+		return false
+	}
+	items := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, map[string]any{"id": id, "suspended_at": nil})
+	}
+	json.NewEncoder(w).Encode(map[string]any{"installations": items})
+	return true
+}
+
 func testPrivateKeyFile(t *testing.T) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1032,4 +1157,36 @@ func testPrivateKeyFile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestRepositoryRefsBranchesTagsAndPagination(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("per_page") != "100" || r.URL.Query().Get("page") != "2" {
+			t.Errorf("bounded pagination: %s", r.URL.String())
+		}
+		switch r.URL.Path {
+		case "/repos/owner/repo/branches":
+			w.Header().Set("Link", `<https://api.github.com/repos/owner/repo/branches?page=3>; rel="next"`)
+			fmt.Fprint(w, `[{"name":"feature/vite"}]`)
+		case "/repos/owner/repo/tags":
+			fmt.Fprint(w, `[{"name":"v1.0"}]`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	client := NewClient(api.URL, http.DefaultClient)
+	for _, tc := range []struct {
+		source, name string
+		more         bool
+	}{{"branch", "feature/vite", true}, {"tag", "v1.0", false}} {
+		names, more, err := client.ListRepositoryRefs(t.Context(), "owner/repo", tc.source, 2)
+		if err != nil || len(names) != 1 || names[0] != tc.name || more != tc.more {
+			t.Fatalf("%s refs=%v more=%v err=%v", tc.source, names, more, err)
+		}
+	}
+	if _, _, err := client.ListRepositoryRefs(t.Context(), "owner/repo", "commit", 1); err == nil {
+		t.Fatal("accepted unsupported source")
+	}
 }

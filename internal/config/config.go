@@ -11,42 +11,47 @@ import (
 )
 
 type Config struct {
-	HTTPAddr                  string
-	HTTPReadTimeout           time.Duration
-	HTTPWriteTimeout          time.Duration
-	HTTPIdleTimeout           time.Duration
-	StateDir                  string
-	StateBackend              string
-	StateDatabaseDSN          Secret
-	GitHubAppID               int64
-	GitHubAppInstallationID   int64
-	GitHubAppSlug             string
-	GitHubAppPrivateKeyFile   string
-	GitHubToken               Secret
-	GitHubBasicAuthUsername   string
-	GitHubBasicAuthPassword   Secret
-	GitHubWebhookSecret       Secret
-	GitHubAllowedRepositories []string
-	AuthSessionSecret         Secret
-	AuthEncryptionKey         Secret
-	AuthSessionTTL            time.Duration
-	GitHubOAuthClientID       string
-	GitHubOAuthClientSecret   Secret
-	GitHubOAuthRedirectURL    string
-	SandboxTimeout            time.Duration
-	SandboxCreateTimeout      time.Duration
-	SandboxStopTimeout        time.Duration
-	RecoveryTimeout           time.Duration
-	WorkerLeaseTTL            time.Duration
-	RunnerIdleTimeout         time.Duration
-	RetryBaseDelay            time.Duration
-	RetryMaxDelay             time.Duration
-	RetryMaxAttempts          int
-	MaxConcurrentRunners      int
-	GitHubAPIBaseURL          string
-	ConfigPath                string
-	SandboxRegions            []SandboxRegionConfig
-	CacheSTSEndpoint          string
+	HTTPAddr                     string
+	HTTPReadTimeout              time.Duration
+	HTTPWriteTimeout             time.Duration
+	HTTPIdleTimeout              time.Duration
+	StateDir                     string
+	StateBackend                 string
+	StateDatabaseDSN             Secret
+	GitHubAppID                  int64
+	GitHubAppInstallationID      int64
+	GitHubAppSlug                string
+	GitHubAppPrivateKeyFile      string
+	GitHubToken                  Secret
+	GitHubBasicAuthUsername      string
+	GitHubBasicAuthPassword      Secret
+	GitHubWebhookSecret          Secret
+	GitHubAllowedRepositories    []string
+	AuthSessionSecret            Secret
+	AuthEncryptionKey            Secret
+	AuthSessionTTL               time.Duration
+	GitHubOAuthClientID          string
+	GitHubOAuthClientSecret      Secret
+	GitHubOAuthRedirectURL       string
+	SandboxTimeout               time.Duration
+	SandboxCreateTimeout         time.Duration
+	SandboxStopTimeout           time.Duration
+	RecoveryTimeout              time.Duration
+	WorkerLeaseTTL               time.Duration
+	RunnerIdleTimeout            time.Duration
+	RetryBaseDelay               time.Duration
+	RetryMaxDelay                time.Duration
+	RetryMaxAttempts             int
+	MaxConcurrentRunners         int
+	GitHubAPIBaseURL             string
+	ConfigPath                   string
+	SandboxRegions               []SandboxRegionConfig
+	CacheSTSEndpoint             string
+	DeploymentTemplateID         string
+	DeploymentWorkRoot           string
+	DeploymentMaxConcurrent      int
+	DeploymentRetention          time.Duration
+	DeploymentAllowAdminFallback bool
 }
 
 type SandboxRegionConfig struct {
@@ -115,6 +120,13 @@ type fileConfig struct {
 	Cache struct {
 		STSEndpoint string `yaml:"sts_endpoint"`
 	} `yaml:"cache"`
+	Deploy struct {
+		TemplateID            string `yaml:"template_id"`
+		WorkRoot              string `yaml:"work_root"`
+		MaxConcurrentPerScope int    `yaml:"max_concurrent_per_scope"`
+		RetentionHours        int    `yaml:"retention_hours"`
+		AllowAdminFallback    bool   `yaml:"allow_admin_fallback"`
+	} `yaml:"deploy"`
 }
 
 const (
@@ -169,41 +181,46 @@ func LoadFile(path string) (Config, error) {
 	}
 	configDir := filepath.Dir(path)
 	cfg := Config{
-		HTTPAddr:                  defaultString(raw.Server.HTTPAddr, ":25500"),
-		HTTPReadTimeout:           durationSeconds(raw.Server.ReadTimeoutSec, 15),
-		HTTPWriteTimeout:          durationSeconds(raw.Server.WriteTimeoutSec, 60),
-		HTTPIdleTimeout:           durationSeconds(raw.Server.IdleTimeoutSec, 120),
-		StateBackend:              strings.ToLower(defaultString(raw.Database.Backend, "sqlite")),
-		StateDatabaseDSN:          defaultSecret(raw.Database.DSN, raw.Database.LegacyURL),
-		GitHubAppID:               raw.GitHub.App.ID,
-		GitHubAppInstallationID:   raw.GitHub.App.InstallationID,
-		GitHubAppSlug:             strings.TrimSpace(raw.GitHub.App.Slug),
-		GitHubAppPrivateKeyFile:   resolveConfigPath(configDir, raw.GitHub.App.PrivateKeyFile),
-		GitHubToken:               raw.GitHub.Token,
-		GitHubBasicAuthUsername:   raw.GitHub.BasicAuth.Username,
-		GitHubBasicAuthPassword:   raw.GitHub.BasicAuth.Password,
-		GitHubWebhookSecret:       raw.GitHub.WebhookSecret,
-		GitHubAllowedRepositories: normalizePatterns(raw.GitHub.AllowedRepositories),
-		AuthEncryptionKey:         Secret(strings.TrimSpace(raw.Auth.EncryptionKey.Value())),
-		AuthSessionSecret:         Secret(strings.TrimSpace(raw.Auth.SessionSecret.Value())),
-		AuthSessionTTL:            durationHours(raw.Auth.SessionTTLHours, 12),
-		GitHubOAuthClientID:       strings.TrimSpace(raw.GitHub.OAuth.ClientID),
-		GitHubOAuthClientSecret:   Secret(strings.TrimSpace(raw.GitHub.OAuth.ClientSecret.Value())),
-		GitHubOAuthRedirectURL:    strings.TrimSpace(raw.GitHub.OAuth.RedirectURL),
-		SandboxTimeout:            durationSeconds(raw.Sandbox.TimeoutSec, 3600),
-		SandboxCreateTimeout:      durationSeconds(raw.Sandbox.CreateTimeoutSec, 120),
-		SandboxStopTimeout:        durationSeconds(raw.Sandbox.StopTimeoutSec, 30),
-		RecoveryTimeout:           durationSeconds(raw.Worker.RecoveryTimeoutSec, 120),
-		WorkerLeaseTTL:            durationSeconds(raw.Worker.LeaseTTLSec, 300),
-		RunnerIdleTimeout:         durationSeconds(raw.Worker.RunnerIdleTimeoutSec, 300),
-		RetryBaseDelay:            durationSeconds(raw.Worker.RetryBaseDelaySec, 15),
-		RetryMaxDelay:             durationSeconds(raw.Worker.RetryMaxDelaySec, 300),
-		RetryMaxAttempts:          defaultInt(raw.Worker.RetryMaxAttempts, 5),
-		MaxConcurrentRunners:      defaultInt(raw.Worker.MaxConcurrentRunners, 100),
-		GitHubAPIBaseURL:          defaultString(raw.GitHub.APIBaseURL, defaultGitHubAPIBaseURL),
-		ConfigPath:                path,
-		SandboxRegions:            raw.Sandbox.Regions,
-		CacheSTSEndpoint:          defaultString(raw.Cache.STSEndpoint, defaultCacheSTSEndpoint),
+		HTTPAddr:                     defaultString(raw.Server.HTTPAddr, ":25500"),
+		HTTPReadTimeout:              durationSeconds(raw.Server.ReadTimeoutSec, 15),
+		HTTPWriteTimeout:             durationSeconds(raw.Server.WriteTimeoutSec, 60),
+		HTTPIdleTimeout:              durationSeconds(raw.Server.IdleTimeoutSec, 120),
+		StateBackend:                 strings.ToLower(defaultString(raw.Database.Backend, "sqlite")),
+		StateDatabaseDSN:             defaultSecret(raw.Database.DSN, raw.Database.LegacyURL),
+		GitHubAppID:                  raw.GitHub.App.ID,
+		GitHubAppInstallationID:      raw.GitHub.App.InstallationID,
+		GitHubAppSlug:                strings.TrimSpace(raw.GitHub.App.Slug),
+		GitHubAppPrivateKeyFile:      resolveConfigPath(configDir, raw.GitHub.App.PrivateKeyFile),
+		GitHubToken:                  raw.GitHub.Token,
+		GitHubBasicAuthUsername:      raw.GitHub.BasicAuth.Username,
+		GitHubBasicAuthPassword:      raw.GitHub.BasicAuth.Password,
+		GitHubWebhookSecret:          raw.GitHub.WebhookSecret,
+		GitHubAllowedRepositories:    normalizePatterns(raw.GitHub.AllowedRepositories),
+		AuthEncryptionKey:            Secret(strings.TrimSpace(raw.Auth.EncryptionKey.Value())),
+		AuthSessionSecret:            Secret(strings.TrimSpace(raw.Auth.SessionSecret.Value())),
+		AuthSessionTTL:               durationHours(raw.Auth.SessionTTLHours, 12),
+		GitHubOAuthClientID:          strings.TrimSpace(raw.GitHub.OAuth.ClientID),
+		GitHubOAuthClientSecret:      Secret(strings.TrimSpace(raw.GitHub.OAuth.ClientSecret.Value())),
+		GitHubOAuthRedirectURL:       strings.TrimSpace(raw.GitHub.OAuth.RedirectURL),
+		SandboxTimeout:               durationSeconds(raw.Sandbox.TimeoutSec, 3600),
+		SandboxCreateTimeout:         durationSeconds(raw.Sandbox.CreateTimeoutSec, 120),
+		SandboxStopTimeout:           durationSeconds(raw.Sandbox.StopTimeoutSec, 30),
+		RecoveryTimeout:              durationSeconds(raw.Worker.RecoveryTimeoutSec, 120),
+		WorkerLeaseTTL:               durationSeconds(raw.Worker.LeaseTTLSec, 300),
+		RunnerIdleTimeout:            durationSeconds(raw.Worker.RunnerIdleTimeoutSec, 300),
+		RetryBaseDelay:               durationSeconds(raw.Worker.RetryBaseDelaySec, 15),
+		RetryMaxDelay:                durationSeconds(raw.Worker.RetryMaxDelaySec, 300),
+		RetryMaxAttempts:             defaultInt(raw.Worker.RetryMaxAttempts, 5),
+		MaxConcurrentRunners:         defaultInt(raw.Worker.MaxConcurrentRunners, 100),
+		GitHubAPIBaseURL:             defaultString(raw.GitHub.APIBaseURL, defaultGitHubAPIBaseURL),
+		ConfigPath:                   path,
+		SandboxRegions:               raw.Sandbox.Regions,
+		CacheSTSEndpoint:             defaultString(raw.Cache.STSEndpoint, defaultCacheSTSEndpoint),
+		DeploymentTemplateID:         strings.TrimSpace(raw.Deploy.TemplateID),
+		DeploymentWorkRoot:           strings.TrimSpace(raw.Deploy.WorkRoot),
+		DeploymentMaxConcurrent:      defaultInt(raw.Deploy.MaxConcurrentPerScope, 3),
+		DeploymentRetention:          durationHours(raw.Deploy.RetentionHours, 168),
+		DeploymentAllowAdminFallback: raw.Deploy.AllowAdminFallback,
 	}
 	if cfg.StateBackend == "sqlite" {
 		if strings.TrimSpace(cfg.StateDatabaseDSN.Value()) == "" {
@@ -212,6 +229,18 @@ func LoadFile(path string) (Config, error) {
 			cfg.StateDatabaseDSN = Secret(resolveConfigPath(configDir, cfg.StateDatabaseDSN.Value()))
 		}
 		cfg.StateDir = filepath.Dir(cfg.StateDatabaseDSN.Value())
+	}
+	if strings.TrimSpace(cfg.DeploymentWorkRoot) == "" {
+		baseDir := cfg.StateDir
+		if strings.TrimSpace(baseDir) == "" {
+			baseDir = filepath.Join(configDir, "var")
+		}
+		cfg.DeploymentWorkRoot = filepath.Join(baseDir, "deployments")
+		if absolute, err := filepath.Abs(cfg.DeploymentWorkRoot); err == nil {
+			cfg.DeploymentWorkRoot = absolute
+		}
+	} else {
+		cfg.DeploymentWorkRoot = resolveConfigPath(configDir, cfg.DeploymentWorkRoot)
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -305,6 +334,18 @@ func (c Config) validate() error {
 	}
 	if c.RetryMaxAttempts < 1 {
 		return fmt.Errorf("invalid config worker.retry_max_attempts: must be >= 1")
+	}
+	if len(c.DeploymentTemplateID) > 256 || strings.ContainsAny(c.DeploymentTemplateID, "\r\n") {
+		return fmt.Errorf("invalid config deploy.template_id")
+	}
+	if strings.TrimSpace(c.DeploymentWorkRoot) == "" || !filepath.IsAbs(c.DeploymentWorkRoot) {
+		return fmt.Errorf("invalid config deploy.work_root")
+	}
+	if c.DeploymentMaxConcurrent < 1 || c.DeploymentMaxConcurrent > 1000 {
+		return fmt.Errorf("invalid config deploy.max_concurrent_per_scope: must be between 1 and 1000")
+	}
+	if c.DeploymentRetention < 24*time.Hour || c.DeploymentRetention > 365*24*time.Hour {
+		return fmt.Errorf("invalid config deploy.retention_hours: must be between 24 and 8760")
 	}
 	return nil
 }

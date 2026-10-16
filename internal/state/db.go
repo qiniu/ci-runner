@@ -170,6 +170,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	}
 	models = append(
 		models,
+		&deploymentRecord{},
+		&deploymentRevisionRecord{},
+		&deploymentEventRecord{},
 		&auditEventRecord{},
 		&accountRecord{},
 		&oauthIdentityRecord{},
@@ -191,6 +194,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 		models = append([]any{&runnerRequestRecord{}}, models...)
 	}
 	if err := db.AutoMigrate(models...); err != nil {
+		return err
+	}
+	if err := backfillDeploymentRevisions(db); err != nil {
 		return err
 	}
 	if err := migrateRunnerProfilePolicies(db); err != nil {

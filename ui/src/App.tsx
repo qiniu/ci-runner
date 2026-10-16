@@ -1,4 +1,6 @@
-import { lazy, Suspense, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { readableQuery } from "@/url-query"
+import { githubContextFromPath, githubContextPath } from "@/github-context-routes"
+import { lazy, Suspense, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -51,6 +53,7 @@ import {
   adminRunnerRequestPageSize,
   adminRunnerRequestsPath,
   appRouteAccess,
+  isDeploymentRoute,
   authRouteViewState,
   collectAdminRunnerPoll,
   createLatestUserLoadGate,
@@ -208,6 +211,9 @@ function App() {
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
   const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
   const currentAccount = authSession.login ?? ""
+  const requestAccountRef = useRef(currentAccount)
+  // Child effects may start requests immediately after an account switch.
+  useLayoutEffect(() => { requestAccountRef.current = currentAccount }, [currentAccount])
   const currentGithubApp = githubAppLoad?.account === currentAccount ? githubApp : null
   const userPreferences = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.value : null
   const userPreferencesScope = scopedUserPreferences?.account === currentAccount ? scopedUserPreferences.scope : ""
@@ -278,14 +284,21 @@ function App() {
     window.history.replaceState(null, "", nextPath)
   }, [])
 
-  const setUserPage = useCallback((next: "home" | "repositories" | "runner-specs" | "settings") => {
-    const nextPath = next === "settings" ? "/account/preferences" : next === "repositories" ? "/repositories" : next === "runner-specs" ? "/runner-specs" : userJobsPath(userSelectedKey)
+  const setUserPage = useCallback((next: "home" | "repositories" | "runner-specs" | "deployments" | "settings") => {
+    const nextPath = next === "settings" ? "/account/preferences" : next === "repositories" ? "/repositories" : next === "runner-specs" ? "/runner-specs" : next === "deployments" ? "/deployments" : userJobsPath(userSelectedKey)
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
     }
     setLocationPath(window.location.pathname)
     setLocationSearch(window.location.search)
   }, [userSelectedKey])
+
+  const openDeployment = useCallback((id: string | null) => {
+    const nextPath = id ? `/deployments/${encodeURIComponent(id)}` : "/deployments"
+    if (window.location.pathname !== nextPath) window.history.pushState(null, "", nextPath)
+    setLocationPath(window.location.pathname)
+    setLocationSearch(window.location.search)
+  }, [])
 
   const setRepositoryAccount = useCallback(
     (accountLogin: string | undefined) => {
@@ -344,7 +357,7 @@ function App() {
   )
 
   const hasAccess = authSession.authenticated && authSession.role === "admin"
-  const routeAccess = appRouteAccess(locationPath)
+  const routeAccess = appRouteAccess(locationPath, locationSearch)
   const isAdminRoute = routeAccess === "admin"
   const userJobID = userJobIDFromPath(locationPath)
   const userSelectedJobID = userJobIDFromSearch(locationSearch)
@@ -363,6 +376,8 @@ function App() {
   )
   const userPage = locationPath === "/runner-specs"
     ? "runner-specs"
+    : isDeploymentRoute(locationPath)
+      ? "deployments"
     : selectedRepositoryAccountLogin
       ? "repositories"
       : accountSettingsRoute
@@ -374,8 +389,15 @@ function App() {
     [runnerRequestMetrics, t],
   )
 
+  const refreshGitHubOAuthLogin = useCallback(() => {
+    const returnTo = window.location.pathname + window.location.search
+    window.location.href = `/auth/github/login?return_to=${encodeURIComponent(returnTo || "/")}`
+  }, [])
+
   const requestResponse = useCallback(
     async (url: string, options: RequestInit = {}) => {
+      const requestAccount = requestAccountRef.current
+      const requestLocation = window.location.pathname + window.location.search
       const headers = new Headers(options.headers)
       const response = await fetch(url, { ...options, headers, credentials: "same-origin" })
       if (response.status === 401) {
@@ -383,6 +405,10 @@ function App() {
           const sessionResponse = await fetch("/auth/session", { credentials: "same-origin" })
           if (sessionResponse.ok) {
             setAuthSession((await sessionResponse.json()) as AuthSession)
+          } else {
+            // Let the protected-route gate render SignInPage with the current
+            // deployment or Job URL as its return destination.
+            setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
           }
         } catch {
           setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
@@ -402,11 +428,20 @@ function App() {
         }
         const error = new Error(message || `${response.status} ${response.statusText}`) as RequestError
         error.code = code
+        if (
+          requiresGitHubReauthentication(error)
+          && requestAccount === requestAccountRef.current
+          && requestLocation === window.location.pathname + window.location.search
+          && beginGitHubReauthentication()
+        ) {
+          toast.message(appI18n.t("app.refreshingGitHubSignIn"))
+          refreshGitHubOAuthLogin()
+        }
         throw error
       }
       return response
     },
-    []
+    [beginGitHubReauthentication, refreshGitHubOAuthLogin]
   )
 
   const request = useCallback(
@@ -503,11 +538,6 @@ function App() {
       .split(",")
       .map((label) => label.trim())
       .filter(Boolean)
-
-  const refreshGitHubOAuthLogin = useCallback(() => {
-    const returnTo = window.location.pathname + window.location.search
-    window.location.href = `/auth/github/login?return_to=${encodeURIComponent(returnTo || "/")}`
-  }, [])
 
   const loadAll = useCallback(async (polling = false) => {
     if (!hasAccess || !isAdminRoute || runnerRequestIdentifier) return
@@ -956,13 +986,14 @@ function App() {
   }, [locationPath])
 
   useEffect(() => {
-    if (!isUserJobsRoute(locationPath)) return
+    if (!isUserJobsRoute(locationPath, locationSearch)) return
     const key = userJobsGroupKeyFromLocation(locationPath, locationSearch)
     setUserSelectedKey(key)
-    const canonicalPath = userJobsPath(key)
+    const context = githubContextFromPath(locationPath, locationSearch)
+    const canonicalPath = context ? githubContextPath(context, "jobs") : userJobsPath(key)
     const currentLocation = `${locationPath}${locationSearch}`
     const nextPath = withPreservedJobSearch(canonicalPath, locationSearch)
-    if (key && currentLocation !== nextPath) {
+    if ((key || context) && currentLocation !== nextPath) {
       window.history.replaceState(null, "", nextPath)
       setLocationPath(window.location.pathname)
       setLocationSearch(window.location.search)
@@ -1173,8 +1204,8 @@ function App() {
     toast.success(t("app.runnerIDCopied"))
   }
 
-  const openUserJob = (id: string) => {
-    const groupPath = userSelectedKey ? userJobsPath(userSelectedKey) : ""
+  const openUserJob = (id: string, groupKey = userSelectedKey) => {
+    const groupPath = groupKey ? userJobsPath(groupKey) : ""
     const nextPath = groupPath && groupPath !== "/jobs" ? withSearchParam(groupPath, "job", id) : `/jobs/${encodeURIComponent(id)}`
     window.history.pushState(null, "", nextPath)
     setLocationPath(window.location.pathname)
@@ -1277,6 +1308,7 @@ function App() {
           authSession={authSession}
           githubApp={currentGithubApp}
           locationPath={locationPath}
+          locationSearch={locationSearch}
           productTourOnboarding={productTourOnboarding}
           userPreferences={userPreferences}
           userPreferencesScope={userPreferencesScope}
@@ -1306,6 +1338,7 @@ function App() {
           onSaveCacheConfig={saveCacheConfig}
           onDeleteCacheConfig={deleteCacheConfig}
           onNavigate={setUserPage}
+          onOpenDeployment={openDeployment}
           onNavigateRepositoryAccount={setRepositoryAccount}
           onNavigateAccountSettings={setAccountSettingsRoute}
           onOpenJob={openUserJob}
@@ -1584,8 +1617,8 @@ function isRunnerJobGroupResponse(value: unknown): value is { key: string } {
   return Boolean(value && typeof value === "object" && typeof (value as { key?: unknown }).key === "string")
 }
 
-function isUserJobsRoute(path: string) {
-  return path === "/jobs" || Boolean(userJobsGroupKeyFromPath(path))
+function isUserJobsRoute(path: string, search = "") {
+  return path === "/jobs" || (path.endsWith("/jobs") && Boolean(githubContextFromPath(path, search))) || Boolean(userJobsGroupKeyFromPath(path, search))
 }
 
 function userJobsGroupKeyFromLocation(path: string, search: string) {
@@ -1596,42 +1629,19 @@ function userJobsGroupKeyFromLocation(path: string, search: string) {
 }
 
 function userJobsGroupKeyFromPath(path: string, search = "") {
-  const pullRequestMatch = path.match(/^\/github\/pulls\/([^/]+)\/([^/]+)\/(\d+)\/jobs$/)
-  if (pullRequestMatch) {
-    return `pr:${decodeRepositoryPath(pullRequestMatch[1], pullRequestMatch[2])}:${pullRequestMatch[3]}`
-  }
+  const context = path.endsWith("/jobs") ? githubContextFromPath(path, search) : null
+  if (context?.kind === "pulls") return `pr:${context.repository}:${context.reference}`
+  if (context?.kind === "runs") return `run:${context.repository}:${context.reference}`
+  if (context?.kind === "branches" && context.name && context.reference) return `branch:${context.repository}:${context.name}:${context.reference}`
 
   const legacyPullRequestMatch = path.match(/^\/jobs\/pulls\/([^/]+)\/([^/]+)\/(\d+)$/)
   if (legacyPullRequestMatch) {
     return `pr:${decodeRepositoryPath(legacyPullRequestMatch[1], legacyPullRequestMatch[2])}:${legacyPullRequestMatch[3]}`
   }
 
-  const runMatch = path.match(/^\/github\/runs\/([^/]+)\/([^/]+)\/(\d+)\/jobs$/)
-  if (runMatch) {
-    return `run:${decodeRepositoryPath(runMatch[1], runMatch[2])}:${runMatch[3]}`
-  }
-
   const legacyRunMatch = path.match(/^\/jobs\/runs\/([^/]+)\/([^/]+)\/(\d+)$/)
   if (legacyRunMatch) {
     return `run:${decodeRepositoryPath(legacyRunMatch[1], legacyRunMatch[2])}:${legacyRunMatch[3]}`
-  }
-
-  const branchMatch = path.match(/^\/github\/branches\/([^/]+)\/([^/]+)\/(.+)\/([^/]+)\/jobs$/)
-  if (branchMatch) {
-    const repository = decodeRepositoryPath(branchMatch[1], branchMatch[2])
-    const branch = safeDecodePathSegment(branchMatch[3])
-    const sha = safeDecodePathSegment(branchMatch[4])
-    if (!branch || !sha) return ""
-    return `branch:${repository}:${branch}:${sha}`
-  }
-
-  const branchQueryMatch = path.match(/^\/github\/branches\/([^/]+)\/([^/]+)\/([^/]+)\/jobs$/)
-  if (branchQueryMatch) {
-    const repository = decodeRepositoryPath(branchQueryMatch[1], branchQueryMatch[2])
-    const sha = safeDecodePathSegment(branchQueryMatch[3])
-    const branch = new URLSearchParams(search).get("branch") || ""
-    if (!branch || !sha) return ""
-    return `branch:${repository}:${branch}:${sha}`
   }
 
   const legacyBranchMatch = path.match(/^\/jobs\/branches\/([^/]+)\/([^/]+)\/(.+)\/([^/]+)$/)
@@ -1657,14 +1667,14 @@ function userJobsGroupKeyFromPath(path: string, search = "") {
 function userJobsPath(groupKey: string) {
   if (!groupKey) return "/jobs"
   const pullRequestMatch = groupKey.match(/^pr:(.+):(\d+)$/)
-  if (pullRequestMatch) return `/github/pulls/${encodeRepositoryPath(pullRequestMatch[1])}/${pullRequestMatch[2]}/jobs`
+  if (pullRequestMatch) return githubContextPath({ kind: "pulls", repository: pullRequestMatch[1], reference: pullRequestMatch[2] }, "jobs")
 
   const runMatch = groupKey.match(/^run:(.+):(\d+)$/)
-  if (runMatch) return `/github/runs/${encodeRepositoryPath(runMatch[1])}/${runMatch[2]}/jobs`
+  if (runMatch) return githubContextPath({ kind: "runs", repository: runMatch[1], reference: runMatch[2] }, "jobs")
 
   const branchMatch = groupKey.match(/^branch:([^:]+):(.+):([^:]+)$/)
   if (branchMatch) {
-    return withSearchParam(`/github/branches/${encodeRepositoryPath(branchMatch[1])}/${encodeURIComponent(branchMatch[3])}/jobs`, "branch", branchMatch[2])
+    return githubContextPath({ kind: "branches", repository: branchMatch[1], reference: branchMatch[3], name: branchMatch[2] }, "jobs")
   }
 
   const manualMatch = groupKey.match(/^manual:(.+):([^:]+)$/)
@@ -1697,7 +1707,7 @@ function withSearchParam(path: string, key: string, value: string) {
   const [pathname, search = ""] = path.split("?")
   const params = new URLSearchParams(search)
   params.set(key, value)
-  const query = params.toString()
+  const query = readableQuery(params)
   return query ? `${pathname}?${query}` : pathname
 }
 

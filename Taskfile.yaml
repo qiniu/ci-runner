@@ -71,7 +71,9 @@ tasks:
     desc: Run staticcheck, formatting checks, goimports checks, and go vet
     cmds:
       - task: ui-lint
-      - staticcheck {{.GO_PACKAGES}}
+      - cmd: |
+          GO_TOOLCHAIN=$(awk '$1 == "go" { print "go" $2; exit }' go.mod)
+          GOTOOLCHAIN="$GO_TOOLCHAIN" staticcheck {{.GO_PACKAGES}}
       - cmd: |
           UNFORMATTED=$(gofmt -l cmd internal)
           if [ -n "$UNFORMATTED" ]; then

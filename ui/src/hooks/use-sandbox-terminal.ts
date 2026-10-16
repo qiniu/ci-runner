@@ -76,10 +76,14 @@ export function useSandboxTerminal({
     setTerminalConnecting(true)
     setTerminalError("")
     try {
+      // Canvas renderers need the resolved stack, not a CSS var() expression.
+      const fontFamily = terminalEl.current
+        ? getComputedStyle(terminalEl.current).getPropertyValue("--font-mono").trim() || "monospace"
+        : "monospace"
       const term = new Terminal({
         cursorBlink: true,
         convertEol: true,
-        fontFamily: "var(--font-mono)",
+        fontFamily,
         fontSize: 13,
         theme: {
           background: "#111318",
@@ -93,6 +97,8 @@ export function useSandboxTerminal({
       terminalRef.current = term
       fitRef.current = fit
       if (terminalEl.current) {
+        await document.fonts.load(`13px ${fontFamily}`).catch(() => undefined)
+        if (terminalRef.current !== term) return
         term.open(terminalEl.current)
         fit.fit()
       }

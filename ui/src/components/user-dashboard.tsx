@@ -1,3 +1,5 @@
+import { githubContextFromPath, githubContextMatchesJobGroup } from "@/github-context-routes"
+import { JobDeploymentLinks } from "@/components/job-deployment-links"
 import {
   AlertCircle,
   Boxes,
@@ -14,7 +16,7 @@ import {
   Workflow,
   X,
 } from "lucide-react"
-import { type FormEvent, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
+import { type FormEvent, type MouseEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { AuthSession, GitHubAppConfig, ProductTourOnboarding, RunnerJobGroup, RunnerState, UserPreferences } from "@/admin-types"
@@ -36,6 +38,7 @@ import {
 } from "@/repository-readiness"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { DetailField } from "@/components/ui/detail-field"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
@@ -52,6 +55,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { shouldShowSandboxSetupTask } from "@/user-onboarding"
 import { SandboxesSection, SandboxTemplatesSection } from "@/components/sandbox-catalog-sections"
 import { UserRunnerSpecsSection } from "@/components/user-runner-specs-section"
+import { UserDeploymentsSection } from "@/components/user-deployments-section"
+import { UserDeploymentCreateSection } from "@/components/user-deployment-create-section"
+import { deploymentIDFromPath } from "@/app-load-policy"
 import { ForkSponsorshipSection } from "@/components/fork-sponsorship-section"
 import { findSandboxRegionByAPIURL, useSandboxRegions } from "@/components/sandbox-catalog-utils"
 import { Switch } from "@/components/ui/switch"
@@ -77,20 +83,18 @@ type BuildGroup = {
   pullRequestNumber?: number
 }
 
-type UserPage = "home" | "repositories" | "runner-specs" | "settings"
+type UserPage = "home" | "repositories" | "runner-specs" | "deployments" | "settings"
 type AccountSettingsTab = "repositories" | "preferences" | "sandbox-templates" | "sandbox-instances" | "runner-specs" | "fork-sponsorship"
 type AccountSettingsRoute = {
   accountLogin?: string
   tab: AccountSettingsTab
 }
 
-const jobLogTabsListClassName = "h-auto w-full justify-start gap-6 rounded-none border-b bg-transparent p-0 text-muted-foreground"
-const jobLogTabsTriggerClassName = "h-10 flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none hover:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent"
-
 export function UserDashboard({
   authSession,
   githubApp,
   locationPath,
+  locationSearch = "",
   productTourOnboarding,
   userPreferences,
   userPreferencesScope,
@@ -120,6 +124,7 @@ export function UserDashboard({
   onSaveCacheConfig,
   onDeleteCacheConfig,
   onNavigate,
+  onOpenDeployment,
   onNavigateRepositoryAccount,
   onNavigateAccountSettings,
   onOpenJob,
@@ -132,6 +137,7 @@ export function UserDashboard({
   authSession: AuthSession
   githubApp: GitHubAppConfig | null
   locationPath: string
+  locationSearch?: string
   productTourOnboarding: ProductTourOnboarding | null
   userPreferences: UserPreferences | null
   userPreferencesScope: string
@@ -161,9 +167,10 @@ export function UserDashboard({
   onSaveCacheConfig: (input: { bucket: string; prefix: string; access_key_id: string; secret_access_key: string }, installationID?: number) => Promise<void>
   onDeleteCacheConfig: (installationID?: number) => Promise<void>
   onNavigate: (page: UserPage) => void
+  onOpenDeployment: (id: string | null) => void
   onNavigateRepositoryAccount: (accountLogin: string | undefined) => void
   onNavigateAccountSettings: (accountLogin: string | undefined, tab: AccountSettingsTab) => void
-  onOpenJob: (id: string) => void
+  onOpenJob: (id: string, groupKey?: string) => void
   onLoadJobGroup: (key: string) => Promise<unknown>
   onLoadRunnerHistory: () => void
   request: (url: string, options?: RequestInit) => Promise<unknown>
@@ -171,7 +178,8 @@ export function UserDashboard({
   onSignOut: () => void
 }) {
   const { t } = useTranslation()
-  const groups = useMemo(() => groupRunnersByBuildContext(runners, t), [runners, t])
+  const sourceContext = useMemo(() => githubContextFromPath(locationPath, locationSearch), [locationPath, locationSearch])
+  const groups = useMemo(() => groupRunnersByBuildContext(runners, t).filter((group) => githubContextMatchesJobGroup(sourceContext, group)), [runners, t, sourceContext])
   const selected = groups.find((group) => group.key === selectedKey) || (selectedKey ? undefined : groups[0])
   const [loadedJobGroup, setLoadedJobGroup] = useState<{ key: string; group: RunnerJobGroup } | null>(null)
   const selectedJobGroup = loadedJobGroup && selected && loadedJobGroup.key === selected.key ? loadedJobGroup.group : null
@@ -238,7 +246,7 @@ export function UserDashboard({
     <main
       className={cn(
         "flex min-h-screen flex-col bg-background text-foreground",
-        page === "home" && "xl:h-dvh xl:min-h-0 xl:overflow-hidden",
+        (page === "home" || (page === "deployments" && locationPath !== "/deployments/new")) && "xl:h-dvh xl:min-h-0 xl:overflow-hidden",
       )}
     >
       <UserOnboardingTour
@@ -279,6 +287,14 @@ export function UserDashboard({
             {t("user.repositories")}
           </a>
           <a
+            href="/deployments"
+            className={navItemClass(page === "deployments")}
+            onClick={(event) => goToPage(event, "deployments")}
+          >
+            <SquareTerminal className="h-4 w-4" />
+            {t("user.deployments")}
+          </a>
+          <a
             href="/runner-specs"
             className={navItemClass(page === "runner-specs")}
             onClick={(event) => goToPage(event, "runner-specs")}
@@ -299,7 +315,7 @@ export function UserDashboard({
         </div>
       </header>
 
-      <nav className="flex items-center gap-1 border-b px-4 py-2 md:hidden" aria-label={t("user.workspace")}>
+      <nav className="flex items-center gap-1 overflow-x-auto border-b px-4 py-2 md:hidden [&>a]:shrink-0 [&>a]:whitespace-nowrap" aria-label={t("user.workspace")}>
         <a
           href="/jobs"
           className={navItemClass(page === "home")}
@@ -319,6 +335,14 @@ export function UserDashboard({
           {t("user.repositories")}
         </a>
         <a
+          href="/deployments"
+          className={navItemClass(page === "deployments")}
+          onClick={(event) => goToPage(event, "deployments")}
+        >
+          <SquareTerminal className="h-4 w-4" />
+          {t("user.deployments")}
+        </a>
+        <a
           href="/runner-specs"
           className={navItemClass(page === "runner-specs")}
           onClick={(event) => goToPage(event, "runner-specs")}
@@ -328,7 +352,24 @@ export function UserDashboard({
         </a>
       </nav>
 
-      {page === "repositories" ? (
+      {page === "deployments" ? (
+        locationPath === "/deployments/new" ? <UserDeploymentCreateSection
+          key={`${authSession.login}:${locationSearch}`}
+          locationSearch={locationSearch}
+          githubApp={githubApp}
+          currentLogin={authSession.login}
+          loadingGitHubApp={loadingGitHubApp}
+          request={request}
+          onOpenDeployment={onOpenDeployment}
+        /> : <UserDeploymentsSection
+          currentLogin={authSession.login}
+          request={request}
+          deploymentID={deploymentIDFromPath(locationPath)}
+          locationPath={locationPath}
+          locationSearch={locationSearch}
+          onOpenDeployment={onOpenDeployment}
+        />
+      ) : page === "repositories" ? (
         <RepositoryReadinessPage
           githubApp={githubApp ? { ...githubApp, installations } : null}
           currentLogin={authSession.login}
@@ -373,7 +414,7 @@ export function UserDashboard({
           canSyncGitHubInstallations={canSyncGitHubInstallations}
           syncingGitHubInstallations={syncingGitHubInstallations}
           onSyncGitHubInstallations={onSyncGitHubInstallations}
-          onOpenJob={onOpenJob}
+          onOpenJob={(id) => onOpenJob(id, selected?.key)}
           request={request}
           runnerCount={runners.length}
           runnerTotal={runnerTotal}
@@ -1328,8 +1369,9 @@ function PullRequestsPage({
         <section className="min-h-0 overflow-y-auto">
           {selected ? (
             <div className="flex min-h-full flex-col">
-              <div className="border-b px-4 py-4 lg:px-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 lg:px-6">
                 <h2 className="truncate text-2xl font-semibold">{selected.repository}</h2>
+                {selectedJob ? <JobDeploymentLinks job={selectedJob} /> : null}
               </div>
               <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 lg:p-6">
                 <div className="shrink-0 border-b pb-4">
@@ -1340,16 +1382,16 @@ function PullRequestsPage({
                   <div className="mt-3 space-y-4 text-sm">
                     <section>
                       <div className="grid gap-3 sm:grid-cols-3">
-                        <JobField label={t("user.branch")} value={selectedJobGroup?.head_branch || selected.headBranch || selected.subtitle || t("common.unknown")} />
-                        <JobField label={t("user.commit")} value={shortSHA(selectedJobGroup?.head_sha || selected.headSHA) || t("common.unknown")} />
-                        <JobField label={t("user.lastUpdated")} value={formatTime(selectedJobGroup?.updated_at || selected.updatedAt, i18n.resolvedLanguage)} />
+                        <DetailField label={t("user.branch")} value={selectedJob?.head_branch || selectedJobGroup?.head_branch || selected.headBranch || selected.subtitle || t("common.unknown")} />
+                        <DetailField label={t("user.commit")} value={shortSHA(selectedJob?.head_sha || selectedJobGroup?.head_sha || selected.headSHA) || t("common.unknown")} />
+                        <DetailField label={t("user.lastUpdated")} value={formatTime(selectedJobGroup?.updated_at || selected.updatedAt, i18n.resolvedLanguage)} />
                       </div>
                     </section>
                     <section>
                       <div className="grid gap-3 sm:grid-cols-3">
                         {selectedJob ? (
                           <>
-                            <JobField
+                            <DetailField
                               label={t("user.jobName")}
                               value={selectedJob.github_job_url ? (
                                 <a className={cn("inline-flex max-w-full min-w-0 items-center gap-1 hover:underline", jobStatusTextClass(selectedJob.status))} href={selectedJob.github_job_url} target="_blank" rel="noreferrer" title={t("user.openGitHubJob")}>
@@ -1360,7 +1402,7 @@ function PullRequestsPage({
                                 <span className={cn("block truncate", jobStatusTextClass(selectedJob.status))}>{runnerJobTitle(selectedJob)}</span>
                               )}
                             />
-                            <JobField
+                            <DetailField
                               label={t("user.workflow")}
                               value={workflowRunURL(selectedJob) ? (
                                 <a className="inline-flex max-w-full min-w-0 items-center gap-1 text-primary hover:underline" href={workflowRunURL(selectedJob)} target="_blank" rel="noreferrer" title={t("user.openGitHubRun")}>
@@ -1371,7 +1413,7 @@ function PullRequestsPage({
                                 <span className="block truncate">{selectedJob.workflow_name || t("user.workflow")}</span>
                               )}
                             />
-                            <JobField label={t("user.duration")} value={formatRunnerDuration(selectedJob) || "-"} />
+                            <DetailField label={t("user.duration")} value={formatRunnerDuration(selectedJob) || "-"} />
                           </>
                         ) : (
                           <div className="text-muted-foreground">{t("user.selectJob")}</div>
@@ -1434,21 +1476,6 @@ function PullRequestsPage({
         </section>
       </div>
     </>
-  )
-}
-
-function JobField({ label, value, onOpen }: { label: string; value: ReactNode; onOpen?: () => void }) {
-  return (
-    <div className="grid grid-cols-[88px_minmax(0,1fr)] items-baseline gap-2">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      {onOpen ? (
-        <button type="button" className="min-w-0 break-words text-left font-medium hover:text-primary hover:underline" onClick={onOpen}>
-          {value}
-        </button>
-      ) : (
-        <div className="min-w-0 break-words font-medium">{value}</div>
-      )}
-    </div>
   )
 }
 
@@ -1559,10 +1586,10 @@ function RunnerJobLogPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col gap-0">
-        <TabsList className={jobLogTabsListClassName}>
-          <TabsTrigger className={jobLogTabsTriggerClassName} value="runner-logs">{t("user.runnerLogs")}</TabsTrigger>
-          <TabsTrigger className={jobLogTabsTriggerClassName} value="web-console">{t("user.webConsole")}</TabsTrigger>
-          <TabsTrigger className={jobLogTabsTriggerClassName} value="details">{t("user.details")}</TabsTrigger>
+        <TabsList variant="line">
+          <TabsTrigger variant="line" value="runner-logs">{t("user.runnerLogs")}</TabsTrigger>
+          <TabsTrigger variant="line" value="web-console">{t("user.webConsole")}</TabsTrigger>
+          <TabsTrigger variant="line" value="details">{t("user.details")}</TabsTrigger>
         </TabsList>
         <TabsContent value="runner-logs" className="m-0 pt-2">
           <RunnerEventTimeline endpoint={`${endpoint}/events`} request={request} autoRefresh={activeStatuses.has(job.status)} />
@@ -1602,13 +1629,13 @@ function RunnerJobLogPanel({
         </TabsContent>
         <TabsContent value="details" className="m-0 py-5">
           <div className="grid gap-2 text-sm">
-            <JobField label={t("common.status")} value={runnerStatusLabel(job.status)} />
-            <JobField label={t("common.runnerSpec")} value={job.runner_spec_name || t("user.matchedByLabels")} />
-            <JobField label={t("user.workflowRun")} value={workflowRunValue(job, t)} />
-            <JobField label={t("user.queued")} value={formatTime(job.created_at, i18n.resolvedLanguage)} />
-            <JobField label={t("common.started")} value={job.running_at ? formatTime(job.running_at, i18n.resolvedLanguage) : "-"} />
-            <JobField label={t("user.finished")} value={job.completed_at || job.failed_at ? formatTime(job.completed_at || job.failed_at, i18n.resolvedLanguage) : "-"} />
-            <JobField label={t("user.commit")} value={job.head_sha || "-"} />
+            <DetailField label={t("common.status")} value={runnerStatusLabel(job.status)} />
+            <DetailField label={t("common.runnerSpec")} value={job.runner_spec_name || t("user.matchedByLabels")} />
+            <DetailField label={t("user.workflowRun")} value={workflowRunValue(job, t)} />
+            <DetailField label={t("user.queued")} value={formatTime(job.created_at, i18n.resolvedLanguage)} />
+            <DetailField label={t("common.started")} value={job.running_at ? formatTime(job.running_at, i18n.resolvedLanguage) : "-"} />
+            <DetailField label={t("user.finished")} value={job.completed_at || job.failed_at ? formatTime(job.completed_at || job.failed_at, i18n.resolvedLanguage) : "-"} />
+            <DetailField label={t("user.commit")} value={job.head_sha || "-"} />
           </div>
         </TabsContent>
       </Tabs>

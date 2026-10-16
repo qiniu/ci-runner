@@ -17,6 +17,10 @@ import (
 
 func TestUserForkSponsorshipPolicyAPIRequiresOrganizationOwnerAndAuditsMutation(t *testing.T) {
 	githubAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 200) {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/memberships/orgs":

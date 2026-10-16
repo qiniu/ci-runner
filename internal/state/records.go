@@ -72,6 +72,111 @@ type runnerRequestRecord struct {
 
 func (runnerRequestRecord) TableName() string { return "runner_requests" }
 
+type deploymentRecord struct {
+	CreateRequestHash          string     `gorm:"column:create_request_hash;size:64;not null;default:''"`
+	ExecutionAccountID         int64      `gorm:"column:execution_account_id;not null;default:0"`
+	RevisionNumber             int64      `gorm:"column:revision_number;not null;default:1"`
+	ID                         string     `gorm:"column:id;primaryKey"`
+	AccountID                  int64      `gorm:"column:account_id;not null;index:idx_deployments_account_created"`
+	ScopeType                  string     `gorm:"column:scope_type;not null;index:idx_deployments_scope"`
+	ScopeID                    int64      `gorm:"column:scope_id;not null;index:idx_deployments_scope"`
+	GitHubInstallationID       int64      `gorm:"column:github_installation_id;not null;index:idx_deployments_installation_repository"`
+	RepositoryID               int64      `gorm:"column:repository_id;not null"`
+	RepositoryFullName         string     `gorm:"column:repository_full_name;not null;index:idx_deployments_installation_repository"`
+	Ref                        string     `gorm:"column:ref;not null"`
+	CommitSHA                  string     `gorm:"column:commit_sha;not null;index:idx_deployments_repository_commit"`
+	ConfigPath                 string     `gorm:"column:config_path;not null"`
+	SnapshotVersion            int        `gorm:"column:snapshot_version;not null"`
+	SpecHash                   string     `gorm:"column:spec_hash;not null"`
+	SpecJSONEncrypted          string     `gorm:"column:spec_json_encrypted;not null"`
+	Status                     string     `gorm:"column:status;not null;index:idx_deployments_status_expires;index:idx_deployments_account_created"`
+	SandboxID                  string     `gorm:"column:sandbox_id;index:idx_deployments_sandbox"`
+	Attempt                    int64      `gorm:"column:attempt;not null;default:0"`
+	RuntimeID                  string     `gorm:"column:runtime_id"`
+	ProcessID                  string     `gorm:"column:process_id"`
+	ProcessTag                 string     `gorm:"column:process_tag"`
+	SandboxAPIURL              string     `gorm:"column:sandbox_api_url"`
+	SandboxAPIKeyEncrypted     string     `gorm:"column:sandbox_api_key_encrypted;type:text"`
+	SandboxConfigSource        string     `gorm:"column:sandbox_config_source"`
+	SandboxRegion              string     `gorm:"column:sandbox_region"`
+	DeploymentTemplateID       string     `gorm:"column:deployment_template_id"`
+	DeploymentTemplateName     string     `gorm:"column:deployment_template_name"`
+	DeploymentTemplateCPU      int32      `gorm:"column:deployment_template_cpu"`
+	DeploymentTemplateMemoryMB int32      `gorm:"column:deployment_template_memory_mb"`
+	DeploymentTemplateDiskMB   int32      `gorm:"column:deployment_template_disk_mb"`
+	Endpoint                   string     `gorm:"column:endpoint"`
+	FailureStage               string     `gorm:"column:failure_stage"`
+	FailureReason              string     `gorm:"column:failure_reason"`
+	Error                      string     `gorm:"column:error"`
+	ExpiresAt                  time.Time  `gorm:"column:expires_at;not null;index:idx_deployments_status_expires"`
+	CreatedAt                  time.Time  `gorm:"column:created_at;not null;index:idx_deployments_account_created"`
+	PlanningAt                 *time.Time `gorm:"column:planning_at"`
+	CreatingAt                 *time.Time `gorm:"column:creating_at"`
+	RunningAt                  *time.Time `gorm:"column:running_at"`
+	StoppingAt                 *time.Time `gorm:"column:stopping_at"`
+	CompletedAt                *time.Time `gorm:"column:completed_at"`
+	FailedAt                   *time.Time `gorm:"column:failed_at"`
+	UpdatedAt                  time.Time  `gorm:"column:updated_at;not null"`
+	Version                    int64      `gorm:"column:version;not null;default:0"`
+
+	SourceRepositoryID       int64  `gorm:"column:source_repository_id"`
+	SourceRepositoryFullName string `gorm:"column:source_repository_full_name"`
+	SourceRef                string `gorm:"column:source_ref"`
+	PullRequestTitle         string `gorm:"column:pull_request_title"`
+}
+
+func (deploymentRecord) TableName() string { return "deployments" }
+
+// Revision snapshots exclude service credentials and retain the encrypted plan.
+type deploymentRevisionRecord struct {
+	ExecutionAccountID int64      `gorm:"column:execution_account_id;not null;default:0"`
+	ID                 string     `gorm:"column:id;primaryKey"`
+	DeploymentID       string     `gorm:"column:deployment_id;size:128;not null;uniqueIndex:idx_deployment_revisions_number,priority:1"`
+	Number             int64      `gorm:"column:number;not null;uniqueIndex:idx_deployment_revisions_number,priority:2"`
+	Ref                string     `gorm:"column:ref;not null"`
+	CommitSHA          string     `gorm:"column:commit_sha;not null"`
+	ConfigPath         string     `gorm:"column:config_path;not null"`
+	SnapshotVersion    int        `gorm:"column:snapshot_version;not null"`
+	SpecHash           string     `gorm:"column:spec_hash;not null"`
+	SpecJSONEncrypted  string     `gorm:"column:spec_json_encrypted;type:text;not null"`
+	TemplateID         string     `gorm:"column:template_id"`
+	TemplateName       string     `gorm:"column:template_name"`
+	TemplateCPU        int32      `gorm:"column:template_cpu"`
+	TemplateMemoryMB   int32      `gorm:"column:template_memory_mb"`
+	TemplateDiskMB     int32      `gorm:"column:template_disk_mb"`
+	Status             string     `gorm:"column:status;not null"`
+	SandboxID          string     `gorm:"column:sandbox_id"`
+	SandboxRegion      string     `gorm:"column:sandbox_region"`
+	Endpoint           string     `gorm:"column:endpoint"`
+	FailureStage       string     `gorm:"column:failure_stage"`
+	FailureReason      string     `gorm:"column:failure_reason"`
+	ExpiresAt          time.Time  `gorm:"column:expires_at;not null"`
+	RunningAt          *time.Time `gorm:"column:running_at"`
+	CreatedAt          time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt          time.Time  `gorm:"column:updated_at;not null"`
+
+	SourceRepositoryID       int64  `gorm:"column:source_repository_id"`
+	SourceRepositoryFullName string `gorm:"column:source_repository_full_name"`
+	SourceRef                string `gorm:"column:source_ref"`
+	PullRequestTitle         string `gorm:"column:pull_request_title"`
+}
+
+func (deploymentRevisionRecord) TableName() string { return "deployment_revisions" }
+
+type deploymentEventRecord struct {
+	RevisionNumber int64     `gorm:"column:revision_number;not null;default:1;index:idx_deployment_events_revision_id,priority:2"`
+	ID             int64     `gorm:"column:id;primaryKey;autoIncrement;index:idx_deployment_events_deployment_id,priority:2;index:idx_deployment_events_revision_id,priority:3"`
+	DeploymentID   string    `gorm:"column:deployment_id;not null;index:idx_deployment_events_deployment_id,priority:1;index:idx_deployment_events_revision_id,priority:1"`
+	Attempt        int64     `gorm:"column:attempt;not null;default:0"`
+	EventType      string    `gorm:"column:event_type;not null"`
+	Stage          string    `gorm:"column:stage"`
+	Stream         string    `gorm:"column:stream"`
+	Message        string    `gorm:"column:message"`
+	CreatedAt      time.Time `gorm:"column:created_at;not null;index:idx_deployment_events_created"`
+}
+
+func (deploymentEventRecord) TableName() string { return "deployment_events" }
+
 type runnerEventRecord struct {
 	ID          int64     `gorm:"column:id;primaryKey;autoIncrement;index:idx_runner_events_request_id,priority:2;index:idx_runner_events_request_type_id,priority:3"`
 	RequestID   string    `gorm:"column:request_id;not null;index:idx_runner_events_request_created;index:idx_runner_events_request_id,priority:1;index:idx_runner_events_request_type_id,priority:1"`

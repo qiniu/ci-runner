@@ -4,6 +4,12 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Complete individual-repository removal acceptance for the [GitHub context workflow](docs/deployment.md#github-context-routes). Live Installation suspension/cache expiry/recovery and OAuth-token revocation/API denial/in-app browser reauthentication passed on 2026-10-16. GitHub disallowed removing the sole selected repository, so that distinct revocation mode remains unverified.
+
+- Before Issue #125 can close, complete the remaining acceptance gates below and retain the endpoint, per-scope quota, and terminal retention evidence against a deployed runnerd. The first implementation uses public HTTPS endpoints, a transactional per-scope concurrency limit, and configurable terminal retention; an authenticated reverse proxy remains a follow-up if product requirements change.
+
+- Complete the remaining Issue #125 acceptance for cross-account repository authorization with owner-only Sandbox settings (a second real GitHub account is not yet available). Public authenticated API duplicate/terminal replay, DELETE/provider release, per-scope quota/re-admission, synthetic startup-failure cleanup, accelerated terminal retention with audit preservation, ordinary Chrome 375-pixel history/log stacking, same-Commit concurrent CI success/Runner release with deployment survival, public `base` worker execution/reconnection/TTL, real provider lost-create-response reconciliation and release, full local runnerd process restart, authenticated browser creation/detail/reload/stop and revision/latest redeploy evidence, and the user's 2026-10-14 confirmation of real Sandbox acceptance for the Web terminal iteration are recorded in [Deploy configuration](docs/deployment.md#iteration-plan); local fakes and browser fixtures remain supporting evidence only.
+
 - Before promoting the pipx isolation fix, rebuild and smoke-test Ubuntu 26.04 in each supported Sandbox region; the local Docker regression is not regional release evidence.
 
 - If the original llgo network failure recurs, capture comparable live GitHub API, Ubuntu archive, and LLVM APT evidence from the same running Sandbox before changing diagnostics again. The original root cause remains unverified without that same-window evidence.

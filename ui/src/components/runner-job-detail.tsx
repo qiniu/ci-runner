@@ -1,3 +1,4 @@
+import { JobDeploymentLinks } from "@/components/job-deployment-links"
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import { ArrowLeft, CheckCircle2, Clock3, ExternalLink, Loader2, Play, RefreshCw, SquareTerminal, XCircle } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -138,7 +139,8 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {job?.id === id && apiBase.startsWith("/user/") ? <JobDeploymentLinks job={job} /> : null}
             {githubLink ? (
               <Button type="button" variant="outline" asChild>
                 <a href={githubLink.url} target="_blank" rel="noreferrer">

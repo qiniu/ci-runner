@@ -15,6 +15,17 @@ const (
 )
 
 const (
+	DeploymentStatusQueued    = "queued"
+	DeploymentStatusPlanning  = "planning"
+	DeploymentStatusCreating  = "creating"
+	DeploymentStatusRunning   = "running"
+	DeploymentStatusStopping  = "stopping"
+	DeploymentStatusCompleted = "completed"
+	DeploymentStatusExpired   = "expired"
+	DeploymentStatusFailed    = "failed"
+)
+
+const (
 	TerminationSourceProcessExit        = "process_exit"
 	TerminationSourceWorkflowJobWebhook = "workflow_job_webhook"
 	TerminationSourceManualStop         = "manual_stop"
@@ -33,6 +44,7 @@ var (
 	ErrConflict                            = errors.New("state conflict")
 	ErrNotFound                            = errors.New("state record not found")
 	ErrRetryNotAllowed                     = errors.New("retry not allowed for current state")
+	ErrDeploymentQuotaExceeded             = errors.New("deployment scope concurrency limit exceeded")
 	ErrSandboxServiceDefaultAPIKeyRequired = errors.New("sandbox service default api key is required")
 	ErrCacheServiceNotConfigured           = errors.New("cache service not configured")
 	ErrAuditEventPersistence               = errors.New("audit event persistence failed")
@@ -63,6 +75,121 @@ type RunnerRequest struct {
 	SponsorSourceRepositoryFullName string    `json:"sponsor_source_repository_full_name,omitempty"`
 	SponsorAuthorizationReason      string    `json:"sponsor_authorization_reason,omitempty"`
 	CreatedAt                       time.Time `json:"created_at"`
+}
+
+// Deployment is the durable control-plane record for one temporary service.
+// Source identity and the normalized execution Spec are immutable after create;
+// lifecycle and provider fields are updated with optimistic version checks.
+type Deployment struct {
+	CreateRequestHash          string    `json:"-"` // Immutable admission identity, independent of provider expiry and revisions.
+	ExecutionAccountID         int64     `json:"-"` // Current revision actor; zero uses the historical creator.
+	RevisionNumber             int64     `json:"revision_number"`
+	ID                         string    `json:"id"`
+	AccountID                  int64     `json:"account_id"`
+	ScopeType                  string    `json:"scope_type"`
+	ScopeID                    int64     `json:"scope_id"`
+	GitHubInstallationID       int64     `json:"github_installation_id"`
+	RepositoryID               int64     `json:"repository_id"`
+	RepositoryFullName         string    `json:"repository_full_name"`
+	Ref                        string    `json:"ref,omitempty"`
+	CommitSHA                  string    `json:"commit_sha"`
+	ConfigPath                 string    `json:"config_path"`
+	SnapshotVersion            int       `json:"snapshot_version"`
+	SpecHash                   string    `json:"spec_hash"`
+	SpecJSONEncrypted          string    `json:"-"`
+	Status                     string    `json:"status"`
+	SandboxID                  string    `json:"sandbox_id,omitempty"`
+	Attempt                    int64     `json:"-"`
+	RuntimeID                  string    `json:"-"`
+	ProcessID                  string    `json:"-"`
+	ProcessTag                 string    `json:"-"`
+	SandboxAPIURL              string    `json:"-"`
+	SandboxAPIKeyEncrypted     string    `json:"-"`
+	SandboxConfigSource        string    `json:"sandbox_config_source,omitempty"`
+	SandboxRegion              string    `json:"sandbox_region,omitempty"`
+	DeploymentTemplateID       string    `json:"-"`
+	DeploymentTemplateName     string    `json:"-"`
+	DeploymentTemplateCPU      int32     `json:"-"`
+	DeploymentTemplateMemoryMB int32     `json:"-"`
+	DeploymentTemplateDiskMB   int32     `json:"-"`
+	Endpoint                   string    `json:"endpoint,omitempty"`
+	FailureStage               string    `json:"failure_stage,omitempty"`
+	FailureReason              string    `json:"failure_reason,omitempty"`
+	Error                      string    `json:"error,omitempty"`
+	ExpiresAt                  time.Time `json:"expires_at"`
+	CreatedAt                  time.Time `json:"created_at"`
+	PlanningAt                 time.Time `json:"planning_at,omitempty"`
+	CreatingAt                 time.Time `json:"creating_at,omitempty"`
+	RunningAt                  time.Time `json:"running_at,omitempty"`
+	StoppingAt                 time.Time `json:"stopping_at,omitempty"`
+	CompletedAt                time.Time `json:"completed_at,omitempty"`
+	FailedAt                   time.Time `json:"failed_at,omitempty"`
+	UpdatedAt                  time.Time `json:"updated_at"`
+	Version                    int64     `json:"version"`
+
+	ContextRevision          *DeploymentRevision `json:"-"`
+	SourceRepositoryID       int64               `json:"source_repository_id,omitempty"`
+	SourceRepositoryFullName string              `json:"source_repository_full_name,omitempty"`
+	SourceRef                string              `json:"source_ref,omitempty"`
+	PullRequestTitle         string              `json:"pull_request_title,omitempty"`
+}
+
+// DeploymentRevision preserves one immutable source/plan and its execution history.
+// Only the current revision can advance; completed revisions are never reused.
+type DeploymentRevision struct {
+	Deployment
+	RevisionID string `json:"revision_id"`
+}
+
+// DeploymentListOptions controls account-scoped deployment pagination.
+type DeploymentListOptions struct {
+	RepositoryFullName string
+	Ref                string
+	CommitSHA          string
+	Status             string
+	Limit              int
+	Offset             int
+}
+
+// DeploymentStatusCounts covers all authorized source matches before status filtering or pagination.
+type DeploymentStatusCounts struct {
+	All        int64 `json:"all"`
+	Running    int64 `json:"running"`
+	Processing int64 `json:"processing"`
+	Stopped    int64 `json:"stopped"`
+	Failed     int64 `json:"failed"`
+}
+
+// DeploymentNavigationItem contains only the local fields needed to navigate to a deployment.
+type DeploymentNavigationItem struct {
+	ID                 string    `json:"id"`
+	RepositoryFullName string    `json:"repository_full_name"`
+	Ref                string    `json:"ref"`
+	PullRequestTitle   string    `json:"pull_request_title,omitempty"`
+	CommitSHA          string    `json:"commit_sha"`
+	Status             string    `json:"status"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// DeploymentRepository groups retained history independently of deployment-list pagination.
+type DeploymentRepository struct {
+	RepositoryFullName string                     `json:"repository_full_name"`
+	Total              int64                      `json:"total"`
+	ActiveCount        int64                      `json:"active_count"`
+	ActiveDeployments  []DeploymentNavigationItem `json:"active_deployments" gorm:"-"`
+}
+
+// DeploymentEvent is bounded, credential-free lifecycle evidence for one deployment.
+type DeploymentEvent struct {
+	RevisionNumber int64     `json:"revision_number"`
+	ID             int64     `json:"id"`
+	DeploymentID   string    `json:"deployment_id"`
+	Attempt        int64     `json:"attempt,omitempty"`
+	EventType      string    `json:"event_type"`
+	Stage          string    `json:"stage,omitempty"`
+	Stream         string    `json:"stream,omitempty"`
+	Message        string    `json:"message,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type RunnerState struct {
@@ -530,6 +657,29 @@ type AuditStore interface {
 	ListAuditEvents(limit int) ([]AuditEvent, error)
 }
 
+type DeploymentStore interface {
+	CreateDeployment(deployment Deployment) (Deployment, error)
+	CreateDeploymentWithScopeLimit(deployment Deployment, maxConcurrent int) (Deployment, error)
+	GetDeployment(id string) (Deployment, error)
+	ListDeploymentsForAccount(accountID int64, options DeploymentListOptions) ([]Deployment, int64, error)
+	ListAuthorizedDeployments(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) ([]Deployment, int64, error)
+	CountAuthorizedDeploymentsByStatus(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) (DeploymentStatusCounts, error)
+	ListDeploymentRepositories(access []GitHubInstallationRepositoryAccess, repository string, limit, offset int) ([]DeploymentRepository, bool, error)
+	ListActiveDeployments() ([]Deployment, error)
+	FillDeploymentPullRequestTitle(id, ref, title string) error
+	UpdateDeployment(deployment Deployment) error
+	RetryDeployment(deployment Deployment, expiresAt time.Time) error
+	RetryDeploymentWithScopeLimit(deployment Deployment, expiresAt time.Time, maxConcurrent int) error
+	ListDeploymentRevisions(id string, beforeNumber int64, limit int) ([]DeploymentRevision, bool, error)
+	GetDeploymentRevision(id string, number int64) (DeploymentRevision, error)
+	LastSuccessfulDeploymentRevisionNumber(id string) (int64, error)
+	ListDeploymentRevisionEvents(id string, number, beforeID, afterID int64, limit int) ([]DeploymentEvent, bool, error)
+	PruneDeployments(before time.Time, limit int) (int, error)
+	AppendDeploymentEvent(event DeploymentEvent) error
+	ListDeploymentEvents(id string, beforeID int64, limit int) ([]DeploymentEvent, bool, error)
+	ListDeploymentEventsAfter(id string, afterID int64, limit int) ([]DeploymentEvent, bool, error)
+}
+
 type Store interface {
 	RunnerRequestStore
 	RunnerCatalogStore
@@ -540,6 +690,7 @@ type Store interface {
 	SandboxServiceDefaultStore
 	ForkSponsorshipStore
 	AuditStore
+	DeploymentStore
 }
 
 type Options struct {

@@ -564,6 +564,10 @@ func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	s.streamTerminalSession(w, r, session)
+}
+
+func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	controller := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
@@ -608,6 +612,10 @@ func (s *Server) handleUserRunnerTerminalInput(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
+	s.sendTerminalInput(w, r, session)
+}
+
+func (s *Server) sendTerminalInput(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	var input terminalInputRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid terminal input")
@@ -616,7 +624,7 @@ func (s *Server) handleUserRunnerTerminalInput(w http.ResponseWriter, r *http.Re
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := session.terminal.SendInput(ctx, []byte(input.Data)); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, "terminal operation failed")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
@@ -631,6 +639,10 @@ func (s *Server) handleUserRunnerTerminalResize(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	s.resizeTerminalSession(w, r, session)
+}
+
+func (s *Server) resizeTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	var input terminalResizeRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid terminal size")
@@ -639,7 +651,7 @@ func (s *Server) handleUserRunnerTerminalResize(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := session.terminal.Resize(ctx, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, "terminal operation failed")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})

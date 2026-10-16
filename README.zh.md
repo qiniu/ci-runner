@@ -83,6 +83,14 @@ Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 
 
 本地开发请使用 `task dev` 配合 `runnerd.local.yaml`。详细的本地环境搭建（包括 GitHub App 创建和 webhook 转发）请参阅 [docs/zh/testing.md](docs/zh/testing.md)。
 
+Sandbox Deploy 控制面与执行切片见 [docs/zh/deployment.md](docs/zh/deployment.md)。`/deployments` 与部署详情共用仓库侧边栏：点击仓库进入其部署列表，展开后显示活动部署，当前选中的终态部署仍保留入口。导航汇总与部署历史从本地数据库独立分页。列表使用“运行中／处理中／已停止／失败”单选分段筛选，默认“运行中”，始终保留一个选中项；数量覆盖完整授权范围，URL 保留选择。“创建部署”链接进入 `/deployments/new`，并预选当前仓库。创建页只展示仓库、分支／Tag／PR 和作用域 Sandbox 模板等表单；`deploy.template_id` 仅作为 API 可选默认值。创建成功后进入仓库或 PR 上下文中的部署详情，刷新仍保留该部署与日志。列表、详情、日志与操作复用 Jobs 的 GitHub OAuth/App Installation＋仓库精确授权。内容从本地数据库读取，授权复用 Jobs 的短期缓存；即使 GitHub 仍返回仓库列表，已暂停的 Installation 也会被拒绝。PR 标题在创建时保存；独立的可选元数据请求补齐旧记录缺失的标题，不阻塞详情和日志。来源标题可以跳转到 GitHub 分支／PR／Tag 页面。仓库成员可以创建和重新部署；Sandbox 设置与私有模板目录仍由 owner 管理。首次部署生成版本 #1，重新部署为固定计划创建新版本并保留旧版状态与日志。详情展示所选模板名称及 CPU、内存、磁盘快照，左侧展示仓库与活动部署，右侧以部署日志、终端和部署历史标签页展示当前部署及所选版本的日志，`?revision=N` 在刷新后恢复版本选择。
+
+运行中的部署详情还提供当前版本的 Web 终端。手动连接后可检查进程和应用日志文件，离开终端时关闭 shell。终端访问重新校验仓库权限，并隔离每个用户的 shell，并使用部署保存的 Sandbox 凭据。
+补偿清理保留部署及版本的原始失败证据，清理过程中断后恢复也遵循此规则。创建幂等性使用不可变的请求摘要，不受 Provider 到期时间精度或后续版本变化影响；旧记录缺少摘要时拒绝幂等重放。
+启动应用时会为 Vite 的 Host 白名单传入当前 Sandbox 的精确域名，Vite preview 无需在仓库中预先配置公网入口域名。
+
+Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署。仓库集合路由使用可读的 Branch／Tag 查询条件（例如 `/github/qiniu/deployment/deployments?branch=example/vite`），PR 使用稳定的 `pull_requests/{number}` 路径。部署详情使用 `/github/{owner}/{repo}/deployments/{id}`（或 PR 路径），来源和 revision 放在查询参数中，URL 不携带 Commit SHA。旧 Jobs 来源路径保持兼容；不兼容旧部署 query-ID 链接，详见 [GitHub 上下文路由](docs/zh/deployment.md#github-上下文路由)。
+
 ## 配置
 
 `runnerd` 默认读取 `./runnerd.yaml`，也可通过 `--config` 指定路径。完整注释的参考配置见 [`runnerd.yaml.example`](runnerd.yaml.example)。
@@ -93,6 +101,7 @@ Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 
 | `database` | 后端类型（`sqlite` / `postgres` / `mysql`）和 DSN                |
 | `auth`     | Session secret、加密密钥、Session TTL                            |
 | `sandbox`  | 沙箱生命周期超时（创建、运行、停止）                             |
+| `deploy`   | 独立 Deploy 模板、scope 并发上限、保留期和临时工作目录（启用 Issue #125 worker） |
 | `github`   | Webhook secret、鉴权方式（App / PAT / basic）、OAuth、允许的仓库 |
 | `worker`   | Lease、重试和并发设置                                            |
 
@@ -105,6 +114,9 @@ Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 
 - **不支持** GitHub Enterprise Server，请使用 GitHub.com App。
 - GitHub 鉴权方式三选一：`github.app`、`github.token` 或 `github.basic_auth`。
 - 省略 `github.app.installation_id` 时，runnerd 按仓库动态解析 installation，一个 App 可服务多个账号。
+- `deploy.template_id` 是可选默认值，与 Runner Spec 分离。独立 worker 始终运行；创建需要可用的所选模板（或默认模板）及有效作用域凭据。`deploy.work_root` 是 Sandbox 内的绝对工作目录路径。
+- Deploy 默认只消费 scope 凭据；`deploy.allow_admin_fallback: true` 显式允许现有平台兜底及其 audience 规则。准入保存区域／模板绑定，重试重新解析当前凭据。
+- `deploy.max_concurrent_per_scope` 默认是 `3`，限制每个账户或组织 scope 的排队／运行部署数；`deploy.retention_hours` 默认是 `168`，释放后的终态记录和有界事件到期清理，审计历史继续保留。
 
 ### 配置值混淆
 
@@ -187,9 +199,14 @@ env:
 | Repository   | Actions             | Read-only    | 查询 job/run 状态、列出排队 job；接收 webhook 事件所需 |
 | Repository   | Administration      | Read & write | 仓库级 runner 注册（spec 未设置 `runner_group` 时）              |
 | Repository   | Metadata            | Read-only    | 识别仓库及其所属账户                                             |
-| Repository   | Pull requests       | Read-only    | 在 job 分组中显示 PR 标题                                        |
+| Repository   | Contents            | Read-only    | Sandbox Deploy：发现分支／Tag／Commit 来源、读取部署配置并检出固定版本源码 |
+| Repository   | Pull requests       | Read-only    | 显示 PR 标题并解析 PR 部署来源                                        |
 | Organization | Members             | Read-only    | 验证 active 组织所有者角色（`role: admin`），以开放组织 Settings 和 scoped 管理 |
 | Organization | Self-hosted runners | Read & write | 组织级 runner 注册（spec 设置了 `runner_group` 时）              |
+
+Deploy 新增 Contents 或 Pull requests 权限后，已有 Installation 的 owner 必须批准
+权限更新。批准后若仍提示 `REAUTH_REQUIRED` 或无法加载仓库版本，先退出登录，再通过
+GitHub 登录。公开仓库部署成功不证明私有仓库 Contents 权限已就绪。
 
 设置 `github.app.slug` 可在用户 UI 中显示"安装 GitHub App"链接。使用 `github.allowed_repositories`（支持 `owner/repo` 或 `owner/*` 模式）限制哪些仓库可以使用此 runnerd 实例。
 
@@ -291,7 +308,7 @@ Admin 创建时分别维护平台执行配置和公共可见性。只应服务�
 | `/admin/audit`           | 审计事件历史 |
 | `/admin/diagnostics`     | runnerd 运行时诊断，用于查看脱敏摘要、pprof discovery 和按需加载的 expvar |
 
-`/` 始终是公开的 Qiniu CI Runner 产品首页。`/docs` 及其固定指南路由公开、同域，并提供英文和简体中文。普通用户 Jobs 首页位于 `/jobs`；其他受保护路由包括 `/repositories`、PR job 分组（`/github/pulls/{owner}/{repo}/{number}/jobs`）、账户设置（`/account/preferences`、`/account/sandbox-templates`、`/account/sandbox-instances`），以及对应的 `/organizations/{login}/...` 路由。未登录访问受保护路由时会显示独立的 GitHub 登录页，并在 OAuth 完成后返回原 URL。
+`/` 始终是公开的 Qiniu CI Runner 产品首页。`/docs` 及其固定指南路由公开、同域，并提供英文和简体中文。普通用户 Jobs 首页位于 `/jobs`；其他受保护路由包括 `/repositories`、PR job 分组（`/github/{owner}/{repo}/pull_requests/{number}/jobs`）、账户设置（`/account/preferences`、`/account/sandbox-templates`、`/account/sandbox-instances`），以及对应的 `/organizations/{login}/...` 路由。未登录访问受保护路由时会显示独立的 GitHub 登录页，并在 OAuth 完成后返回原 URL。
 
 Job 详情默认展示 **Runner 日志**，并保留 Web Console 和详细信息。Jobs 与后台请求详情共用事件时间线，混排 control、stdout、stderr，显示时间戳和阶段，支持日志流筛选、加载更早记录及活动期间每五秒增量刷新。`GET /user/runner_requests/{id}/events` 使用与 Job 详情相同的精确安装/仓库权限校验，返回与后台接口相同的事件分页。在 Jobs 面板中，任务名称链接到 GitHub Job，工作流名称链接到对应的 Run。独立 Job 详情页提供 **在 GitHub 查看 Job**；缺少 Job URL 时，若已知仓库和 Run ID，则提供 Workflow Run 跳转。runnerd 不再下载或重复展示 GitHub Actions 日志。已退役的 `/user/runner_requests/{id}/github-log` 接口返回 `404`。
 
@@ -336,6 +353,8 @@ task test          # 重建 UI + 运行全部测试（Go race detection + Bun UI
 task docker-check  # 验证服务 Dockerfile
 task release-check # 验证发布构建
 ```
+
+`task lint` 中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
 
 单独运行 UI 测试时使用 `cd ui && bun run test`。修改 UI 依赖、Vite/Rollup 配置或
 生产静态资源加载逻辑后，还要运行 `task ui-production-smoke`。
@@ -399,6 +418,7 @@ workflow 与 large workflow 门槛，证据保留在
 | [站点指南](https://runner.qiniuinc.com/docs)                                           | 托管版快速开始、runnerd 部署、Workflow 示例、组织 Fork 赞助、自定义模板全流程、故障排查和 managed labels |
 | [docs/zh/testing.md](docs/zh/testing.md)                                               | 本地测试、GitHub App/OAuth 设置、webhook 转发、故障排查 |
 | [docs/zh/deployment-smoke.md](docs/zh/deployment-smoke.md)                             | 生产环境就绪检查清单                                    |
+| [docs/zh/deployment.md](docs/zh/deployment.md)                                         | Sandbox Deploy 配置和当前控制面 API                      |
 | [docs/zh/default-runner-templates.md](docs/zh/default-runner-templates.md)             | 公共模板 labels、qshell 发布流程、区域 smoke 和回滚     |
 | [docs/zh/runner-architecture-comparison.md](docs/zh/runner-architecture-comparison.md) | 架构图及与 ARC / Fireactions 的对比                     |
 | [docs/zh/runner-implementation-review.md](docs/zh/runner-implementation-review.md)     | 实现状态与 schema 迁移说明                              |

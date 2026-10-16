@@ -4,6 +4,8 @@
 
 This guide explains how to test the service with a local Qiniu sandbox environment and how to configure a GitHub repository so self-hosted runners are started automatically.
 
+Run `task lint` for local quality checks. Its `staticcheck` step uses the Go version declared in `go.mod`, matching CI.
+
 ## 1. Local Config File
 
 The service reads `./runnerd.yaml` by default. You can also pass another path with `--config`:
@@ -176,6 +178,7 @@ Suggested setup:
    - Click `Install App`
    - Choose the target owner
    - Choose the repositories to authorize
+   - For Deploy, approve newly requested `Contents: Read-only` and `Pull requests: Read-only`; retry source discovery after approval, and sign in with GitHub again if the stored user authorization is rejected
    - If `Members: Read-only` was added to an existing App, each installation owner must approve the permission update before organization Settings become manageable
 7. Record:
    - App ID
@@ -733,3 +736,199 @@ still stop the build. This does not replace regional Sandbox build/smoke gates.
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow
 - GitHub self-hosted runner autoscaling: https://docs.github.com/en/actions/hosting-your-own-runners/autoscaling-with-self-hosted-runners
 - GitHub webhook `workflow_job` event: https://docs.github.com/en/webhooks/webhook-events-and-payloads
+
+## Sandbox Deploy verification
+
+Deployment details use path IDs under the repository or PR context, retain readable Branch/Tag and revision queries, and reject retired query-ID/source links. Verify signed-out return destinations, direct reload, revision selection, and browser history against those paths.
+
+Run `go test ./internal/state -count=1` first, then
+`go test ./internal/deployment/... ./internal/server -count=1` and `task test`.
+The state coverage includes old SQLite deployment target-column upgrades,
+optimistic lifecycle fencing, retention and bounded events. Add
+`TestDeploymentScopeQuotaSQLBackends` to the dedicated PostgreSQL/MySQL gate
+above; it exercises concurrent account admissions against one organization
+quota after earlier transaction reads, with rejected-write/audit invariance.
+
+Deploy recovery tests distinguish healthy running attempts, transient provider
+failures, mismatched process identity, interrupted creation, unknown creation
+outcomes and confirmed missing resources. Provider HTTP fixtures check metadata
+lookup without creation, missing Sandbox handling and reconnect lifetime.
+These checks do not prove public ingress, real Contents permission or remote
+resource release. Use [Deployment Smoke](deployment-smoke.md#9-sandbox-deploy-acceptance)
+for those gates. `deploy.allow_admin_fallback` defaults to false, independently
+of CI fallback configuration.
+
+The worker tests also cover the startup-only exact Host environment for Vite,
+preservation of unrelated environment values, and rejection before startup when
+the application endpoint cannot be resolved. To exercise the real worker with
+the public `qiniu/deployment` Vite fixture and the public `base` template:
+
+```bash
+RUNNERD_DEPLOY_LIVE=1 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<configured-account-id>" \
+RUNNERD_DEPLOY_LIVE_TEMPLATE=base \
+go test ./internal/server -run '^TestDeploymentLivePublicWorker$' -count=1 -v -timeout 20m
+```
+
+This opt-in test reads that account's scoped Sandbox configuration, uses an
+isolated temporary deployment database, and creates real billable Sandboxes.
+It checks public HTML, same-attempt controller reconnection, manual stop,
+accelerated expiry, and provider-confirmed resource release. It does not prove
+GitHub admission authorization or a full runnerd process restart. Set
+`RUNNERD_DEPLOY_LIVE_EVIDENCE` to an absolute, untracked output path to save
+credential-free results; no local account or physical template ID is embedded
+in the test. The test skips unless explicitly enabled.
+
+The `create-timeout` subtest forwards one real create, discards its successful
+response, and injects a timeout for the initial metadata lookup. It requires an
+unresolved `creating` attempt, then restores transport and starts a new worker
+to reconcile the exact resource, compensate it without another create, preserve
+the original failure, and confirm provider 404. Run only this case with the same
+environment and `-run '^TestDeploymentLivePublicWorker$/^create-timeout$'`.
+The transport faults are injected locally; provider operations remain real.
+This does not cover duplicate authenticated API requests. Worker regressions
+also verify that interruption during failed cleanup preserves failure status and
+cause in both the deployment and its revision.
+
+The `start-failure` worker subtest uses the same pinned public source with a
+locally injected `exit 23` startup plan. It must fail at starting/probing, retain
+failure evidence on the revision, create exactly one real Sandbox, and confirm
+provider 404 after cleanup. This is execution/cleanup evidence, not GitHub
+configuration-admission evidence.
+
+For authenticated admission against an already running **local** runnerd, use:
+
+```bash
+RUNNERD_DEPLOY_LIVE_API=1 \
+RUNNERD_DEPLOY_LIVE_BASE_URL=http://127.0.0.1:25500 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<configured-account-id>" \
+RUNNERD_DEPLOY_LIVE_EVIDENCE=/tmp/deployment-api-evidence.json \
+go test ./internal/server -run '^TestDeploymentLivePublicAPI$' -count=1 -v -timeout 12m
+```
+
+By default this check uses `qiniu/deployment` at branch `example/vite`. It requires
+the running server's config, a linked installation for the repository owner,
+no existing active deployment in the selected scope, a runnable public `base`
+template, and a per-scope limit of 1–3. It signs an in-memory short session for
+the configured existing account and sends it only to a loopback origin; it does
+not test OAuth login. Real GitHub authorization, API admission, workers and
+Sandbox calls run in the existing process. Concurrent keyed requests must yield
+one resource/attempt; quota rejection must leave no row, DELETE must release the
+Sandbox while retaining history, terminal replay must remain idempotent, and
+admission must recover after capacity is released. It creates at most the scope
+limit plus one new deployment, stops only its own submissions, and preserves
+those terminal records for inspection. It does not prove a second user's access,
+private Contents permissions or fork PR execution with its default source. Never publish cookies/configs.
+
+To use a designated public fork or PR fixture, set:
+
+- `RUNNERD_DEPLOY_LIVE_REPOSITORY` (default `qiniu/deployment`).
+- `RUNNERD_DEPLOY_LIVE_SOURCE`: `branch`, `tag`, or `pull_request` (default `branch`).
+- `RUNNERD_DEPLOY_LIVE_REF`: branch/Tag name or positive PR number (default `example/vite`).
+- `RUNNERD_DEPLOY_LIVE_COMMIT_SHA`: optional full immutable SHA to deploy.
+- `RUNNERD_DEPLOY_LIVE_SOURCE_REPOSITORY`: optional expected PR head repository.
+- `RUNNERD_DEPLOY_LIVE_HTML_MARKER`: optional text required in the public HTML.
+
+The quota check follows the selected personal account or Organization scope.
+For an older fork PR Commit, advance the fixture branch first, then pin the old
+SHA and its HTML marker; the saved fork identity and served old content must match.
+This public gate does not revoke GitHub access or prove private Contents permissions.
+
+To additionally verify CI lifecycle independence, set
+`RUNNERD_DEPLOY_LIVE_CI_RUN_ID=<single-job-run-id>` and
+`RUNNERD_DEPLOY_LIVE_CI_RUN_ATTEMPT=<attempt>` with the API gate above. CI must
+use `qiniu/deployment` and the same Commit as the deployment. The test waits for
+that exact attempt, observes concurrent running Sandboxes, requires retained CI
+success and real Runner Sandbox absence, then probes the unchanged deployment
+immediately and after 20 seconds. Missing overlap is a failure. The gate does
+not dispatch/rerun CI or mutate Runner requests. Prepare a real workflow, wait
+for the test's `waiting for concurrent CI` message, then trigger the selected
+attempt separately. For fast startup, compile first with
+`go test -c -o /tmp/deployment-live.test ./internal/server`, then run that binary
+with the same environment and `-test.run '^TestDeploymentLivePublicAPI$'
+-test.v -test.timeout 12m`. Keep private repositories and second-user acceptance
+separate from this public gate.
+
+SDK protocol fixtures verify that application startup sends no remote
+`Connect-Timeout-Ms` deadline while response-header and PID confirmation remain
+bounded locally. Worker regressions cover provider lookups that cross expiry
+and stale expiry observations that must not stop a replacement attempt.
+
+
+Deployment list/detail/event tests must prove cross-account repository sharing,
+exact installation-repository isolation before count/pagination, Jobs cache reuse,
+and rejection of missing/rejected OAuth access. Verify non-owner creation and
+public-only template choices, owner-only private catalogs/settings, revision actor
+persistence and worker revalidation, and per-user PTY isolation. Deployment
+content remains local; a cold authorization cache may contact GitHub.
+UI tests must prove that `/deployments` loads only local history/navigation and links to
+`/deployments/new`, that creation only loads form dependencies, and that both
+routes reload directly. Deployment UI verification also covers Branch/Tag discovery, empty and error retry
+states, version pagination, delayed source/scope responses, template selection,
+create-to-detail navigation, direct `/deployments/{id}` reload, and before/after
+log pagination with history retained on errors. Run the focused Bun deployment
+interaction tests and `task ui-production-smoke`; its deployment fixture checks
+the production bundle, while authenticated real Sandbox acceptance remains separate.
+Navigation tests also cover more than 100 history rows, terminal-only repositories, exact-pair filtering before repository counts/pages, active summaries without credentials, independent history/sidebar pagination, retained selected terminal entries, delayed responses after repository/account switches, in-app back/forward, and desktop/narrow independent scrolling. Fixture browser checks do not establish real Sandbox acceptance.
+Single-select status-filter coverage includes authorized/source-scoped counts beyond the first page,
+all eight lifecycle states, current-state grouping for historical source matches,
+invalid/repeated/empty API CSV members, each UI status, default Running,
+exclusive selection and repeated clicks retaining the current status, empty results, source-preserving URL selection and reload,
+back/forward, keyboard focus and Space toggling, narrow-screen overflow, pagination reset, and
+late page rejection after switching status. Run `go test ./internal/state -run
+TestDeploymentStatus -count=1` and the `filters deployment status` production fixture.
+API regressions cover qualified branch/tag resolution, same-name idempotency
+conflicts, source-prefix length limits, and unauthorized discovery before provider reads.
+
+Deployment revision verification must cover initial #1, atomic next-version creation and audit rollback, frozen old state, revision-scoped cursor pages, stale-output rejection, repeated legacy SQLite upgrade, Postgres/MySQL schema and mutations, URL-restored selection, and delayed-response isolation. Verify the history/log columns stack on a narrow screen and read without provider calls.
+
+### Deployment terminal checks
+
+Run `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1` for PTY input/resize/close, repository authorization and per-user session ownership, revision/attempt identity, stopped/expired rejection, and remaining-lifetime Connect coverage. Run `cd ui && bun run test:production --grep 'separates deployment'` for browser tab navigation, manual connection, typing and disconnect with fixture APIs/output. Fixtures do not prove a real Sandbox PTY. For live acceptance, open a running revision, connect, run `pwd` and inspect an application log file, resize, disconnect, reconnect, then stop the deployment and confirm the terminal becomes unavailable. Historical revisions must never open the current Sandbox.
+
+Deployment context checks: run `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` and the deployment production browser fixture. Cover legacy redirects, direct reload/OAuth return, encoded branch names, immutable revision selection, back navigation, and local-only filtered history before pagination. State coverage includes `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`.
+
+PR source verification: `go test ./internal/server ./internal/github -run 'TestPullRequestDeployment|TestDeploymentSource' -count=1` covers immutable head/older-commit resolution, fork identity, base mismatch, deleted heads, head races, idempotent replay, revoked access, and latest/revision redeploy. Run state upgrade and dedicated PostgreSQL/MySQL revision gates for the additive source snapshot fields. The PR production fixture proves form/routing; real fork PR execution remains a separate live acceptance.
+
+The production browser fixtures cover repository-first PR Jobs → historical Job → pinned creation → deployment detail/reload. Focused UI tests additionally cover Branch/Tag encoded names, old links, delayed catalogs, and pin reset on source changes. Run `task ui-production-smoke`; fixtures do not prove a real fork PR Sandbox execution.
+
+Route migration coverage additionally verifies readable slash queries, literal percent escapes and reserved characters, repository/branch Jobs filtering (including empty results), repository-only deployment/creation links, old named-source URLs, OAuth return, refresh, back/forward and historical resource selection. Run `bun test src/url-query.test.js src/github-context-routes.test.js src/components/auth-pages.test.js` in `ui/` and `task ui-production-smoke`.
+
+Deployment URL checks also cover SHA-free Branch/Tag/PR detail URLs, source history without an implicit commit filter, explicit list commit filters, pinned Job creation, and GitHub links/full-SHA copying for the selected immutable revision.
+
+PR title/link regressions: `TestFillDeploymentPullRequestTitlePreservesSnapshotsAndLifecycle`
+and `TestPullRequestDeploymentPinsSourceAndRejectsInvalidContext` prove empty-only,
+exact-ref title repair, timestamp preservation, repository authorization and local
+detail reads before optional GitHub metadata. Deployment UI tests cover delayed
+legacy title responses, current versus historical headings, and Branch/PR/Tag
+links. The PR production fixture checks long titles, focus and narrow layouts.
+
+Deployment authentication fixtures cover structured GitHub `REAUTH_REQUIRED`
+responses from the list, detail, logs, Web terminal and creation form; runnerd
+session expiry with a successful/failed session recheck; and ordinary forbidden
+or rate-limit errors. Assert a single OAuth redirect with the complete source,
+resource and revision destination, no false reauthentication for other errors,
+and no delayed redirect after leaving the deployment page.
+
+To verify an existing PR deployment against the running local API without creating
+or stopping Sandboxes, use:
+
+```bash
+RUNNERD_DEPLOY_LIVE_METADATA=1 \
+RUNNERD_DEPLOY_LIVE_BASE_URL=http://127.0.0.1:25500 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<configured-account-id>" \
+RUNNERD_DEPLOY_LIVE_DETAIL_ID="<existing-pr-deployment-id>" \
+RUNNERD_DEPLOY_LIVE_EVIDENCE=/tmp/deployment-metadata-evidence.json \
+go test ./internal/server -run '^TestDeploymentLivePullRequestMetadata$' -count=1 -v -timeout 2m
+```
+
+This probe signs a short-lived in-memory session using the specified local config.
+It checks anonymous rejection, authenticated details, the PR title endpoint,
+retained revisions, persisted titles and unchanged lifecycle fields. Missing
+legacy titles may be filled through the normal metadata endpoint. Evidence says
+whether that backfill was exercised and records initial/warm request latency
+separately. It does not test browser OAuth, layout, private Contents access,
+second-account authorization, or live resource release.

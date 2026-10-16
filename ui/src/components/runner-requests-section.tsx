@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react"
 import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -130,15 +130,15 @@ export function RunnerRequestsSection({
   const repositorySearchGeneration = useRef(0)
   const tableHeaderRef = useRef<HTMLTableSectionElement>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
-  const automaticPageLoadGate = useRef(createAutomaticPageLoadGate()).current
+  const [automaticPageLoadGate] = useState(createAutomaticPageLoadGate)
 
-  const triggerLoadMore = (manual = false) => {
+  const triggerLoadMore = useCallback((manual = false) => {
     if (!automaticPageLoadGate.begin(manual)) return
     void onLoadMore().then(
       (succeeded) => automaticPageLoadGate.finish(succeeded),
       () => automaticPageLoadGate.finish(false),
     )
-  }
+  }, [automaticPageLoadGate, onLoadMore])
 
   useEffect(() => {
     if (!hasMore || runners.length === 0) automaticPageLoadGate.reset()
@@ -217,7 +217,7 @@ export function RunnerRequestsSection({
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [automaticPageLoadGate, hasMore, loadingMore, onLoadMore, runners.length])
+  }, [hasMore, loadingMore, runners.length, triggerLoadMore])
 
   const openRunnerRequest = (event: MouseEvent<HTMLAnchorElement>, runner: RunnerState) => {
     event.stopPropagation()

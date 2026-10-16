@@ -9,6 +9,7 @@ The public, bilingual end-user guides are served at [runner.qiniuinc.com/docs](h
 - [Platform Runner Specs](platform-runner-specs.md): database authority, public/private bindings, publication, runtime policy, migration and compatibility.
 - [Local Testing And GitHub Setup](testing.md): local configuration, GitHub App/OAuth setup, webhook forwarding, admin API examples, and troubleshooting.
 - [Deployment Smoke Checklist](deployment-smoke.md): production-style smoke checklist for a real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics.
+- [Deploy configuration](deployment.md): the repository configuration contract for the Sandbox Deploy feature.
 - [Public Runner Templates](default-runner-templates.md): qshell requirements, two-region build and publication order, Sandbox smoke evidence, ownership, and rollback.
 - [Runner Architecture Comparison](runner-architecture-comparison.md): current runnerd architecture baseline, Mermaid system/lifecycle/state diagrams, DB-backed state model, and comparison with Fireactions and Actions Runner Controller.
 - [Organization-Sponsored Fork Runners](organization-sponsored-fork-runners.md): active implementation record for owner-controlled organization sponsorship of trusted personal forks.

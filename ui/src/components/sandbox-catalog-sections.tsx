@@ -147,7 +147,7 @@ export function SandboxTemplatesSection({
     return () => {
       scopedLoadGeneration.current += 1
     }
-  }, [loadScoped])
+  }, [loadScoped, region])
 
   return (
     <SandboxTemplateCatalog

@@ -4,6 +4,7 @@
 
 - Run `git status --short --branch` before editing and preserve user-owned changes.
 - Read the exact code, scripts, tests, or docs that back the requested behavior before changing documents.
+- Before changing UI components or pages, read [Frontend UI Consistency](frontend-ui-consistency.md), identify the shared primitives and an existing comparable page, and follow its mandatory implementation and acceptance rules.
 - Keep changes scoped. Do not edit generated UI assets in `internal/server/ui/` by hand; edit `ui/` and rebuild with `task build` or `task ui-build`.
 - Do not commit real secrets, local sqlite databases, `runnerd.local.yaml`, `.smee-url`, private keys, cookie jars, or deployment-local hostnames.
 
@@ -29,6 +30,7 @@ task template-check-all
 - `task dev` is the local development entrypoint. It defaults to `RUNNERD_CONFIG=runnerd.local.yaml`, starts Vite on the first available localhost port at or after `5173`, starts smee forwarding when `.smee-url` exists, and runs runnerd with the `development` build tag.
 - `task smee` reads `.smee-url` and defaults to `SMEE_TARGET=http://127.0.0.1:25500/webhooks/github`.
 - `task build` rebuilds production UI assets into `internal/server/ui/` before compiling `bin/runnerd`.
+- `task lint` runs `staticcheck` with the Go version declared in `go.mod`, matching CI and avoiding newer host Go export data unsupported by the installed analyzer.
 - `task ui-i18n-check` validates the English/Chinese resource contract, typed i18next keys, and untranslated visible literals before UI copy changes are handed off.
 - `task template-runner-update-test` exercises stable-release, downgrade,
   canonical-asset, digest/size, atomic-write, and no-op behavior for the shared

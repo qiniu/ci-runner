@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
 	"github.com/qiniu/ci-runner/internal/runnerapplication"
 	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
@@ -191,6 +192,14 @@ type Catalog interface {
 	ListRunnerSandboxes(ctx context.Context) ([]CatalogSandbox, error)
 }
 
+// DeploymentSandboxInspector reads the provider-owned resource snapshot for a
+// Deploy Sandbox. It is deliberately separate from Catalog because Deploy
+// Sandboxes use their own metadata namespace and must not appear in the Runner
+// Sandbox catalog.
+type DeploymentSandboxInspector interface {
+	InspectDeploymentSandbox(context.Context, string) (CatalogSandbox, error)
+}
+
 // DefaultTemplateCatalog lists public templates available on the scoped Sandbox endpoint.
 type DefaultTemplateCatalog interface {
 	ListDefaultTemplates(ctx context.Context) ([]CatalogTemplate, error)
@@ -224,7 +233,10 @@ var (
 )
 
 type E2BService struct {
-	client *qnsandbox.Client
+	client     *qnsandbox.Client
+	apiKey     string
+	endpoint   string
+	httpClient *http.Client
 }
 
 const runnerBootstrapUser = "root"
@@ -246,7 +258,34 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	if err != nil {
 		return nil, err
 	}
-	return &E2BService{client: client}, nil
+	return &E2BService{client: client, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
+}
+
+// CreateDeploymentRuntime allocates a Sandbox runtime for deployd. It uses a
+// separate metadata namespace from GitHub Runner sandboxes.
+func (s *E2BService) CreateDeploymentRuntime(ctx context.Context, templateID string, timeout time.Duration, operationID string) (*deployruntime.Handle, error) {
+	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return factory.Create(ctx, templateID, timeout, operationID)
+}
+
+// ConnectDeploymentRuntime reconnects to a persisted Deploy Sandbox.
+func (s *E2BService) ConnectDeploymentRuntime(ctx context.Context, sandboxID string, remaining time.Duration) (*deployruntime.Handle, error) {
+	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return factory.Connect(ctx, sandboxID, remaining)
+}
+
+func (s *E2BService) ReconcileDeploymentRuntime(ctx context.Context, templateID, operationID string, remaining time.Duration) (*deployruntime.Handle, error) {
+	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return factory.ReconcileCreate(ctx, templateID, operationID, remaining)
 }
 
 // TemplateDetails allowlists credential-free provider metadata for the admin form.
@@ -365,6 +404,7 @@ func (s *E2BService) ListTemplates(ctx context.Context) ([]CatalogTemplate, erro
 			EnvdVersion: item.EnvdVersion,
 			CreatedAt:   item.CreatedAt,
 			Aliases:     item.Aliases,
+			Names:       item.Names,
 			BuildStatus: string(item.BuildStatus),
 			CPUCount:    item.CPUCount,
 			MemoryMB:    item.MemoryMB,
@@ -428,6 +468,46 @@ func (s *E2BService) ListRunnerSandboxes(ctx context.Context) ([]CatalogSandbox,
 		})
 	}
 	return result, nil
+}
+
+// InspectDeploymentSandbox finds one Deploy Sandbox by its persisted ID. The
+// provider list call is read-only and does not reconnect or extend the
+// Sandbox lifetime.
+func (s *E2BService) InspectDeploymentSandbox(ctx context.Context, sandboxID string) (CatalogSandbox, error) {
+	sandboxID = strings.TrimSpace(sandboxID)
+	if sandboxID == "" {
+		return CatalogSandbox{}, ErrSandboxNotFound
+	}
+	metadata := "app=qiniu-deployd"
+	limit := int32(100)
+	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &metadata, Limit: &limit})
+	if err != nil {
+		return CatalogSandbox{}, err
+	}
+	for _, item := range items {
+		if item.SandboxID != sandboxID {
+			continue
+		}
+		return CatalogSandbox{
+			SandboxID:  item.SandboxID,
+			TemplateID: item.TemplateID,
+			Alias:      sandboxAlias(item.Alias),
+			State:      string(item.State),
+			CPUCount:   item.CPUCount,
+			MemoryMB:   item.MemoryMB,
+			DiskSizeMB: item.DiskSizeMB,
+			StartedAt:  item.StartedAt,
+			ExpiresAt:  item.EndAt,
+		}, nil
+	}
+	return CatalogSandbox{}, ErrSandboxNotFound
+}
+
+func sandboxAlias(alias *string) string {
+	if alias == nil {
+		return ""
+	}
+	return *alias
 }
 
 func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartResult, error) {
@@ -978,7 +1058,25 @@ type e2bTerminalSession struct {
 }
 
 func (s *E2BService) StartTerminal(ctx context.Context, sandboxID string, size PtySize, onData func([]byte)) (TerminalSession, error) {
-	sb, err := s.client.Connect(ctx, sandboxID, qnsandbox.ConnectParams{Timeout: 30})
+	return s.startTerminal(ctx, sandboxID, size, 30, onData)
+}
+
+// StartTerminalUntil connects with the deployment's remaining lifetime rather
+// than the fixed timeout used for interactive Runner diagnostics.
+func (s *E2BService) StartTerminalUntil(ctx context.Context, sandboxID string, size PtySize, expiresAt time.Time, onData func([]byte)) (TerminalSession, error) {
+	remaining := time.Until(expiresAt)
+	if remaining <= 0 {
+		return nil, errors.New("deployment has expired")
+	}
+	seconds := math.Ceil(remaining.Seconds())
+	if seconds > math.MaxInt32 {
+		return nil, errors.New("deployment lifetime exceeds limit")
+	}
+	return s.startTerminal(ctx, sandboxID, size, int32(seconds), onData)
+}
+
+func (s *E2BService) startTerminal(ctx context.Context, sandboxID string, size PtySize, timeout int32, onData func([]byte)) (TerminalSession, error) {
+	sb, err := s.client.Connect(ctx, sandboxID, qnsandbox.ConnectParams{Timeout: timeout})
 	if err != nil {
 		return nil, err
 	}

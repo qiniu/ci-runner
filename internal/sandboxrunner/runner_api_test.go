@@ -255,6 +255,28 @@ func TestE2BServiceListDefaultTemplates(t *testing.T) {
 	}
 }
 
+func TestE2BServiceInspectDeploymentSandbox(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/sandboxes" {
+			t.Fatalf("request path = %q, want /v2/sandboxes", r.URL.Path)
+		}
+		if r.URL.Query().Get("metadata") != "app=qiniu-deployd" {
+			t.Fatalf("metadata query = %q", r.URL.Query().Get("metadata"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"sandboxID":"deploy-1","templateID":"tpl","state":"running","cpuCount":4,"memoryMB":8192,"diskSizeMB":40960,"startedAt":"2026-10-13T00:00:00Z","endAt":"2026-10-13T01:00:00Z"}]`))
+	}))
+	defer ts.Close()
+
+	got, err := newTestService(t, ts).InspectDeploymentSandbox(context.Background(), " deploy-1 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SandboxID != "deploy-1" || got.TemplateID != "tpl" || got.CPUCount != 4 || got.MemoryMB != 8192 || got.DiskSizeMB != 40960 {
+		t.Fatalf("unexpected sandbox resource snapshot: %#v", got)
+	}
+}
+
 func TestInspectTemplateMetadataFallsBackToEffectiveCatalog(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -9,6 +9,7 @@
 - [平台 Runner 规格管理](platform-runner-specs.md)：数据库权威来源、公共／私有绑定、目录发布、运行策略、迁移和兼容边界。
 - [本地测试与 GitHub 配置](testing.md)：本地配置、GitHub App/OAuth 设置、webhook forwarding、admin API 示例和排障流程。
 - [部署 Smoke Checklist](deployment-smoke.md)：面向真实 GitHub App、webhook、Qiniu sandbox template、runner pickup、cleanup 和 diagnostics 的生产风格 smoke checklist。
+- [Deploy 配置](deployment.md)：Sandbox Deploy 功能使用的仓库配置契约。
 - [公共 Runner 模板](default-runner-templates.md)：qshell 环境要求、双区域构建与发布顺序、Sandbox smoke 证据、维护责任和回滚流程。
 - [Runner 架构对比](runner-architecture-comparison.md)：当前 runnerd 架构基线、Mermaid 系统/生命周期/状态图、DB-backed state model，以及和 Fireactions、Actions Runner Controller 的对比。
 - [组织赞助的 Fork Runner](organization-sponsored-fork-runners.md)：由 owner 控制的可信个人 Fork 组织赞助能力的当前实现记录。

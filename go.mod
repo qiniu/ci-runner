@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jimmicro/pprof v1.1.0
+	github.com/miclle/deployd v0.0.0-20261008112950-f1ca4144c713
 	github.com/qiniu/go-sdk/v7 v7.27.0
 	golang.org/x/sync v0.21.0
 	gopkg.in/yaml.v3 v3.0.1

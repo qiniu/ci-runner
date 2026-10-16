@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/config"
+	deploymentworker "github.com/qiniu/ci-runner/internal/deployment/worker"
 	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/metrics"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
@@ -22,24 +23,26 @@ import (
 )
 
 type Server struct {
-	cfg         config.Config
-	store       state.Store
-	gh          *github.Client
-	sandbox     sandboxrunner.Service
-	sandboxHTTP *http.Client
-	logger      *slog.Logger
-	mux         *http.ServeMux
-	slots       chan struct{}
-	oauth       *http.Client
-	diagnostics *http.Client
-	cacheSTS    *http.Client
-	terminals   *terminalHub
-	startedAt   time.Time
+	cfg              config.Config
+	store            state.Store
+	gh               *github.Client
+	sandbox          sandboxrunner.Service
+	sandboxHTTP      *http.Client
+	logger           *slog.Logger
+	mux              *http.ServeMux
+	slots            chan struct{}
+	oauth            *http.Client
+	diagnostics      *http.Client
+	cacheSTS         *http.Client
+	terminals        *terminalHub
+	deploymentWorker *deploymentworker.Worker
+	startedAt        time.Time
 
 	admissionMu          sync.Mutex
 	forkSponsorshipLocks [64]sync.Mutex
 	locks                [64]sync.Mutex
 	queueNotify          chan struct{}
+	deploymentNotify     chan struct{}
 	startOnce            sync.Once
 	workerID             string
 	loopCtx              context.Context
@@ -184,6 +187,7 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		mux:                       http.NewServeMux(),
 		slots:                     make(chan struct{}, cfg.MaxConcurrentRunners),
 		queueNotify:               make(chan struct{}, 1),
+		deploymentNotify:          make(chan struct{}, 1),
 		oauth:                     &http.Client{Timeout: 10 * time.Second},
 		diagnostics:               &http.Client{Timeout: 5 * time.Second},
 		cacheSTS:                  &http.Client{Timeout: 30 * time.Second},
@@ -199,6 +203,7 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 	hostname, _ := os.Hostname()
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
 	s.loopCtx, s.loopCancel = context.WithCancel(context.Background())
+	s.deploymentWorker = s.newDeploymentWorker()
 	s.routes()
 	return s
 }
@@ -299,7 +304,15 @@ func (s *Server) Recover(ctx context.Context) error {
 			active = append(active, st)
 		}
 	}
+	var runnerRecoveryErr error
 	if len(active) == 0 {
+		if s.deploymentWorker != nil {
+			return s.deploymentWorker.RunOnce(ctx)
+		}
+		if s.cfg.DeploymentRetention > 0 {
+			_, err := s.store.PruneDeployments(time.Now().UTC().Add(-s.cfg.DeploymentRetention), 100)
+			return err
+		}
 		return nil
 	}
 
@@ -359,7 +372,18 @@ dispatch:
 	for err := range recoveryErrors {
 		joined = append(joined, err)
 	}
-	return errors.Join(joined...)
+	runnerRecoveryErr = errors.Join(joined...)
+	if s.deploymentWorker != nil {
+		return errors.Join(runnerRecoveryErr, s.deploymentWorker.RunOnce(ctx))
+	}
+	if s.cfg.DeploymentRetention > 0 {
+		pruneErr := func() error {
+			_, err := s.store.PruneDeployments(time.Now().UTC().Add(-s.cfg.DeploymentRetention), 100)
+			return err
+		}()
+		return errors.Join(runnerRecoveryErr, pruneErr)
+	}
+	return runnerRecoveryErr
 }
 
 func (s *Server) recoveryTimeoutPerRunner(ctx context.Context, requestCount, workerCount int) (time.Duration, bool) {
@@ -422,6 +446,25 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /user/github-app/installations/{id}", s.handleUserDeleteGitHubInstallation)
 	s.mux.HandleFunc("GET /user/onboarding/product-tour", s.handleUserProductTourOnboarding)
 	s.mux.HandleFunc("PUT /user/onboarding/product-tour", s.handleUserSaveProductTourOnboarding)
+	s.mux.HandleFunc("POST /user/deployments", s.handleUserCreateDeployment)
+	s.mux.HandleFunc("GET /user/deployment-templates", s.handleUserDeploymentTemplates)
+	s.mux.HandleFunc("GET /user/deployment-refs", s.handleUserDeploymentRefs)
+	s.mux.HandleFunc("GET /user/deployment-repositories", s.handleUserDeploymentRepositories)
+	s.mux.HandleFunc("GET /user/deployments", s.handleUserListDeployments)
+	s.mux.HandleFunc("GET /user/deployments/{id}", s.handleUserGetDeployment)
+	s.mux.HandleFunc("GET /user/deployments/{id}/pull-request", s.handleUserGetDeploymentPullRequest)
+	s.mux.HandleFunc("GET /user/deployments/{id}/resources", s.handleUserGetDeploymentResources)
+	s.mux.HandleFunc("GET /user/deployments/{id}/events", s.handleUserListDeploymentEvents)
+	s.mux.HandleFunc("GET /user/deployments/{id}/revisions", s.handleUserListDeploymentRevisions)
+	s.mux.HandleFunc("GET /user/deployments/{id}/revisions/{number}/events", s.handleUserListDeploymentEvents)
+	s.mux.HandleFunc("POST /user/deployments/{id}/stop", s.handleUserStopDeployment)
+	s.mux.HandleFunc("DELETE /user/deployments/{id}", s.handleUserStopDeployment)
+	s.mux.HandleFunc("POST /user/deployments/{id}/retry", s.handleUserRetryDeployment)
+	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal", s.handleUserCreateDeploymentTerminal)
+	s.mux.HandleFunc("GET /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/events", s.handleUserDeploymentTerminalEvents)
+	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/input", s.handleUserDeploymentTerminalInput)
+	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/resize", s.handleUserDeploymentTerminalResize)
+	s.mux.HandleFunc("DELETE /user/deployments/{id}/revisions/{number}/terminal/{sessionID}", s.handleUserCloseDeploymentTerminal)
 	s.mux.HandleFunc("GET /user/runner_requests", s.handleUserListRunners)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}", s.handleUserGetRunner)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/group", s.handleUserGetRunnerJobGroup)

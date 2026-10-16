@@ -44,6 +44,18 @@ sandbox:
       s3_region: cn-east-1
       s3_endpoint: https://internal-s3-las-cn-east-1-yz.qiniucs.com
 
+deploy:
+  # Optional default template ID for Sandbox Deploy; users can choose a
+  # scoped public or owned template in /deployments. No selection rejects creation.
+  template_id: ""
+  work_root: /var/lib/runnerd/deployments
+  # Maximum queued/running deployment attempts per account or organization scope.
+  max_concurrent_per_scope: 3
+  # Terminal records and their bounded events are retained for this long after cleanup.
+  retention_hours: 168
+  # Deploy does not use the platform CI fallback unless explicitly enabled.
+  allow_admin_fallback: false
+
 github:
   webhook_secret: change-me
   # GitHub.com only. GitHub Enterprise Server is not currently supported.

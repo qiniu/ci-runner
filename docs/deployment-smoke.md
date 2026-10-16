@@ -352,3 +352,102 @@ enabled `-large` custom specs first. Do not delete public templates or custom
 specs during rollback.
 
 Record any deployment-specific notes outside the repository if they include private hosts, account names, channel URLs, secrets, or cookie data.
+
+## 9. Sandbox Deploy acceptance
+
+Run this section with a real private repository, a GitHub App installation, a
+usable dedicated Deploy template, and an account or organization
+Sandbox configuration. Before starting, confirm the App has repository
+Contents read access. Repository members may deploy; managing organization
+settings and private template catalogs requires Members read access and active
+owner membership. Keep the generated IDs and timestamps in the external
+acceptance record, never in repository files.
+
+1. Create a repository `.qiniu/deploy.yaml` at a known Commit. Start a manual
+   deployment from a branch, then verify the API stores the resolved full SHA,
+   immutable spec hash, one-hour default TTL (or the requested bounded TTL),
+   and no command or credential in the response.
+2. Verify the deployment reaches `running`, its HTTPS endpoint answers the
+   configured health path, and the response reports `endpoint_access: public`.
+   Confirm the UI warns that the address has no application authentication.
+   For Vite preview, verify the unmodified repository runs with the current
+   Sandbox hostname supplied at startup; retain its Host check and avoid a
+   wildcard allowlist. The opt-in public worker check is documented in
+   [Testing](testing.md#sandbox-deploy-verification).
+3. Confirm the service remains reachable after the source GitHub Job and any
+   runner cleanup finish; Deploy must not register a GitHub Runner. The optional
+   CI Run/attempt gate in [Testing](testing.md#sandbox-deploy-verification) requires
+   an observed overlap on the same Commit and provider-confirmed Runner cleanup.
+4. Submit the same `Idempotency-Key` twice and force a provider create timeout.
+   Reconcile by the exact `qiniu-deployd` metadata and confirm that retrying does
+   not create a second Sandbox.
+   The opt-in `create-timeout` worker subtest in [Testing](testing.md#sandbox-deploy-verification)
+   provides repeatable real-resource fault injection for a lost create response
+   and unavailable initial lookup. `TestDeploymentLivePublicAPI` separately
+   verifies concurrent authenticated submissions, terminal replay, DELETE and
+   quota release against an existing local runnerd; see the same Testing section.
+   Successful compensation must retain the original failure stage/reason in the deployment and revision.
+5. Restart runnerd while the service is running. The same Sandbox ID, runtime
+   process tag, endpoint, and expiry must be recovered; an old attempt callback
+   must not change the current deployment.
+6. Exercise stop, DELETE, TTL expiry, and a failed start. Each path must finish
+   with provider evidence that the Sandbox is released; a cleanup failure stays
+   visible and is retried. The opt-in `start-failure` worker mode verifies real
+   cleanup using a synthetic plan whose start command exits with code 23.
+7. Verify anonymous users and users without the exact installation-repository
+   pair cannot read or mutate deployments. A different authorized repository
+   member must be able to read history/logs and create/redeploy/stop/delete.
+   Missing/rejected OAuth fails closed; warmed reads reuse the Jobs cache.
+   With explicit owner approval, suspend and restore the test Installation:
+   after the 30-second cache expires, repository lists must exclude it and
+   details/logs/actions must deny access even if GitHub still lists its repositories.
+   Confirm access recovers after unsuspending. Record this separately from
+   individual repository removal and OAuth-token revocation.
+   Separately, with account approval, revoke only that local App's current OAuth
+   access token and wait for cache expiry. Jobs/Deploy reads and actions must
+   return `403 / REAUTH_REQUIRED`; normal browser OAuth must restore a valid
+   token and return to the original detail with saved history intact.
+   Check public-only template choices for members, owner-only private catalogs
+   and Sandbox settings, revision execution credentials, and per-user terminals. Create enough active deployments to
+   receive `429 deployment_quota_exceeded`, then release one and verify admission
+   resumes. After the configured retention window, confirm terminal deployment
+   rows/events are pruned while audit evidence remains.
+
+The 2026-10-14 public API, startup-failure and accelerated retention results are
+recorded in [Deploy configuration](deployment.md#iteration-plan). Retention used
+a timestamp change on one completed test record; it was not a natural seven-day wait.
+
+Record three evidence classes separately: local unit/integration checks,
+browser/UI checks, and the real Sandbox provider run. Local fakes and preview
+fixtures cannot satisfy this section.
+
+
+In the real browser flow, confirm `/deployments` only shows the list and its Create
+deployment link. Follow it to `/deployments/new`, reload, and confirm only the form
+appears; the list must not load form catalogs and creation must not load history.
+Switch Version source between Branch and Tag, confirm
+the matching live reference list, and choose an available template for the selected scope.
+Empty or failed reference discovery must prevent stale submission and allow refresh.
+Create the deployment and verify navigation to the repository/PR-context
+`/deployments/{id}` detail path (the ID must not be a query value). Refresh
+that address during execution and after readiness; the same deployment and
+stage/stdout/stderr logs must remain visible. Exercise earlier-log pagination
+and a failed event read without discarding existing history. Missing template
+or scoped credentials must reject creation with an actionable message. Verify
+the selected template ID remains bound through idempotent replay and retry.
+
+Deployment revision verification must cover initial #1, atomic next-version creation and audit rollback, frozen old state, revision-scoped cursor pages, stale-output rejection, repeated legacy SQLite upgrade, Postgres/MySQL schema and mutations, URL-restored selection, and delayed-response isolation. Verify the history/log columns stack on a narrow screen and read without provider calls.
+
+For a designated public fork PR, use the optional repository/source/Commit and
+HTML-marker parameters of the live API gate in [Testing](testing.md#sandbox-deploy-verification).
+Advance the PR head and deploy an older full SHA; confirm saved fork identity,
+old page content, and provider absence after DELETE. Record this separately from
+live GitHub permission revocation, private repository Contents, and second-user access.
+
+For an existing PR deployment, also verify its real title and Branch/PR/Tag GitHub
+links. The opt-in `TestDeploymentLivePullRequestMetadata` probe in
+[Testing](testing.md#sandbox-deploy-verification) checks authenticated metadata,
+anonymous rejection and lifecycle preservation without creating or stopping a
+Sandbox. It may fill missing legacy titles. Record API evidence separately from
+signed-in Chrome rendering and OAuth expiry/return checks; synthetic session
+signing does not verify browser sign-in.

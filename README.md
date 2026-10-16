@@ -83,6 +83,14 @@ Organization owners can open **Settings → Fork sponsorship** to let trusted pe
 
 For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testing.md](docs/testing.md) for detailed local setup including GitHub App creation and webhook forwarding.
 
+The Sandbox Deploy control-plane and execution slice is documented in [docs/deployment.md](docs/deployment.md). `/deployments` and deployment details share a repository sidebar: repository links open its deployment list, expandable children show active deployments, and a selected terminal deployment remains visible. Navigation summaries and deployment history paginate independently from the local database. The list uses single-select Running / Processing / Stopped / Failed segmented filters with full authorized counts and URL-restored selection. Running is selected by default; exactly one status remains selected. The Create deployment link opens `/deployments/new` with the current repository preselected. The creation page contains the repository, Branch/Tag/PR and scoped Sandbox template form; `deploy.template_id` is an optional API default. Creation opens the deployment detail under its repository or PR context; refresh preserves the deployment and its logs. Lists, details, logs and actions share Jobs' exact GitHub OAuth/App installation-repository authorization. Content stays in the local database; authorization uses the same short-lived cache as Jobs and rejects suspended Installations even if GitHub still lists their repositories. PR titles are saved at admission; a separate optional metadata request fills missing legacy titles without delaying details or logs. Source headings link to GitHub Branch/PR/Tag pages. Repository members may deploy and redeploy; Sandbox settings and private template catalogs remain owner-managed. Each deployment starts at Revision #1; redeploy creates a new numbered revision of the pinned plan and keeps earlier status/logs. Details show the selected template name and CPU, memory, and disk snapshot beside revision history and a chronological log viewer, and `?revision=N` preserves the selected version on reload.
+
+Running deployment details also offer a Web terminal for the current revision. Connect manually to inspect processes and application log files; leaving the terminal closes the shell. Terminal access revalidates repository access and isolates each user's shell and uses the saved Sandbox credentials.
+Compensation cleanup preserves the original deployment failure and revision evidence, including when cleanup resumes after interruption. Creation idempotency uses an immutable request hash, so provider expiry changes and later revisions do not invalidate the original request key.
+Application startup supplies the exact Sandbox hostname for Vite's Host allowlist, so Vite preview needs no repository-specific ingress domain.
+
+Jobs provide deployment history and a creation link pinned to the selected Job commit. Repository collections use readable Branch/Tag query filters (for example, `/github/qiniu/deployment/deployments?branch=example/vite`) and stable `pull_requests/{number}` paths. Deployment details use `/github/{owner}/{repo}/deployments/{id}` (or the PR path) with optional source/revision queries and no Commit SHA. Existing Jobs source paths remain compatible; old deployment query-ID links are unsupported. See [GitHub context routes](docs/deployment.md#github-context-routes).
+
 ## Configuration
 
 `runnerd` reads `./runnerd.yaml` by default, or the path passed with `--config`. See [`runnerd.yaml.example`](runnerd.yaml.example) for a fully commented reference.
@@ -93,6 +101,7 @@ For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testi
 | `database` | Backend (`sqlite` / `postgres` / `mysql`) and DSN |
 | `auth` | Session secret, encryption key, session TTL |
 | `sandbox` | Sandbox lifecycle timeouts (create, run, stop) |
+| `deploy` | Dedicated Deploy template, per-scope concurrency, retention, and transient work root (enables Issue #125 worker) |
 | `github` | Webhook secret, auth method (App / PAT / basic), OAuth, allowed repositories |
 | `worker` | Lease, retry, and concurrency settings |
 
@@ -105,6 +114,9 @@ Key notes:
 - GitHub Enterprise Server is **not** supported; use a GitHub.com App.
 - Configure exactly one GitHub auth method: `github.app`, `github.token`, or `github.basic_auth`.
 - When `github.app.installation_id` is omitted, runnerd resolves the installation dynamically per repository, allowing one App to serve multiple accounts.
+- `deploy.template_id` is an optional default, separate from Runner Specs. The independent worker always runs; creation requires an available selected template (or this default) and effective scoped credentials. `deploy.work_root` is an absolute workspace path inside the Sandbox.
+- Deploy defaults to scoped credentials; `deploy.allow_admin_fallback: true` explicitly permits the existing platform fallback and its audience rules. Admitted deployments snapshot region/template bindings; retries resolve current credentials.
+- `deploy.max_concurrent_per_scope` defaults to `3` and limits queued/running deployments for each account or organization scope. `deploy.retention_hours` defaults to `168`; released terminal rows and bounded events are pruned after that period while audit history remains.
 
 ### Config Value Obfuscation
 
@@ -187,9 +199,15 @@ env:
 | Repository | Actions | Read-only | Query job/run status, list queued jobs; required for webhook events |
 | Repository | Administration | Read & write | Repository-level runner registration (when spec has no `runner_group`) |
 | Repository | Metadata | Read-only | Identify repositories and owners |
-| Repository | Pull requests | Read-only | Show PR titles in job groups |
+| Repository | Contents | Read-only | Sandbox Deploy: discover Branch/Tag/Commit sources, read deployment configuration and check out pinned source |
+| Repository | Pull requests | Read-only | Show PR titles and resolve PR deployment sources |
 | Organization | Members | Read-only | Verify active organization owner role (`role: admin`) for organization Settings and scoped management |
 | Organization | Self-hosted runners | Read & write | Organization-level runner registration (when spec sets `runner_group`) |
+
+For Deploy, existing installation owners must approve newly requested Contents
+or Pull requests permissions. After approval, sign out and sign in with GitHub
+again if runnerd still reports `REAUTH_REQUIRED` or unavailable repository
+versions. A successful public deployment does not prove private Contents access.
 
 Set `github.app.slug` to show an "Install GitHub App" link in the user UI. Use `github.allowed_repositories` (patterns like `owner/repo` or `owner/*`) to restrict which repositories can use this runnerd instance.
 
@@ -296,7 +314,7 @@ The built-in web UI provides:
 | `/admin/audit` | Audit event history |
 | `/admin/diagnostics` | runnerd runtime diagnostics with redacted summary, pprof discovery, and on-demand expvar |
 
-`/` is always the public Qiniu CI Runner product landing page. `/docs` and its fixed guide routes are public, same-origin, and available in English and Simplified Chinese. The ordinary-user Jobs homepage is `/jobs`; other protected routes include `/repositories`, PR job groups (`/github/pulls/{owner}/{repo}/{number}/jobs`), and account settings (`/account/preferences`, `/account/sandbox-templates`, `/account/sandbox-instances`), with matching `/organizations/{login}/...` routes. Opening a protected route without a session shows a focused GitHub sign-in page and returns to the original URL after OAuth.
+`/` is always the public Qiniu CI Runner product landing page. `/docs` and its fixed guide routes are public, same-origin, and available in English and Simplified Chinese. The ordinary-user Jobs homepage is `/jobs`; other protected routes include `/repositories`, PR job groups (`/github/{owner}/{repo}/pull_requests/{number}/jobs`), and account settings (`/account/preferences`, `/account/sandbox-templates`, `/account/sandbox-instances`), with matching `/organizations/{login}/...` routes. Opening a protected route without a session shows a focused GitHub sign-in page and returns to the original URL after OAuth.
 
 Job details open **Runner logs** by default and retain the Web Console and request details. Jobs and admin request details share one event timeline: mixed control/stdout/stderr records, timestamps, stages, stream filters, older-page loading, and incremental refresh every five seconds while active. `GET /user/runner_requests/{id}/events` requires the same exact installation/repository authorization as Job details and returns the same event pages as the admin endpoint. In the Jobs panel, the job name links to the GitHub Job and the workflow name links to its Run. Standalone Job details provide **View job on GitHub**, falling back to the Workflow Run when its repository and Run ID are known. runnerd does not download or duplicate GitHub Actions logs. The retired `/user/runner_requests/{id}/github-log` endpoint returns `404`.
 
@@ -341,6 +359,8 @@ task test          # Rebuild UI + run all tests (Go with race detection + Bun UI
 task docker-check  # Verify the service Dockerfile
 task release-check # Verify release build
 ```
+
+The `staticcheck` step in `task lint` uses the Go version declared in `go.mod`, matching CI.
 
 For focused UI tests, run `cd ui && bun run test`. Use `task ui-production-smoke`
 after changing UI dependencies, Vite/Rollup configuration, or production asset
@@ -416,6 +436,7 @@ standard workflow, and large workflow gates recorded in
 | [Hosted site guides](https://runner.qiniuinc.com/docs) | Hosted quick start, runnerd deployment, workflow example, organization fork sponsorship, custom template lifecycle, troubleshooting, and managed labels |
 | [docs/testing.md](docs/testing.md) | Local testing, GitHub App/OAuth setup, webhook forwarding, troubleshooting |
 | [docs/deployment-smoke.md](docs/deployment-smoke.md) | Production-style readiness checklist |
+| [docs/deployment.md](docs/deployment.md) | Sandbox Deploy configuration and current control-plane API |
 | [docs/default-runner-templates.md](docs/default-runner-templates.md) | Public template labels, qshell release flow, regional smoke, and rollback |
 | [docs/runner-architecture-comparison.md](docs/runner-architecture-comparison.md) | Architecture diagrams and comparison with ARC / Fireactions |
 | [docs/runner-implementation-review.md](docs/runner-implementation-review.md) | Implementation status and schema migration notes |

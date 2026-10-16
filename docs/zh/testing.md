@@ -4,6 +4,8 @@
 
 这份文档说明如何用本地 Qiniu sandbox 环境测试服务，以及如何在 GitHub 仓库中配置 self-hosted runner 自动拉起。
 
+本地质量检查使用 `task lint`；其中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
+
 ## 1. 本地配置文件
 
 服务现在默认读取 `./runnerd.yaml`；也可以通过 `--config` 指向别的路径：
@@ -169,6 +171,7 @@ go test ./internal/sandboxrunner -count=1
    - 点 `Install App`
    - 选择目标 owner
    - 选择要授权的仓库
+   - Deploy 需要批准新增的 `Contents: Read-only` 和 `Pull requests: Read-only`；批准后重试版本发现，已保存用户授权被拒绝时重新通过 GitHub 登录
    - 如果给已有 App 新增了 `Members: Read-only`，每个 installation owner 都必须先批准权限更新，组织 Settings 才会变为可管理
 7. 记录这些值：
    - App ID
@@ -716,3 +719,161 @@ apt 管理的 `packaging` 保持不变、pipx 工具目录兼容、普通用户�
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow
 - GitHub self-hosted runner autoscaling: https://docs.github.com/en/actions/hosting-your-own-runners/autoscaling-with-self-hosted-runners
 - GitHub webhook `workflow_job` event: https://docs.github.com/en/webhooks/webhook-events-and-payloads
+
+## Sandbox Deploy 验证
+
+部署详情将 ID 放在仓库或 PR 上下文路径中，保留可读的 Branch／Tag 与 revision 查询参数，拒绝旧 query-ID／来源链接。验证这些路径的未登录返回地址、直接刷新、版本选择及浏览器前进／后退。
+
+先运行 `go test ./internal/state -count=1`，再运行
+`go test ./internal/deployment/... ./internal/server -count=1` 与 `task test`。
+状态测试覆盖旧 SQLite 部署目标列升级、乐观锁生命周期隔离、保留期限和有界事件。
+在上面的独立 PostgreSQL/MySQL gate 中增加 `TestDeploymentScopeQuotaSQLBackends`；
+它验证两个账号在同一组织下并发准入时的共享配额、事务此前已读取后的可见性，以及
+拒绝写入时部署与审计记录保持不变。
+
+恢复测试区分健康 running attempt、临时 Provider 故障、进程身份不匹配、中断创建、
+创建结果未知和确认资源不存在。Provider HTTP fixture 验证只查找元数据而不创建资源、
+Sandbox 不存在判定和重连时的剩余生命周期。这些检查不能证明公网访问、真实 Contents
+权限或远端资源释放；真实验收见 [Deployment Smoke](deployment-smoke.md)。
+`deploy.allow_admin_fallback` 默认为 false，独立于 CI 兜底配置。
+
+worker 测试还覆盖仅启动时注入 Vite 精确 Host、保留其他环境变量，以及无法解析应用地址时
+拒绝启动。使用公开的 `qiniu/deployment` Vite fixture 和公共 `base` 模板验证真实 worker：
+
+```bash
+RUNNERD_DEPLOY_LIVE=1 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<已配置的账号 ID>" \
+RUNNERD_DEPLOY_LIVE_TEMPLATE=base \
+go test ./internal/server -run '^TestDeploymentLivePublicWorker$' -count=1 -v -timeout 20m
+```
+
+该测试需主动启用，会读取指定账号的 scope Sandbox 配置，在隔离的临时部署数据库中执行，
+并创建真实计费 Sandbox。它验证公网 HTML、相同 attempt 的控制器重连、手动停止、加速到期
+和 Provider 确认资源释放；不代表 GitHub 准入授权或完整 runnerd 进程重启验收。
+可将 `RUNNERD_DEPLOY_LIVE_EVIDENCE` 设置为未跟踪文件的绝对路径，保存不含凭据的结果。
+测试未内置本地账号或物理模板 ID，未显式启用时会跳过。
+
+`create-timeout` 子测试转发一次真实创建，丢弃成功响应，并让首次元数据查询超时。
+它要求记录保持未确认的 `creating` attempt，随后恢复传输并使用新的 worker 找回精确资源，
+不重复创建，补偿清理后保留原始失败原因，并确认 Provider 404。使用相同环境变量，
+将筛选改为 `-run '^TestDeploymentLivePublicWorker$/^create-timeout$'` 可单独执行此项。
+故障在本地传输层注入，Provider 操作仍为真实调用；不覆盖重复的已登录 API 请求。
+worker 回归测试还验证失败清理过程中断后，部署及其版本仍保留失败状态和原因。
+
+`start-failure` worker 子测试使用同一固定公开来源，在本地注入 `exit 23` 启动计划。
+它必须在 starting／probing 阶段失败，将失败证据保留在版本中，只创建一个真实 Sandbox，
+并在清理后确认 Provider 404。这是执行／清理证据，不代表 GitHub 配置准入已经验收。
+
+对已启动的**本地** runnerd 验证真实登录态 API 准入：
+
+```bash
+RUNNERD_DEPLOY_LIVE_API=1 \
+RUNNERD_DEPLOY_LIVE_BASE_URL=http://127.0.0.1:25500 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<configured-account-id>" \
+RUNNERD_DEPLOY_LIVE_EVIDENCE=/tmp/deployment-api-evidence.json \
+go test ./internal/server -run '^TestDeploymentLivePublicAPI$' -count=1 -v -timeout 12m
+```
+
+默认测试使用 `qiniu/deployment` 的 `example/vite` 分支。需要运行中服务的配置、
+已关联目标仓库 owner 的 Installation、所选作用域没有其他活动部署、
+可运行的公共 `base` 模板，以及 1–3 的作用域并发上限。测试为指定的已有账号在内存中签发
+短期 session，仅发送到 loopback 地址，不验证 OAuth 登录。真实 GitHub 授权、API 准入、
+worker 与 Sandbox 调用均在已有服务进程中执行。同键并发请求只能生成一个资源／attempt；
+配额拒绝不留记录，DELETE 释放 Sandbox 并保留历史，终态重放保持幂等，容量释放后准入恢复。
+最多创建“作用域上限＋1”个新部署，只停止本次提交，保留终态记录供检查。不证明第二个账号的
+权限；默认来源也不证明私有仓库 Contents 权限或 fork PR 执行。不要发布 cookie 或配置。
+
+使用指定的公开 fork／PR fixture 时，可设置：
+
+- `RUNNERD_DEPLOY_LIVE_REPOSITORY`：默认 `qiniu/deployment`。
+- `RUNNERD_DEPLOY_LIVE_SOURCE`：`branch`、`tag` 或 `pull_request`，默认 `branch`。
+- `RUNNERD_DEPLOY_LIVE_REF`：分支／Tag 名称或正数 PR 编号，默认 `example/vite`。
+- `RUNNERD_DEPLOY_LIVE_COMMIT_SHA`：可选，固定部署的完整 SHA。
+- `RUNNERD_DEPLOY_LIVE_SOURCE_REPOSITORY`：可选，要求 PR head 的来源仓库匹配。
+- `RUNNERD_DEPLOY_LIVE_HTML_MARKER`：可选，要求公网 HTML 包含该标记。
+
+配额验收使用所选个人账号或 Organization 作用域。验收 fork PR 的历史 Commit 时，
+先推进 fixture 分支，再固定旧 SHA 和页面标记，核对保存的 fork 身份和实际旧版内容。
+该公开验收不会撤销 GitHub 权限，也不能证明私有仓库 Contents 权限。
+
+如需同时验收 CI 生命周期独立性，在上述 API 验收环境中增加
+`RUNNERD_DEPLOY_LIVE_CI_RUN_ID=<单 Job 的 Run ID>` 与
+`RUNNERD_DEPLOY_LIVE_CI_RUN_ATTEMPT=<attempt>`。CI 必须来自 `qiniu/deployment`，
+并与部署使用相同 Commit。测试等待精确的 attempt，实际观察两个 Sandbox 同时运行，
+要求保留 CI 成功结果并由 Provider 确认 Runner Sandbox 不存在，然后立即及 20 秒后
+检查部署 attempt 不变、公网仍返回 200。错过并行阶段会失败；测试不触发／重跑 CI，
+也不修改 Runner request。准备真实工作流，等待测试输出 `waiting for concurrent CI`，
+再单独触发选定的 attempt。为减少启动延迟，可先执行
+`go test -c -o /tmp/deployment-live.test ./internal/server`，然后使用相同环境执行该二进制，
+传入 `-test.run '^TestDeploymentLivePublicAPI$' -test.v -test.timeout 12m`。
+私有仓库和第二个用户的权限验收保持独立。
+
+SDK 协议 fixture 验证应用启动不发送远端 `Connect-Timeout-Ms` 截止时间，响应头等待与 PID
+确认仍受本地超时限制。worker 回归测试覆盖 Provider 查询跨过到期时间，以及旧到期观察
+不能停止替代 attempt 的边界。
+
+
+部署列表、详情及事件测试应证明跨账号仓库共享、计数／分页前的 Installation＋仓库
+精确隔离、Jobs 授权缓存复用，以及 OAuth 缺失或被拒绝时失败关闭。覆盖非 owner 创建、
+仅公共模板选择、owner 私有目录／设置边界、revision 执行账号持久化与 worker 重新授权，
+以及每个用户的 PTY 隔离。部署内容仍从本地读取；授权缓存未命中时可能访问 GitHub。UI 测试应验证 `/deployments` 只加载本地历史与导航，并通过链接进入
+`/deployments/new`；创建页只加载表单依赖，两条路由均支持直接刷新。
+部署 UI 验证还覆盖分支／Tag 发现、空列表与失败重试、版本分页、延迟来源／scope 响应、
+模板选择、创建后进入详情、直接刷新
+`/deployments/{id}`，以及 before／after 日志分页和错误时保留历史。执行部署交互的
+聚焦 Bun 测试及 `task ui-production-smoke`；其中部署 fixture 验证 production bundle，
+已登录的真实 Sandbox 验收仍单独记录。
+导航测试还覆盖超过 100 条历史、只有终态部署的仓库、仓库计数／分页前的精确权限隔离、无凭据活动摘要、列表与侧边栏独立分页、选中终态入口保留、切换仓库／账号后的迟到响应隔离、应用内前进／后退及桌面／窄屏独立滚动。fixture 浏览器检查不代表真实 Sandbox 验收。
+单选状态筛选验证覆盖完整授权及来源范围的跨页计数、八种生命周期状态、历史来源按当前状态分组、
+非法／重复／空的 API 组合成员、各 UI 状态、默认“运行中”、互斥选择、重复点击保持选中、空结果、
+保留来源的 URL 选择及刷新、前进／后退、键盘焦点及空格切换、窄屏溢出、
+分页重置及切换状态后的迟到分页隔离。运行 `go test ./internal/state -run TestDeploymentStatus -count=1`
+及 `filters deployment status` production 浏览器夹具。
+API 回归还覆盖完整分支／Tag 引用解析、同名来源的幂等冲突、包含来源前缀的长度限制，
+以及未授权时禁止读取上游引用。
+
+部署版本验证需覆盖首次 #1、新版与审计原子提交及回滚、旧版状态保留、版本内游标分页、旧版迟到输出拒绝、旧 SQLite 重复升级、Postgres/MySQL 迁移及事务、URL 版本恢复与迟到响应隔离。确认窄屏下历史和日志上下排列，读取无需 Provider 请求。
+
+### 部署终端验证
+
+运行 `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1`，验证 PTY 输入、缩放、关闭，仓库授权与用户终端归属，revision／attempt 绑定，停止／到期拒绝，以及 Connect 使用剩余有效期。运行 `cd ui && bun run test:production --grep 'separates deployment'`，通过浏览器夹具验证标签切换、手动连接、键盘输入和断开；夹具不证明真实 Sandbox PTY 可用。真实验收时打开运行中的版本，连接后执行 `pwd`、查看应用日志文件、缩放、断开并重连，再停止部署并确认终端不可用。历史版本不得打开当前 Sandbox。
+
+部署上下文验证：执行 `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` 及部署 production 浏览器夹具，覆盖旧链接跳转、直接刷新／OAuth 返回、分支名编码、不可变版本选择、返回列表与分页前的本地历史筛选。状态测试包括 `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`。
+
+PR 来源验证：执行 `go test ./internal/server ./internal/github -run 'TestPullRequestDeployment|TestDeploymentSource' -count=1`，覆盖固定 head／历史提交、fork 身份、base 不匹配、来源删除、head 竞争、幂等重放、权限撤销及最新／历史版本重部署。新增来源快照字段还需执行状态升级与专用 PostgreSQL/MySQL 版本门禁。PR production 夹具验证表单和路由，真实 fork PR 执行仍需单独验收。
+
+生产浏览器 fixture 覆盖仓库在前的 PR Jobs → 历史 Job → 固定提交创建 → 部署详情／刷新。聚焦 UI 测试另覆盖 Branch／Tag 名称编码、旧链接、延迟目录与切换来源时清除 SHA。运行 `task ui-production-smoke`；fixture 不代表真实 fork PR Sandbox 执行已通过。
+
+路由迁移另覆盖可读斜杠查询、字面百分号转义与保留字符、仓库／分支 Jobs 筛选（包括空结果）、仓库级部署／创建入口、旧来源路径、OAuth 返回、刷新、前进后退与历史资源选择。在 `ui/` 运行 `bun test src/url-query.test.js src/github-context-routes.test.js src/components/auth-pages.test.js`，并运行 `task ui-production-smoke`。
+
+部署 URL 检查还覆盖不携带 SHA 的 Branch／Tag／PR 详情、未隐式限定 Commit 的来源历史、显式 Commit 列表筛选、Job 固定提交创建，以及所选不可变版本的 GitHub 链接和完整 SHA 复制。
+
+PR 标题／链接回归：`TestFillDeploymentPullRequestTitlePreservesSnapshotsAndLifecycle`
+与 `TestPullRequestDeploymentPinsSourceAndRejectsInvalidContext` 验证按精确 ref
+仅回填空标题、保留时间戳、仓库授权，以及详情先读取本地数据、独立补充 GitHub
+元数据。部署 UI 测试覆盖延迟返回的旧记录标题、当前与历史标题的区分，以及
+Branch／PR／Tag 链接；PR 生产构建夹具验证长标题、焦点和窄屏布局。
+
+部署认证夹具覆盖列表、详情、日志、Web 终端和创建表单返回的 GitHub
+`REAUTH_REQUIRED`，以及 runnerd 会话过期后会话检查成功／失败、普通权限拒绝与限流。
+验证 OAuth 仅跳转一次并保留完整来源、资源和 revision 返回地址；普通错误不误触发
+重新登录，离开部署页面后也不受之前请求的延迟登录错误影响。
+
+验证运行中本地 API 的已有 PR 部署，且不创建或停止 Sandbox，可使用：
+
+```bash
+RUNNERD_DEPLOY_LIVE_METADATA=1 \
+RUNNERD_DEPLOY_LIVE_BASE_URL=http://127.0.0.1:25500 \
+RUNNERD_DEPLOY_LIVE_CONFIG="$PWD/runnerd.local.yaml" \
+RUNNERD_DEPLOY_LIVE_ACCOUNT_ID="<configured-account-id>" \
+RUNNERD_DEPLOY_LIVE_DETAIL_ID="<existing-pr-deployment-id>" \
+RUNNERD_DEPLOY_LIVE_EVIDENCE=/tmp/deployment-metadata-evidence.json \
+go test ./internal/server -run '^TestDeploymentLivePullRequestMetadata$' -count=1 -v -timeout 2m
+```
+
+测试使用指定本地配置，在内存中签发短期会话，检查匿名拒绝、认证详情、PR 标题接口、
+保留版本、标题持久化以及生命周期字段不变。旧记录的空标题可通过正常元数据接口补齐。
+证据明确记录本轮是否触发回填，并分别记录初次和后续请求耗时。本测试不验证浏览器
+OAuth、布局、私有 Contents 权限、第二账号授权或真实资源释放。
