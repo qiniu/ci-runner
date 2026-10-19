@@ -812,10 +812,23 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if err := s.deploymentWorker.Stop(r.Context(), deployment.ID, false); err != nil {
+			if errors.Is(err, deployruntime.ErrCreatePending) {
+				// No retry revision has been admitted. Invite an explicit retry once
+				// cleanup reconciles instead of reporting an accepted deployment.
+				s.signalDeployments()
+				w.Header().Set("Retry-After", "15")
+				writeErrorCode(w, http.StatusConflict, "deployment_cleanup_pending", "Sandbox cleanup is still reconciling; retry after cleanup completes")
+				return
+			}
 			writeError(w, http.StatusBadGateway, "deployment cleanup is incomplete")
 			return
 		}
-		deployment, _ = s.store.GetDeployment(deployment.ID)
+		var err error
+		deployment, err = s.store.GetDeployment(deployment.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "load deployment after cleanup")
+			return
+		}
 	}
 	if input.Mode == "revision" && input.RevisionNumber > 0 {
 		revision, err := s.store.GetDeploymentRevision(deployment.ID, input.RevisionNumber)
@@ -867,6 +880,9 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 		writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
 		return
 	}
+	// Repository members may replay an existing saved template binding, including
+	// an owner-created private template. Only new choices require the public-only
+	// catalog gate; retry cannot substitute an arbitrary template ID.
 	deployment.ExecutionAccountID = account.ID
 	deployment.SandboxAPIURL, deployment.SandboxAPIKeyEncrypted, deployment.SandboxConfigSource = snapshot.APIURL, snapshot.EncryptedAPIKey, snapshot.Source
 	deployment.SandboxRegion = s.sandboxRegionForAPIURL(snapshot.APIURL)

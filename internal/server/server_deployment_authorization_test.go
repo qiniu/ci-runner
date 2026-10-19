@@ -360,10 +360,11 @@ func TestRepositoryMemberCanDeployWithoutPrivateCatalogAccess(t *testing.T) {
 	if d.ExecutionAccountID != account.ID || d.ScopeType != state.AccountScopeTypeGitHubInstall || d.ScopeID != 987 {
 		t.Fatal("incorrect execution scope")
 	}
-	// Reuse an immutable revision created by a different account.
+	// Reuse an immutable private-template revision created by a different account.
 	d.AccountID = account.ID + 10
 	d.ExecutionAccountID = d.AccountID
 	d.ID = "other-creator"
+	d.DeploymentTemplateID = "deploy-template-a"
 	d.Status = state.DeploymentStatusCompleted
 	d, err = store.CreateDeployment(d)
 	if err != nil {

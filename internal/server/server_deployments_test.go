@@ -14,8 +14,18 @@ import (
 	"testing"
 	"time"
 
+	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
+	deploymentworker "github.com/qiniu/ci-runner/internal/deployment/worker"
 	"github.com/qiniu/ci-runner/internal/state"
 )
+
+type pendingCleanupFactory struct {
+	deploymentworker.RuntimeFactory
+}
+
+func (pendingCleanupFactory) Connect(context.Context, state.Deployment) (deploymentworker.RuntimeHandle, error) {
+	return nil, deployruntime.ErrCreatePending
+}
 
 func TestDeploymentID(t *testing.T) {
 	id := newDeploymentID(1, "request-1")
@@ -267,6 +277,33 @@ func testUserCreateDeploymentPinsCommitAndAuditsPlan(t *testing.T, source string
 	if stopRec.Code != http.StatusOK || !strings.Contains(stopRec.Body.String(), `"status":"completed"`) {
 		t.Fatalf("stop status=%d body=%s", stopRec.Code, stopRec.Body.String())
 	}
+	// Reconciliation is transient but no new revision may be accepted until the
+	// previous Sandbox is confirmed clean.
+	blocked, err := store.GetDeployment(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked.Status, blocked.SandboxID = state.DeploymentStatusFailed, "pending-sandbox"
+	if err := store.UpdateDeployment(blocked); err != nil {
+		t.Fatal(err)
+	}
+	srv.deploymentWorker = deploymentworker.New(store, pendingCleanupFactory{}, nil, nil, t.TempDir())
+	pending := httptest.NewRequest(http.MethodPost, "/user/deployments/"+created.ID+"/retry", nil)
+	pending.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+	pendingRec := httptest.NewRecorder()
+	srv.ServeHTTP(pendingRec, pending)
+	if pendingRec.Code != http.StatusConflict || pendingRec.Header().Get("Retry-After") != "15" || !strings.Contains(pendingRec.Body.String(), "deployment_cleanup_pending") {
+		t.Fatalf("pending cleanup response: %d %s", pendingRec.Code, pendingRec.Body.String())
+	}
+	blocked, err = store.GetDeployment(created.ID)
+	if err != nil || blocked.RevisionNumber != 1 || blocked.Status != state.DeploymentStatusFailed || blocked.SandboxID != "pending-sandbox" {
+		t.Fatalf("pending cleanup admitted a revision: %#v %v", blocked, err)
+	}
+	blocked.SandboxID = ""
+	if err := store.UpdateDeployment(blocked); err != nil {
+		t.Fatal(err)
+	}
+	srv.deploymentWorker = nil
 	retry := httptest.NewRequest(http.MethodPost, "/user/deployments/"+created.ID+"/retry", nil)
 	retry.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
 	retryRec := httptest.NewRecorder()
