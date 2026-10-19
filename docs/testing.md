@@ -744,10 +744,12 @@ Deployment details use path IDs under the repository or PR context, retain reada
 Run `go test ./internal/state -count=1` first, then
 `go test ./internal/deployment/... ./internal/server -count=1` and `task test`.
 The state coverage includes old SQLite deployment target-column upgrades,
-optimistic lifecycle fencing, retention and bounded events. Add
-`TestDeploymentScopeQuotaSQLBackends` to the dedicated PostgreSQL/MySQL gate
-above; it exercises concurrent account admissions against one organization
-quota after earlier transaction reads, with rejected-write/audit invariance.
+optimistic lifecycle fencing, retention and bounded events. The CI PostgreSQL/MySQL
+gate includes `TestDeploymentScopeQuotaSQLBackends`, which exercises concurrent
+account admissions against one organization quota after earlier transaction reads,
+with rejected-write/audit invariance. `TestDeploymentRevisionsSQLBackends` covers
+immutable history; `TestDeploymentQuerySQLBackends` verifies constant query counts
+for historical source lists and one UTF-8 byte-budget aggregate per event append.
 
 Deploy recovery tests distinguish healthy running attempts, transient provider
 failures, mismatched process identity, interrupted creation, unknown creation

@@ -379,13 +379,28 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 	if err := query.Order("created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&records).Error; err != nil {
 		return nil, 0, err
 	}
+	revisions := make(map[string]deploymentRevisionRecord, len(records))
+	if matchingRevision && len(records) > 0 {
+		ids := make([]string, len(records))
+		for i, record := range records {
+			ids[i] = record.ID
+		}
+		latest := deploymentRevisionListQuery(db, options).Select("deployment_id, MAX(number)").Where("deployment_id IN ?", ids).Group("deployment_id")
+		var matches []deploymentRevisionRecord
+		if err := db.Where("(deployment_id, number) IN (?)", latest).Find(&matches).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, revision := range matches {
+			revisions[revision.DeploymentID] = revision
+		}
+	}
 	deployments := make([]Deployment, 0, len(records))
 	for _, record := range records {
 		deployment := deploymentFromRecord(record)
 		if matchingRevision {
-			var revision deploymentRevisionRecord
-			if err := deploymentRevisionListQuery(db, options).Where("deployment_id = ?", record.ID).Order("number DESC").First(&revision).Error; err != nil {
-				return nil, 0, err
+			revision, ok := revisions[record.ID]
+			if !ok {
+				return nil, 0, ErrNotFound
 			}
 			matched := revisionFromRecord(revision, record)
 			deployment.ContextRevision = &matched
@@ -677,18 +692,16 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 			return ErrConflict
 		}
 		record.RevisionNumber = event.RevisionNumber
-		for {
-			var count int64
-			if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Count(&count).Error; err != nil {
-				return err
-			}
-			var bytes int64
-			if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Select("COALESCE(SUM(LENGTH(message)), 0)").Scan(&bytes).Error; err != nil {
-				return err
-			}
-			if count < maxDeploymentEvents && bytes+int64(len(event.Message)) <= maxDeploymentEventBytes {
-				break
-			}
+		var budget struct{ Count, Bytes int64 }
+		// SQLite LENGTH(text) counts characters; budgets apply to UTF-8 bytes.
+		messageBytes := "OCTET_LENGTH(message)"
+		if tx.Dialector.Name() == "sqlite" {
+			messageBytes = "LENGTH(CAST(message AS BLOB))"
+		}
+		if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Select("COUNT(*) AS count, COALESCE(SUM(" + messageBytes + "), 0) AS bytes").Scan(&budget).Error; err != nil {
+			return err
+		}
+		for budget.Count >= maxDeploymentEvents || budget.Bytes+int64(len(event.Message)) > maxDeploymentEventBytes {
 			var oldest deploymentEventRecord
 			if err := tx.Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Order("id ASC").First(&oldest).Error; err != nil {
 				return err
@@ -696,6 +709,8 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 			if err := tx.Delete(&oldest).Error; err != nil {
 				return err
 			}
+			budget.Count--
+			budget.Bytes -= int64(len(oldest.Message))
 		}
 		return tx.Create(&record).Error
 	})
@@ -816,6 +831,8 @@ func validDeploymentStatus(status string) bool {
 }
 
 func validDeploymentCommit(value string) bool {
+	// Persisted deployd plans support SHA-1 and SHA-256 Git object IDs. GitHub
+	// admission separately requires the SHA-1 IDs exposed by its current API.
 	value = strings.TrimSpace(value)
 	if len(value) != 40 && len(value) != 64 {
 		return false
