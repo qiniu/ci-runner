@@ -673,7 +673,6 @@ export const zh = {
     deploymentCreateFailed: "无法创建部署",
     deploymentActionFailed: "无法更新部署",
     deploymentStopped: "部署已停止",
-    deploymentDeleted: "部署已删除",
     deploymentRetried: "部署已重新排队",
     deploymentPlanning: "规划中",
     deploymentStatusStopped: "已停止",

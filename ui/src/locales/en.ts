@@ -673,7 +673,6 @@ export const en = {
     deploymentCreateFailed: "Unable to create deployment",
     deploymentActionFailed: "Unable to update deployment",
     deploymentStopped: "Deployment stopped",
-    deploymentDeleted: "Deployment deleted",
     deploymentRetried: "Deployment queued for retry",
     deploymentPlanning: "Planning",
     deploymentStatusStopped: "Stopped",

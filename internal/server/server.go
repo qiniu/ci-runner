@@ -458,6 +458,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /user/deployments/{id}/revisions", s.handleUserListDeploymentRevisions)
 	s.mux.HandleFunc("GET /user/deployments/{id}/revisions/{number}/events", s.handleUserListDeploymentEvents)
 	s.mux.HandleFunc("POST /user/deployments/{id}/stop", s.handleUserStopDeployment)
+	// DELETE is a stop alias: Sandbox resources are removed, retained revision
+	// and event history is pruned only by the configured retention policy.
 	s.mux.HandleFunc("DELETE /user/deployments/{id}", s.handleUserStopDeployment)
 	s.mux.HandleFunc("POST /user/deployments/{id}/retry", s.handleUserRetryDeployment)
 	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal", s.handleUserCreateDeploymentTerminal)

@@ -131,7 +131,6 @@ describe("deployment interaction", () => {
   test.each([
     ["stop", "running", "Deployment stopped", "部署已停止"],
     ["retry", "completed", "Deployment queued for retry", "部署已重新排队"],
-    ["delete", "completed", "Deployment deleted", "部署已删除"],
   ])("translates the %s success notification in both languages", async (kind, status, english, chinese) => {
     const success = spyOn(toast, "success").mockImplementation(() => "test-toast")
     try {
@@ -146,7 +145,8 @@ describe("deployment interaction", () => {
           return saved
         }
         const { container } = await mountPage({ request, deploymentID: saved.id }, { page: "deployments" })
-        await act(async () => button(container, i18n.t(kind === "stop" ? "user.stopDeployment" : kind === "retry" ? "user.retryDeployment" : "common.delete")).click())
+        expect(button(container, i18n.t("common.delete"))).toBeUndefined()
+        await act(async () => button(container, i18n.t(kind === "stop" ? "user.stopDeployment" : "user.retryDeployment")).click())
         if (kind === "retry") await act(async () => button(document.body, i18n.t("user.startRedeploy")).click())
         expect(success.mock.calls.at(-1)?.[0]).toBe(language === "en" ? english : chinese)
       }
@@ -178,10 +178,12 @@ describe("deployment interaction", () => {
       const { container } = await mountPage({ request }, { page: "deployments" })
       await act(async () => button(container, "Load more deployments").click())
       await act(async () => button(container, "Load more repositories").click())
+      const intervalCreations = interval.mock.calls.length
       requests.length = 0
       await act(async () => { for (const callback of [...timers.values()]) callback() })
       expect(requests.length).toBe(2)
       expect(requests.some((url) => url.includes("offset=100"))).toBe(false)
+      expect(interval.mock.calls.length).toBe(intervalCreations)
       expect(container.querySelectorAll('[data-testid="deployment-list"] > a')).toHaveLength(101)
       expect(container.querySelector('[data-testid="deployment-list"] > a[href*="old-history"]')).not.toBeNull()
       expect(container.querySelector('[data-testid="deployment-navigation"]').textContent).toContain("old/repository")

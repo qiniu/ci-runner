@@ -1,5 +1,5 @@
 import { deploymentCreatePath, deploymentListAPIPath, deploymentListPath, deploymentPath, githubContextFromPath, githubContextPath } from "@/github-context-routes"
-import { ArrowLeft, CalendarDays, Copy, GitBranch, GitCommitHorizontal, ExternalLink, Loader2, Plus, RefreshCw, Square, Trash2, RotateCcw } from "lucide-react"
+import { ArrowLeft, CalendarDays, Copy, GitBranch, GitCommitHorizontal, ExternalLink, Loader2, Plus, RefreshCw, Square, RotateCcw } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -94,7 +94,7 @@ type EventPage = { events?: DeploymentEvent[]; has_more?: boolean }
 type DeploymentPage = { items?: Deployment[]; total?: number; status_counts?: DeploymentStatusCounts }
 
 const statusFilterLabels = { running: "common.statusRunning", processing: "user.deploymentStatusProcessing", stopped: "user.deploymentStatusStopped", failed: "common.statusFailed" } as const
-const actionMessages = { stop: "user.deploymentStopped", delete: "user.deploymentDeleted", retry: "user.deploymentRetried" } as const
+const actionMessages = { stop: "user.deploymentStopped", retry: "user.deploymentRetried" } as const
 
 type DeploymentResources = Pick<Deployment, "template_id" | "template_name" | "template_cpu" | "template_memory_mb" | "template_disk_mb" | "sandbox_id" | "sandbox_region" | "expires_at"> & { remote_error?: string }
 
@@ -293,8 +293,9 @@ export function UserDeploymentsSection({
     }
   }, [loadDeployments, currentLogin])
 
+  const shouldPoll = !deploymentID || deployments.some((item) => activeStatuses.has(item.status))
   useEffect(() => {
-    if (deploymentID && !deployments.some((item) => activeStatuses.has(item.status))) return
+    if (!shouldPoll) return
     const poll = () => { if (document.visibilityState !== "hidden") void loadDeployments(true) }
     const timer = window.setInterval(poll, deploymentID ? 3000 : 5000)
     document.addEventListener("visibilitychange", poll)
@@ -302,7 +303,7 @@ export function UserDeploymentsSection({
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", poll)
     }
-  }, [loadDeployments, deployments, deploymentID])
+  }, [loadDeployments, shouldPoll, deploymentID])
 
   const loadOlderDeployments = async () => {
     if (loadingOlder || loading || !hasMore) return
@@ -338,16 +339,15 @@ export function UserDeploymentsSection({
     }
   }
 
-  async function runAction(kind: "stop" | "delete" | "retry", retryOptions?: { mode: "latest" | "revision"; revision_number?: number }) {
+  async function runAction(kind: "stop" | "retry", retryOptions?: { mode: "latest" | "revision"; revision_number?: number }) {
     if (!selectedDeployment || action) return
     setAction(kind)
     try {
       const path = `/user/deployments/${encodeURIComponent(selectedDeployment.id)}`
-      const result = await request(kind === "delete" ? path : `${path}/${kind}`, { method: kind === "delete" ? "DELETE" : "POST", ...(kind === "retry" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(retryOptions ?? { mode: "revision" }) } : {}) }) as Deployment
+      const result = await request(`${path}/${kind}`, { method: "POST", ...(kind === "retry" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(retryOptions ?? { mode: "revision" }) } : {}) }) as Deployment
       if (kind === "retry") { setRevisionSelection({ id: result.id, number: result.revision_number }); const url = new URL(window.location.href); url.searchParams.delete("revision"); window.history.replaceState(null, "", url) }
-      setDeployments((current) => kind === "delete" ? current.filter((item) => item.id !== selectedDeployment.id) : current.map((item) => item.id === result.id ? { ...result, revisions: item.revisions, revisions_has_more: item.revisions_has_more } : item))
-      if (kind !== "delete") void loadDeployments()
-      if (kind === "delete" && deploymentID) backToDeployments()
+      setDeployments((current) => current.map((item) => item.id === result.id ? { ...result, revisions: item.revisions, revisions_has_more: item.revisions_has_more } : item))
+      void loadDeployments()
       setNavigationRefresh((value) => value + 1)
       toast.success(t(actionMessages[kind]))
     } catch (cause) {
@@ -434,7 +434,7 @@ function DeploymentDetail({ request, selectedRevisionNumber, deployment, selecte
   eventState: ReturnType<typeof useDeploymentEvents>
   formatTime: (value?: string) => string
   action: string | null
-  onAction: (kind: "stop" | "delete" | "retry", retryOptions?: { mode: "latest" | "revision"; revision_number?: number }) => void
+  onAction: (kind: "stop" | "retry", retryOptions?: { mode: "latest" | "revision"; revision_number?: number }) => void
 }) {
   const { t, i18n } = useTranslation()
   const sandboxRegions = useSandboxRegions()
@@ -479,7 +479,6 @@ function DeploymentDetail({ request, selectedRevisionNumber, deployment, selecte
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button type="button" size="sm" variant="outline" disabled={!canStop || Boolean(action)} onClick={() => onAction("stop")}><Square className="h-3.5 w-3.5" />{t("user.stopDeployment")}</Button>
             <Button type="button" size="sm" disabled={!canRetry || Boolean(action)} onClick={() => { setRedeployMode(deployment.source === "branch" || deployment.source === "pull_request" ? "latest" : "revision"); setRedeployRevision(deployment.revision_number ?? revisions[0]?.number ?? 1); setRedeployOpen(true) }}><RotateCcw className="h-3.5 w-3.5" />{t("user.retryDeployment")}</Button>
-            <Button type="button" size="sm" variant="outline" disabled={Boolean(action)} onClick={() => onAction("delete")}><Trash2 className="h-3.5 w-3.5" />{t("common.delete")}</Button>
           </div>
         </div>
         {deployment.source_repository_full_name ? <p className="text-sm text-muted-foreground">{deployment.source_repository_full_name}:{deployment.source_ref}</p> : null}
