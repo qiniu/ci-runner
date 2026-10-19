@@ -77,9 +77,11 @@ tagged Sandbox, checks out the pinned Commit, persists deployd checkpoints, and
 keeps the Sandbox alive after readiness. It records the Sandbox ID, attempt,
 runtime ID and process tag so a restart can reconnect to the exact attempt.
 Command output is bounded and redacted before any optional event sink receives
-it. Deployment history retains at most 2,000 events and 8 MiB of message data
-per deployment, keeping the event timeline bounded while preserving the newest
-evidence. The worker runs independently of a configured default. Admission
+it. Provider failures emit only the operation name, error category and validated
+HTTP status to server logs; raw errors, response bodies, URLs and credentials are
+never logged. Deployment history retains at most 2,000 events and 8 MiB of message
+data per revision, keeping each revision's event timeline bounded while preserving
+the newest evidence. The worker runs independently of a configured default. Admission
 validates the selected physical template ID with the effective scoped credentials
 and rejects missing/unavailable templates or credentials before queuing. Existing
 queued records without a template fail visibly; create a new deployment with a
@@ -203,9 +205,9 @@ ID is resolved server-side.
   100 repositories (maximum 500); optional `repository_full_name` selects one
   repository for direct detail navigation outside the loaded sidebar pages.
   Authorization filters exact installation/repository pairs before grouping or
-  pagination. Active children include all matching active deployments for these
-  repositories, even beyond the history's first page; summaries expose only ID,
-  repository, qualified ref, commit, status and update time, never runtime or
+  pagination. Active children include the newest active deployments (up to 20 per
+  repository), including those beyond the history's first page; summaries expose
+  only ID, repository, qualified ref, commit, status and update time, never runtime or
   credential fields. No Sandbox or GitHub catalog calls occur; authorization uses
   Jobs' existing OAuth/App intersection cache. Reads use `Cache-Control: no-store`.
 - `GET /user/deployments/{id}`, saved events, revisions and lifecycle actions

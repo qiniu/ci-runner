@@ -61,7 +61,9 @@ deploy:
 位于 Sandbox 内，只用于每次 attempt 的临时工作目录。worker 会创建带独立元数据的
 Sandbox，检出固定 Commit，持久化 deployd checkpoint，并在服务就绪后保持该
 Sandbox 运行。系统记录 Sandbox ID、attempt、runtime ID 和进程 tag，重启后只会
-重新连接同一个 attempt。命令输出在交给可选事件接收器前会限制大小并脱敏。每个部署
+重新连接同一个 attempt。命令输出在交给可选事件接收器前会限制大小并脱敏。
+Provider 失败只向服务端日志记录操作名、错误类别及经过校验的 HTTP 状态码，
+不记录原始错误、响应正文、URL 或凭据。每个部署版本
 最多保留 2,000 条事件和 8 MiB 消息内容，时间线有界且优先保留最新证据。worker 不依赖默认模板配置。准入使用有效作用域凭据验证所选物理模板 ID，缺少模板、
 模板不可用或凭据未配置时会在入队前拒绝。已有缺少模板的 queued 记录会明确失败，
 应选择模板重新创建。创建／重试在事务中保存排队事件，并立即唤醒 worker；定期协调仍作为兜底。
@@ -179,7 +181,8 @@ Sandbox，然后记录 `expired`。创建或清理失败时只记录 `failed`，
 `repository_full_name`、保留的部署总数 `total`、`active_count` 与 `active_deployments`，
 以及 `has_more`、`limit`、`offset`。每页默认 100 个仓库，上限 500；可用
 `repository_full_name` 精确读取尚未加载的当前仓库。查询先按 Installation＋仓库精确授权，
-再聚合和分页；活动部署不受历史第一页限制，只返回 ID、仓库、完整 ref、Commit、状态和更新时间，
+再聚合和分页；每个仓库返回最新的最多 20 个活动部署，不受历史第一页限制，
+只返回 ID、仓库、完整 ref、Commit、状态和更新时间，
 不返回运行时或凭据。内容来自本地数据库，不访问 Sandbox 或 GitHub 目录；授权复用 Jobs
 的 OAuth/App 交集缓存，响应使用 `Cache-Control: no-store`。
 
