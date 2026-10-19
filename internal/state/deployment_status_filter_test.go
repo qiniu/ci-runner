@@ -45,8 +45,8 @@ func TestDeploymentStatusFiltersAndCountsUseAuthorizedSourceBeforePagination(t *
 		if filter == "processing" || filter == "stopped" {
 			options.Offset = 1
 		}
-		items, got, err := store.ListAuthorizedDeployments(access, options)
-		if err != nil || got != total || len(items) != 1 {
+		items, got, actualCounts, err := store.ListAuthorizedDeploymentsWithCounts(access, options)
+		if err != nil || got != total || len(items) != 1 || actualCounts != want {
 			t.Fatalf("%s: items=%v total=%d err=%v", filter, items, got, err)
 		}
 		allowed, _ := DeploymentListStatusValues(filter)
@@ -56,7 +56,7 @@ func TestDeploymentStatusFiltersAndCountsUseAuthorizedSourceBeforePagination(t *
 	}
 	options.Status = "running"
 	options.Offset = 1
-	items, total, err := store.ListAuthorizedDeployments(access, options)
+	items, total, _, err := store.ListAuthorizedDeploymentsWithCounts(access, options)
 	if err != nil || total != 1 || len(items) != 0 {
 		t.Fatalf("filtered offset: %#v %d %v", items, total, err)
 	}
@@ -65,7 +65,7 @@ func TestDeploymentStatusFiltersAndCountsUseAuthorizedSourceBeforePagination(t *
 	}
 	for _, status := range []string{"running' OR 1=1", "running,unknown", ",running", "running,", "running,running", "all,running"} {
 		options.Status = status
-		if _, _, err := store.ListAuthorizedDeployments(access, options); err == nil {
+		if _, _, _, err := store.ListAuthorizedDeploymentsWithCounts(access, options); err == nil {
 			t.Fatalf("accepted invalid status filter %q", status)
 		}
 	}

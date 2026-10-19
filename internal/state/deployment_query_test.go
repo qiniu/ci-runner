@@ -73,6 +73,23 @@ func testDeploymentContextRevisionQueries(t *testing.T, store *DBStore) {
 			}
 		}
 	}
+	access := []GitHubInstallationRepositoryAccess{{InstallationID: 101, Repositories: []string{"OWNER/PROJECT"}}}
+	for _, options := range []DeploymentListOptions{{Limit: 10}, {Limit: 10, Ref: "main", CommitSHA: strings.Repeat("a", 40)}} {
+		queries = 0
+		items, total, counts, err := store.ListAuthorizedDeploymentsWithCounts(access, options)
+		if err != nil || total != 12 || counts.All != 12 || counts.Processing != 12 || len(items) != 10 {
+			t.Fatalf("combined list lost authorized counts: items=%d total=%d counts=%+v err=%v", len(items), total, counts, err)
+		}
+		// GORM scans the grouped counts through Row(), while page/revision loads
+		// use Query(). Neither path issues an additional COUNT query.
+		want := 1
+		if options.Ref != "" {
+			want++
+		}
+		if queries != want {
+			t.Fatalf("combined list used %d page queries, want %d", queries, want)
+		}
+	}
 }
 
 func TestDeploymentEventBudgetUsesCountersAndLegacyBootstrap(t *testing.T) {
@@ -102,7 +119,13 @@ func testDeploymentEventBudgetQueries(t *testing.T, store *DBStore) {
 	if err := db.CreateInBatches(&seed, 50).Error; err != nil {
 		t.Fatal(err)
 	}
-	aggregates := 0
+	aggregates, deletes := 0, 0
+	if err := db.Callback().Delete().After("gorm:delete").Register("test:budget-deletes", func(tx *gorm.DB) {
+		deletes++
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Callback().Delete().Remove("test:budget-deletes")
 	if err := db.Callback().Row().After("gorm:row").Register("test:budget-aggregates", func(tx *gorm.DB) {
 		if strings.Contains(tx.Statement.SQL.String(), "SUM(") {
 			aggregates++
@@ -116,6 +139,9 @@ func testDeploymentEventBudgetQueries(t *testing.T, store *DBStore) {
 	}
 	if aggregates != 1 {
 		t.Fatalf("append aggregated %d times, want once even when evicting many rows", aggregates)
+	}
+	if deletes != 1 {
+		t.Fatalf("multi-row bootstrap eviction used %d deletes, want one batch", deletes)
 	}
 	var workers sync.WaitGroup
 	errors := make(chan error, 16)

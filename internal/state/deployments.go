@@ -207,6 +207,49 @@ func (s *DBStore) ListAuthorizedDeployments(access []GitHubInstallationRepositor
 	return s.listDeploymentsForAccount(0, access, true, options)
 }
 
+// ListAuthorizedDeploymentsWithCounts reuses the status aggregation for the
+// filtered total, avoiding a separate COUNT scan on every list poll.
+func (s *DBStore) ListAuthorizedDeploymentsWithCounts(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) ([]Deployment, int64, DeploymentStatusCounts, error) {
+	limit, offset, err := normalizeDeploymentPagination(options)
+	if err != nil {
+		return nil, 0, DeploymentStatusCounts{}, err
+	}
+	statuses, err := DeploymentListStatusValues(options.Status)
+	if err != nil {
+		return nil, 0, DeploymentStatusCounts{}, err
+	}
+	counts, err := s.CountAuthorizedDeploymentsByStatus(access, options)
+	if err != nil {
+		return nil, 0, counts, err
+	}
+	total := counts.All
+	if len(statuses) > 0 {
+		total = 0
+		for _, group := range strings.Split(options.Status, ",") {
+			switch group {
+			case "running":
+				total += counts.Running
+			case "processing":
+				total += counts.Processing
+			case "stopped":
+				total += counts.Stopped
+			case "failed":
+				total += counts.Failed
+			}
+		}
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, 0, counts, err
+	}
+	query := deploymentListQuery(db, 0, access, true, options)
+	if len(statuses) > 0 {
+		query = query.Where("status IN ?", statuses)
+	}
+	items, err := loadDeploymentPage(db, query.Limit(limit).Offset(offset), options)
+	return items, total, counts, err
+}
+
 // ListDeploymentRepositories counts all retained authorized history, then reads
 // only bounded credential-free active summaries for this repository page.
 // Repository counts include all history, even when no deployment is active.
@@ -373,14 +416,19 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 	if len(statuses) > 0 {
 		query = query.Where("status IN ?", statuses)
 	}
-	matchingRevision := options.Ref != "" || options.CommitSHA != ""
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
+	items, err := loadDeploymentPage(db, query.Limit(limit).Offset(offset), options)
+	return items, total, err
+}
+
+func loadDeploymentPage(db, query *gorm.DB, options DeploymentListOptions) ([]Deployment, error) {
+	matchingRevision := options.Ref != "" || options.CommitSHA != ""
 	var records []deploymentRecord
-	if err := query.Order("created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&records).Error; err != nil {
-		return nil, 0, err
+	if err := query.Order("created_at DESC, id DESC").Find(&records).Error; err != nil {
+		return nil, err
 	}
 	revisions := make(map[string]deploymentRevisionRecord, len(records))
 	if matchingRevision && len(records) > 0 {
@@ -391,7 +439,7 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 		latest := deploymentRevisionListQuery(db, options).Select("deployment_id, MAX(number)").Where("deployment_id IN ?", ids).Group("deployment_id")
 		var matches []deploymentRevisionRecord
 		if err := db.Where("(deployment_id, number) IN (?)", latest).Find(&matches).Error; err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		for _, revision := range matches {
 			revisions[revision.DeploymentID] = revision
@@ -403,14 +451,14 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 		if matchingRevision {
 			revision, ok := revisions[record.ID]
 			if !ok {
-				return nil, 0, ErrNotFound
+				return nil, ErrNotFound
 			}
 			matched := revisionFromRecord(revision, record)
 			deployment.ContextRevision = &matched
 		}
 		deployments = append(deployments, deployment)
 	}
-	return deployments, total, nil
+	return deployments, nil
 }
 
 // ListActiveDeployments returns the first bounded batch for diagnostics.
@@ -738,27 +786,39 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 			return err
 		}
 		budget := struct{ Count, Bytes int64 }{revision.EventCount, revision.EventBytes}
+		messageBytes := "OCTET_LENGTH(message)"
+		if tx.Dialector.Name() == "sqlite" {
+			messageBytes = "LENGTH(CAST(message AS BLOB))"
+		}
 		if !revision.EventBudgetInitialized {
 			// Bootstrap old revisions once under the same owner lock used by all
 			// appends. Subsequent writes use the retained transactional counters.
-			messageBytes := "OCTET_LENGTH(message)"
-			if tx.Dialector.Name() == "sqlite" {
-				messageBytes = "LENGTH(CAST(message AS BLOB))"
-			}
 			if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Select("COUNT(*) AS count, COALESCE(SUM(" + messageBytes + "), 0) AS bytes").Scan(&budget).Error; err != nil {
 				return err
 			}
 		}
 		for budget.Count >= maxDeploymentEvents || budget.Bytes+int64(len(event.Message)) > maxDeploymentEventBytes {
-			var oldest deploymentEventRecord
-			if err := tx.Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Order("id ASC").First(&oldest).Error; err != nil {
+			// Read only bounded ID/byte metadata, then remove the necessary prefix
+			// in one statement instead of two round trips per evicted event.
+			var oldest []struct{ ID, Bytes int64 }
+			if err := tx.Model(&deploymentEventRecord{}).Select("id, "+messageBytes+" AS bytes").Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Order("id ASC").Limit(100).Scan(&oldest).Error; err != nil {
 				return err
 			}
-			if err := tx.Delete(&oldest).Error; err != nil {
+			if len(oldest) == 0 {
+				return gorm.ErrRecordNotFound
+			}
+			ids := make([]int64, 0, len(oldest))
+			for _, item := range oldest {
+				if budget.Count < maxDeploymentEvents && budget.Bytes+int64(len(event.Message)) <= maxDeploymentEventBytes {
+					break
+				}
+				ids = append(ids, item.ID)
+				budget.Count--
+				budget.Bytes -= item.Bytes
+			}
+			if err := tx.Where("deployment_id = ? AND revision_number = ? AND id IN ?", event.DeploymentID, event.RevisionNumber, ids).Delete(&deploymentEventRecord{}).Error; err != nil {
 				return err
 			}
-			budget.Count--
-			budget.Bytes -= int64(len(oldest.Message))
 		}
 		if err := tx.Create(&record).Error; err != nil {
 			return err

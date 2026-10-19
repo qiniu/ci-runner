@@ -411,14 +411,9 @@ func (s *Server) handleUserListDeployments(w http.ResponseWriter, r *http.Reques
 		s.writeUserRepositoryAuthorizationError(w, err)
 		return
 	}
-	items, total, err := s.store.ListAuthorizedDeployments(access, options)
+	items, total, counts, err := s.store.ListAuthorizedDeploymentsWithCounts(access, options)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list deployments")
-		return
-	}
-	counts, err := s.store.CountAuthorizedDeploymentsByStatus(access, options)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "count deployments")
 		return
 	}
 	responses := make([]deploymentResponse, 0, len(items))

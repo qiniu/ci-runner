@@ -663,6 +663,7 @@ type DeploymentStore interface {
 	GetDeployment(id string) (Deployment, error)
 	ListDeploymentsForAccount(accountID int64, options DeploymentListOptions) ([]Deployment, int64, error)
 	ListAuthorizedDeployments(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) ([]Deployment, int64, error)
+	ListAuthorizedDeploymentsWithCounts(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) ([]Deployment, int64, DeploymentStatusCounts, error)
 	CountAuthorizedDeploymentsByStatus(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) (DeploymentStatusCounts, error)
 	ListDeploymentRepositories(access []GitHubInstallationRepositoryAccess, repository string, limit, offset int) ([]DeploymentRepository, bool, error)
 	ListActiveDeployments() ([]Deployment, error)
