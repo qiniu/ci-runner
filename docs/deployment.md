@@ -107,6 +107,8 @@ An interrupted `creating` attempt is reconciled by exact operation metadata and
 compensated without replaying user commands or creating a replacement. Unknown
 creation outcomes remain nonterminal until their resource can be found and
 cleaned, or a successful lookup after expiry confirms no remaining resource.
+The exact-operation lookup requests at most two matches; a full page cannot
+establish uniqueness and keeps the original attempt pending without replacement.
 Stopping an unknown create returns `202` until compensation finishes. A confirmed
 missing Sandbox counts as released. Reconnection preserves remaining lifetime;
 the initial provider expiry is retained when supplied. This is single-process
@@ -254,9 +256,12 @@ transaction. Commands are never returned by these APIs. With the worker
 enabled, records advance through `planning`, `creating`, and `running`; expiry
 reconnects to the saved Sandbox/PID attempt, stops the tagged process, and
 deletes the Sandbox before recording `expired`. A failed create or cleanup is
-recorded as `failed` without claiming that remote cleanup succeeded.
-Successful compensation retains the original failure stage and reason in the
-deployment and revision, including recovery after an interruption during cleanup.
+recorded as `failed` without claiming that remote cleanup succeeded. If expiry
+interrupts execution and cleanup also fails, `expiry_cleanup` retains the expiry
+cause while the saved Sandbox keeps cleanup retryable. Repeated cleanup failures
+preserve that cause; confirmed release records `expired` and clears the temporary
+cleanup error. Successful compensation retains an earlier execution failure's
+stage and reason, including recovery after an interruption during cleanup.
 
 `/deployments` and deployment details share a Jobs-style repository sidebar.
 The all-deployments entry shows authorized history; repository links open
@@ -731,7 +736,13 @@ Per-revision event counts and UTF-8 byte totals are updated in the same transact
 as event insertion and retention eviction, under the owning deployment lock. New
 additive columns default to an uninitialized budget. The first append to an older
 revision computes its existing totals once; later appends never rescan all logs.
-Counter writes do not change revision lifecycle timestamps.
+Counter writes do not change revision lifecycle timestamps. Eviction reads at most
+100 oldest IDs and byte lengths at a time, then deletes the necessary prefix in
+one statement per batch, without loading raw messages or changing the owner lock.
+
+List responses reuse the fresh grouped status counts for the filtered total,
+avoiding a separate count scan. Counts remain uncached and authorization still
+precedes every database query; source-filtered pages retain their bounded revision lookup.
 
 Navigation includes at most 20 newest active deployments per repository; counts
 remain exact and the repository deployment list provides the full paged history.
