@@ -62,6 +62,8 @@ RUNNERD_MYSQL_TEST_DSN='<dedicated mysql test DSN>' \
   go test ./internal/state -run 'Test(ApplyMutationWithAudit|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy)SQLBackends' -count=1 -v
 ```
 
+Deploy startup regressions must keep queued plans untouched during `Server.Recover` and prove the independent worker survives cancellation of the startup context. Counter rollback/re-upgrade regressions must cover legacy append/deletion, repeated migration, preserved history/timestamps, and one lazy recount on first append after startup on SQLite, PostgreSQL and MySQL.
+
 ## Go Server Or API
 
 - For focused backend changes, start with the relevant package test.

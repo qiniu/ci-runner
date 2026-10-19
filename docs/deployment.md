@@ -98,6 +98,11 @@ The platform CI fallback is disabled for Deploy unless
 `allow_admin_fallback: true`; its existing enabled/audience restrictions still
 apply. Deploy never uses fork sponsorship or Cache S3 credentials.
 
+Startup recovery only queues a wakeup for the independent Deploy scheduler.
+Once startup recovery finishes, background loops start and the HTTP gate opens.
+The scheduler handles reconnection, compensation and queued plans with its own context. A slow
+clone/install cannot hold the startup gate or inherit its recovery deadline.
+
 The single Deploy worker periodically reconnects to running attempts and checks
 the saved runtime/PID/tag. Healthy services survive controller restart; transient
 provider failures and identity mismatches preserve resources for another check.
@@ -734,8 +739,12 @@ limits apply within one runnerd process and do not establish multi-instance safe
 
 Per-revision event counts and UTF-8 byte totals are updated in the same transaction
 as event insertion and retention eviction, under the owning deployment lock. New
-additive columns default to an uninitialized budget. The first append to an older
-revision computes its existing totals once; later appends never rescan all logs.
+additive columns default to an uninitialized budget. Every startup invalidates
+initialized budgets without changing cached totals, logs or lifecycle timestamps.
+The first append to each revision after startup recomputes its totals under the
+same lock; later appends in that process reuse the counters. This repairs drift
+when an older binary writes logs during rollback before a subsequent upgrade.
+Run only one Deploy controller; mixed-version or multi-instance writers are unsupported.
 Counter writes do not change revision lifecycle timestamps. Eviction reads at most
 100 oldest IDs and byte lengths at a time, then deletes the necessary prefix in
 one statement per batch, without loading raw messages or changing the owner lock.

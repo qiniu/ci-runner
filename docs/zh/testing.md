@@ -731,7 +731,11 @@ CI 的独立 PostgreSQL/MySQL gate 包含 `TestDeploymentScopeQuotaSQLBackends`�
 它验证两个账号在同一组织下并发准入时的共享配额、事务此前已读取后的可见性，以及
 拒绝写入时部署与审计记录保持不变。
 `TestDeploymentRevisionsSQLBackends` 验证不可变版本历史；
-`TestDeploymentQuerySQLBackends` 验证历史来源列表的查询次数保持固定，以及事务内 UTF-8 字节计数、旧版本一次性补算和并发追加。
+`TestDeploymentQuerySQLBackends` 验证历史来源列表的查询次数保持固定，以及事务内 UTF-8 字节计数和并发追加。
+回滚再升级回归模拟旧版追加和删除日志、重复迁移，确认历史与时间戳保留，并在 SQLite、
+PostgreSQL 和 MySQL 上验证启动后每个版本只在首次写入时重算一次。
+`TestStartupRecoveryDefersQueuedDeploymentToIndependentWorker` 确认启动恢复不执行排队计划，
+且取消启动 context 不影响随后启动的独立 worker；原有 Runner 恢复与 HTTP 门禁测试仍需保留。
 
 恢复测试区分健康 running attempt、临时 Provider 故障、进程身份不匹配、中断创建、
 创建结果未知和确认资源不存在。Provider HTTP fixture 验证只查找元数据而不创建资源、

@@ -749,7 +749,14 @@ gate includes `TestDeploymentScopeQuotaSQLBackends`, which exercises concurrent
 account admissions against one organization quota after earlier transaction reads,
 with rejected-write/audit invariance. `TestDeploymentRevisionsSQLBackends` covers
 immutable history; `TestDeploymentQuerySQLBackends` verifies constant query counts
-for historical source lists and transactional UTF-8 byte counters, one-time legacy bootstrap, and concurrent appends.
+for historical source lists, transactional UTF-8 byte counters and concurrent appends.
+The rollback/re-upgrade regression simulates legacy append and deletion, repeats
+migration, preserves history and timestamps, and verifies one lazy recount per
+revision after startup on SQLite, PostgreSQL and MySQL.
+`TestStartupRecoveryDefersQueuedDeploymentToIndependentWorker` verifies that
+startup recovery leaves queued plans untouched and a cancelled startup context
+cannot cancel the worker started afterward; retain the existing Runner recovery
+and HTTP-gate tests separately.
 
 Deploy recovery tests distinguish healthy running attempts, transient provider
 failures, mismatched process identity, interrupted creation, unknown creation

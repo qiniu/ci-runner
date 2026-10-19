@@ -87,6 +87,7 @@ Sandbox Deploy 控制面与执行切片见 [docs/zh/deployment.md](docs/zh/deplo
 
 运行中的部署详情还提供当前版本的 Web 终端。手动连接后可检查进程和应用日志文件，离开终端时关闭 shell。终端访问重新校验仓库权限，并隔离每个用户的 shell，并使用部署保存的 Sandbox 凭据。
 补偿清理保留部署及版本的原始失败证据，清理过程中断后恢复也遵循此规则。创建幂等性使用不可变的请求摘要，不受 Provider 到期时间精度或后续版本变化影响；旧记录缺少摘要时拒绝幂等重放。
+部署恢复和排队执行由独立后台调度器推进，不继承 HTTP 启动恢复超时。每次重启后首次追加日志会校准版本预算，也覆盖回滚期间旧版写入的情况；Deploy 只支持单控制器，不支持新旧版本混跑。
 启动应用时会为 Vite 的 Host 白名单传入当前 Sandbox 的精确域名，Vite preview 无需在仓库中预先配置公网入口域名。
 
 Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署。仓库集合路由使用可读的 Branch／Tag 查询条件（例如 `/github/qiniu/deployment/deployments?branch=example/vite`），PR 使用稳定的 `pull_requests/{number}` 路径。部署详情使用 `/github/{owner}/{repo}/deployments/{id}`（或 PR 路径），来源和 revision 放在查询参数中，URL 不携带 Commit SHA。旧 Jobs 来源路径保持兼容；不兼容旧部署 query-ID 链接，详见 [GitHub 上下文路由](docs/zh/deployment.md#github-上下文路由)。
