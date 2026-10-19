@@ -207,6 +207,8 @@ export function UserDeploymentsSection({
     let cancelled = false
     setDeploymentResources(null)
     setDeploymentResourcesLoading(true)
+    // The overview intentionally remains on the current deployment. History
+    // selection changes logs only, with its immutable template in the history tab.
     const revisionQuery = selectedDeployment?.revision_number ? `?revision=${selectedDeployment.revision_number}` : ""
     void request(`/user/deployments/${encodeURIComponent(selectedDeploymentID)}/resources${revisionQuery}`)
       .then((value) => {

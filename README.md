@@ -114,7 +114,7 @@ Key notes:
 - GitHub Enterprise Server is **not** supported; use a GitHub.com App.
 - Configure exactly one GitHub auth method: `github.app`, `github.token`, or `github.basic_auth`.
 - When `github.app.installation_id` is omitted, runnerd resolves the installation dynamically per repository, allowing one App to serve multiple accounts.
-- `deploy.template_id` is an optional default, separate from Runner Specs. The independent worker always runs; creation requires an available selected template (or this default) and effective scoped credentials. `deploy.work_root` is an absolute workspace path inside the Sandbox.
+- `deploy.template_id` is an optional default, separate from Runner Specs. The independent worker always runs; creation requires an available selected template (or this default) and effective scoped credentials. `deploy.work_root` is resolved against the runnerd config directory (defaulting under the state directory); the resulting absolute workspace path is used inside the Sandbox, not for host execution.
 - Deploy defaults to scoped credentials; `deploy.allow_admin_fallback: true` explicitly permits the existing platform fallback and its audience rules. Admitted deployments snapshot region/template bindings; retries resolve current credentials.
 - `deploy.max_concurrent_per_scope` defaults to `3` and limits queued/running deployments for each account or organization scope. `deploy.retention_hours` defaults to `168`; released terminal rows and bounded events are pruned after that period while audit history remains.
 

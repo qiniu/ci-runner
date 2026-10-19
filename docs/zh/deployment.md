@@ -119,7 +119,7 @@ Installation ID 由服务端解析：
   向作用域 owner 返回可运行的自有／公共模板。其他用户必须通过精确仓库授权，
   只获得公共模板 ID 与名称，不返回私有目录或作用域元数据。非 owner 创建时只能
   选择已验证的公共模板；仓库成员可以重新部署已有的保存版本。Deploy fallback 仍需明确启用。
-- `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag&page=1`
+- `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag|pull_request&page=1`
   每页最多返回 100 个引用名称及 `has_more`。读取前检查与创建相同的
   OAuth/App 精确仓库交集；OAuth 缺失或被拒绝时失败关闭。
 - `POST /user/deployments` 接收所选物理 `template_id`、可选的模板目录快照 `template_name`、
@@ -165,7 +165,7 @@ Installation ID 由服务端解析：
 - `POST /user/deployments/{id}/stop`（或 `DELETE /user/deployments/{id}`）停止带
   tag 的进程并删除部署 Sandbox。清理失败会保留为 `failed`，worker 会继续重试。
 - `POST /user/deployments/{id}/retry` 只有在上一轮 Sandbox 证据已清理后才能重新入队。
-  JSON 请求体可使用 `{"mode":"latest"}` 重新解析分支并保存新的不可变计划，
+  JSON 请求体可使用 `{"mode":"latest"}` 重新解析分支或 PR 的当前来源并保存新的不可变计划，
   或使用 `{"mode":"revision","revision_number":N}` 复用保留的部署版本；省略请求体时复用当前版本。
 
 创建流程会将 ref 固定为完整 Commit SHA，从该 Commit 读取配置，生成 deployd
@@ -534,3 +534,15 @@ PR 编号保存在完整 ref 中，并通过 `pull_request_number` 返回。最�
 
 `DELETE /user/deployments/{id}` 是停止的 API 别名，并非删除记录；它释放 Sandbox，
 版本和日志继续保留到保留期结束。界面只提供“停止”，不再将这一操作称为“删除”。
+
+侧边栏每个仓库最多展示 20 个最新活动部署，计数仍为精确总数，完整记录可通过仓库
+部署列表分页读取。重试清理仍在协调时返回 `409 deployment_cleanup_pending` 和
+`Retry-After: 15`；清理完成前不会准入新的部署版本。
+
+`work_root` 由 runnerd 的配置目录解析为绝对路径，默认值来自状态目录，但实际
+文件操作在 Sandbox 内执行，不会在 runnerd 主机上检出仓库或运行部署命令。
+
+选择历史日志时，概览和资源面板仍展示当前部署，历史模板证据在版本历史中展示。
+仓库成员可以复用已保存的模板绑定，包括 owner 创建的私有绑定；公开模板限制用于
+新模板选择，重试仍使用当前作用域凭据验证模板可用性。未指定来源的 API 引用可以
+固定仓库可解析的 Commit；显式选择 PR 时才应用 PR 归属及提交成员关系校验。

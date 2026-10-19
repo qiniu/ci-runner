@@ -69,8 +69,10 @@ deploy:
 ```
 
 `template_id` is intentionally separate from Runner Specs. `work_root` is a
-controller-owned absolute path inside the Sandbox used only for transient
-per-attempt workspace names. The worker creates an independently
+controller-resolved absolute path used for transient per-attempt workspace names
+inside the Sandbox. Relative configuration is resolved against the runnerd config
+directory; the default derives from its state directory. File operations run in
+the Sandbox, not the runnerd host. The worker creates an independently
 tagged Sandbox, checks out the pinned Commit, persists deployd checkpoints, and
 keeps the Sandbox alive after readiness. It records the Sandbox ID, attempt,
 runtime ID and process tag so a restart can reconnect to the exact attempt.
@@ -160,7 +162,7 @@ ID is resolved server-side.
   and names, without private catalogs or scope metadata. Non-owner creation
   accepts only a verified public template; existing saved revisions can be
   redeployed by repository members. Deploy fallback remains opt-in.
-- `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag&page=1`
+- `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag|pull_request&page=1`
   lists at most 100 reference names per page, with `has_more`. It requires the
   same exact OAuth/App repository intersection as creation;
   missing or rejected OAuth access fails closed.
@@ -239,7 +241,7 @@ ID is resolved server-side.
   them. The UI exposes Stop and does not report this as deletion.
 - `POST /user/deployments/{id}/retry` requeues a terminal deployment only after
   its prior Sandbox evidence has been cleaned. The JSON body may select
-  `{"mode":"latest"}` for a branch deployment, which resolves the branch again
+  `{"mode":"latest"}` for a branch or PR deployment, which resolves the current source again
   and saves a new immutable plan, or `{"mode":"revision","revision_number":N}`
   to reuse a retained revision. An omitted body reuses the current revision.
 
@@ -728,3 +730,16 @@ as event insertion and retention eviction, under the owning deployment lock. New
 additive columns default to an uninitialized budget. The first append to an older
 revision computes its existing totals once; later appends never rescan all logs.
 Counter writes do not change revision lifecycle timestamps.
+
+Navigation includes at most 20 newest active deployments per repository; counts
+remain exact and the repository deployment list provides the full paged history.
+If retry cleanup is still reconciling, the API returns `409 deployment_cleanup_pending`
+with `Retry-After: 15`; no new revision is admitted until cleanup completes.
+
+The overview and resource panel always describe the current deployment, including
+while historical logs are selected. Historical template evidence remains in the
+revision history. Repository members may replay existing saved template bindings,
+including owner-created private bindings; the public-only gate applies to new
+template choices, and retry still validates availability with current scoped
+credentials. Source-less API refs intentionally allow repository-resolvable pinned
+commits; PR attribution and membership checks apply to explicitly selected PR refs.
