@@ -257,14 +257,11 @@ func TestE2BServiceListDefaultTemplates(t *testing.T) {
 
 func TestE2BServiceInspectDeploymentSandbox(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/sandboxes" {
-			t.Fatalf("request path = %q, want /v2/sandboxes", r.URL.Path)
-		}
-		if r.URL.Query().Get("metadata") != "app=qiniu-deployd" {
-			t.Fatalf("metadata query = %q", r.URL.Query().Get("metadata"))
+		if r.URL.Path != "/sandboxes/deploy-1" || r.Method != http.MethodGet || r.URL.RawQuery != "" {
+			t.Fatalf("expected a read-only exact Sandbox lookup, got %s %s", r.Method, r.URL)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"sandboxID":"deploy-1","templateID":"tpl","state":"running","cpuCount":4,"memoryMB":8192,"diskSizeMB":40960,"startedAt":"2026-10-13T00:00:00Z","endAt":"2026-10-13T01:00:00Z"}]`))
+		_, _ = w.Write([]byte(`{"sandboxID":"deploy-1","templateID":"tpl","state":"running","cpuCount":4,"memoryMB":8192,"diskSizeMB":40960,"startedAt":"2026-10-13T00:00:00Z","endAt":"2026-10-13T01:00:00Z"}`))
 	}))
 	defer ts.Close()
 
@@ -274,6 +271,34 @@ func TestE2BServiceInspectDeploymentSandbox(t *testing.T) {
 	}
 	if got.SandboxID != "deploy-1" || got.TemplateID != "tpl" || got.CPUCount != 4 || got.MemoryMB != 8192 || got.DiskSizeMB != 40960 {
 		t.Fatalf("unexpected sandbox resource snapshot: %#v", got)
+	}
+}
+
+func TestInspectDeploymentSandboxBoundsAndSanitizesResponse(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{{"missing", 404, "provider-secret"}, {"denied", 403, "provider-secret"}, {"identity mismatch", 200, `{"sandboxID":"other"}`}, {"oversized", 200, strings.Repeat("x", (64<<10)+1)}} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != "GET" || r.URL.Path != "/sandboxes/exact" {
+					t.Errorf("unexpected provider mutation/list: %s %s", r.Method, r.URL)
+				}
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, test.body)
+			}))
+			defer api.Close()
+			_, err := newTestService(t, api).InspectDeploymentSandbox(context.Background(), "exact")
+			if err == nil || strings.Contains(err.Error(), "provider-secret") || calls != 1 {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+			if test.status == 404 && !errors.Is(err, ErrSandboxNotFound) {
+				t.Fatalf("missing Sandbox error=%v", err)
+			}
+		})
 	}
 }
 

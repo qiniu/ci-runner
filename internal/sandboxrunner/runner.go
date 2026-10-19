@@ -4,8 +4,10 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -471,36 +473,58 @@ func (s *E2BService) ListRunnerSandboxes(ctx context.Context) ([]CatalogSandbox,
 }
 
 // InspectDeploymentSandbox finds one Deploy Sandbox by its persisted ID. The
-// provider list call is read-only and does not reconnect or extend the
+// provider detail call is read-only and does not reconnect or extend the
 // Sandbox lifetime.
 func (s *E2BService) InspectDeploymentSandbox(ctx context.Context, sandboxID string) (CatalogSandbox, error) {
 	sandboxID = strings.TrimSpace(sandboxID)
 	if sandboxID == "" {
 		return CatalogSandbox{}, ErrSandboxNotFound
 	}
-	metadata := "app=qiniu-deployd"
-	limit := int32(100)
-	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &metadata, Limit: &limit})
+	endpoint := strings.TrimRight(s.endpoint, "/")
+	if endpoint == "" {
+		endpoint = qnsandbox.DefaultEndpoint
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/sandboxes/"+url.PathEscape(sandboxID), nil)
 	if err != nil {
-		return CatalogSandbox{}, err
+		return CatalogSandbox{}, errors.New("invalid Sandbox resource request")
 	}
-	for _, item := range items {
-		if item.SandboxID != sandboxID {
-			continue
-		}
-		return CatalogSandbox{
-			SandboxID:  item.SandboxID,
-			TemplateID: item.TemplateID,
-			Alias:      sandboxAlias(item.Alias),
-			State:      string(item.State),
-			CPUCount:   item.CPUCount,
-			MemoryMB:   item.MemoryMB,
-			DiskSizeMB: item.DiskSizeMB,
-			StartedAt:  item.StartedAt,
-			ExpiresAt:  item.EndAt,
-		}, nil
+	req.Header.Set("X-API-Key", s.apiKey)
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
 	}
-	return CatalogSandbox{}, ErrSandboxNotFound
+	resp, err := client.Do(req)
+	if err != nil {
+		return CatalogSandbox{}, errors.New("sandbox resource lookup failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return CatalogSandbox{}, ErrSandboxNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return CatalogSandbox{}, errors.New("sandbox resource lookup rejected")
+	}
+	var item struct {
+		SandboxID  string    `json:"sandboxID"`
+		TemplateID string    `json:"templateID"`
+		Alias      *string   `json:"alias"`
+		State      string    `json:"state"`
+		CPUCount   int32     `json:"cpuCount"`
+		MemoryMB   int32     `json:"memoryMB"`
+		DiskSizeMB int32     `json:"diskSizeMB"`
+		StartedAt  time.Time `json:"startedAt"`
+		EndAt      time.Time `json:"endAt"`
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+	if err != nil || len(data) > 64<<10 || json.Unmarshal(data, &item) != nil || item.SandboxID != sandboxID {
+		return CatalogSandbox{}, errors.New("invalid Sandbox resource response")
+	}
+	return CatalogSandbox{
+		SandboxID: item.SandboxID, TemplateID: item.TemplateID,
+		Alias: sandboxAlias(item.Alias), State: item.State, CPUCount: item.CPUCount,
+		MemoryMB: item.MemoryMB, DiskSizeMB: item.DiskSizeMB,
+		StartedAt: item.StartedAt, ExpiresAt: item.EndAt,
+	}, nil
 }
 
 func sandboxAlias(alias *string) string {
