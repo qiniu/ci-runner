@@ -98,7 +98,7 @@ attempt。准入在状态事务中串行化，超过限制的并发请求返回
 私有仓库 Deploy 要求 App 具备仓库 **Contents: Read-only** 权限，以读取
 `.qiniu/deploy.yaml` 和固定 Commit。现有用户 OAuth 流程还必须能够列出该仓库及其
 Installation 访问范围。Deploy 与 Jobs 一样按 OAuth/App 的 Installation＋仓库精确交集
-授权，不按创建者或组织角色隔离。仓库成员可以查看、创建、重新部署、停止和删除部署。
+授权，不按创建者或组织角色隔离。仓库成员可以查看、创建、重新部署和停止部署。
 Sandbox Preferences 与私有模板目录仍由 owner 管理；管理组织设置仍需
 **Members: Read-only** 和 active owner membership（`role: admin`）。
 Deploy 不会继承 CI Secrets、Cache S3 凭证或 Fork sponsorship 权限。
@@ -124,7 +124,7 @@ Installation ID 由服务端解析：
   OAuth/App 精确仓库交集；OAuth 缺失或被拒绝时失败关闭。
 - `POST /user/deployments` 接收所选物理 `template_id`、可选的模板目录快照 `template_name`、
   `template_cpu`、`template_memory_mb` 和 `template_disk_mb`、已关联的本地 `installation_id`、精确的
-  `repository_full_name`、`ref`、可选的 `source`（`branch` 或 `tag`）、可选的 `config_path` 和可选的
+  `repository_full_name`、`ref`、可选的 `source`（`branch`、`tag` 或 `pull_request`）、可选的 `config_path` 和可选的
   `ttl_seconds`（五分钟到 24 小时，默认一小时）。可以使用 `Idempotency-Key` 请求头安全重放同一请求。
   创建时保存原始规范化准入字段的摘要。Provider 更新到期时间、停止或重新部署后，重放仍
   返回已有资源，不启动新 attempt；执行字段不同则返回 409。没有摘要的历史记录无法安全
@@ -132,7 +132,8 @@ Installation ID 由服务端解析：
   部署 ID 使用 26 位小写 Base32 编码，保留 128 位标识空间，可直接用于 URL。
   有幂等键时根据账号和请求键生成固定 ID；无幂等键时生成新的随机 ID。
   客户端应将 ID 作为不透明字符串使用；上线前不提供旧 ID 的重放回退逻辑。
-  传入 `source` 时，服务端先将名称限定为 `refs/heads/<name>` 或 `refs/tags/<name>`，
+  传入 `source` 时，服务端先将名称限定为 `refs/heads/<name>`、`refs/tags/<name>`
+  或 `refs/pull/<number>/head`，
   避免同名分支与 Tag 混淆。未传 `source` 的 API 客户端仍可使用 branch/tag/commit ref。
   已知来源的响应返回来源和用于展示的原名称。
 - `GET /user/deployments` 在本地数据库中按已授权的 Installation＋仓库过滤，再计算
@@ -363,7 +364,7 @@ fixture 仅增加 HTML 仓库／版本标记，部署命令及 Vite Host 校验�
    和日志，以及带状态的清理证据；真实创建响应丢失后的恢复与清理已验证。
 4. **用户界面（首片已完成）**：`/deployments` 展示本地历史，`/deployments/new` 处理授权
    仓库、分支／Tag、模板选择与不可变部署创建，部署详情展示状态、地址、TTL、模板 CPU／内存／磁盘资源、
-   生命周期／输出事件及停止／删除／重试操作。
+   生命周期／输出事件及停止／重试操作。
    本地验证和已登录的公开仓库创建／详情／刷新／停止流程已通过；剩余真实验收见上文。
 5. **验收**：完成聚焦测试、本地启动／构建检查，再用真实 GitHub App 和 Sandbox
    验证部署、停止、到期、重启恢复及越权访问证据。
@@ -519,3 +520,17 @@ head SHA 相同，然后通过目标仓库读取配置、检出该不可变 SHA�
 `source_repository_full_name` 和 `source_ref`；旧记录通过新增字段升级，来源证据保持为空。
 PR 编号保存在完整 ref 中，并通过 `pull_request_number` 返回。最新重部署重新解析 PR head，
 历史版本重部署复制已保存的来源与计划。历史内容仍从本地读取，并向有仓库权限的成员共享。
+
+### 有界调度与日志预算
+
+调度器按游标分批读取，每批最多 100 条。创建、健康检查和清理分别限制为 4、8、4 个
+并发操作，慢构建不会占用到期清理的执行名额。每轮健康检查只访问同一部署一次，
+完成后继续下一页；服务退出时取消并等待所有任务。创建及应用执行受已保存的到期
+时间约束。这些限制属于单个 runnerd 进程，不代表已验证多实例安全。
+
+每个版本的日志条数与 UTF-8 字节数随追加和淘汰在同一事务中更新，沿用部署行锁。
+新增列默认预算未初始化，旧版本首次追加时只补算一次；后续追加不再扫描全部日志，
+也不会改动版本的生命周期时间戳。
+
+`DELETE /user/deployments/{id}` 是停止的 API 别名，并非删除记录；它释放 Sandbox，
+版本和日志继续保留到保留期结束。界面只提供“停止”，不再将这一操作称为“删除”。

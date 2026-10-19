@@ -749,7 +749,7 @@ gate includes `TestDeploymentScopeQuotaSQLBackends`, which exercises concurrent
 account admissions against one organization quota after earlier transaction reads,
 with rejected-write/audit invariance. `TestDeploymentRevisionsSQLBackends` covers
 immutable history; `TestDeploymentQuerySQLBackends` verifies constant query counts
-for historical source lists and one UTF-8 byte-budget aggregate per event append.
+for historical source lists and transactional UTF-8 byte counters, one-time legacy bootstrap, and concurrent appends.
 
 Deploy recovery tests distinguish healthy running attempts, transient provider
 failures, mismatched process identity, interrupted creation, unknown creation

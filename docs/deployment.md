@@ -134,7 +134,7 @@ permission so runnerd can read `.qiniu/deploy.yaml` and the pinned Commit. The
 existing user OAuth flow must also be able to enumerate the repository and its
 installation access. Like Jobs, Deploy authorizes the exact OAuth/App
 installation-repository pair, independently of creator identity or organization
-role. Repository members may read, create, redeploy, stop and delete deployments.
+role. Repository members may read, create, redeploy and stop deployments.
 Sandbox Preferences and private template catalogs remain owner-managed; managing
 organization settings still requires **Members: Read-only** and active owner
 membership (`role: admin`). Deploy never inherits CI Secrets, Cache S3
@@ -166,7 +166,7 @@ ID is resolved server-side.
   missing or rejected OAuth access fails closed.
 - `POST /user/deployments` accepts a selected physical `template_id`, optional `template_name`, `template_cpu`,
   `template_memory_mb`, and `template_disk_mb` snapshots from the template catalog, a linked local `installation_id`, an exact
-  `repository_full_name`, a `ref`, an optional `source` (`branch` or `tag`), an optional `config_path`,
+  `repository_full_name`, a `ref`, an optional `source` (`branch`, `tag` or `pull_request`), an optional `config_path`,
   and an optional `ttl_seconds` (five minutes to 24 hours; the default is one
   hour). The `Idempotency-Key` header can replay the same request safely.
   The original normalized admission fields are hashed once and retained on the
@@ -178,8 +178,8 @@ ID is resolved server-side.
   to use directly in URLs. Keyed requests derive the ID from the account and
   key; unkeyed requests generate a new random ID. Clients should treat IDs as
   opaque strings. No legacy ID replay fallback is provided before launch.
-  With `source`, the server qualifies the name as `refs/heads/<name>` or
-  `refs/tags/<name>` before resolution, so identical branch/tag names stay
+  With `source`, the server qualifies the name as `refs/heads/<name>`,
+  `refs/tags/<name>` or `refs/pull/<number>/head` before resolution, so identical branch/tag names stay
   distinct. API clients that omit `source` can still send a branch/tag/commit
   ref. Responses expose the source and unqualified display name when available.
 - `GET /user/deployments` reads local history after filtering authorized exact
@@ -234,7 +234,9 @@ ID is resolved server-side.
   ascending page so active polling can catch up without skipping output.
 - `POST /user/deployments/{id}/stop` (or `DELETE /user/deployments/{id}`) stops
   the tagged process and removes the deployment Sandbox. Cleanup failures remain
-  visible as `failed` and are retried by the worker.
+  visible as `failed` and are retried by the worker. `DELETE` is a stop alias,
+  not record deletion: revisions and logs remain until the retention policy prunes
+  them. The UI exposes Stop and does not report this as deletion.
 - `POST /user/deployments/{id}/retry` requeues a terminal deployment only after
   its prior Sandbox evidence has been cleaned. The JSON body may select
   `{"mode":"latest"}` for a branch deployment, which resolves the branch again
@@ -598,7 +600,7 @@ repository removal remain unverified.
 4. **User surface (first slice done):** `/deployments` lists local history,
    `/deployments/new` handles authorized repository and Branch/Tag selection,
    template choice and immutable deployment creation, and the deployment detail
-   shows status, endpoint, TTL, template resources (CPU, memory, and disk), lifecycle/output events and stop/delete/retry
+   shows status, endpoint, TTL, template resources (CPU, memory, and disk), lifecycle/output events and stop/retry
    actions. Local verification and the authenticated public create/detail/reload/
    stop browser flow passed; the remaining real acceptance gates are listed above.
 5. **Acceptance:** run focused tests, local startup/build checks, then a real
@@ -710,3 +712,19 @@ and `source_ref`; existing records migrate additively with empty source evidence
 The PR number is retained in its qualified ref and exposed as `pull_request_number`.
 Latest redeploy resolves the current PR head again; revision redeploy copies the
 saved source/plan evidence. Saved deployment history remains local and shared by authorized repository members.
+
+### Bounded worker scheduling and event budgets
+
+The deployment scheduler reads keyset pages of at most 100 records. Provisioning
+(up to four operations), monitoring (up to eight) and cleanup (up to four) have
+independent capacity, so a slow clone/install cannot occupy expiry-cleanup slots.
+Each monitoring cycle visits a deployment at most once; completion advances the
+remaining pages without restarting the cycle. Shutdown cancels and joins active
+operations, and creation/application work is bounded by the saved expiry. These
+limits apply within one runnerd process and do not establish multi-instance safety.
+
+Per-revision event counts and UTF-8 byte totals are updated in the same transaction
+as event insertion and retention eviction, under the owning deployment lock. New
+additive columns default to an uninitialized budget. The first append to an older
+revision computes its existing totals once; later appends never rescan all logs.
+Counter writes do not change revision lifecycle timestamps.
