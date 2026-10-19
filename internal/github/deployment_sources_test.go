@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestDeploymentSourceEscapesRepositorySegments(t *testing.T) {
+	calls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.EscapedPath() != "/repos/ow%3Fner/re%23po/pulls" || r.URL.Query().Get("state") != "open" || len(r.URL.Query()) != 3 {
+			t.Errorf("repository changed request structure: %s", r.URL)
+		}
+		fmt.Fprint(w, `[]`)
+	}))
+	defer api.Close()
+	client := NewClient(api.URL, api.Client())
+	if _, _, err := client.ListDeploymentPullRequests(t.Context(), "ow?ner/re#po", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, repository := range []string{"owner", "owner/repo/extra", "owner/..", "./repo", "/repo", "owner/"} {
+		if _, _, err := client.ListDeploymentPullRequests(t.Context(), repository, 1); err == nil {
+			t.Fatalf("accepted malformed repository %q", repository)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("invalid repository reached provider: %d requests", calls)
+	}
+}
+
 func TestDeploymentSourceCommitMembershipIsBounded(t *testing.T) {
 	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	calls := 0

@@ -21,7 +21,17 @@ func RepositoryCloneURL(repository string) string {
 // Deployment source reads always use the authorized target repository's App.
 // Never follow a fork-provided clone URL or send target credentials to a fork.
 func (c *Client) deploymentSourceJSON(ctx context.Context, repository, resource string, result any) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/repos/"+repository+"/"+resource, nil)
+	parts := strings.Split(repository, "/")
+	if len(parts) != 2 {
+		return false, errors.New("invalid deployment repository")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false, errors.New("invalid deployment repository")
+		}
+	}
+	path := url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/repos/"+path+"/"+resource, nil)
 	if err != nil {
 		return false, err
 	}

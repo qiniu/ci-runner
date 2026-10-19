@@ -510,7 +510,7 @@ func (s *Server) handleUserGetDeploymentResources(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	selected := state.Deployment(deployment)
+	selected := deployment
 	if value := strings.TrimSpace(r.URL.Query().Get("revision")); value != "" {
 		number, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || number <= 0 {
