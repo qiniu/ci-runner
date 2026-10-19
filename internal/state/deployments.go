@@ -208,8 +208,8 @@ func (s *DBStore) ListAuthorizedDeployments(access []GitHubInstallationRepositor
 }
 
 // ListDeploymentRepositories counts all retained authorized history, then reads
-// only credential-free active summaries for this repository page. Historical
-// list limits never hide an active deployment or a repository with no activity.
+// only bounded credential-free active summaries for this repository page.
+// Repository counts include all history, even when no deployment is active.
 func (s *DBStore) ListDeploymentRepositories(access []GitHubInstallationRepositoryAccess, repository string, limit, offset int) ([]DeploymentRepository, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
@@ -246,9 +246,12 @@ func (s *DBStore) ListDeploymentRepositories(access []GitHubInstallationReposito
 		repositories[i].ActiveDeployments = []DeploymentNavigationItem{}
 	}
 	var deployments []DeploymentNavigationItem
-	err = db.Model(&deploymentRecord{}).Select("id, repository_full_name, ref, pull_request_title, commit_sha, status, updated_at").
-		Where(authorizedDeploymentRepositories(db, access)).Where("LOWER(repository_full_name) IN ? AND status IN ?", names, active).
-		Order("created_at DESC, id DESC").Scan(&deployments).Error
+	// Rank only authorized rows; cap each repository independently so a busy
+	// repository cannot displace another repository's active navigation entries.
+	ranked := db.Model(&deploymentRecord{}).Select("id, repository_full_name, ref, pull_request_title, commit_sha, status, updated_at, created_at, ROW_NUMBER() OVER (PARTITION BY LOWER(repository_full_name) ORDER BY created_at DESC, id DESC) AS navigation_rank").
+		Where(authorizedDeploymentRepositories(db, access)).Where("LOWER(repository_full_name) IN ? AND status IN ?", names, active)
+	err = db.Table("(?) AS active_navigation", ranked).Select("id, repository_full_name, ref, pull_request_title, commit_sha, status, updated_at").
+		Where("navigation_rank <= ?", 20).Order("created_at DESC, id DESC").Scan(&deployments).Error
 	if err != nil {
 		return nil, false, err
 	}

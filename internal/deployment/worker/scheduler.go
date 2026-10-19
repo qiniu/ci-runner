@@ -30,7 +30,11 @@ func (w *Worker) Run(ctx context.Context, notify <-chan struct{}, report func(er
 		lane *lane
 		err  error
 	}
-	completed := make(chan completion, 16)
+	capacity := 0
+	for _, l := range lanes {
+		capacity += l.capacity
+	}
+	completed := make(chan completion, capacity)
 	inFlight := make(map[string]context.CancelFunc)
 	var workers sync.WaitGroup
 	defer func() {

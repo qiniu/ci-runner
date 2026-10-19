@@ -7,6 +7,43 @@ import (
 	"time"
 )
 
+func TestDeploymentNavigationCapsEachAuthorizedRepository(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	testDeploymentNavigationCaps(t, store)
+}
+
+func testDeploymentNavigationCaps(t *testing.T, store *DBStore) {
+	t.Helper()
+	for i := range 67 {
+		d := deploymentFixture(fmt.Sprintf("nav-cap-%03d", i), 1)
+		d.RepositoryFullName = "owner/navigation-z"
+		d.Status = DeploymentStatusRunning
+		d.CreatedAt = time.Now().UTC().Add(time.Duration(i) * time.Minute)
+		if i == 65 {
+			d.RepositoryFullName = "owner/navigation-a"
+		}
+		if i == 66 {
+			d.GitHubInstallationID = 102
+		}
+		if _, err := store.CreateDeployment(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	access := []GitHubInstallationRepositoryAccess{{InstallationID: 101, Repositories: []string{"owner/navigation-z", "owner/navigation-a"}}}
+	items, more, err := store.ListDeploymentRepositories(access, "", 100, 0)
+	if err != nil || more || len(items) != 2 {
+		t.Fatalf("navigation=%#v more=%v err=%v", items, more, err)
+	}
+	if items[0].RepositoryFullName != "owner/navigation-a" || len(items[0].ActiveDeployments) != 1 || items[1].ActiveCount != 65 || len(items[1].ActiveDeployments) != 20 {
+		t.Fatalf("cap must not hide other repositories or inflate counts: %#v", items)
+	}
+	for i, d := range items[1].ActiveDeployments {
+		if d.ID != fmt.Sprintf("nav-cap-%03d", 64-i) {
+			t.Fatalf("unexpected or unauthorized capped row %s", d.ID)
+		}
+	}
+}
+
 func TestDeploymentRepositoryNavigationIgnoresHistoryPageAndFiltersExactAccess(t *testing.T) {
 	store := New(t.TempDir())
 	access := []GitHubInstallationRepositoryAccess{{InstallationID: 101, Repositories: []string{"owner/project", "owner/retired"}}}

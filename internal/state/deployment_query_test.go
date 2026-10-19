@@ -174,6 +174,7 @@ func TestDeploymentQuerySQLBackends(t *testing.T) {
 			}
 			testDeploymentContextRevisionQueries(t, store)
 			testDeploymentEventBudgetQueries(t, store)
+			testDeploymentNavigationCaps(t, store)
 		})
 	}
 }
