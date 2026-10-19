@@ -261,7 +261,7 @@ func (s *Server) handleUserCreateDeployment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	plan, err := deploy.NewPlan(deploy.ResolvedSource{
-		SourceID:  githubDeploymentSourceURL(repository.FullName),
+		SourceID:  github.RepositoryCloneURL(repository.FullName),
 		CommitSHA: commitSHA,
 	}, spec)
 	if err != nil {
@@ -357,10 +357,6 @@ func (s *Server) handleUserCreateDeployment(w http.ResponseWriter, r *http.Reque
 	s.signalDeployments()
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, deploymentResponseFromState(deployment))
-}
-
-func githubDeploymentSourceURL(repository string) string {
-	return "https://github.com/" + strings.TrimSuffix(strings.TrimSpace(repository), ".git") + ".git"
 }
 
 func (s *Server) handleUserDeploymentRepositories(w http.ResponseWriter, r *http.Request) {
@@ -928,7 +924,7 @@ func (s *Server) refreshDeploymentPlanFromGitHub(ctx context.Context, accountID 
 	if err != nil {
 		return err
 	}
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubDeploymentSourceURL(deployment.RepositoryFullName), CommitSHA: commitSHA}, spec)
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(deployment.RepositoryFullName), CommitSHA: commitSHA}, spec)
 	if err != nil {
 		return err
 	}

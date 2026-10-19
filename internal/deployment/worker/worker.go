@@ -15,6 +15,7 @@ import (
 	deploy "github.com/miclle/deployd"
 	deploygit "github.com/miclle/deployd/source/git"
 	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
@@ -165,7 +166,7 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 	}
 	snapshot := deploy.Snapshot{
 		Version:   d.SnapshotVersion,
-		SourceID:  githubSourceURL(d.RepositoryFullName),
+		SourceID:  github.RepositoryCloneURL(d.RepositoryFullName),
 		CommitSHA: d.CommitSHA,
 		SpecHash:  d.SpecHash,
 	}
@@ -435,16 +436,13 @@ func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *st
 					return stopErr
 				}
 			}
-			if closeErr := rt.Close(ctx); closeErr != nil && err == nil {
-				err = closeErr
+			if closeErr := rt.Close(ctx); closeErr != nil {
+				if persistErr := w.fail(&d, "cleanup", "deployment cleanup is incomplete"); persistErr != nil {
+					return persistErr
+				}
+				return closeErr
 			}
 		}
-	}
-	if err != nil {
-		if persistErr := w.fail(&d, "cleanup", "deployment cleanup is incomplete"); persistErr != nil {
-			return persistErr
-		}
-		return err
 	}
 	if expired {
 		d.Status = state.DeploymentStatusExpired
@@ -526,10 +524,6 @@ func DecodeJSONSpec(d state.Deployment, decrypt func(string) (string, error)) (d
 	return deploy.NormalizeSpec(spec)
 }
 
-func githubSourceURL(repository string) string {
-	return "https://github.com/" + strings.TrimSuffix(strings.TrimSpace(repository), ".git") + ".git"
-}
-
 func stageFromError(err error) deploy.Stage {
 	var stageErr *deploy.StageError
 	if errors.As(err, &stageErr) {
@@ -585,6 +579,6 @@ func GitSourceFactory(token func(context.Context, int64) (string, error)) Source
 			"GIT_CONFIG_NOSYSTEM": "1",
 			"GIT_CONFIG_GLOBAL":   "/dev/null",
 		}
-		return deploygit.New(githubSourceURL(d.RepositoryFullName), deploygit.Options{Ref: d.CommitSHA, CheckoutEnv: env})
+		return deploygit.New(github.RepositoryCloneURL(d.RepositoryFullName), deploygit.Options{Ref: d.CommitSHA, CheckoutEnv: env})
 	}
 }

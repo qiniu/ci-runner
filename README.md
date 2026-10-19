@@ -101,7 +101,7 @@ Jobs provide deployment history and a creation link pinned to the selected Job c
 | `database` | Backend (`sqlite` / `postgres` / `mysql`) and DSN |
 | `auth` | Session secret, encryption key, session TTL |
 | `sandbox` | Sandbox lifecycle timeouts (create, run, stop) |
-| `deploy` | Dedicated Deploy template, per-scope concurrency, retention, and transient work root (enables Issue #125 worker) |
+| `deploy` | Deploy worker settings: optional template default, per-scope concurrency, retention, and transient work root |
 | `github` | Webhook secret, auth method (App / PAT / basic), OAuth, allowed repositories |
 | `worker` | Lease, retry, and concurrency settings |
 

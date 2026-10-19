@@ -9,7 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
+
+// RepositoryCloneURL constructs the GitHub-owned URL after repository validation.
+// Never substitute a clone URL supplied by a fork or PR payload.
+func RepositoryCloneURL(repository string) string {
+	return "https://github.com/" + strings.TrimSuffix(strings.TrimSpace(repository), ".git") + ".git"
+}
 
 // Deployment source reads always use the authorized target repository's App.
 // Never follow a fork-provided clone URL or send target credentials to a fork.

@@ -13,6 +13,7 @@ import (
 
 	deploy "github.com/miclle/deployd"
 	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
@@ -81,7 +82,7 @@ func (f *fakeFactory) Reconcile(context.Context, state.Deployment) (RuntimeHandl
 type fakeSource struct{}
 
 func (fakeSource) Resolve(context.Context) (deploy.ResolvedSource, error) {
-	return deploy.ResolvedSource{SourceID: githubSourceURL("owner/repo"), CommitSHA: strings.Repeat("a", 40)}, nil
+	return deploy.ResolvedSource{SourceID: github.RepositoryCloneURL("owner/repo"), CommitSHA: strings.Repeat("a", 40)}, nil
 }
 
 func (fakeSource) Materialize(context.Context, deploy.Runtime, deploy.Snapshot, string, deploy.Output) error {
@@ -105,7 +106,7 @@ func TestWorkerProcessesQueuedDeploymentAndFencesAttempt(t *testing.T) {
 	fixture := deploymentFixture(t)
 	fixture.ID = strings.Repeat("d", 26) // Same length as HTTP deployment IDs.
 	spec := deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080}
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubSourceURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func TestWorkerMissingTemplateFailsWithoutProvisioning(t *testing.T) {
 	store := state.New(t.TempDir())
 	d := deploymentFixture(t)
 	d.DeploymentTemplateID = ""
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubSourceURL(d.RepositoryFullName), CommitSHA: d.CommitSHA}, deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080})
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(d.RepositoryFullName), CommitSHA: d.CommitSHA}, deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +204,7 @@ func TestWorkerExecutionFailureCleansSandboxAndRetainsFailure(t *testing.T) {
 	store := state.New(t.TempDir())
 	fixture := deploymentFixture(t)
 	spec := deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080}
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubSourceURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestWorkerExecutionFailureKeepsSandboxWhenCleanupFails(t *testing.T) {
 	store := state.New(t.TempDir())
 	fixture := deploymentFixture(t)
 	spec := deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080}
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubSourceURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func TestWorkerExecutionFailureKeepsSandboxWhenCleanupFails(t *testing.T) {
 func TestWorkerPersistsAndCleansReconciledCreateEvidence(t *testing.T) {
 	store := state.New(t.TempDir())
 	fixture := deploymentFixture(t)
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubSourceURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080})
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(fixture.RepositoryFullName), CommitSHA: fixture.CommitSHA}, deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080})
 	if err != nil {
 		t.Fatal(err)
 	}

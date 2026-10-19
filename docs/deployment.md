@@ -26,6 +26,12 @@ must be an origin-relative path. The parser rejects unknown fields, multiple YAM
 documents, unsupported versions, unsafe paths, invalid ports, and files larger
 than 64 KiB.
 
+Repository commands run as root inside the Sandbox with outbound internet access.
+The Sandbox is the isolation boundary; repository authorization controls who may
+execute that code. There is no per-scope network policy in this version. Use
+separate scoped Sandbox credentials and do not expose privileged network services
+or secrets to untrusted application code.
+
 CamelCase fields above are the existing repository contract. The snake_case aliases
 `working_directory`, `install_command`, `start_command`, and
 `healthcheck.timeout_seconds` are also accepted. Supplying both spellings for

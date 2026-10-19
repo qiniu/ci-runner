@@ -146,8 +146,8 @@ func (f *Factory) ReconcileCreate(ctx context.Context, templateID, operationID s
 		if match != nil {
 			return nil, deploy.ErrConflict
 		}
-		copy := item
-		match = &copy
+		matched := item
+		match = &matched
 	}
 	if match != nil {
 		box, connectErr := f.client.Connect(ctx, match.SandboxID, qnsandbox.ConnectParams{Timeout: connectTimeout(timeout)})

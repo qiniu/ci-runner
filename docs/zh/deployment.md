@@ -23,6 +23,10 @@ healthcheck:
 凭证。`healthcheck.path` 必须是相对于服务根地址的路径。解析器会拒绝未知字段、
 多个 YAML 文档、不支持的版本、不安全路径、无效端口以及超过 64 KiB 的文件。
 
+仓库命令以 root 身份在 Sandbox 内执行，并允许访问外网。Sandbox 是隔离边界，
+仓库授权决定谁可以执行这些代码。当前版本没有按 scope 配置的网络策略。请使用
+独立的 scope Sandbox 凭证，不要向不受信任的应用代码暴露高权限网络服务或密钥。
+
 上述 camelCase 字段沿用现有仓库约定。也接受 `working_directory`、
 `install_command`、`start_command` 和 `healthcheck.timeout_seconds` 下划线别名；
 同一字段同时提供两种拼写会被拒绝。

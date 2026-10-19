@@ -19,6 +19,7 @@ import (
 	"github.com/qiniu/ci-runner/internal/config"
 	deployconfig "github.com/qiniu/ci-runner/internal/deployment/config"
 	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
@@ -84,7 +85,7 @@ func TestDeploymentLivePublicWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: githubDeploymentSourceURL("qiniu/deployment"), CommitSHA: commit}, spec)
+	plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL("qiniu/deployment"), CommitSHA: commit}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestDeploymentLivePublicWorker(t *testing.T) {
 			worker := srv.newDeploymentWorker()
 			worker.Store = store
 			worker.Source = func(context.Context, state.Deployment) (deploy.Source, error) {
-				return deploygit.New(githubDeploymentSourceURL("qiniu/deployment"), deploygit.Options{Ref: commit})
+				return deploygit.New(github.RepositoryCloneURL("qiniu/deployment"), deploygit.Options{Ref: commit})
 			}
 			worker.Event = func(_ state.Deployment, event state.DeploymentEvent) {
 				if err := store.AppendDeploymentEvent(event); err != nil {
@@ -124,7 +125,7 @@ func TestDeploymentLivePublicWorker(t *testing.T) {
 				failedSpec := plan.Spec()
 				failedSpec.InstallCommand = "true"
 				failedSpec.StartCommand = "exit 23"
-				modePlan, err = deploy.NewPlan(deploy.ResolvedSource{SourceID: githubDeploymentSourceURL("qiniu/deployment"), CommitSHA: commit}, failedSpec)
+				modePlan, err = deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL("qiniu/deployment"), CommitSHA: commit}, failedSpec)
 				if err != nil {
 					t.Fatal(err)
 				}

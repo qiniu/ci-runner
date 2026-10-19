@@ -101,7 +101,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 | `database` | 后端类型（`sqlite` / `postgres` / `mysql`）和 DSN                |
 | `auth`     | Session secret、加密密钥、Session TTL                            |
 | `sandbox`  | 沙箱生命周期超时（创建、运行、停止）                             |
-| `deploy`   | 独立 Deploy 模板、scope 并发上限、保留期和临时工作目录（启用 Issue #125 worker） |
+| `deploy`   | Deploy worker 设置：可选的默认模板、scope 并发上限、保留期和临时工作目录 |
 | `github`   | Webhook secret、鉴权方式（App / PAT / basic）、OAuth、允许的仓库 |
 | `worker`   | Lease、重试和并发设置                                            |
 
