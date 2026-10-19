@@ -201,6 +201,7 @@ func TestDeploymentQuerySQLBackends(t *testing.T) {
 			testDeploymentContextRevisionQueries(t, store)
 			testDeploymentEventBudgetQueries(t, store)
 			testDeploymentNavigationCaps(t, store)
+			testDeploymentCounterRollbackReupgrade(t, store)
 			t.Run("work_pages", func(t *testing.T) {
 				resetSQLBackendTestTables(t, db)
 				if err := store.migrate(db); err != nil {

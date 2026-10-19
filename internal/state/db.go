@@ -199,6 +199,12 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	if err := backfillDeploymentRevisions(db); err != nil {
 		return err
 	}
+	// A rollback can run a writer that predates transactional event counters.
+	// Revalidate lazily on the first append after every startup, under the owner
+	// lock. Keep cached values and lifecycle timestamps unchanged until then.
+	if err := db.Model(&deploymentRevisionRecord{}).Where("event_budget_initialized = ?", true).UpdateColumn("event_budget_initialized", false).Error; err != nil {
+		return err
+	}
 	if err := migrateRunnerProfilePolicies(db); err != nil {
 		return err
 	}
