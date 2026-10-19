@@ -54,9 +54,7 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		}
 	}
 	var start func(context.Context, string, sandboxrunner.PtySize, func([]byte)) (sandboxrunner.TerminalSession, error)
-	if s.sandbox != nil {
-		start = s.sandbox.StartTerminal
-	} else {
+	if d.SandboxAPIURL != "" || d.SandboxAPIKeyEncrypted != "" {
 		key, err := decryptSecret(d.SandboxAPIKeyEncrypted, s.cfg.AuthEncryptionKey.Value())
 		if err != nil || key == "" || d.SandboxAPIURL == "" {
 			writeError(w, http.StatusConflict, "deployment Sandbox credentials are unavailable")
@@ -70,6 +68,15 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		start = func(ctx context.Context, id string, size sandboxrunner.PtySize, output func([]byte)) (sandboxrunner.TerminalSession, error) {
 			return service.StartTerminalUntil(ctx, id, size, d.ExpiresAt, output)
 		}
+	} else if service, ok := s.sandbox.(*sandboxrunner.E2BService); ok {
+		start = func(ctx context.Context, id string, size sandboxrunner.PtySize, output func([]byte)) (sandboxrunner.TerminalSession, error) {
+			return service.StartTerminalUntil(ctx, id, size, d.ExpiresAt, output)
+		}
+	} else if s.sandbox != nil {
+		start = s.sandbox.StartTerminal
+	} else {
+		writeError(w, http.StatusConflict, "deployment Sandbox credentials are unavailable")
+		return
 	}
 	parent := s.loopCtx
 	if parent == nil {
