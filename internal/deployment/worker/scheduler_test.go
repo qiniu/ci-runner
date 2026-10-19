@@ -45,6 +45,50 @@ func TestApplyDeadlineUsesSavedExpiryAndKeepsCleanupIndependent(t *testing.T) {
 	})
 }
 
+func TestExpiredApplyRetainsCauseUntilCleanupSucceeds(t *testing.T) {
+	store := state.New(t.TempDir())
+	if _, err := store.ListActiveDeployments(); err != nil {
+		t.Fatal(err)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		d := deploymentFixture(t)
+		d.ExpiresAt = time.Now().Add(time.Second)
+		plan, err := deploy.NewPlan(deploy.ResolvedSource{SourceID: github.RepositoryCloneURL(d.RepositoryFullName), CommitSHA: d.CommitSHA}, deploy.Spec{InstallCommand: "true", StartCommand: "true", Port: 8080})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.SpecHash = plan.Snapshot().SpecHash
+		if _, err := store.CreateDeployment(d); err != nil {
+			t.Fatal(err)
+		}
+		cleanupErr := errors.New("cleanup unavailable")
+		factory := &fakeFactory{runtime: &fakeRuntime{id: "sandbox-1", closeErr: cleanupErr}}
+		w := New(store, factory, func(context.Context, state.Deployment) (deploy.Source, error) {
+			return blockedCheckout{release: make(chan struct{})}, nil
+		}, func(state.Deployment) (deploy.Spec, error) { return plan.Spec(), nil }, t.TempDir())
+		if err := w.Process(context.Background(), d.ID); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			current, err := store.GetDeployment(d.ID)
+			if err != nil || current.Status != state.DeploymentStatusFailed || current.FailureStage != expiryCleanupStage || current.FailureReason != "deployment expired; cleanup is incomplete" || current.SandboxID == "" {
+				t.Fatalf("expiry cause or cleanup evidence lost: %#v %v", current, err)
+			}
+			if err := w.RunOnce(context.Background()); !errors.Is(err, cleanupErr) {
+				t.Fatalf("expected retryable cleanup failure: %v", err)
+			}
+		}
+		factory.runtime.closeErr = nil
+		if err := w.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		current, err := store.GetDeployment(d.ID)
+		if err != nil || current.Status != state.DeploymentStatusExpired || current.SandboxID != "" || current.FailureReason != "" || current.Error != "" {
+			t.Fatalf("cleaned expiry retained a false execution failure: %#v %v", current, err)
+		}
+	})
+}
+
 type scheduledRuntime struct {
 	*fakeRuntime
 	inspected chan<- string

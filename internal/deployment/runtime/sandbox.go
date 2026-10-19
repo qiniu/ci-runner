@@ -132,7 +132,11 @@ func (f *Factory) ReconcileCreate(ctx context.Context, templateID, operationID s
 	metadataQuery.Set("app", "qiniu-deployd")
 	metadataQuery.Set("deployment_id", operationID)
 	templates := []string{strings.TrimSpace(templateID)}
-	limit := int32(100)
+	// One operation ID belongs to exactly one attempt and should match at most
+	// one Sandbox. A full page cannot prove uniqueness (including unseen rows).
+	// Keep the attempt pending rather than adopting an ambiguous resource or
+	// creating a replacement. The original create request has a bounded lifetime.
+	limit := int32(2)
 	items, err := f.client.List(ctx, &qnsandbox.ListParams{Metadata: ptr(metadataQuery.Encode()), Template: &templates, Limit: &limit})
 	if err != nil {
 		return nil, ErrCreatePending

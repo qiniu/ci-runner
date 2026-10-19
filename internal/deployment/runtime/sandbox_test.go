@@ -299,3 +299,22 @@ func TestReconcileCreateDoesNotCreateOrHideProviderFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileCreateRejectsFullOrAmbiguousOperationPage(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v2/sandboxes" || r.URL.Query().Get("limit") != "2" {
+			t.Errorf("ambiguous reconciliation mutated a resource or lost its bound: %s %s", r.Method, r.URL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"sandboxID":"one","metadata":{"app":"qiniu-deployd","deployment_id":"operation"}},{"sandboxID":"two","metadata":{"app":"qiniu-deployd","deployment_id":"operation"}}]`)
+	}))
+	defer api.Close()
+	factory, err := NewFactory("fixture-key", api.URL, api.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := factory.ReconcileCreate(t.Context(), "template-a", "operation", time.Hour)
+	if handle != nil || !errors.Is(err, ErrCreatePending) {
+		t.Fatalf("ambiguous page adopted a resource: handle=%v err=%v", handle, err)
+	}
+}

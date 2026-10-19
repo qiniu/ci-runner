@@ -24,6 +24,7 @@ const (
 	defaultInstallTimeout = 15 * time.Minute
 	defaultStartTimeout   = 2 * time.Minute
 	defaultCleanupTimeout = 30 * time.Second
+	expiryCleanupStage    = "expiry_cleanup"
 )
 
 // RuntimeHandle combines the deployd process runtime with Sandbox cleanup.
@@ -292,6 +293,9 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 				return w.transition(&d, state.DeploymentStatusExpired, "cleanup", "")
 			}
 		} else {
+			if !time.Now().Before(d.ExpiresAt) {
+				return w.fail(&d, expiryCleanupStage, "deployment expired; cleanup is incomplete")
+			}
 			reason = "deployment execution failed; cleanup is incomplete"
 		}
 		return w.fail(&d, string(stageFromError(applyErr)), reason)
@@ -397,8 +401,16 @@ func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *st
 	if observed != nil && d.Version != observed.Version {
 		return state.ErrConflict
 	}
-	preserveFailed := d.Status == state.DeploymentStatusFailed ||
-		(d.Status == state.DeploymentStatusStopping && d.FailureReason != "")
+	expiryCleanup := d.FailureStage == expiryCleanupStage
+	preserveFailed := (d.Status == state.DeploymentStatusFailed ||
+		(d.Status == state.DeploymentStatusStopping && d.FailureReason != "")) && !expiryCleanup
+	expiryCleanup = expiryCleanup || (expired && !preserveFailed)
+	failCleanup := func() error {
+		if expiryCleanup {
+			return w.fail(&d, expiryCleanupStage, "deployment expired; cleanup is incomplete")
+		}
+		return w.fail(&d, "cleanup", "deployment cleanup is incomplete")
+	}
 	if (d.Status == state.DeploymentStatusCompleted || d.Status == state.DeploymentStatusExpired || d.Status == state.DeploymentStatusFailed) && strings.TrimSpace(d.SandboxID) == "" {
 		return nil
 	}
@@ -426,7 +438,7 @@ func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *st
 	if strings.TrimSpace(d.SandboxID) != "" {
 		rt, connectErr := w.Runtime.Connect(ctx, d)
 		if connectErr != nil {
-			if persistErr := w.fail(&d, "cleanup", "deployment cleanup is incomplete"); persistErr != nil {
+			if persistErr := failCleanup(); persistErr != nil {
 				return persistErr
 			}
 			return connectErr
@@ -438,27 +450,30 @@ func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *st
 			}
 			if d.ProcessID != "" && d.ProcessTag != "" {
 				if stopErr := deploy.Stop(ctx, rt, deploy.ProcessRef{RuntimeID: runtimeID, ID: d.ProcessID, Tag: d.ProcessTag}); stopErr != nil && !errors.Is(stopErr, deploy.ErrProcessUnknown) {
-					if persistErr := w.fail(&d, "cleanup", "deployment cleanup is incomplete"); persistErr != nil {
+					if persistErr := failCleanup(); persistErr != nil {
 						return persistErr
 					}
 					return stopErr
 				}
 			}
 			if closeErr := rt.Close(ctx); closeErr != nil {
-				if persistErr := w.fail(&d, "cleanup", "deployment cleanup is incomplete"); persistErr != nil {
+				if persistErr := failCleanup(); persistErr != nil {
 					return persistErr
 				}
 				return closeErr
 			}
 		}
 	}
-	if expired {
+	if expired || expiryCleanup {
 		d.Status = state.DeploymentStatusExpired
 	} else {
 		d.Status = state.DeploymentStatusCompleted
 	}
 	if preserveFailed {
 		d.Status = state.DeploymentStatusFailed
+	}
+	if expiryCleanup {
+		d.FailureStage, d.FailureReason, d.Error = "", "", ""
 	}
 	d.SandboxID = ""
 	d.RuntimeID = ""
