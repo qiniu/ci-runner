@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func testDeploymentContextRevisionQueries(t *testing.T, store *DBStore) {
 	}
 }
 
-func TestDeploymentEventBudgetUsesBytesAndOneAggregate(t *testing.T) {
+func TestDeploymentEventBudgetUsesCountersAndLegacyBootstrap(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	testDeploymentEventBudgetQueries(t, store)
 }
@@ -82,6 +83,10 @@ func TestDeploymentEventBudgetUsesBytesAndOneAggregate(t *testing.T) {
 func testDeploymentEventBudgetQueries(t *testing.T, store *DBStore) {
 	t.Helper()
 	d, err := store.CreateDeployment(deploymentFixture("unicode-budget", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetDeploymentRevision(d.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +117,23 @@ func testDeploymentEventBudgetQueries(t *testing.T, store *DBStore) {
 	if aggregates != 1 {
 		t.Fatalf("append aggregated %d times, want once even when evicting many rows", aggregates)
 	}
+	var workers sync.WaitGroup
+	errors := make(chan error, 16)
+	for range 16 {
+		workers.Go(func() {
+			errors <- store.AppendDeploymentEvent(DeploymentEvent{DeploymentID: d.ID, EventType: "output", Message: "latest"})
+		})
+	}
+	workers.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if aggregates != 1 {
+		t.Fatalf("subsequent appends rescanned the event history %d times", aggregates-1)
+	}
 	events, more, err := store.ListDeploymentRevisionEvents(d.ID, 1, 0, 0, 500)
 	if err != nil || more || len(events) == 0 || events[len(events)-1].Message != "latest" {
 		t.Fatalf("events=%d more=%v err=%v", len(events), more, err)
@@ -122,6 +144,13 @@ func testDeploymentEventBudgetQueries(t *testing.T, store *DBStore) {
 	}
 	if bytes > maxDeploymentEventBytes || bytes+len(message) <= maxDeploymentEventBytes {
 		t.Fatalf("retained %d bytes; want maximum fitting history within %d bytes", bytes, maxDeploymentEventBytes)
+	}
+	var revision deploymentRevisionRecord
+	if err := db.Where("deployment_id = ? AND number = 1", d.ID).First(&revision).Error; err != nil {
+		t.Fatal(err)
+	}
+	if revision.EventCount != int64(len(events)) || revision.EventBytes != int64(bytes) || !revision.EventBudgetInitialized || !revision.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("event counters/lifecycle timestamp disagree: %#v", revision)
 	}
 }
 

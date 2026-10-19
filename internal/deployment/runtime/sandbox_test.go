@@ -13,10 +13,27 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	deploy "github.com/miclle/deployd"
 )
+
+func TestStopObservationBacksOffAndHonorsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		calls := 0
+		err := waitForProcessStop(ctx, func() error { calls++; return nil })
+		if !errors.Is(err, context.DeadlineExceeded) || calls != 5 {
+			t.Fatalf("stop observation calls=%d err=%v; want bounded backoff", calls, err)
+		}
+	})
+	calls := 0
+	if err := waitForProcessStop(context.Background(), func() error { calls++; return deploy.ErrProcessUnknown }); err != nil || calls != 1 {
+		t.Fatalf("confirmed absence: calls=%d err=%v", calls, err)
+	}
+}
 
 func TestOutputLimiterBoundsAndDropsLaterChunks(t *testing.T) {
 	var got strings.Builder

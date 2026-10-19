@@ -91,8 +91,8 @@ func New(store state.DeploymentStore, runtime RuntimeFactory, source SourceFacto
 	}
 }
 
-// RunOnce advances queued deployments and performs expiry cleanup. It is safe
-// to call from a periodic loop and after startup recovery.
+// RunOnce synchronously advances one bounded batch for explicit recovery.
+// The application uses Run for independent, bounded concurrent scheduling.
 func (w *Worker) RunOnce(ctx context.Context) error {
 	if w == nil || w.Store == nil {
 		return nil
@@ -111,30 +111,33 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var itemErr error
-		switch {
-		case item.Status == state.DeploymentStatusCreating:
-			itemErr = w.recoverCreating(ctx, item)
-		case item.Status == state.DeploymentStatusPlanning:
-			// Planning has no provider side effects. This single-worker loop can
-			// safely resume an interrupted plan without changing the attempt.
-			itemErr = w.transition(&item, state.DeploymentStatusQueued, "recovery", "")
-		case !item.ExpiresAt.IsZero() && !time.Now().UTC().Before(item.ExpiresAt):
-			itemErr = w.Stop(ctx, item.ID, true)
-		case item.Status == state.DeploymentStatusQueued:
-			itemErr = w.Process(ctx, item.ID)
-		case item.Status == state.DeploymentStatusFailed && strings.TrimSpace(item.SandboxID) != "":
-			itemErr = w.Stop(ctx, item.ID, false)
-		case item.Status == state.DeploymentStatusStopping:
-			itemErr = w.Stop(ctx, item.ID, false)
-		case item.Status == state.DeploymentStatusRunning:
-			itemErr = w.checkRunning(ctx, item)
-		}
+		itemErr := w.advance(ctx, item)
 		if itemErr != nil && firstErr == nil {
 			firstErr = itemErr
 		}
 	}
 	return firstErr
+}
+
+func (w *Worker) advance(ctx context.Context, item state.Deployment) error {
+	switch {
+	case item.Status == state.DeploymentStatusCreating:
+		return w.recoverCreating(ctx, item)
+	case item.Status == state.DeploymentStatusPlanning:
+		// Planning has no provider side effects; resume the saved attempt.
+		return w.transition(&item, state.DeploymentStatusQueued, "recovery", "")
+	case !item.ExpiresAt.IsZero() && !time.Now().UTC().Before(item.ExpiresAt):
+		return w.Stop(ctx, item.ID, true)
+	case item.Status == state.DeploymentStatusQueued:
+		return w.Process(ctx, item.ID)
+	case item.Status == state.DeploymentStatusFailed && strings.TrimSpace(item.SandboxID) != "":
+		return w.Stop(ctx, item.ID, false)
+	case item.Status == state.DeploymentStatusStopping:
+		return w.Stop(ctx, item.ID, false)
+	case item.Status == state.DeploymentStatusRunning:
+		return w.checkRunning(ctx, item)
+	}
+	return nil
 }
 
 // Process executes one queued deployment. Every provider side effect follows a
@@ -153,6 +156,8 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 	if !time.Now().UTC().Before(d.ExpiresAt) {
 		return w.Stop(ctx, d.ID, true)
 	}
+	ctx, cancel := context.WithDeadline(ctx, d.ExpiresAt)
+	defer cancel()
 	if err := w.transition(&d, state.DeploymentStatusPlanning, "", ""); err != nil {
 		return err
 	}
@@ -283,6 +288,9 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 			d.RuntimeID = ""
 			d.ProcessID = ""
 			d.ProcessTag = ""
+			if !time.Now().Before(d.ExpiresAt) {
+				return w.transition(&d, state.DeploymentStatusExpired, "cleanup", "")
+			}
 		} else {
 			reason = "deployment execution failed; cleanup is incomplete"
 		}

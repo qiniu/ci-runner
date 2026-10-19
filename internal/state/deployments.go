@@ -410,26 +410,52 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 	return deployments, total, nil
 }
 
+// ListActiveDeployments returns the first bounded batch for diagnostics.
+// Production scheduling walks ListDeploymentWork pages independently per lane.
 func (s *DBStore) ListActiveDeployments() ([]Deployment, error) {
+	items, _, err := s.ListDeploymentWork("all", "", 100, time.Now().UTC())
+	return items, err
+}
+
+// ListDeploymentWork uses bounded keyset pages, independently per scheduling lane.
+func (s *DBStore) ListDeploymentWork(kind, afterID string, limit int, now time.Time) ([]Deployment, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if limit <= 0 || limit > 100 || now.IsZero() {
+		return nil, false, fmt.Errorf("invalid deployment work page")
+	}
+	active := []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating, DeploymentStatusRunning, DeploymentStatusStopping}
+	query := db.Model(&deploymentRecord{})
+	switch kind {
+	case "provision":
+		query = query.Where("status IN ? AND expires_at > ?", []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating}, now)
+	case "monitor":
+		query = query.Where("status = ? AND expires_at > ?", DeploymentStatusRunning, now)
+	case "cleanup":
+		query = query.Where("status = ? OR (status = ? AND sandbox_id <> '') OR (status IN ? AND expires_at <= ?)", DeploymentStatusStopping, DeploymentStatusFailed, active, now)
+	case "all":
+		query = query.Where("status IN ? OR (status = ? AND sandbox_id <> '')", active, DeploymentStatusFailed)
+	default:
+		return nil, false, fmt.Errorf("invalid deployment work kind")
+	}
+	if afterID != "" {
+		query = query.Where("id > ?", afterID)
 	}
 	var records []deploymentRecord
-	if err := db.Where("status IN ? OR (status = ? AND sandbox_id <> '')", []string{
-		DeploymentStatusQueued,
-		DeploymentStatusPlanning,
-		DeploymentStatusCreating,
-		DeploymentStatusRunning,
-		DeploymentStatusStopping,
-	}, DeploymentStatusFailed).Order("created_at ASC, id ASC").Find(&records).Error; err != nil {
-		return nil, err
+	if err := query.Order("id ASC").Limit(limit + 1).Find(&records).Error; err != nil {
+		return nil, false, err
+	}
+	more := len(records) > limit
+	if more {
+		records = records[:limit]
 	}
 	deployments := make([]Deployment, 0, len(records))
 	for _, record := range records {
 		deployments = append(deployments, deploymentFromRecord(record))
 	}
-	return deployments, nil
+	return deployments, more, nil
 }
 
 func (s *DBStore) UpdateDeployment(deployment Deployment) error {
@@ -692,14 +718,21 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 			return ErrConflict
 		}
 		record.RevisionNumber = event.RevisionNumber
-		var budget struct{ Count, Bytes int64 }
-		// SQLite LENGTH(text) counts characters; budgets apply to UTF-8 bytes.
-		messageBytes := "OCTET_LENGTH(message)"
-		if tx.Dialector.Name() == "sqlite" {
-			messageBytes = "LENGTH(CAST(message AS BLOB))"
-		}
-		if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Select("COUNT(*) AS count, COALESCE(SUM(" + messageBytes + "), 0) AS bytes").Scan(&budget).Error; err != nil {
+		var revision deploymentRevisionRecord
+		if err := tx.Select("event_count, event_bytes, event_budget_initialized").Where("deployment_id = ? AND number = ?", event.DeploymentID, event.RevisionNumber).First(&revision).Error; err != nil {
 			return err
+		}
+		budget := struct{ Count, Bytes int64 }{revision.EventCount, revision.EventBytes}
+		if !revision.EventBudgetInitialized {
+			// Bootstrap old revisions once under the same owner lock used by all
+			// appends. Subsequent writes use the retained transactional counters.
+			messageBytes := "OCTET_LENGTH(message)"
+			if tx.Dialector.Name() == "sqlite" {
+				messageBytes = "LENGTH(CAST(message AS BLOB))"
+			}
+			if err := tx.Model(&deploymentEventRecord{}).Where("deployment_id = ? AND revision_number = ?", event.DeploymentID, event.RevisionNumber).Select("COUNT(*) AS count, COALESCE(SUM(" + messageBytes + "), 0) AS bytes").Scan(&budget).Error; err != nil {
+				return err
+			}
 		}
 		for budget.Count >= maxDeploymentEvents || budget.Bytes+int64(len(event.Message)) > maxDeploymentEventBytes {
 			var oldest deploymentEventRecord
@@ -712,7 +745,12 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 			budget.Count--
 			budget.Bytes -= int64(len(oldest.Message))
 		}
-		return tx.Create(&record).Error
+		if err := tx.Create(&record).Error; err != nil {
+			return err
+		}
+		return tx.Model(&deploymentRevisionRecord{}).Where("deployment_id = ? AND number = ?", event.DeploymentID, event.RevisionNumber).UpdateColumns(map[string]any{
+			"event_count": budget.Count + 1, "event_bytes": budget.Bytes + int64(len(event.Message)), "event_budget_initialized": true,
+		}).Error
 	})
 }
 

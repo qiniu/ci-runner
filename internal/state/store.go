@@ -666,6 +666,7 @@ type DeploymentStore interface {
 	CountAuthorizedDeploymentsByStatus(access []GitHubInstallationRepositoryAccess, options DeploymentListOptions) (DeploymentStatusCounts, error)
 	ListDeploymentRepositories(access []GitHubInstallationRepositoryAccess, repository string, limit, offset int) ([]DeploymentRepository, bool, error)
 	ListActiveDeployments() ([]Deployment, error)
+	ListDeploymentWork(kind, afterID string, limit int, now time.Time) ([]Deployment, bool, error)
 	FillDeploymentPullRequestTitle(id, ref, title string) error
 	UpdateDeployment(deployment Deployment) error
 	RetryDeployment(deployment Deployment, expiresAt time.Time) error

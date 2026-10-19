@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,19 +27,9 @@ func (s *Server) startBackgroundLoops() {
 
 func (s *Server) deploymentLoop(ctx context.Context) {
 	defer s.loopWG.Done()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		case <-s.deploymentNotify:
-		}
-		if err := s.deploymentWorker.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			s.logger.Error("process deployments", "error", err)
-		}
-	}
+	s.deploymentWorker.Run(ctx, s.deploymentNotify, func(err error) {
+		s.logger.Error("process deployments", "error", err)
+	})
 }
 
 func (s *Server) signalDeployments() {

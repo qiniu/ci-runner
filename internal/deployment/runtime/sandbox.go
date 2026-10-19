@@ -315,21 +315,27 @@ func (r *sandboxRuntime) Stop(ctx context.Context, ref deploy.ProcessRef) error 
 	if err := r.box.Commands().Kill(ctx, uint32(pid)); err != nil {
 		return sanitizeProviderError(ctx, err)
 	}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	return waitForProcessStop(ctx, func() error { _, err := r.Inspect(ctx, ref); return err })
+}
+
+func waitForProcessStop(ctx context.Context, inspect func() error) error {
+	delay := 250 * time.Millisecond
 	for {
-		_, inspectErr := r.Inspect(ctx, ref)
+		inspectErr := inspect()
 		if errors.Is(inspectErr, deploy.ErrProcessUnknown) {
 			return nil
 		}
 		if inspectErr != nil {
 			return inspectErr
 		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		delay = min(delay*2, time.Second)
 	}
 }
 

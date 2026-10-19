@@ -129,6 +129,10 @@ func (deploymentRecord) TableName() string { return "deployments" }
 
 // Revision snapshots exclude service credentials and retain the encrypted plan.
 type deploymentRevisionRecord struct {
+	EventCount             int64 `gorm:"column:event_count;not null;default:0"`
+	EventBytes             int64 `gorm:"column:event_bytes;not null;default:0"`
+	EventBudgetInitialized bool  `gorm:"column:event_budget_initialized;not null;default:false"`
+
 	ExecutionAccountID int64      `gorm:"column:execution_account_id;not null;default:0"`
 	ID                 string     `gorm:"column:id;primaryKey"`
 	DeploymentID       string     `gorm:"column:deployment_id;size:128;not null;uniqueIndex:idx_deployment_revisions_number,priority:1"`
