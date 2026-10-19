@@ -92,8 +92,8 @@ func New(store state.DeploymentStore, runtime RuntimeFactory, source SourceFacto
 	}
 }
 
-// RunOnce synchronously advances one bounded batch for explicit recovery.
-// The application uses Run for independent, bounded concurrent scheduling.
+// RunOnce synchronously advances one bounded batch for explicit maintenance.
+// Application startup only wakes Run so provisioning cannot inherit its deadline.
 func (w *Worker) RunOnce(ctx context.Context) error {
 	if w == nil || w.Store == nil {
 		return nil

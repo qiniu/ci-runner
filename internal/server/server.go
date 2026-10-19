@@ -307,7 +307,10 @@ func (s *Server) Recover(ctx context.Context) error {
 	var runnerRecoveryErr error
 	if len(active) == 0 {
 		if s.deploymentWorker != nil {
-			return s.deploymentWorker.RunOnce(ctx)
+			// Deployment recovery and provisioning run after Start on their own
+			// context; the startup recovery deadline must not execute queued plans.
+			s.signalDeployments()
+			return nil
 		}
 		if s.cfg.DeploymentRetention > 0 {
 			_, err := s.store.PruneDeployments(time.Now().UTC().Add(-s.cfg.DeploymentRetention), 100)
@@ -374,7 +377,8 @@ dispatch:
 	}
 	runnerRecoveryErr = errors.Join(joined...)
 	if s.deploymentWorker != nil {
-		return errors.Join(runnerRecoveryErr, s.deploymentWorker.RunOnce(ctx))
+		s.signalDeployments()
+		return runnerRecoveryErr
 	}
 	if s.cfg.DeploymentRetention > 0 {
 		pruneErr := func() error {
