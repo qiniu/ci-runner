@@ -235,10 +235,11 @@ var (
 )
 
 type E2BService struct {
-	client     *qnsandbox.Client
-	apiKey     string
-	endpoint   string
-	httpClient *http.Client
+	client            *qnsandbox.Client
+	deploymentFactory *deployruntime.Factory
+	apiKey            string
+	endpoint          string
+	httpClient        *http.Client
 }
 
 const runnerBootstrapUser = "root"
@@ -260,34 +261,26 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	if err != nil {
 		return nil, err
 	}
-	return &E2BService{client: client, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
+	factory, err := deployruntime.NewFactory(apiKey, endpoint, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return &E2BService{client: client, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
 }
 
 // CreateDeploymentRuntime allocates a Sandbox runtime for deployd. It uses a
 // separate metadata namespace from GitHub Runner sandboxes.
 func (s *E2BService) CreateDeploymentRuntime(ctx context.Context, templateID string, timeout time.Duration, operationID string) (*deployruntime.Handle, error) {
-	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
-	if err != nil {
-		return nil, err
-	}
-	return factory.Create(ctx, templateID, timeout, operationID)
+	return s.deploymentFactory.Create(ctx, templateID, timeout, operationID)
 }
 
 // ConnectDeploymentRuntime reconnects to a persisted Deploy Sandbox.
 func (s *E2BService) ConnectDeploymentRuntime(ctx context.Context, sandboxID string, remaining time.Duration) (*deployruntime.Handle, error) {
-	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
-	if err != nil {
-		return nil, err
-	}
-	return factory.Connect(ctx, sandboxID, remaining)
+	return s.deploymentFactory.Connect(ctx, sandboxID, remaining)
 }
 
 func (s *E2BService) ReconcileDeploymentRuntime(ctx context.Context, templateID, operationID string, remaining time.Duration) (*deployruntime.Handle, error) {
-	factory, err := deployruntime.NewFactory(s.apiKey, s.endpoint, s.httpClient)
-	if err != nil {
-		return nil, err
-	}
-	return factory.ReconcileCreate(ctx, templateID, operationID, remaining)
+	return s.deploymentFactory.ReconcileCreate(ctx, templateID, operationID, remaining)
 }
 
 // TemplateDetails allowlists credential-free provider metadata for the admin form.

@@ -431,15 +431,27 @@ func (s *DBStore) ListDeploymentWork(kind, afterID string, limit int, now time.T
 	}
 	active := []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating, DeploymentStatusRunning, DeploymentStatusStopping}
 	query := db.Model(&deploymentRecord{})
+	// Expose each status predicate to the planner and bound candidate IDs before
+	// merging the branches into one keyset page.
+	workIDs := func(predicate string, args ...any) *gorm.DB {
+		return db.Model(&deploymentRecord{}).Select("id").Where(predicate, args...).
+			Where("id > ?", afterID).Order("id ASC").Limit(limit + 1)
+	}
 	switch kind {
 	case "provision":
 		query = query.Where("status IN ? AND expires_at > ?", []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating}, now)
 	case "monitor":
 		query = query.Where("status = ? AND expires_at > ?", DeploymentStatusRunning, now)
 	case "cleanup":
-		query = query.Where("status = ? OR (status = ? AND sandbox_id <> '') OR (status IN ? AND expires_at <= ?)", DeploymentStatusStopping, DeploymentStatusFailed, active, now)
+		candidates := db.Raw("SELECT id FROM (?) AS stopping_work UNION ALL SELECT id FROM (?) AS failed_work UNION ALL SELECT id FROM (?) AS expired_work",
+			workIDs("status = ?", DeploymentStatusStopping),
+			workIDs("status = ? AND sandbox_id <> ''", DeploymentStatusFailed),
+			workIDs("status IN ? AND expires_at <= ?", []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating, DeploymentStatusRunning}, now))
+		query = query.Where("id IN (?)", candidates)
 	case "all":
-		query = query.Where("status IN ? OR (status = ? AND sandbox_id <> '')", active, DeploymentStatusFailed)
+		candidates := db.Raw("SELECT id FROM (?) AS active_work UNION ALL SELECT id FROM (?) AS failed_work",
+			workIDs("status IN ?", active), workIDs("status = ? AND sandbox_id <> ''", DeploymentStatusFailed))
+		query = query.Where("id IN (?)", candidates)
 	default:
 		return nil, false, fmt.Errorf("invalid deployment work kind")
 	}

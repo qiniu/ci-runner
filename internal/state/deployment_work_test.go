@@ -7,8 +7,13 @@ import (
 )
 
 func TestDeploymentWorkPagesKeepSchedulingLanesBoundedAndComplete(t *testing.T) {
-	store := New(t.TempDir())
-	now := time.Now().UTC()
+	testDeploymentWorkPages(t, New(t.TempDir()).(*DBStore))
+}
+
+func testDeploymentWorkPages(t *testing.T, store *DBStore) {
+	t.Helper()
+	// Use an exact second so every SQL dialect stores the expiry boundary equally.
+	now := time.Now().UTC().Truncate(time.Second)
 	want := map[string]int{"all": 210}
 	for i := range 210 {
 		d := deploymentFixture(fmt.Sprintf("work-%03d", i), 1)
@@ -30,6 +35,24 @@ func TestDeploymentWorkPagesKeepSchedulingLanesBoundedAndComplete(t *testing.T) 
 			want["provision"]++
 		}
 	}
+	for _, fixture := range []struct {
+		id, status string
+		sandbox    string
+	}{
+		{"work-stopping-empty", DeploymentStatusStopping, ""},
+		{"work-exact-expiry", DeploymentStatusRunning, "exact"},
+		{"work-failed-clean", DeploymentStatusFailed, ""},
+		{"work-completed", DeploymentStatusCompleted, "released"},
+		{"work-expired", DeploymentStatusExpired, "released"},
+	} {
+		d := deploymentFixture(fixture.id, 1)
+		d.Status, d.SandboxID, d.ExpiresAt = fixture.status, fixture.sandbox, now
+		if _, err := store.CreateDeployment(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want["all"] += 2
+	want["cleanup"] += 2
 	for kind, count := range want {
 		after := ""
 		seen := make(map[string]bool)
