@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test"
 import { act, createElement } from "react"
 import { Window } from "happy-dom"
 import { createRoot } from "react-dom/client"
@@ -7,6 +7,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import "../i18n"
 import { UserDeploymentsSection } from "./user-deployments-section"
 import { UserDeploymentCreateSection } from "./user-deployment-create-section"
+import i18n from "../i18n"
+import { toast } from "sonner"
 
 function renderPage(overrides = {}) {
   return renderToStaticMarkup(createElement(UserDeploymentCreateSection, {
@@ -53,7 +55,7 @@ describe("UserDeploymentCreateSection", () => {
 })
 
 const window = new Window({ url: "http://localhost/" })
-const domGlobals = { window, document: window.document, navigator: window.navigator, HTMLElement: window.HTMLElement, SVGElement: window.SVGElement, Node: window.Node, DocumentFragment: window.DocumentFragment, Event: window.Event, MouseEvent: window.MouseEvent, getComputedStyle: window.getComputedStyle.bind(window), requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), IS_REACT_ACT_ENVIRONMENT: true }
+const domGlobals = { window, document: window.document, navigator: window.navigator, HTMLElement: window.HTMLElement, HTMLInputElement: window.HTMLInputElement, MutationObserver: window.MutationObserver, CustomEvent: window.CustomEvent, NodeFilter: window.NodeFilter, SVGElement: window.SVGElement, Node: window.Node, DocumentFragment: window.DocumentFragment, Event: window.Event, MouseEvent: window.MouseEvent, getComputedStyle: window.getComputedStyle.bind(window), requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), IS_REACT_ACT_ENVIRONMENT: true }
 const originalGlobalDescriptors = new Map(Object.keys(domGlobals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
 for (const [key, value] of Object.entries(domGlobals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value })
 const mountedRoots = []
@@ -126,6 +128,81 @@ async function selectOption(container, id, value) {
 }
 
 describe("deployment interaction", () => {
+  test.each([
+    ["stop", "running", "Deployment stopped", "部署已停止"],
+    ["retry", "completed", "Deployment queued for retry", "部署已重新排队"],
+    ["delete", "completed", "Deployment deleted", "部署已删除"],
+  ])("translates the %s success notification in both languages", async (kind, status, english, chinese) => {
+    const success = spyOn(toast, "success").mockImplementation(() => "test-toast")
+    try {
+      for (const language of ["en", "zh"]) {
+        await act(async () => i18n.changeLanguage(language))
+        const saved = { ...deployment(`action-${kind}-${language}`, status), revision_number: 1 }
+        const request = async (url, options) => {
+          if (url.startsWith("/user/deployment-repositories")) return { items: [] }
+          if (url.endsWith("/events")) return { events: [], has_more: false }
+          if (url.endsWith("/resources")) return {}
+          if (options?.method) return { ...saved, status: kind === "retry" ? "queued" : "completed", revision_number: kind === "retry" ? 2 : 1 }
+          return saved
+        }
+        const { container } = await mountPage({ request, deploymentID: saved.id }, { page: "deployments" })
+        await act(async () => button(container, i18n.t(kind === "stop" ? "user.stopDeployment" : kind === "retry" ? "user.retryDeployment" : "common.delete")).click())
+        if (kind === "retry") await act(async () => button(document.body, i18n.t("user.startRedeploy")).click())
+        expect(success.mock.calls.at(-1)?.[0]).toBe(language === "en" ? english : chinese)
+      }
+    } finally {
+      success.mockRestore()
+      await act(async () => i18n.changeLanguage("en"))
+    }
+  })
+
+  test("polls only the first list and repository pages, retains history, and pauses while hidden", async () => {
+    const timers = new Map()
+    let timerID = 0
+    const interval = spyOn(window, "setInterval").mockImplementation((callback) => { timers.set(++timerID, callback); return timerID })
+    const clear = spyOn(window, "clearInterval").mockImplementation((id) => timers.delete(id))
+    const visibility = Object.getOwnPropertyDescriptor(document, "visibilityState")
+    let hidden = false
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => hidden ? "hidden" : "visible" })
+    const requests = []
+    const request = async (url) => {
+      requests.push(url)
+      const offset = new URL(url, window.location.href).searchParams.get("offset")
+      if (url.startsWith("/user/deployment-repositories")) return {
+        items: Array.from({ length: offset === "100" ? 1 : 100 }, (_, index) => ({ repository_full_name: offset === "100" ? "old/repository" : `owner/repo-${index}`, active_deployments: [] })),
+        has_more: offset !== "100",
+      }
+      return { items: offset === "100" ? [deployment("old-history")] : Array.from({ length: 100 }, (_, index) => deployment(`fresh-${index}`)), total: 101 }
+    }
+    try {
+      const { container } = await mountPage({ request }, { page: "deployments" })
+      await act(async () => button(container, "Load more deployments").click())
+      await act(async () => button(container, "Load more repositories").click())
+      requests.length = 0
+      await act(async () => { for (const callback of [...timers.values()]) callback() })
+      expect(requests.length).toBe(2)
+      expect(requests.some((url) => url.includes("offset=100"))).toBe(false)
+      expect(container.querySelectorAll('[data-testid="deployment-list"] > a')).toHaveLength(101)
+      expect(container.querySelector('[data-testid="deployment-list"] > a[href*="old-history"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="deployment-navigation"]').textContent).toContain("old/repository")
+      requests.length = 0
+      hidden = true
+      await act(async () => { for (const callback of [...timers.values()]) callback() })
+      expect(requests).toHaveLength(0)
+      hidden = false
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")))
+      expect(requests).toHaveLength(2)
+      requests.length = 0
+      await act(async () => button(container, "Refresh").click())
+      expect(requests.filter((url) => url.includes("offset=100"))).toHaveLength(2)
+    } finally {
+      interval.mockRestore()
+      clear.mockRestore()
+      if (visibility) Object.defineProperty(document, "visibilityState", visibility)
+      else Reflect.deleteProperty(document, "visibilityState")
+    }
+  })
+
   test("uses saved revision commits for links and copying without putting them in the URL", async () => {
     const sha = "b".repeat(40)
     const revision = { ...deployment("d1-r1", "completed"), number: 1, ref: "refs/heads/example/vite", commit_sha: sha, source_repository_full_name: "contributor/fork" }

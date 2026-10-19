@@ -30,8 +30,9 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
   const [prefillActive, setPrefillActive] = useState(Boolean(prefill))
   const [commitSHA, setCommitSHA] = useState(prefill?.commitSHA ?? "")
   const prefillInstallation = githubApp?.installations.find((item) => (item.repositories?.includes(prefill?.repository ?? "") || item.account_login?.toLowerCase() === prefill?.repository.split("/")[0]?.toLowerCase()))
-  const initialInstallation = prefill ? prefillInstallation : githubApp?.installations.find((item) => item.account_login?.toLowerCase() === currentLogin?.toLowerCase())
-    ?? githubApp?.installations[0]
+  const initialInstallation = prefill ? prefillInstallation : (
+    githubApp?.installations.find((item) => item.account_login?.toLowerCase() === currentLogin?.toLowerCase()) ?? githubApp?.installations[0]
+  )
   const [repositories, setRepositories] = useState<string[]>(initialInstallation?.repositories ?? [])
   const [loadingRepositories, setLoadingRepositories] = useState(false)
   const [installationID, setInstallationID] = useState(initialInstallation ? String(initialInstallation.id) : "")

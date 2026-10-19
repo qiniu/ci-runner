@@ -42,11 +42,11 @@ export function DeploymentNavigation({ request, selected, selectedID, repository
   useEffect(() => {
     let cancelled = false
     let busy = false
-    const load = async () => {
+    const load = async (poll = false) => {
       if (busy) return
       busy = true
       try {
-        const pages = await Promise.all(Array.from({ length: pageCount }, (_, index) => request(`/user/deployment-repositories?limit=${pageSize}&offset=${index * pageSize}`) as Promise<RepositoryPage>))
+        const pages = await Promise.all(Array.from({ length: poll ? 1 : pageCount }, (_, index) => request(`/user/deployment-repositories?limit=${pageSize}&offset=${index * pageSize}`) as Promise<RepositoryPage>))
         if (cancelled) return
         const items = pages.flatMap((page) => page.items ?? [])
         if (selectedRepository && !items.some((item) => item.repository_full_name.toLowerCase() === selectedRepository.toLowerCase())) {
@@ -54,8 +54,17 @@ export function DeploymentNavigation({ request, selected, selectedID, repository
           items.unshift(...(page.items ?? []))
         }
         if (!cancelled) {
-          setRepositories([...new Map(items.map((item) => [item.repository_full_name.toLowerCase(), item])).values()])
-          setHasMore(Boolean(pages[pages.length - 1]?.has_more))
+          setRepositories((current) => {
+            const incoming = new Map(items.map((item) => [item.repository_full_name.toLowerCase(), item]))
+            if (poll && pageCount > 1) {
+              current.slice(pageSize).forEach((item) => {
+                const key = item.repository_full_name.toLowerCase()
+                if (!incoming.has(key)) incoming.set(key, item)
+              })
+            }
+            return [...incoming.values()]
+          })
+          if (!poll || pageCount === 1) setHasMore(Boolean(pages[pages.length - 1]?.has_more))
           setFailed(false)
         }
       } catch {
@@ -67,8 +76,10 @@ export function DeploymentNavigation({ request, selected, selectedID, repository
     }
     setLoading(true)
     void load()
-    const timer = window.setInterval(() => { void load() }, 5000)
-    return () => { cancelled = true; window.clearInterval(timer) }
+    const poll = () => { if (document.visibilityState !== "hidden") void load(true) }
+    const timer = window.setInterval(poll, 5000)
+    document.addEventListener("visibilitychange", poll)
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", poll) }
   }, [request, selectedRepository, pageCount, refreshVersion, refresh])
 
   const visible = [...repositories]

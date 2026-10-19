@@ -94,6 +94,7 @@ type EventPage = { events?: DeploymentEvent[]; has_more?: boolean }
 type DeploymentPage = { items?: Deployment[]; total?: number; status_counts?: DeploymentStatusCounts }
 
 const statusFilterLabels = { running: "common.statusRunning", processing: "user.deploymentStatusProcessing", stopped: "user.deploymentStatusStopped", failed: "common.statusFailed" } as const
+const actionMessages = { stop: "user.deploymentStopped", delete: "user.deploymentDeleted", retry: "user.deploymentRetried" } as const
 
 type DeploymentResources = Pick<Deployment, "template_id" | "template_name" | "template_cpu" | "template_memory_mb" | "template_disk_mb" | "sandbox_id" | "sandbox_region" | "expires_at"> & { remote_error?: string }
 
@@ -231,7 +232,7 @@ export function UserDeploymentsSection({
     }).format(parsed)
   }, [i18n.resolvedLanguage])
 
-  const loadDeployments = useCallback(async () => {
+  const loadDeployments = useCallback(async (poll = false) => {
     if (listPageLoading.current) return
     const requestGeneration = ++generation.current
     setLoading(true)
@@ -239,24 +240,31 @@ export function UserDeploymentsSection({
     try {
       const paths = deploymentID
         ? [`/user/deployments/${encodeURIComponent(deploymentID)}${requestedRevision ? `?revision=${requestedRevision}` : ""}`]
-        : Array.from({ length: loadedPages.current }, (_, index) => index === 0 ? listPath : `${listPath}${listPath.includes("?") ? "&" : "?"}limit=100&offset=${index * 100}`)
+        : Array.from({ length: poll ? 1 : loadedPages.current }, (_, index) => index === 0 ? listPath : `${listPath}${listPath.includes("?") ? "&" : "?"}limit=100&offset=${index * 100}`)
       const pages = await Promise.all(paths.map((path) => request(path) as Promise<DeploymentPage & Deployment>))
       if (requestGeneration !== generation.current) return
       const next = deploymentID ? [pages[0]] : [...new Map(pages.flatMap((data) => Array.isArray(data.items) ? data.items : []).map((item) => [item.id, item])).values()]
-      setHasMore(!deploymentID && (pages[0].total ?? next.length) > next.length)
+      setHasMore(!deploymentID && (pages[0].total ?? next.length) > (poll ? loadedPages.current * 100 : next.length))
       if (!deploymentID) setStatusCounts(pages[0].status_counts ?? null)
-      setDeployments((current) => next.map((item) => {
-        const previous = current.find((old) => old.id === item.id)
-        // A detail response started before metadata was saved may still be
-        // missing the title. Retain it only for the same immutable source/version.
-        const snapshot = !item.pull_request_title && previous?.ref === item.ref && previous?.revision_number === item.revision_number && previous?.pull_request_title
-          ? { ...item, pull_request_title: previous.pull_request_title }
-          : item
-        if (!previous?.revisions?.length || !item.revisions?.length) return snapshot
-        const merged = new Map(previous.revisions.map((revision) => [revision.number, revision]))
-        item.revisions.forEach((revision) => merged.set(revision.number, revision))
-        return { ...snapshot, revisions: [...merged.values()].sort((a, b) => b.number - a.number), revisions_has_more: previous.revisions.length > item.revisions.length ? previous.revisions_has_more : item.revisions_has_more }
-      }))
+      setDeployments((current) => {
+        // Automatic refresh updates the newest page without reloading history.
+        // Keep its remaining rows visible until an explicit full refresh.
+        const incoming = !deploymentID && poll && loadedPages.current > 1
+          ? [...next, ...current.slice(100).filter((item) => !next.some((fresh) => fresh.id === item.id))]
+          : next
+        return incoming.map((item) => {
+          const previous = current.find((old) => old.id === item.id)
+          // A detail response started before metadata was saved may still be
+          // missing the title. Retain it only for the same immutable source/version.
+          const snapshot = !item.pull_request_title && previous?.ref === item.ref && previous?.revision_number === item.revision_number && previous?.pull_request_title
+            ? { ...item, pull_request_title: previous.pull_request_title }
+            : item
+          if (!previous?.revisions?.length || !item.revisions?.length) return snapshot
+          const merged = new Map(previous.revisions.map((revision) => [revision.number, revision]))
+          item.revisions.forEach((revision) => merged.set(revision.number, revision))
+          return { ...snapshot, revisions: [...merged.values()].sort((a, b) => b.number - a.number), revisions_has_more: previous.revisions.length > item.revisions.length ? previous.revisions_has_more : item.revisions_has_more }
+        })
+      })
     } catch (cause) {
       if (requestGeneration !== generation.current) return
       setError(cause instanceof Error ? cause.message : t("user.deploymentLoadFailed"))
@@ -287,9 +295,12 @@ export function UserDeploymentsSection({
 
   useEffect(() => {
     if (deploymentID && !deployments.some((item) => activeStatuses.has(item.status))) return
-    const timer = window.setInterval(() => { void loadDeployments() }, deploymentID ? 3000 : 5000)
+    const poll = () => { if (document.visibilityState !== "hidden") void loadDeployments(true) }
+    const timer = window.setInterval(poll, deploymentID ? 3000 : 5000)
+    document.addEventListener("visibilitychange", poll)
     return () => {
       window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", poll)
     }
   }, [loadDeployments, deployments, deploymentID])
 
@@ -338,7 +349,7 @@ export function UserDeploymentsSection({
       if (kind !== "delete") void loadDeployments()
       if (kind === "delete" && deploymentID) backToDeployments()
       setNavigationRefresh((value) => value + 1)
-      toast.success(t(`user.deployment${kind[0].toUpperCase()}${kind.slice(1)}d` as "user.deploymentStopped" | "user.deploymentDeleted" | "user.deploymentRetried"))
+      toast.success(t(actionMessages[kind]))
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : t("user.deploymentActionFailed"))
     } finally {
@@ -720,8 +731,10 @@ function useDeploymentEvents(request: Request, id: string | null, revisionNumber
   useEffect(() => {
     void refresh()
     if (!status || !activeStatuses.has(status)) return
-    const timer = window.setInterval(() => { void refresh() }, 3000)
-    return () => window.clearInterval(timer)
+    const poll = () => { if (document.visibilityState !== "hidden") void refresh() }
+    const timer = window.setInterval(poll, 3000)
+    document.addEventListener("visibilitychange", poll)
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", poll) }
   }, [refresh, status, login])
 
   return { events, loading, error, hasOlder, refresh, loadOlder }
