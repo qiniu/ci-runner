@@ -4,6 +4,8 @@ package deployruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -77,7 +79,7 @@ func (h *Handle) Close(ctx context.Context) error {
 		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
 			return nil
 		}
-		return sanitizeProviderError(ctx, err)
+		return providerOperationError(ctx, "close", err)
 	}
 	return nil
 }
@@ -178,7 +180,7 @@ func (f *Factory) Connect(ctx context.Context, sandboxID string, remaining time.
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
 			return nil, ErrSandboxNotFound
 		}
-		return nil, sanitizeProviderError(ctx, err)
+		return nil, providerOperationError(ctx, "connect", err)
 	}
 	return &Handle{Runtime: newRuntime(box), SandboxID: box.ID(), box: box}, nil
 }
@@ -207,14 +209,14 @@ func (r *sandboxRuntime) Run(ctx context.Context, command deploy.Command, output
 	limiter := newOutputLimiter(output, nil)
 	handle, err := r.box.Commands().Start(ctx, command.Script, qnsandbox.WithCommandUser(rootUser), qnsandbox.WithCwd(command.Directory), qnsandbox.WithEnvs(command.Env), qnsandbox.WithOnStdout(func(data []byte) { limiter.write(deploy.Stdout, data) }), qnsandbox.WithOnStderr(func(data []byte) { limiter.write(deploy.Stderr, data) }))
 	if err != nil {
-		return deploy.Exit{}, sanitizeProviderError(ctx, err)
+		return deploy.Exit{}, providerOperationError(ctx, "run_start", err)
 	}
 	result, waitErr := handle.Wait()
 	if limiter.Exceeded() {
 		return deploy.Exit{}, ErrOutputLimit
 	}
 	if waitErr != nil || result == nil || strings.TrimSpace(result.Error) != "" {
-		return deploy.Exit{}, sanitizeProviderError(ctx, waitErr)
+		return deploy.Exit{}, providerOperationError(ctx, "run_wait", waitErr)
 	}
 	return deploy.Exit{Code: result.ExitCode}, nil
 }
@@ -246,7 +248,7 @@ func (r *sandboxRuntime) Start(ctx context.Context, command deploy.Command, outp
 	limiter := newOutputLimiter(output, cancelStream)
 	handle, err := r.box.Commands().Start(streamCtx, command.Script, qnsandbox.WithCommandUser(rootUser), qnsandbox.WithCwd(command.Directory), qnsandbox.WithEnvs(command.Env), qnsandbox.WithTag(command.Tag), qnsandbox.WithOnStdout(func(data []byte) { limiter.write(deploy.Stdout, data) }), qnsandbox.WithOnStderr(func(data []byte) { limiter.write(deploy.Stderr, data) }))
 	if err != nil {
-		return deploy.ProcessRef{}, sanitizeProviderError(ctx, err)
+		return deploy.ProcessRef{}, providerOperationError(ctx, "start", err)
 	}
 	pid, err := handle.WaitPID(ctx)
 	if err != nil || pid == 0 || ctx.Err() != nil || limiter.Exceeded() {
@@ -262,7 +264,7 @@ func (r *sandboxRuntime) Start(ctx context.Context, command deploy.Command, outp
 			return deploy.ProcessRef{}, ctx.Err()
 		}
 		if err != nil {
-			return deploy.ProcessRef{}, sanitizeProviderError(ctx, err)
+			return deploy.ProcessRef{}, providerOperationError(ctx, "start_confirm", err)
 		}
 		return deploy.ProcessRef{}, ErrProcessLost
 	}
@@ -280,7 +282,7 @@ func (r *sandboxRuntime) Inspect(ctx context.Context, ref deploy.ProcessRef) (de
 	}
 	items, err := r.box.Commands().List(ctx)
 	if err != nil {
-		return deploy.ProcessState{}, sanitizeProviderError(ctx, err)
+		return deploy.ProcessState{}, providerOperationError(ctx, "inspect", err)
 	}
 	var found *qnsandbox.ProcessInfo
 	for i := range items {
@@ -313,7 +315,7 @@ func (r *sandboxRuntime) Stop(ctx context.Context, ref deploy.ProcessRef) error 
 		return deploy.ErrRuntimeMismatch
 	}
 	if err := r.box.Commands().Kill(ctx, uint32(pid)); err != nil {
-		return sanitizeProviderError(ctx, err)
+		return providerOperationError(ctx, "stop", err)
 	}
 	return waitForProcessStop(ctx, func() error { _, err := r.Inspect(ctx, ref); return err })
 }
@@ -368,10 +370,34 @@ func validateCommand(command deploy.Command, requireTag bool) error {
 	return nil
 }
 
-func sanitizeProviderError(ctx context.Context, err error) error {
+func providerOperationError(ctx context.Context, operation string, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
+	// Provider errors can contain keys, command output, URLs and response bodies.
+	// Log only server-owned operation names and typed, credential-free evidence.
+	category, status := "unknown", 0
+	var apiErr *qnsandbox.APIError
+	var networkErr net.Error
+	switch {
+	case err == nil:
+		category = "command_result"
+	case errors.As(err, &apiErr):
+		category = "api"
+		if apiErr.StatusCode >= 100 && apiErr.StatusCode <= 599 {
+			status = apiErr.StatusCode
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		category = "timeout"
+	case errors.Is(err, context.Canceled):
+		category = "canceled"
+	case errors.As(err, &networkErr):
+		category = "transport"
+		if networkErr.Timeout() {
+			category = "timeout"
+		}
+	}
+	slog.WarnContext(ctx, "deployment Sandbox operation failed", "operation", operation, "category", category, "http_status", status)
 	return errors.New("sandbox operation failed")
 }
 

@@ -1,12 +1,14 @@
 package deployruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	deploy "github.com/miclle/deployd"
+	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
 
 func TestStopObservationBacksOffAndHonorsDeadline(t *testing.T) {
@@ -179,10 +182,43 @@ func TestValidateCommandRejectsUnsafeExecutionDirectories(t *testing.T) {
 	}
 }
 
-func TestSanitizeProviderErrorNeverReturnsProviderText(t *testing.T) {
-	err := sanitizeProviderError(context.Background(), errors.New("secret-provider-body"))
-	if strings.Contains(err.Error(), "secret-provider-body") {
-		t.Fatalf("provider text leaked: %v", err)
+func TestProviderOperationErrorRetainsOnlySafeDiagnostics(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	for _, test := range []struct {
+		err      error
+		category string
+		status   int
+	}{
+		{fmt.Errorf("wrapped: %w", &qnsandbox.APIError{StatusCode: 403, Body: []byte("secret-body"), Message: "secret-message", Reqid: "secret-request", Code: "secret-code"}), "api", 403},
+		{&qnsandbox.APIError{StatusCode: 429}, "api", 429},
+		{&qnsandbox.APIError{StatusCode: 503}, "api", 503},
+		{&url.Error{Op: "secret-op", URL: "https://secret-key@example.test", Err: context.DeadlineExceeded}, "timeout", 0},
+		{&url.Error{Op: "secret-op", URL: "https://secret-key@example.test", Err: errors.New("secret-transport")}, "transport", 0},
+		{errors.New("secret-provider-body"), "unknown", 0},
+		{nil, "command_result", 0},
+	} {
+		logs.Reset()
+		err := providerOperationError(context.Background(), "connect", test.err)
+		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(logs.String(), "secret") {
+			t.Fatalf("provider details leaked: error=%v logs=%s", err, &logs)
+		}
+		var evidence struct {
+			Operation string `json:"operation"`
+			Category  string `json:"category"`
+			Status    int    `json:"http_status"`
+		}
+		if err := json.Unmarshal(logs.Bytes(), &evidence); err != nil || evidence.Operation != "connect" || evidence.Category != test.category || evidence.Status != test.status {
+			t.Fatalf("safe diagnostics=%s err=%v", &logs, err)
+		}
+	}
+	logs.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := providerOperationError(ctx, "connect", errors.New("secret")); !errors.Is(err, context.Canceled) || logs.Len() != 0 {
+		t.Fatalf("cancellation should preserve its cause without provider warnings: %v %s", err, &logs)
 	}
 }
 
