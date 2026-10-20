@@ -248,6 +248,8 @@ its own advertised and required labels instead.
 
 runnerd handles `queued`, `in_progress`, and `completed` actions. For `workflow_run`, it lists all queued jobs in the run and enqueues any matching jobs not already seen.
 
+A startup REST check reporting `waiting`, `pending`, or `requested` keeps the request queued with capped exponential backoff and no Runner resources or lease. `in_progress` is monitored without starting a duplicate Runner. A later queued delivery can wake a deferred request; polling also resumes it without another webhook. GitHub owns approval/concurrency timeouts. Unknown states or lookup failures use the configured finite retry budget and fail visibly rather than recording success. HTTP 429 and GitHub secondary rate limits remain queued with capped backoff even after that budget is exhausted, and resume automatically when throttling clears. See [targeted recovery of historical false completions](docs/testing.md#waiting-workflow-jobs).
+
 New runner requests, including admission rejections, store the parsed GitHub context but not the raw webhook body. The legacy `github_payload_json` column and existing values remain available for historical metadata backfill; this change does not clean up old payloads, request history, or logs.
 
 ## Runner Specs & Matching

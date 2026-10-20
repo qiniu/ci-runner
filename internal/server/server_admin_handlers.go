@@ -304,6 +304,9 @@ func (s *Server) handleRetryRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.store.RetryRequest(r.PathValue("id"), time.Now().UTC())
+	if errors.Is(err, state.ErrRetryNotAllowed) {
+		st, err = s.retryHistoricalWaitingJob(r.Context(), r.PathValue("id"))
+	}
 	if err != nil {
 		if errors.Is(err, state.ErrRetryNotAllowed) {
 			s.logger.Info("runner retry rejected", "id", r.PathValue("id"), "error", err)

@@ -704,6 +704,49 @@ Common issues:
   timeout and release-evidence regressions.
 - registration token fails: check the [GitHub App permission table](../README.md#required-permissions). Specs without `runner_group` require repository `Administration`; specs with `runner_group` require organization `Self-hosted runners`. Group lookup also needs that organization permission. `runner_group_not_supported` means the scope is not an organization. `runner_group_not_found` means the group is missing or inherited from an enterprise; `runner_group_repository_denied` means the target repository cannot use it. `runner_group_permission_denied`, `runner_group_rate_limited`, `runner_group_timeout` and `runner_group_unavailable` distinguish lookup failures without exposing upstream responses. See [GitHub Runner groups](platform-runner-specs.md#github-runner-groups) for form, YAML and validation behavior.
 
+### Waiting workflow jobs
+
+A queued webhook is a snapshot: the startup REST lookup may still return
+`waiting`. runnerd retains these requests as local `queued`, releases the
+creation lease/capacity, and rechecks using `worker.retry_base_delay_seconds`
+and `worker.retry_max_delay_seconds`. Recognized `waiting`, `pending`,
+`requested`, and already `in_progress` Jobs remain recoverable until GitHub
+reports queued or completed; GitHub controls environment and concurrency wait
+timeouts. `in_progress` observations include the owning Runner name in service
+logs and never create a second Runner. A queued delivery may clear only the
+known wait's next-check time, never reopen a terminal or active request.
+Restart preserves deferred queue records. Unknown statuses and lookup errors
+use `worker.retry_max_attempts`; exhaustion fails at `github_job_status`.
+HTTP 429 and GitHub secondary rate limits are queue deferrals instead: the
+retry count saturates at that limit while capped backoff continues, releasing
+the lease and creation capacity. The sanitized reason is
+`github_job_status_rate_limited`; polling resumes startup after throttling
+clears without requiring another webhook.
+Control events show the decision/reason/next check, and service logs correlate
+webhook action with Delivery ID. Raw webhook bodies are not persisted.
+
+For a historical false completion from Issue #134, an authenticated admin may
+explicitly call `POST /runner_requests/<request_id>/retry` using the existing
+admin API session. This is a targeted API recovery, not a completed-row Retry
+button. The endpoint requires the exact old waiting-skip control-log suffix,
+no Sandbox/process/running/cleanup/terminal-result evidence, current GitHub
+`queued` with no assigned Runner, repository admission, and a currently valid
+Runner Spec. A concurrent state change rejects recovery with HTTP 409. Missing
+or expired control evidence also rejects it; do not edit the database or bulk
+reset completed rows. Successful recovery returns 202 and re-enters normal
+startup checks, capacity, credentials and registration. Real completions stay
+protected. No historical records are rewritten at startup.
+
+Regression coverage:
+
+```bash
+go test ./internal/server -run 'Test(WorkflowJobWaiting|WorkflowJobStartup|QueuedDeliveryDoesNot|HistoricalWaiting)' -race -count=1
+```
+
+Use `task ui-build` first in a fresh checkout to generate embedded assets.
+The tests use local GitHub/Sandbox fixtures; production acceptance still needs
+a real environment-gated workflow, Runner pickup and cleanup.
+
 ## 9. How To Read GitHub Actions Logs
 
 In the Jobs panel, select the job name to open its GitHub Job or the workflow name to open its Run. Standalone Job details provide **View job on GitHub** (or **View workflow run on GitHub** when only the Run is known). The default **Runner logs** tab shares the admin request event timeline, showing Runner lifecycle output and process stdout/stderr with timestamps and stages. It initially loads the newest 200 mixed events; filters apply to loaded records. The ordinary-user `GET /user/runner_requests/{id}/events` endpoint uses exact installation/repository authorization, accepts exclusive `before_id` or `after_id` cursors, and returns `{events, has_more}`. Older pages and active five-second incremental refresh merge without discarding loaded history; manual refresh and explicit scrolling to the bottom remain available. Workflow step output stays on GitHub. Both the Jobs panel and standalone Job fallback use this navigation; neither requests GitHub log archives. The retired `GET /user/runner_requests/{id}/github-log` endpoint returns `404`.

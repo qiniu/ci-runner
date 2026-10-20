@@ -680,6 +680,41 @@ curl -fsS -b "$COOKIE_JAR" \
   -run 'TestSandboxConformance|TestTemplateReleaseSmoke' -count=1`，验证清理、超时及发布证据。
 - registration token 失败：检查 [GitHub App 权限表](../../README.zh.md#所需权限)。未配置 `runner_group` 的 spec 需要 repository `Administration`；配置了 `runner_group` 的 spec 需要 organization `Self-hosted runners`。组查询也需要该组织权限。`runner_group_not_supported` 表示作用域不是组织。`runner_group_not_found` 表示组不存在或属于企业继承组；`runner_group_repository_denied` 表示目标仓库无权使用该组。`runner_group_permission_denied`、`runner_group_rate_limited`、`runner_group_timeout` 和 `runner_group_unavailable` 分别表示查询权限、频率、超时和不可用错误，不包含上游正文。表单、YAML 和校验行为见 [GitHub Runner 组](platform-runner-specs.md#github-runner-组)。
 
+### 等待中的 Workflow Job
+
+queued webhook 是状态快照，启动前 REST 查询仍可能返回 `waiting`。
+runnerd 会保留本地 `queued`，释放创建容量和 lease，按照
+`worker.retry_base_delay_seconds` 与 `worker.retry_max_delay_seconds`
+进行有上限的指数退避。已识别的 `waiting`、`pending`、`requested` 和
+`in_progress` 持续复查，直到 GitHub 返回 queued 或 completed；审批和
+并发等待的超时由 GitHub 控制。`in_progress` 会在服务日志中记录接单的
+Runner 名称，不重复创建 Runner。后续 queued 投递只可清除已知等待请求的
+下次检查时间，不重开终态或活动执行。重启保留等待记录及延迟。
+未知状态或查询失败使用 `worker.retry_max_attempts` 的有限重试次数，
+耗尽后在 `github_job_status` 阶段明确失败。HTTP 429 和 GitHub secondary rate limit
+则持续延迟排队：重试计数达到上限后保持不变，继续按有上限的退避复查，
+释放 lease 和创建容量，脱敏原因码为 `github_job_status_rate_limited`。
+限流解除后，无需新 webhook 即可通过轮询恢复启动。控制事件记录决策、原因和
+下次复查时间；服务日志关联 webhook action 与 Delivery ID，不持久化原始 payload。
+
+对于 Issue #134 的历史误标记录，管理员可使用现有管理 API 会话，显式调用
+`POST /runner_requests/<request_id>/retry` 定向恢复。这是 API 恢复入口，
+并未给所有 completed 记录添加重试按钮。接口要求控制日志以旧版精确的
+waiting 跳过信息结束，不存在 Sandbox、进程、运行、清理或真实终态结果证据，
+GitHub 当前仍为 `queued` 且未分配 Runner，仓库准入及当前 Runner Spec 均有效。
+并发状态变化、控制证据缺失或过期均返回 409；不要直接修改数据库或批量重置终态。
+恢复成功返回 202，随后经过正常的启动检查、容量、凭证和注册流程。
+真实完成记录保持保护，启动时不会自动改写历史终态。
+
+回归验证：
+
+```bash
+go test ./internal/server -run 'Test(WorkflowJobWaiting|WorkflowJobStartup|QueuedDeliveryDoesNot|HistoricalWaiting)' -race -count=1
+```
+
+全新 checkout 先运行 `task ui-build` 生成嵌入资源。上述测试使用本地
+GitHub/Sandbox fixture；生产验收仍需真实带 environment 的 workflow 接单与清理。
+
 ## 9. GitHub Actions 日志怎么看
 
 在 Jobs 面板中，点击任务名称打开 GitHub Job，点击工作流名称打开对应的 Run。独立 Job 详情页提供 **在 GitHub 查看 Job**；仅已知 Run 时，使用 **在 GitHub 查看 Workflow Run**。默认的 **Runner 日志** 标签与后台请求详情共用事件时间线，显示 Runner 生命周期和进程 stdout/stderr，并保留时间戳与阶段。首次加载最近 200 条混合事件，筛选仅作用于已加载记录。普通用户的 `GET /user/runner_requests/{id}/events` 接口校验精确安装/仓库权限，接受互斥的排他游标 `before_id` 或 `after_id`，返回 `{events, has_more}`。更早分页与活动期间每五秒增量刷新合并记录，不丢弃已加载历史；支持手动刷新和主动滚动到底部。工作流步骤输出仍在 GitHub 查看。Jobs 面板和独立 Job 详情回退页均使用这种跳转，不再请求 GitHub 日志归档。已退役的 `GET /user/runner_requests/{id}/github-log` 接口返回 `404`。

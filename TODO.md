@@ -14,6 +14,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 - Complete the remaining Issue #125 acceptance for cross-account repository authorization with owner-only Sandbox settings (a second real GitHub account is not yet available). Public authenticated API duplicate/terminal replay, DELETE/provider release, per-scope quota/re-admission, synthetic startup-failure cleanup, accelerated terminal retention with audit preservation, ordinary Chrome 375-pixel history/log stacking, same-Commit concurrent CI success/Runner release with deployment survival, public `base` worker execution/reconnection/TTL, real provider lost-create-response reconciliation and release, full local runnerd process restart, authenticated browser creation/detail/reload/stop and revision/latest redeploy evidence, and the user's 2026-10-14 confirmation of real Sandbox acceptance for the Web terminal iteration are recorded in [Deploy configuration](docs/deployment.md#iteration-plan); local fakes and browser fixtures remain supporting evidence only.
 
+- Validate [Issue #134](https://github.com/qiniu/ci-runner/issues/134) with a real environment-gated workflow after rollout: waiting → queued, Runner pickup, cleanup, and targeted historical recovery where needed. Local queue/race tests do not establish production acceptance.
+
 - Before promoting the pipx isolation fix, rebuild and smoke-test Ubuntu 26.04 in each supported Sandbox region; the local Docker regression is not regional release evidence.
 
 - If the original llgo network failure recurs, capture comparable live GitHub API, Ubuntu archive, and LLVM APT evidence from the same running Sandbox before changing diagnostics again. The original root cause remains unverified without that same-window evidence.
