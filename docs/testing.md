@@ -779,7 +779,12 @@ before provider validation or creation when legacy queued records lack snapshots
 collaborators across template discovery, creation, redeploy and legacy resolution:
 owner selected allows platform use, collaborator-only or wrong-type selection denies
 it without revision/audit changes, and collaborator-scoped credentials keep priority.
-Its platform outcomes are checked against Jobs. The execution-only live worker probe
+Its platform outcomes are checked against Jobs.
+`TestPlatformDeploymentRetryDoesNotRequireOrganizationOwnership` verifies that
+forbidden/unavailable organization membership lookup cannot block a platform-backed
+public retry. Exact repository authorization, audience checks and private-template
+rejection still apply; rejected retries leave revision/audit state unchanged.
+The execution-only live worker probe
 selects operator credentials directly; repository-owner audience admission belongs
 to the live API gate. These local fixtures do not prove a real provider deployment.
 

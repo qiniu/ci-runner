@@ -752,6 +752,9 @@ selected audience 的身份／类型、scope 与继承优先级、损坏配置�
 `TestPersonalRepositoryCollaboratorDeploymentAudience` 覆盖个人仓库协作者的模板发现、创建、
 重新部署和无快照解析：选择 owner 后允许平台使用，仅选择协作者或账号类型错误时拒绝，
 拒绝不创建新版本／审计事件；协作者自身 scope 凭据仍优先。平台结果与 Jobs 对照。
+`TestPlatformDeploymentRetryDoesNotRequireOrganizationOwnership` 验证组织 membership
+接口拒绝／不可用不阻止平台公共模板重试；仍保留精确仓库授权、audience 检查和私有模板拒绝，
+拒绝重试时不改变版本／审计状态。
 仅验证执行的真实 worker 探针直接选择操作者凭据；仓库 owner audience 准入由真实 API gate 验证。
 这些本地夹具不代表真实 Provider 部署验收通过。
 

@@ -161,17 +161,21 @@ func publicDeploymentTemplateOptions(items []sandboxrunner.CatalogTemplate) []pu
 }
 
 func (s *Server) authorizeDeploymentTemplate(w http.ResponseWriter, r *http.Request, accountID int64, scope accountPreferenceScope, service sandboxrunner.Service, snapshot sandboxServiceConfigSnapshot, template string) bool {
-	manageable, err := s.accountPreferenceScopeManageable(r.Context(), accountID, scope)
-	if err != nil {
-		s.writeUserRepositoryAuthorizationError(w, err)
-		return false
-	}
-	if manageable && snapshot.Source != sandboxConfigSourceAdminDefault {
-		if err := service.ValidateTemplate(r.Context(), template); err != nil {
-			writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
+	// Platform policy is public-only for every role; Settings ownership cannot
+	// affect it and must not add an organization-membership API dependency.
+	if snapshot.Source != sandboxConfigSourceAdminDefault {
+		manageable, err := s.accountPreferenceScopeManageable(r.Context(), accountID, scope)
+		if err != nil {
+			s.writeUserRepositoryAuthorizationError(w, err)
 			return false
 		}
-		return true
+		if manageable {
+			if err := service.ValidateTemplate(r.Context(), template); err != nil {
+				writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
+				return false
+			}
+			return true
+		}
 	}
 	allowed, err := publicDeploymentTemplateAllowed(r.Context(), service, template)
 	if err != nil {
