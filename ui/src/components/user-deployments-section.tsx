@@ -444,9 +444,10 @@ function DeploymentDetail({ request, selectedRevisionNumber, deployment, selecte
   const { events, loading, error, hasOlder, refresh, loadOlder } = eventState
   const canStop = activeStatuses.has(deployment.status)
   const canRetry = ["failed", "completed", "expired"].includes(deployment.status)
-  const terminalAvailable = deployment.status === "running" && Boolean(deployment.sandbox_id)
   const viewingHistory = Boolean(selectedRevisionNumber && selectedRevisionNumber !== deployment.revision_number)
+  const terminalAvailable = !viewingHistory && deployment.status === "running" && Boolean(deployment.sandbox_id)
   const [activeTab, setActiveTab] = useState("logs")
+  const displayedTab = viewingHistory && activeTab === "terminal" ? "logs" : activeTab
   const viewRevision = (number: number) => { onSelectRevision(number); setActiveTab("logs") }
   const revisions = deployment.revisions ?? []
   const [redeployOpen, setRedeployOpen] = useState(false)
@@ -511,10 +512,10 @@ function DeploymentDetail({ request, selectedRevisionNumber, deployment, selecte
       </div>
     </section>
     <div className="min-w-0" data-testid="deployment-workspace">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="min-w-0 gap-0" data-testid="deployment-output">
+      <Tabs value={displayedTab} onValueChange={setActiveTab} className="min-w-0 gap-0" data-testid="deployment-output">
         <TabsList variant="line">
           <TabsTrigger variant="line" value="logs">{t("user.deploymentEvents")}</TabsTrigger>
-          <TabsTrigger variant="line" value="terminal">{t("common.terminal")}</TabsTrigger>
+          {!viewingHistory ? <TabsTrigger variant="line" value="terminal">{t("common.terminal")}</TabsTrigger> : null}
           <TabsTrigger variant="line" value="history">{t("user.deploymentHistory")}</TabsTrigger>
         </TabsList>
         <TabsContent value="logs" className="m-0 space-y-2 pt-2">
@@ -552,12 +553,12 @@ function DeploymentDetail({ request, selectedRevisionNumber, deployment, selecte
         </CardContent>
       </Card>
         </TabsContent>
-        <TabsContent value="terminal" className="m-0 space-y-2 pt-2">
+        {!viewingHistory ? <TabsContent value="terminal" className="m-0 space-y-2 pt-2">
           <p className="text-xs text-muted-foreground">{t("user.deploymentCurrentRevision", { number: deployment.revision_number ?? 1 })}</p>
           {terminalAvailable ? <Suspense fallback={<p className="p-5 text-sm text-muted-foreground">{t("common.loading")}</p>}>
             <DeploymentTerminal key={`${deployment.id}:${deployment.revision_number}:${deployment.sandbox_id}:${selectedRevisionNumber}`} endpoint={`/user/deployments/${encodeURIComponent(deployment.id)}/revisions/${deployment.revision_number}`} request={request} />
           </Suspense> : <div className="bg-muted/20 px-4 py-12 text-center text-sm text-muted-foreground">{t("user.deploymentTerminalUnavailable")}</div>}
-        </TabsContent>
+        </TabsContent> : null}
         <TabsContent value="history" className="m-0 space-y-2 py-5" data-testid="deployment-history">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <p>{t("user.deploymentHistoryDescription")}</p>

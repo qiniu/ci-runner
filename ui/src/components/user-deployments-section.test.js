@@ -374,6 +374,8 @@ describe("deployment interaction", () => {
     await selectRevisionURL(1)
     expect(container.textContent).toContain("Viewing historical revision #1")
     expect(container.textContent).toContain("historical log")
+    expect([...container.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual(["Deployment logs", "Deployment history"])
+    expect(container.textContent).not.toContain("Terminal")
     expect(container.textContent).toContain("current-template")
     expect(container.textContent).not.toContain("old-template")
     expect(calls.filter((url) => url.includes("/resources"))).toEqual(["/user/deployments/history/resources?revision=2"])
