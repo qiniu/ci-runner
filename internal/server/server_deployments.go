@@ -227,7 +227,7 @@ func (s *Server) handleUserCreateDeployment(w http.ResponseWriter, r *http.Reque
 		writeErrorCode(w, http.StatusBadRequest, "deployment_template_required", "Select a Sandbox template before deploying")
 		return
 	}
-	service, sandboxSnapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), scope)
+	service, sandboxSnapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), scope, installation.InstallationID)
 	if snapshotErr != nil {
 		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
 		return
@@ -556,7 +556,7 @@ func (s *Server) refreshDeploymentResources(ctx context.Context, deployment, sel
 	} else if s.sandbox != nil {
 		service = s.sandbox
 	} else {
-		resolved, _, err := s.sandboxServiceForDeployment(ctx, accountPreferenceScope{Type: deployment.ScopeType, ID: deployment.ScopeID})
+		resolved, _, err := s.sandboxServiceForDeployment(ctx, accountPreferenceScope{Type: deployment.ScopeType, ID: deployment.ScopeID}, deployment.GitHubInstallationID)
 		if err != nil {
 			return err
 		}
@@ -867,7 +867,7 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	scope := accountPreferenceScope{Type: deployment.ScopeType, ID: deployment.ScopeID}
-	service, snapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), scope)
+	service, snapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), scope, deployment.GitHubInstallationID)
 	if snapshotErr != nil {
 		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
 		return

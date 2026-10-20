@@ -23,6 +23,117 @@ func deploymentAuthCall(s *Server, method, path, body string) *httptest.Response
 	return w
 }
 
+func TestPersonalRepositoryCollaboratorDeploymentAudience(t *testing.T) {
+	for _, tc := range []struct {
+		name, audienceType string
+		audienceID         int64
+		scoped             bool
+		allowed            bool
+	}{
+		{name: "owner selected", audienceID: 200, audienceType: "user", allowed: true},
+		{name: "only collaborator selected", audienceID: 100, audienceType: "user"},
+		{name: "owner wrong account type", audienceID: 200, audienceType: "organization"},
+		{name: "collaborator scoped credentials take priority", audienceID: 100, audienceType: "user", scoped: true, allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveActiveInstallationFixture(w, r, 987) {
+					return
+				}
+				switch r.URL.Path {
+				case "/user/installations/987/repositories":
+					fmt.Fprint(w, `{"repositories":[{"id":42,"full_name":"bob/project","owner":{"id":200,"login":"bob","type":"User"}}]}`)
+				case "/repos/bob/project/commits/refs/heads/main":
+					fmt.Fprintf(w, `{"sha":%q}`, strings.Repeat("a", 40))
+				case "/repos/bob/project/contents/.qiniu/deploy.yaml":
+					fmt.Fprintf(w, `{"type":"file","encoding":"base64","content":%q}`, base64.StdEncoding.EncodeToString([]byte("version: 1\ninstall_command: npm ci\nstart_command: npm start\nport: 3000\n")))
+				default:
+					t.Errorf("unexpected GitHub request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer api.Close()
+			store := state.New(t.TempDir())
+			srv := newTestServer(t, store, api.URL, nil)
+			srv.Close()
+			srv.sandbox = nil
+			srv.loopCtx = context.Background()
+			srv.sandboxHTTP = deploymentTemplateTestClient()
+			account, _, err := store.EnsureAccountForOAuthIdentity(state.OAuthIdentity{OAuthProvider: "github", OAuthSubject: "100", OAuthLogin: "alice"}, "user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+			installation, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987, GitHubAccountID: 200, AccountType: "user", AccountLogin: "bob"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := encryptSecret("fixture-platform-key", srv.cfg.AuthEncryptionKey.Value())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{Enabled: true, APIURL: "https://platform.example", APIKeyEncrypted: key, AudienceMode: state.SandboxServiceDefaultAudienceModeSelected}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.UpsertSandboxServiceDefaultAudience(state.SandboxServiceDefaultAudience{GitHubAccountID: tc.audienceID, AccountType: tc.audienceType, AccountLogin: "display-only"}); err != nil {
+				t.Fatal(err)
+			}
+			wantSource := sandboxConfigSourceAdminDefault
+			if tc.scoped {
+				wantSource = sandboxConfigSourceAccount
+				if _, err := store.UpsertAccountPreference(state.AccountPreference{ScopeType: state.AccountScopeTypeAccount, ScopeID: account.ID, Namespace: accountPreferenceNamespaceSandbox, Key: accountPreferenceKeySandboxService, ValueJSON: `{"api_url":"https://scoped.example"}`}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.UpsertAccountSecret(state.AccountSecret{ScopeType: state.AccountScopeTypeAccount, ScopeID: account.ID, KeyType: state.AccountSecretTypeSandboxAPIKey, EncryptedValue: key}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			call := func(method, path, body string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(method, path, strings.NewReader(body))
+				r.AddCookie(testSessionCookie("100", "alice", "user"))
+				w := httptest.NewRecorder()
+				srv.ServeHTTP(w, r)
+				return w
+			}
+			catalog := call("GET", fmt.Sprintf("/user/deployment-templates?installation_id=%d&repository_full_name=bob/project", installation.ID), "")
+			creation := call("POST", "/user/deployments", fmt.Sprintf(`{"installation_id":%d,"repository_full_name":"bob/project","source":"branch","ref":"main","template_id":"public-base"}`, installation.ID))
+			fixture := state.Deployment{ID: "collaborator-retry", AccountID: account.ID, ScopeType: state.AccountScopeTypeAccount, ScopeID: account.ID, GitHubInstallationID: 987, RepositoryID: 42, RepositoryFullName: "bob/project", Ref: "refs/heads/main", CommitSHA: strings.Repeat("a", 40), ConfigPath: ".qiniu/deploy.yaml", SnapshotVersion: 1, SpecHash: "hash", SpecJSONEncrypted: "encrypted", DeploymentTemplateID: "public-base", Status: state.DeploymentStatusCompleted, ExpiresAt: time.Now().Add(time.Hour)}
+			if _, err := store.CreateDeployment(fixture); err != nil {
+				t.Fatal(err)
+			}
+			retry := call("POST", "/user/deployments/"+fixture.ID+"/retry", `{}`)
+			factory := serverDeploymentRuntimeFactory{server: srv}
+			_, _, legacyErr := factory.service(context.Background(), fixture)
+			_, jobSnapshot, jobErr := srv.sandboxServiceAndConfigForRunnerRequestContext(context.Background(), state.RunnerRequest{ID: "collaborator-job", GitHubInstallationID: 987})
+			if tc.allowed {
+				if catalog.Code != 200 || creation.Code != 201 || retry.Code != 202 || legacyErr != nil || (!tc.scoped && jobErr != nil) {
+					t.Fatalf("owner eligibility/scoped priority: catalog=%d creation=%d retry=%d legacy=%v job=%v", catalog.Code, creation.Code, retry.Code, legacyErr, jobErr)
+				}
+				var created deploymentResponse
+				if err := json.Unmarshal(creation.Body.Bytes(), &created); err != nil {
+					t.Fatal(err)
+				}
+				saved, err := store.GetDeployment(created.ID)
+				if err != nil || saved.ScopeID != account.ID || saved.GitHubInstallationID != 987 || saved.SandboxConfigSource != wantSource || (!tc.scoped && jobSnapshot.Source != wantSource) {
+					t.Fatal("credential scope, repository installation or service source changed")
+				}
+			} else {
+				if catalog.Code != 409 || creation.Code != 409 || retry.Code != 409 || legacyErr == nil || jobErr == nil {
+					t.Fatalf("unselected owner must be denied: catalog=%d creation=%d retry=%d legacy=%v job=%v", catalog.Code, creation.Code, retry.Code, legacyErr, jobErr)
+				}
+				saved, err := store.GetDeployment(fixture.ID)
+				if err != nil || saved.RevisionNumber != 1 || saved.Status != state.DeploymentStatusCompleted {
+					t.Fatal("denied retry mutated the saved deployment")
+				}
+				audit, err := store.ListAuditEvents(10)
+				if err != nil || len(audit) != 0 {
+					t.Fatal("denied deployment created audit events")
+				}
+			}
+		})
+	}
+}
+
 func TestSuspendedInstallationDeniesJobsAndDeploymentAccess(t *testing.T) {
 	var suspended atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

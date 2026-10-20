@@ -46,7 +46,9 @@ func TestDeploymentLivePublicWorker(t *testing.T) {
 	srv := New(cfg, original, nil, nil, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	service, snapshot, err := srv.sandboxServiceForDeployment(ctx, accountPreferenceScope{Type: state.AccountScopeTypeAccount, ID: accountID})
+	// This execution-only probe selects operator credentials without repository
+	// admission. The live API gate separately verifies Installation-owner audience.
+	service, snapshot, err := srv.sandboxServiceForScopeWithDefaultContext(ctx, accountPreferenceScope{Type: state.AccountScopeTypeAccount, ID: accountID})
 	if err != nil {
 		t.Fatal("account Sandbox config unavailable")
 	}

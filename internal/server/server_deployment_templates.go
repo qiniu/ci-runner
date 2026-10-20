@@ -57,7 +57,7 @@ func (s *Server) handleUserDeploymentTemplates(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	service, snapshot, err := s.sandboxServiceForDeployment(ctx, scope)
+	service, snapshot, err := s.sandboxServiceForDeployment(ctx, scope, installation.InstallationID)
 	if err != nil {
 		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
 		return

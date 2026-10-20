@@ -96,6 +96,13 @@ source or reuse an immutable source/template binding.
 Deploy shares Jobs' Sandbox service eligibility: scoped or organization-inherited
 credentials take priority. Only missing configuration permits the enabled platform
 service, subject to its existing audience rules; corrupt configuration fails closed.
+Credential scope and platform audience identity are separate: for a personal repository,
+a collaborator keeps their own account credential scope, while platform eligibility
+always uses the repository Installation owner's stable GitHub ID and account type.
+Selecting only the collaborator does not authorize the owner's repository; selecting
+the owner permits an otherwise repository-authorized collaborator. Template discovery,
+creation, redeploy and legacy snapshot-free resolution all retain that Installation ID.
+Saved runtime credentials remain independent of later audience checks.
 No separate Deploy opt-in is required. With platform credentials, owners and members
 can list and select only runnable public templates; organization ownership does not
 grant access to the platform's private catalog. This public-only check also applies

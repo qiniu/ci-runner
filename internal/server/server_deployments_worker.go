@@ -43,7 +43,7 @@ func (f *serverDeploymentRuntimeFactory) service(ctx context.Context, d state.De
 		service = resolved
 	} else {
 		scope := accountPreferenceScope{Type: d.ScopeType, ID: d.ScopeID}
-		resolved, current, err := f.server.sandboxServiceForDeployment(ctx, scope)
+		resolved, current, err := f.server.sandboxServiceForDeployment(ctx, scope, d.GitHubInstallationID)
 		if err != nil {
 			return nil, current, err
 		}
@@ -57,8 +57,16 @@ func (f *serverDeploymentRuntimeFactory) service(ctx context.Context, d state.De
 	return resolved, snapshot, nil
 }
 
-func (s *Server) sandboxServiceForDeployment(ctx context.Context, scope accountPreferenceScope) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
-	return s.sandboxServiceForScopeWithDefaultContext(ctx, scope)
+func (s *Server) sandboxServiceForDeployment(ctx context.Context, scope accountPreferenceScope, installationID int64) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
+	service, snapshot, err := s.sandboxServiceForScope(scope)
+	if err == nil || !errors.Is(err, errSandboxServiceNotConfigured) {
+		return service, snapshot, err
+	}
+	// A personal repository collaborator uses their own credential scope, but
+	// platform eligibility belongs to the repository's Installation owner.
+	return s.sandboxServiceForAdminDefault(func() (state.GitHubInstallationAccount, error) {
+		return s.githubInstallationOwner(ctx, installationID)
+	})
 }
 
 func (f *serverDeploymentRuntimeFactory) Create(ctx context.Context, d state.Deployment, attempt int64) (deploymentworker.RuntimeHandle, string, error) {

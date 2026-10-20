@@ -4,7 +4,7 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
-- Before promoting the Deploy Sandbox service eligibility fix, run the owner/member platform public-template, audience denial, scoped/inherited override, quota and saved-runtime cleanup gates in [Deployment Smoke](docs/deployment-smoke.md#9-sandbox-deploy-acceptance). Local regressions do not replace live provider acceptance.
+- Before promoting the Deploy Sandbox service eligibility fix, run the owner/member platform public-template, personal-repository collaborator versus Installation-owner audience, audience denial, scoped/inherited override, quota and saved-runtime cleanup gates in [Deployment Smoke](docs/deployment-smoke.md#9-sandbox-deploy-acceptance). Local regressions do not replace live provider acceptance.
 
 - Complete individual-repository removal acceptance for the [GitHub context workflow](docs/deployment.md#github-context-routes). Live Installation suspension/cache expiry/recovery and OAuth-token revocation/API denial/in-app browser reauthentication passed on 2026-10-16. GitHub disallowed removing the sole selected repository, so that distinct revocation mode remains unverified.
 

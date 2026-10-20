@@ -94,7 +94,7 @@ func TestDeploymentSandboxServiceMatchesJobEligibility(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			service, snapshot, deployErr := srv.sandboxServiceForDeployment(context.Background(), scope)
+			service, snapshot, deployErr := srv.sandboxServiceForDeployment(context.Background(), scope, 987)
 			jobService, jobSnapshot, jobErr := srv.sandboxServiceAndConfigForRunnerRequestContext(context.Background(), state.RunnerRequest{ID: "eligibility", GitHubInstallationID: 987})
 			if tc.source == "" {
 				if deployErr == nil || service != nil || jobErr == nil || jobService != nil {
@@ -114,7 +114,7 @@ func TestDeploymentSandboxServiceMatchesJobEligibility(t *testing.T) {
 			}
 			// Legacy records without saved credentials use the same eligible service.
 			factory := serverDeploymentRuntimeFactory{server: srv}
-			if _, _, err := factory.service(context.Background(), state.Deployment{ScopeType: scope.Type, ScopeID: scope.ID}); err != nil {
+			if _, _, err := factory.service(context.Background(), state.Deployment{ScopeType: scope.Type, ScopeID: scope.ID, GitHubInstallationID: 987}); err != nil {
 				t.Fatalf("legacy deployment service: %v", err)
 			}
 		})

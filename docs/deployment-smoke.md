@@ -443,6 +443,11 @@ create/redeploy with a platform-private template ID. Check disabled/incomplete d
 and audience misses deny new admission/redeploy, scoped/inherited credentials take
 priority, quotas remain effective, and an existing Sandbox still reconnects and cleans
 up with its saved snapshot after the default is disabled or the audience changes.
+For a collaborator on a personally owned repository, select only the owner in the
+platform audience and verify template discovery, creation and redeploy succeed.
+Select only the collaborator and verify these operations fail; neither the revision
+nor audit history may change. Confirm collaborator-scoped credentials remain usable
+independently of platform audience, and retain exact repository authorization checks.
 
 Deployment revision verification must cover initial #1, atomic next-version creation and audit rollback, frozen old state, revision-scoped cursor pages, stale-output rejection, repeated legacy SQLite upgrade, Postgres/MySQL schema and mutations, URL-restored selection, and delayed-response isolation. Verify the history/log columns stack on a narrow screen and read without provider calls.
 

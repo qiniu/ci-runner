@@ -749,6 +749,10 @@ selected audience 的身份／类型、scope 与继承优先级、损坏配置�
 `TestRepositoryMemberCanDeployWithoutPrivateCatalogAccess` 保留 scope 私有绑定重放回归。
 `TestDeploymentRuntimePreservesSavedService` 验证平台未启用时仍能用保存的凭据重连，并拒绝损坏快照。
 `TestLegacyDeploymentRejectsPlatformPrivateTemplate` 验证无快照的旧排队记录在模板验证／创建前拒绝私有或未构建模板。
+`TestPersonalRepositoryCollaboratorDeploymentAudience` 覆盖个人仓库协作者的模板发现、创建、
+重新部署和无快照解析：选择 owner 后允许平台使用，仅选择协作者或账号类型错误时拒绝，
+拒绝不创建新版本／审计事件；协作者自身 scope 凭据仍优先。平台结果与 Jobs 对照。
+仅验证执行的真实 worker 探针直接选择操作者凭据；仓库 owner audience 准入由真实 API gate 验证。
 这些本地夹具不代表真实 Provider 部署验收通过。
 
 worker 测试还覆盖仅启动时注入 Vite 精确 Host、保留其他环境变量，以及无法解析应用地址时
