@@ -883,7 +883,7 @@ the production bundle, while authenticated real Sandbox acceptance remains separ
 Navigation tests also cover more than 100 history rows, terminal-only repositories, exact-pair filtering before repository counts/pages, active summaries without credentials, independent history/sidebar pagination, retained selected terminal entries, delayed responses after repository/account switches, in-app back/forward, and desktop/narrow independent scrolling. Fixture browser checks do not establish real Sandbox acceptance.
 Single-select status-filter coverage includes authorized/source-scoped counts beyond the first page,
 all eight lifecycle states, current-state grouping for historical source matches,
-invalid/repeated/empty API CSV members, each UI status, default Running,
+invalid/repeated/empty API CSV members, each UI status, default All,
 exclusive selection and repeated clicks retaining the current status, empty results, source-preserving URL selection and reload,
 back/forward, keyboard focus and Space toggling, narrow-screen overflow, pagination reset, and
 late page rejection after switching status. Run `go test ./internal/state -run

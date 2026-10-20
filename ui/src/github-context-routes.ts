@@ -108,12 +108,12 @@ export function deploymentPath(deployment: DeploymentSource, revision?: Revision
   return githubContextPath(context, "deployments", { deployment: deployment.id, revision: number })
 }
 
-export function deploymentListPath(context: GitHubContext | null, status: DeploymentListStatus = "running"): string {
-  const selection = status === "running" ? {} : { status }
-  return context ? githubContextPath(context, "deployments", selection) : `/deployments${status === "running" ? "" : `?${new URLSearchParams({ status })}`}`
+export function deploymentListPath(context: GitHubContext | null, status: DeploymentListStatus = "all"): string {
+  const selection = status === "all" ? {} : { status }
+  return context ? githubContextPath(context, "deployments", selection) : `/deployments${status === "all" ? "" : `?${new URLSearchParams({ status })}`}`
 }
 
-export function deploymentListAPIPath(context: GitHubContext | null, status: DeploymentListStatus = "running"): string {
+export function deploymentListAPIPath(context: GitHubContext | null, status: DeploymentListStatus = "all"): string {
   const query = new URLSearchParams()
   if (context) query.set("repository_full_name", context.repository)
   if (context?.kind === "pulls") query.set("pull_request_number", context.reference)

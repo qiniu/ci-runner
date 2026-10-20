@@ -404,11 +404,11 @@ describe("deployment interaction", () => {
     const request = async (url) => {
       requested.push(url)
       if (url.startsWith("/user/deployment-repositories")) return navigationPage([deployment("existing", "running")])
-      if (url !== "/user/deployments?status=running") throw new Error(`list requested a form dependency: ${url}`)
+      if (url !== "/user/deployments?status=all") throw new Error(`list requested a form dependency: ${url}`)
       return { items: [deployment("existing", "running")] }
     }
     const { container } = await mountPage({ request }, { page: "deployments" })
-    expect(requested).toEqual(["/user/deployment-repositories?limit=100&offset=0", "/user/deployments?status=running"])
+    expect(requested).toEqual(["/user/deployment-repositories?limit=100&offset=0", "/user/deployments?status=all"])
     expect(container.querySelector("form")).toBeNull()
     expect(container.querySelector('a[href="/deployments/new"]').textContent).toContain("Create deployment")
     expect(container.querySelector('a[href="/deployments/existing"]').textContent).toContain("miclle/demo")
@@ -537,7 +537,7 @@ describe("deployment interaction", () => {
     expect(container.querySelectorAll('[data-testid="deployment-list"] > a')).toHaveLength(101)
     await act(async () => button(container, "Refresh").click())
     expect(container.querySelectorAll('[data-testid="deployment-list"] > a')).toHaveLength(101)
-    expect(requested).toContain("/user/deployments?status=running&limit=100&offset=100")
+    expect(requested).toContain("/user/deployments?status=all&limit=100&offset=100")
   })
 
   test("filters through URL state and server counts, resets paging, and discards the previous status page", async () => {
@@ -561,14 +561,15 @@ describe("deployment interaction", () => {
     const filters = container.querySelector('[data-testid="deployment-status-filter"]')
     const filter = (label) => [...filters.querySelectorAll('button')].find((item) => item.textContent.startsWith(label))
     expect(filter("Stopped").getAttribute("aria-checked")).toBe("true")
-    expect(filter("All")).toBeUndefined()
+    expect(filter("All").getAttribute("aria-checked")).toBe("false")
+    expect(filter("All").textContent).toBe("All107")
     expect(filter("Stopped").textContent).toBe("Stopped102")
     await act(async () => button(container, "Load more deployments").click())
     await act(async () => filter("Running").click())
     expect(filter("Stopped").getAttribute("aria-checked")).toBe("false")
     await settle()
     expect(new URLSearchParams(window.location.search).get("branch")).toBe("feature/preview")
-    expect(new URLSearchParams(window.location.search).get("status")).toBeNull()
+    expect(new URLSearchParams(window.location.search).get("status")).toBe("running")
     expect(filter("Running").getAttribute("aria-checked")).toBe("true")
     expect(container.querySelectorAll('[data-testid="deployment-list"] > a')).toHaveLength(2)
     const selectedURL = window.location.href
@@ -868,6 +869,7 @@ describe("deployment interaction", () => {
     expect(container.textContent).toContain("8192 MB")
     expect(container.textContent).toContain("40960 MB")
     expect(container.querySelector("form")).toBeNull()
+    expect(container.querySelector('a[href="/deployments/new"]')?.textContent).toContain("Create deployment")
     await act(async () => button(container, "Load earlier logs").click())
     await act(async () => [...container.querySelectorAll("button")].filter((item) => item.textContent.trim() === "Refresh").at(-1).click())
     expect(container.textContent).toContain("Unable to load deployment logs: offline")

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react"
-import { ChevronRight, Loader2, Plus } from "lucide-react"
+import { ChevronRight, Loader2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { AppLink } from "@/components/app-link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { deploymentCreatePath, deploymentPath, githubContextPath } from "@/github-context-routes"
+import { deploymentPath, githubContextPath } from "@/github-context-routes"
 import { cn } from "@/lib/utils"
 import type { Deployment } from "@/components/user-deployments-section"
 import { DeploymentStatus } from "@/components/deployment-status"
@@ -87,11 +87,7 @@ export function DeploymentNavigation({ request, selected, selectedID, repository
     // A direct detail must remain navigable while the independent catalog loads.
     visible.unshift({ repository_full_name: selected.repository_full_name, active_deployments: [] })
   }
-  const createContext = selectedRepository ? { kind: "repository" as const, repository: selectedRepository, reference: "" } : null
   return <aside className="flex min-h-0 min-w-0 flex-col border-b bg-muted/20 xl:border-b-0 xl:border-r" data-testid="deployment-navigation">
-    {selectedID ? <div className="flex h-10 shrink-0 items-center justify-end border-b px-4">
-      <Button asChild variant="ghost" size="icon" className="size-7"><AppLink href={deploymentCreatePath(createContext)} aria-label={t("user.createDeployment")}><Plus className="size-4" /></AppLink></Button>
-    </div> : null}
     {failed ? <div className="flex flex-wrap items-center gap-2 border-b p-3 text-xs text-muted-foreground" role="alert"><span>{t("user.deploymentLoadFailed")}</span><Button type="button" variant="outline" size="sm" onClick={() => setRefresh((value) => value + 1)}>{t("user.tryAgain")}</Button></div> : null}
     <nav aria-label={t("user.deployments")} className="max-h-60 overflow-y-auto xl:min-h-0 xl:max-h-none xl:flex-1">
       <AppLink href="/deployments" aria-current={!selectedID && !repository ? "page" : undefined} className={cn("block border-b px-4 py-3 text-sm hover:bg-accent/70", !selectedID && !repository && "bg-primary/5 font-medium")}>{t("user.deploymentAll")}</AppLink>

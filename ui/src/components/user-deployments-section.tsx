@@ -1,4 +1,4 @@
-import { deploymentCreatePath, deploymentListAPIPath, deploymentListPath, deploymentPath, githubContextFromPath, githubContextPath } from "@/github-context-routes"
+import { deploymentContext, deploymentCreatePath, deploymentListAPIPath, deploymentListPath, deploymentPath, githubContextFromPath, githubContextPath } from "@/github-context-routes"
 import { ArrowLeft, CalendarDays, Copy, GitBranch, GitCommitHorizontal, ExternalLink, Loader2, Plus, RefreshCw, Square, RotateCcw } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
@@ -93,7 +93,7 @@ type Request = (url: string, options?: RequestInit) => Promise<unknown>
 type EventPage = { events?: DeploymentEvent[]; has_more?: boolean }
 type DeploymentPage = { items?: Deployment[]; total?: number; status_counts?: DeploymentStatusCounts }
 
-const statusFilterLabels = { running: "common.statusRunning", processing: "user.deploymentStatusProcessing", stopped: "user.deploymentStatusStopped", failed: "common.statusFailed" } as const
+const statusFilterLabels = { all: "common.all", running: "common.statusRunning", processing: "user.deploymentStatusProcessing", stopped: "user.deploymentStatusStopped", failed: "common.statusFailed" } as const
 const actionMessages = { stop: "user.deploymentStopped", retry: "user.deploymentRetried" } as const
 
 type DeploymentResources = Pick<Deployment, "template_id" | "template_name" | "template_cpu" | "template_memory_mb" | "template_disk_mb" | "sandbox_id" | "sandbox_region" | "expires_at"> & { remote_error?: string }
@@ -144,6 +144,7 @@ export function UserDeploymentsSection({
   const contentRef = useRef<HTMLElement>(null)
   const generation = useRef(0)
   const selectedDeployment = deployments.find((item) => item.id === selectedID) ?? null
+  const createDeploymentContext = context ?? (selectedDeployment ? deploymentContext(selectedDeployment) : null)
   const [revisionSelection, setRevisionSelection] = useState<{ id: string; number?: number } | null>(null)
   const requestedRevision = revisionSelection?.id === selectedID ? revisionSelection.number : revisionNumberFromURL()
   const selectedRevisionNumber = requestedRevision ?? selectedDeployment?.revision_number
@@ -395,7 +396,7 @@ export function UserDeploymentsSection({
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
-            {!deploymentID ? <Button asChild><AppLink href={deploymentCreatePath(context)}><Plus className="h-4 w-4" />{t("user.createDeployment")}</AppLink></Button> : null}
+            <Button asChild><AppLink href={deploymentCreatePath(createDeploymentContext)}><Plus className="h-4 w-4" />{t("user.createDeployment")}</AppLink></Button>
             <Button type="button" variant="outline" onClick={() => { void loadDeployments(); setNavigationRefresh((value) => value + 1) }} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
               {t("common.refresh")}

@@ -285,14 +285,16 @@ remain supported. Lists and repository navigation paginate independently and
 refresh without resetting loaded history. Desktop sidebar and content scroll
 independently; narrow screens stack them with bounded sidebar scrolling.
 
-List pages use shared single-select Toggle Group segments for Running / Processing /
-Stopped / Failed with server-supplied counts. Running is the default; clicking the
+List pages use shared single-select Toggle Group segments for All / Running / Processing /
+Stopped / Failed with server-supplied counts. All is the default; clicking the
 selected segment keeps it selected. The shared control uses a compact muted
 container and a raised background for the selected segment. URLs omit `status`
-for Running and otherwise save the selected status, preserving Branch/Tag/PR/Commit
+for All and otherwise save the selected status, preserving Branch/Tag/PR/Commit
 filters on refresh and browser back/forward. API calls always include the selected
-status. Changing selection resets history pagination and discards stale page
-responses without filtering the sidebar. Empty results retain the filters.
+status. All shows the complete authorized history, with Running and Processing
+deployments ordered before retained terminal history. Changing selection resets
+history pagination and discards stale page responses without filtering the sidebar.
+Empty results retain the filters.
 Deployment details keep their separate Logs / Terminal / Deployment history tabs.
 
 The Create deployment link opens `/deployments/new`, preselecting the repository

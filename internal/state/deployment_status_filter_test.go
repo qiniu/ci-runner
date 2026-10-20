@@ -97,3 +97,31 @@ func TestDeploymentStatusCountsUseCurrentStateForHistoricalSourceMatch(t *testin
 		t.Fatalf("historical source list: %#v %d %v", items, total, err)
 	}
 }
+
+func TestDeploymentAllOrdersActiveDeploymentsFirst(t *testing.T) {
+	store := New(t.TempDir())
+	access := []GitHubInstallationRepositoryAccess{{InstallationID: 101, Repositories: []string{"owner/project"}}}
+	statuses := []string{DeploymentStatusCompleted, DeploymentStatusRunning, DeploymentStatusQueued, DeploymentStatusFailed, DeploymentStatusPlanning, DeploymentStatusCreating, DeploymentStatusStopping}
+	for i, status := range statuses {
+		deployment := deploymentFixture(fmt.Sprintf("all-order-%02d", i), 1)
+		deployment.GitHubInstallationID = 101
+		deployment.Status = status
+		deployment.CreatedAt = time.Now().UTC().Add(time.Duration(i) * time.Minute)
+		deployment.UpdatedAt = deployment.CreatedAt
+		if _, err := store.CreateDeployment(deployment); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, total, _, err := store.ListAuthorizedDeploymentsWithCounts(access, DeploymentListOptions{Status: "all", Limit: 20})
+	if err != nil || total != int64(len(statuses)) {
+		t.Fatalf("all deployments: total=%d err=%v", total, err)
+	}
+	got := make([]string, len(items))
+	for i, item := range items {
+		got[i] = item.Status
+	}
+	want := []string{DeploymentStatusRunning, DeploymentStatusStopping, DeploymentStatusCreating, DeploymentStatusPlanning, DeploymentStatusQueued, DeploymentStatusFailed, DeploymentStatusCompleted}
+	if !slices.Equal(got, want) {
+		t.Fatalf("all deployment order = %v, want %v", got, want)
+	}
+}

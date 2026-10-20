@@ -26,6 +26,7 @@ export const en = {
     edit: "Edit",
     actions: "Actions",
     status: "Status",
+    all: "All",
     repository: "Repository",
     runnerSpec: "Runner spec",
     runner: "Runner",

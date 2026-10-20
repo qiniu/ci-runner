@@ -427,7 +427,14 @@ func (s *DBStore) listDeploymentsForAccount(accountID int64, access []GitHubInst
 func loadDeploymentPage(db, query *gorm.DB, options DeploymentListOptions) ([]Deployment, error) {
 	matchingRevision := options.Ref != "" || options.CommitSHA != ""
 	var records []deploymentRecord
-	if err := query.Order("created_at DESC, id DESC").Find(&records).Error; err != nil {
+	order := "created_at DESC, id DESC"
+	if options.Status == "" || options.Status == "all" {
+		// The all-deployments view is an operational queue: active work should
+		// remain visible above retained terminal history, while each group keeps
+		// the existing newest-first ordering.
+		order = "CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'planning' THEN 1 WHEN 'creating' THEN 1 WHEN 'stopping' THEN 1 ELSE 2 END ASC, created_at DESC, id DESC"
+	}
+	if err := query.Order(order).Find(&records).Error; err != nil {
 		return nil, err
 	}
 	revisions := make(map[string]deploymentRevisionRecord, len(records))
