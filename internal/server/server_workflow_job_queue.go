@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/metrics"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
@@ -115,6 +116,10 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	}
 	if err := s.store.WriteState(st); err != nil {
 		return false, err
+	}
+	if st.Status == state.StatusFailed {
+		metrics.RecordCreate(st.ProfileName, 0, "failed")
+		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
 	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "next_retry_at", st.NextRetryAt)
 	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s next_check=%s\n", job.Status, job.RunnerName, st.Status, code, st.NextRetryAt.Format(time.RFC3339))))

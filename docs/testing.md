@@ -721,7 +721,10 @@ HTTP 429 and GitHub secondary rate limits are queue deferrals instead: the
 retry count saturates at that limit while capped backoff continues, releasing
 the lease and creation capacity. The sanitized reason is
 `github_job_status_rate_limited`; polling resumes startup after throttling
-clears without requiring another webhook.
+clears without requiring another webhook. Terminal status-check failures
+increment the existing Runner operation and Workflow Job failure counters
+only after the failed state is persisted; waiting deferrals do not count as
+terminal failures.
 Control events show the decision/reason/next check, and service logs correlate
 webhook action with Delivery ID. Raw webhook bodies are not persisted.
 

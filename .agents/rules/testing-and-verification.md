@@ -74,7 +74,7 @@ See [Testing](../../docs/testing.md#timed-terminal-transport-faults) for
 prerequisites, artifacts and boundaries; local fixtures do not replace live
 provider, production proxy or authorization-revocation acceptance.
 
-- For waiting Job handling (Issue #134), cover the complete queued webhook → REST waiting → waiting webhook → queued webhook sequence, delayed polling without a webhook, capped waiting and capacity/lease release, restart, cancellation, in-progress ownership, finite unknown/query-error retries, HTTP 429/secondary-rate-limit deferral beyond the retry budget with recovery after throttling clears, and concurrent queued/workflow_run/stale lookups. Targeted historical retry must reject real results, active/cleanup evidence, missing or stdout-only control evidence, invalid specs, nonqueued/assigned Jobs, failed lookups and concurrent changes. Run focused tests with race detection.
+- For waiting Job handling (Issue #134), cover the complete queued webhook → REST waiting → waiting webhook → queued webhook sequence, delayed polling without a webhook, capped waiting and capacity/lease release, restart, cancellation, in-progress ownership, finite unknown/query-error retries with exactly-once terminal failure counters, HTTP 429/secondary-rate-limit deferral beyond the retry budget with recovery after throttling clears, and concurrent queued/workflow_run/stale lookups. Targeted historical retry must reject real results, active/cleanup evidence, missing or stdout-only control evidence, invalid specs, nonqueued/assigned Jobs, failed lookups and concurrent changes. Run focused tests with race detection.
 
 - For focused backend changes, start with the relevant package test.
 - For broad server/API behavior, run `go test ./...`.

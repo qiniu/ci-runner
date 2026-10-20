@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"expvar"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -134,15 +135,40 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 			store := state.New(t.TempDir())
 			srv := newTestServer(t, store, gh.URL, &fakeSandbox{})
 			srv.Close()
+			profileName := "waiting-metrics-" + next
+			profile, err := store.GetProfile("default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile.Name = profileName
+			if _, err := store.UpsertProfile(profile); err != nil {
+				t.Fatal(err)
+			}
 			if _, _, err := store.CreateRequest(state.RunnerRequest{
 				ID: "1001", Source: "github_webhook", JobID: 1001, RepositoryFullName: "o/r",
 				RequestedLabels: []string{"self-hosted", "e2b"}, Labels: []string{"self-hosted", "e2b"},
-				ProfileName: "default", RunnerName: "e2b-1001", CreatedAt: time.Now().Add(-time.Hour),
+				ProfileName: profileName, RunnerName: "e2b-1001", CreatedAt: time.Now().Add(-time.Hour),
 			}, nil); err != nil {
 				t.Fatal(err)
 			}
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
 			req, _ := store.ReadRequest("1001")
+			metricCount := func(name, key string) int64 {
+				t.Helper()
+				metric := expvar.Get(name).(*expvar.Map).Get(key)
+				if metric == nil {
+					return 0
+				}
+				return metric.(*expvar.Int).Value()
+			}
+			failureReason := "github_job_status_unknown"
+			if next == "lookup_error" {
+				failureReason = "github_job_status_unavailable"
+			}
+			createKey := profileName + "|create|failed"
+			workflowKey := "o/r|unknown|e2b-1001|" + profileName + "|github_job_status|" + failureReason
+			createsBefore := metricCount("e2b_runner_operations_total", createKey)
+			failuresBefore := metricCount("github_workflow_job_failures_total", workflowKey)
 			// An earlier provisioning failure must keep its retry budget through
 			// waiting and the later successful queued observation.
 			initial := queueTestState(t, store)
@@ -210,12 +236,25 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				}
 			}
 			if next == "unknown" || next == "lookup_error" {
-				for i := 0; i < srv.cfg.RetryMaxAttempts; i++ {
+				for i := 0; i < srv.cfg.RetryMaxAttempts && queueTestState(t, store).Status != state.StatusFailed; i++ {
 					check()
 				}
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}
+				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); err != nil || start {
+					t.Fatalf("terminal request must ignore a repeated lookup: start=%v err=%v", start, err)
+				}
+			}
+			wantFailures := int64(0)
+			if next == "unknown" || next == "lookup_error" {
+				wantFailures = 1
+			}
+			if got := metricCount("e2b_runner_operations_total", createKey) - createsBefore; got != wantFailures {
+				t.Errorf("failed create count=%d want=%d", got, wantFailures)
+			}
+			if got := metricCount("github_workflow_job_failures_total", workflowKey) - failuresBefore; got != wantFailures {
+				t.Errorf("workflow failure count=%d want=%d", got, wantFailures)
 			}
 		})
 	}
