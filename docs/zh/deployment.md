@@ -75,7 +75,8 @@ Deploy 与 Jobs 使用相同的 Sandbox 服务资格规则：scope 自有或组�
 凭据 scope 与平台 audience 身份分别处理：个人仓库协作者继续使用自身账号凭据 scope，
 平台资格始终按仓库 Installation owner 的稳定 GitHub ID 与账号类型判断。
 仅选择协作者不能授权 owner 的仓库；选择 owner 后，已有精确仓库权限的协作者可以使用平台服务。
-模板发现、新建、重新部署及无快照旧记录解析均保留该 Installation ID，已有凭据快照仍独立于后续 audience 检查。
+模板发现、新建、重新部署及无快照旧记录解析均保留该 Installation ID。
+凭据在准入时保存，排队期间也沿用该快照，不受后续 audience 变更影响；重新部署时再解析当前资格。
 使用平台凭据时，owner 和普通成员都只能列出、选择可运行的公共模板，组织所有权不授予平台私有目录访问权。
 重新部署也要通过公共模板检查，包括删除 scope 凭据后尝试重放原有私有模板的情况。
 没有凭据快照的旧排队记录使用平台服务创建 Sandbox 前，也必须通过这项检查。
@@ -133,9 +134,11 @@ Deploy 不会继承 CI Secrets、Cache S3 凭证或 Fork sponsorship 权限。
 Installation ID 由服务端解析：
 
 - `GET /user/deployment-templates?installation_id=<local-id>&repository_full_name=<owner/repo>`
-  向作用域 owner 返回可运行的自有／公共模板。其他用户必须通过精确仓库授权，
-  只获得公共模板 ID 与名称，不返回私有目录或作用域元数据。非 owner 创建时只能
-  选择已验证的公共模板；仓库成员可以重新部署已有的保存版本。Deploy fallback 仍需明确启用。
+  仅向使用 scope 凭据的 owner 返回可运行的自有／公共模板。使用平台凭据时，
+  owner 也只能获得公共模板 ID 与名称。其他用户必须通过精确仓库授权，只获得
+  公共选项，不返回作用域元数据。平台回退使用共享的启用状态／audience 规则，
+  无需单独开启 Deploy。仓库成员可重放已保存的 scope 私有绑定；使用平台服务重新部署时，
+  仍须选择可运行的公共模板。公共模板准入只读取一次公共目录，同时确认公开性与有效默认构建。
 - `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag|pull_request&page=1`
   每页最多返回 100 个引用名称及 `has_more`。读取前检查与创建相同的
   OAuth/App 精确仓库交集；OAuth 缺失或被拒绝时失败关闭。

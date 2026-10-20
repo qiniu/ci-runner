@@ -235,11 +235,6 @@ func (s *Server) handleUserCreateDeployment(w http.ResponseWriter, r *http.Reque
 	if !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, sandboxSnapshot, templateID) {
 		return
 	}
-	if err := service.ValidateTemplate(r.Context(), templateID); err != nil {
-		writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
-		return
-	}
-
 	sourceSnapshot, err := s.resolveDeploymentSource(r.Context(), repository, input.Ref, input.CommitSHA)
 	if err != nil {
 		if errors.Is(err, errDeploymentSourceChanged) {
@@ -872,12 +867,14 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
 		return
 	}
-	// A saved private binding may be replayed with scoped credentials, but must
-	// not grant access to a private template owned by the platform service.
-	if snapshot.Source == sandboxConfigSourceAdminDefault && !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, snapshot, deployment.DeploymentTemplateID) {
-		return
-	}
-	if err := service.ValidateTemplate(r.Context(), deployment.DeploymentTemplateID); err != nil {
+	// Only platform credentials need the public-only admission gate. Applying
+	// it unconditionally would reject members replaying a saved scoped private
+	// template: they may use that binding without managing the scope.
+	if snapshot.Source == sandboxConfigSourceAdminDefault {
+		if !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, snapshot, deployment.DeploymentTemplateID) {
+			return
+		}
+	} else if err := service.ValidateTemplate(r.Context(), deployment.DeploymentTemplateID); err != nil {
 		writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
 		return
 	}

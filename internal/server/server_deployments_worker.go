@@ -81,13 +81,13 @@ func (f *serverDeploymentRuntimeFactory) Create(ctx context.Context, d state.Dep
 	if snapshot.Source == sandboxConfigSourceAdminDefault && (strings.TrimSpace(d.SandboxAPIURL) == "" || strings.TrimSpace(d.SandboxAPIKeyEncrypted) == "") {
 		allowed, err := publicDeploymentTemplateAllowed(ctx, service, templateID)
 		if err != nil {
+			// Factory errors may reach server logs; discard raw provider details.
 			return nil, "", errors.New("public deployment template catalog is unavailable")
 		}
 		if !allowed {
 			return nil, "", errors.New("deployment template must be public when using the platform Sandbox service")
 		}
-	}
-	if err := service.ValidateTemplate(ctx, templateID); err != nil {
+	} else if err := service.ValidateTemplate(ctx, templateID); err != nil {
 		return nil, "", errors.New("deployment template is unavailable")
 	}
 	handle, err := service.CreateDeploymentRuntime(ctx, templateID, time.Until(d.ExpiresAt), operationID)

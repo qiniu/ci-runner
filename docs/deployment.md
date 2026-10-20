@@ -102,7 +102,8 @@ always uses the repository Installation owner's stable GitHub ID and account typ
 Selecting only the collaborator does not authorize the owner's repository; selecting
 the owner permits an otherwise repository-authorized collaborator. Template discovery,
 creation, redeploy and legacy snapshot-free resolution all retain that Installation ID.
-Saved runtime credentials remain independent of later audience checks.
+Saved credentials are fixed at admission, including while queued; they remain
+independent of later audience checks. Redeploy re-resolves current eligibility.
 No separate Deploy opt-in is required. With platform credentials, owners and members
 can list and select only runnable public templates; organization ownership does not
 grant access to the platform's private catalog. This public-only check also applies
@@ -183,11 +184,14 @@ existing Repositories and Preferences APIs; the external GitHub Installation
 ID is resolved server-side.
 
 - `GET /user/deployment-templates?installation_id=<local-id>&repository_full_name=<owner/repo>`
-  returns runnable owned/public templates for a scope owner. Other users must
-  authorize the exact repository and receive only runnable public template IDs
-  and names, without private catalogs or scope metadata. Non-owner creation
-  accepts only a verified public template; existing saved revisions can be
-  redeployed by repository members. Deploy fallback remains opt-in.
+  returns runnable owned/public templates only to scope owners using scoped
+  credentials. Platform credentials expose only public template IDs and names,
+  including to owners. Other users must authorize the exact repository and
+  receive only public choices without scope metadata. Platform fallback uses
+  the shared enabled/audience rules without a separate Deploy opt-in. Repository
+  members may replay saved scoped-private bindings; platform-backed redeploy
+  still requires a runnable public template. Public-only admission verifies both
+  publicness and the effective default build in one public-catalog read.
 - `GET /user/deployment-refs?installation_id=<local-id>&repository_full_name=<owner/repo>&source=branch|tag|pull_request&page=1`
   lists at most 100 reference names per page, with `has_more`. It requires the
   same exact OAuth/App repository intersection as creation;

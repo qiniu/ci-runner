@@ -422,11 +422,13 @@ func testDeploymentTemplateAccess(t *testing.T, platform bool, role string) {
 	srv.Close()
 	srv.loopCtx = context.Background()
 	srv.sandboxHTTP = deploymentTemplateTestClient()
+	var publicCatalogReads atomic.Int32
 	if platform {
 		srv.sandboxHTTP.Transport = profileValidationTransportFunc(func(r *http.Request) (*http.Response, error) {
-			if r.URL.Path == "/templates" {
-				t.Error("platform private catalog must not be read")
+			if r.URL.Path != "/default-templates" {
+				t.Errorf("platform template checks must use only the public catalog: %s", r.URL.Path)
 			}
+			publicCatalogReads.Add(1)
 			return (deploymentTemplateTransport{}).RoundTrip(r)
 		})
 	}
@@ -487,9 +489,13 @@ func testDeploymentTemplateAccess(t *testing.T, platform bool, role string) {
 			t.Fatalf("non-public choice %d %s", rec.Code, rec.Body.String())
 		}
 	}
+	beforeCreate := publicCatalogReads.Load()
 	rec = deploymentAuthCall(srv, "POST", "/user/deployments", payload("public-base"))
 	if rec.Code != 201 {
 		t.Fatalf("member create %d %s", rec.Code, rec.Body.String())
+	}
+	if platform && publicCatalogReads.Load()-beforeCreate != 1 {
+		t.Fatal("platform creation must validate publicness and runnable build in one catalog read")
 	}
 	var created deploymentResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
@@ -510,8 +516,12 @@ func testDeploymentTemplateAccess(t *testing.T, platform bool, role string) {
 		if err := store.UpdateDeployment(d); err != nil {
 			t.Fatal(err)
 		}
+		beforeRetry := publicCatalogReads.Load()
 		if rec := deploymentAuthCall(srv, "POST", "/user/deployments/"+d.ID+"/retry", `{}`); rec.Code != 202 {
 			t.Fatalf("public platform retry: %d %s", rec.Code, rec.Body.String())
+		}
+		if publicCatalogReads.Load()-beforeRetry != 1 {
+			t.Fatal("platform retry must validate publicness and runnable build in one catalog read")
 		}
 	}
 	// Reuse an immutable private-template revision created by a different account.

@@ -121,6 +121,7 @@ func deploymentTemplates(ctx context.Context, service sandboxrunner.Service) ([]
 		if !item.Runnable() {
 			continue
 		}
+		// Defaults win ID collisions while retaining aliases from owned entries.
 		if previous, exists := byID[item.TemplateID]; exists {
 			item.Aliases = append(item.Aliases, previous.Aliases...)
 		}
@@ -166,6 +167,10 @@ func (s *Server) authorizeDeploymentTemplate(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	if manageable && snapshot.Source != sandboxConfigSourceAdminDefault {
+		if err := service.ValidateTemplate(r.Context(), template); err != nil {
+			writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
+			return false
+		}
 		return true
 	}
 	allowed, err := publicDeploymentTemplateAllowed(r.Context(), service, template)
