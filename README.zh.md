@@ -115,8 +115,8 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 - **不支持** GitHub Enterprise Server，请使用 GitHub.com App。
 - GitHub 鉴权方式三选一：`github.app`、`github.token` 或 `github.basic_auth`。
 - 省略 `github.app.installation_id` 时，runnerd 按仓库动态解析 installation，一个 App 可服务多个账号。
-- `deploy.template_id` 是可选默认值，与 Runner Spec 分离。独立 worker 始终运行；创建需要可用的所选模板（或默认模板）及有效作用域凭据。`deploy.work_root` 相对于 runnerd 配置目录解析（默认位于状态目录下），解析后的绝对工作目录用于 Sandbox 内，不用于主机执行。
-- Deploy 默认只消费 scope 凭据；`deploy.allow_admin_fallback: true` 显式允许现有平台兜底及其 audience 规则。准入保存区域／模板绑定，重试重新解析当前凭据。
+- `deploy.template_id` 是可选默认值，与 Runner Spec 分离。独立 worker 始终运行；创建需要可用的所选模板（或默认模板）及符合资格的 Sandbox 服务。`deploy.work_root` 相对于 runnerd 配置目录解析（默认位于状态目录下），解析后的绝对工作目录用于 Sandbox 内，不用于主机执行。
+- Deploy 与 Jobs 使用相同的 Sandbox 服务资格规则：scope 自有或继承凭据优先；缺少配置时使用已启用且 audience 允许该账号／组织的平台服务。平台凭据只允许公共模板，组织 owner 也不例外。已准入部署保留凭据快照及区域／模板绑定；重试重新解析当前凭据，使用平台服务时重新检查公共模板资格。
 - `deploy.max_concurrent_per_scope` 默认是 `3`，限制每个账户或组织 scope 的排队／运行部署数；`deploy.retention_hours` 默认是 `168`，释放后的终态记录和有界事件到期清理，审计历史继续保留。
 
 ### 配置值混淆

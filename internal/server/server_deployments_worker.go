@@ -15,6 +15,7 @@ import (
 )
 
 type deploymentSandboxService interface {
+	sandboxrunner.Service
 	CreateDeploymentRuntime(context.Context, string, time.Duration, string) (*deployruntime.Handle, error)
 	ConnectDeploymentRuntime(context.Context, string, time.Duration) (*deployruntime.Handle, error)
 	ReconcileDeploymentRuntime(context.Context, string, string, time.Duration) (*deployruntime.Handle, error)
@@ -25,55 +26,61 @@ type serverDeploymentRuntimeFactory struct {
 	templateID string
 }
 
-func (f *serverDeploymentRuntimeFactory) service(ctx context.Context, d state.Deployment) (deploymentSandboxService, error) {
+func (f *serverDeploymentRuntimeFactory) service(ctx context.Context, d state.Deployment) (deploymentSandboxService, sandboxServiceConfigSnapshot, error) {
+	snapshot := sandboxServiceConfigSnapshot{
+		APIURL: d.SandboxAPIURL, EncryptedAPIKey: d.SandboxAPIKeyEncrypted,
+		Source: d.SandboxConfigSource,
+	}
 	if f == nil || f.server == nil {
-		return nil, errors.New("deployment Sandbox service is not configured")
+		return nil, snapshot, errors.New("deployment Sandbox service is not configured")
 	}
 	var service sandboxrunner.Service
 	if strings.TrimSpace(d.SandboxAPIURL) != "" && strings.TrimSpace(d.SandboxAPIKeyEncrypted) != "" {
-		resolved, err := f.server.sandboxServiceForConfig(sandboxServiceConfigSnapshot{
-			APIURL: d.SandboxAPIURL, EncryptedAPIKey: d.SandboxAPIKeyEncrypted,
-			Source: d.SandboxConfigSource,
-		})
+		resolved, err := f.server.sandboxServiceForConfig(snapshot)
 		if err != nil {
-			return nil, err
+			return nil, snapshot, err
 		}
 		service = resolved
 	} else {
 		scope := accountPreferenceScope{Type: d.ScopeType, ID: d.ScopeID}
-		resolved, _, err := f.server.sandboxServiceForDeployment(ctx, scope)
+		resolved, current, err := f.server.sandboxServiceForDeployment(ctx, scope)
 		if err != nil {
-			return nil, err
+			return nil, current, err
 		}
 		service = resolved
+		snapshot = current
 	}
 	resolved, ok := service.(deploymentSandboxService)
 	if !ok {
-		return nil, errors.New("configured Sandbox service does not support Deploy runtimes")
+		return nil, snapshot, errors.New("configured Sandbox service does not support Deploy runtimes")
 	}
-	return resolved, nil
+	return resolved, snapshot, nil
 }
 
 func (s *Server) sandboxServiceForDeployment(ctx context.Context, scope accountPreferenceScope) (sandboxrunner.Service, sandboxServiceConfigSnapshot, error) {
-	if s.cfg.DeploymentAllowAdminFallback {
-		return s.sandboxServiceForScopeWithDefaultContext(ctx, scope)
-	}
-	return s.sandboxServiceForScope(scope)
+	return s.sandboxServiceForScopeWithDefaultContext(ctx, scope)
 }
 
 func (f *serverDeploymentRuntimeFactory) Create(ctx context.Context, d state.Deployment, attempt int64) (deploymentworker.RuntimeHandle, string, error) {
-	service, err := f.service(ctx, d)
+	service, snapshot, err := f.service(ctx, d)
 	if err != nil {
 		return nil, "", err
 	}
 	operationID := d.ID + "-" + formatAttempt(attempt)
 	templateID := f.template(d)
-	if validator, ok := service.(interface {
-		ValidateTemplate(context.Context, string) error
-	}); ok {
-		if err := validator.ValidateTemplate(ctx, templateID); err != nil {
-			return nil, "", errors.New("deployment template is unavailable")
+	// Legacy queued records without credentials must not gain access to the
+	// platform's private templates when resolving a service for the first time.
+	if snapshot.Source == sandboxConfigSourceAdminDefault && (strings.TrimSpace(d.SandboxAPIURL) == "" || strings.TrimSpace(d.SandboxAPIKeyEncrypted) == "") {
+		allowed, err := publicDeploymentTemplateAllowed(ctx, service, templateID)
+		if err != nil {
+			return nil, "", errors.New("public deployment template catalog is unavailable")
 		}
+		if !allowed {
+			return nil, "", errors.New("deployment template must be public when using the platform Sandbox service")
+		}
+	}
+	if err := service.ValidateTemplate(ctx, templateID); err != nil {
+		return nil, "", errors.New("deployment template is unavailable")
 	}
 	handle, err := service.CreateDeploymentRuntime(ctx, templateID, time.Until(d.ExpiresAt), operationID)
 	if err != nil {
@@ -86,7 +93,7 @@ func (f *serverDeploymentRuntimeFactory) Create(ctx context.Context, d state.Dep
 }
 
 func (f *serverDeploymentRuntimeFactory) Connect(ctx context.Context, d state.Deployment) (deploymentworker.RuntimeHandle, error) {
-	service, err := f.service(ctx, d)
+	service, _, err := f.service(ctx, d)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +115,7 @@ func (f *serverDeploymentRuntimeFactory) template(d state.Deployment) string {
 }
 
 func (f *serverDeploymentRuntimeFactory) Reconcile(ctx context.Context, d state.Deployment) (deploymentworker.RuntimeHandle, string, error) {
-	service, err := f.service(ctx, d)
+	service, _, err := f.service(ctx, d)
 	if err != nil {
 		return nil, "", err
 	}

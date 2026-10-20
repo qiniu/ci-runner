@@ -55,9 +55,9 @@ envd `Connect-Timeout-Ms` process lifetime: after PID confirmation, cancelling
 the observation stream leaves the service running until stop or Sandbox expiry.
 Clone and installation commands retain their execution deadlines.
 
-Choose a template from the selected account or organization's runnable public
-or owned Sandbox catalog when creating a deployment. `runnerd.yaml` can provide
-an optional default for API clients that omit `template_id`:
+Choose a runnable public template when using the platform Sandbox service. Owners
+using scoped credentials may also choose owned templates when creating a deployment.
+`runnerd.yaml` can provide an optional default for API clients that omit `template_id`:
 
 ```yaml
 deploy:
@@ -65,7 +65,6 @@ deploy:
   work_root: /var/lib/runnerd/deployments
   max_concurrent_per_scope: 3
   retention_hours: 168
-  allow_admin_fallback: false
 ```
 
 `template_id` is intentionally separate from Runner Specs. `work_root` is a
@@ -82,7 +81,7 @@ HTTP status to server logs; raw errors, response bodies, URLs and credentials ar
 never logged. Deployment history retains at most 2,000 events and 8 MiB of message
 data per revision, keeping each revision's event timeline bounded while preserving
 the newest evidence. The worker runs independently of a configured default. Admission
-validates the selected physical template ID with the effective scoped credentials
+validates the selected physical template ID with the effective Sandbox service
 and rejects missing/unavailable templates or credentials before queuing. Existing
 queued records without a template fail visibly; create a new deployment with a
 selected template. Creation and retry persist a queue event and wake the worker
@@ -92,11 +91,22 @@ The region comes from the effective scope's configured Sandbox endpoint. The
 region identifier, endpoint, encrypted credential and dedicated Deploy template
 binding are saved with admission, so changing global configuration cannot move
 an admitted deployment to another region or template. Retries resolve current
-scoped credentials again; the redeploy mode decides whether to refresh a branch
+Sandbox credentials again; the redeploy mode decides whether to refresh a branch
 source or reuse an immutable source/template binding.
-The platform CI fallback is disabled for Deploy unless
-`allow_admin_fallback: true`; its existing enabled/audience restrictions still
-apply. Deploy never uses fork sponsorship or Cache S3 credentials.
+Deploy shares Jobs' Sandbox service eligibility: scoped or organization-inherited
+credentials take priority. Only missing configuration permits the enabled platform
+service, subject to its existing audience rules; corrupt configuration fails closed.
+No separate Deploy opt-in is required. With platform credentials, owners and members
+can list and select only runnable public templates; organization ownership does not
+grant access to the platform's private catalog. This public-only check also applies
+to redeploy, including a saved private binding after scoped credentials are removed.
+Legacy queued records without credential snapshots must also pass this check before
+creating a Sandbox with the platform service.
+With scoped credentials, owners retain their owned/public catalog and repository
+members retain public choices plus replay of an existing saved private binding.
+Existing runtime reconnection and cleanup keep using saved credentials even when
+the platform is later disabled or its audience changes. Deploy never uses fork
+sponsorship, Runner Spec matching or Cache S3 credentials.
 
 Startup recovery only queues a wakeup for the independent Deploy scheduler.
 Once startup recovery finishes, background loops start and the HTTP gate opens.

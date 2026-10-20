@@ -433,8 +433,16 @@ Create the deployment and verify navigation to the repository/PR-context
 that address during execution and after readiness; the same deployment and
 stage/stdout/stderr logs must remain visible. Exercise earlier-log pagination
 and a failed event read without discarding existing history. Missing template
-or scoped credentials must reject creation with an actionable message. Verify
+or an eligible Sandbox service must reject creation with an actionable message. Verify
 the selected template ID remains bound through idempotent replay and retry.
+
+Verify that a scope shown as platform-ready on `/repositories` can discover public
+Deploy templates without an additional Deploy setting. Exercise both an organization
+owner and a repository member: neither may browse the platform private catalog or
+create/redeploy with a platform-private template ID. Check disabled/incomplete defaults
+and audience misses deny new admission/redeploy, scoped/inherited credentials take
+priority, quotas remain effective, and an existing Sandbox still reconnects and cleans
+up with its saved snapshot after the default is disabled or the audience changes.
 
 Deployment revision verification must cover initial #1, atomic next-version creation and audit rollback, frozen old state, revision-scoped cursor pages, stale-output rejection, repeated legacy SQLite upgrade, Postgres/MySQL schema and mutations, URL-restored selection, and delayed-response isolation. Verify the history/log columns stack on a narrow screen and read without provider calls.
 

@@ -741,7 +741,15 @@ PostgreSQL 和 MySQL 上验证启动后每个版本只在首次写入时重算�
 创建结果未知和确认资源不存在。Provider HTTP fixture 验证只查找元数据而不创建资源、
 Sandbox 不存在判定和重连时的剩余生命周期。这些检查不能证明公网访问、真实 Contents
 权限或远端资源释放；真实验收见 [Deployment Smoke](deployment-smoke.md)。
-`deploy.allow_admin_fallback` 默认为 false，独立于 CI 兜底配置。
+Deploy 复用 scope／继承／平台服务资格规则，不需要额外开启开关。
+`TestDeploymentSandboxServiceMatchesJobEligibility` 覆盖平台启用状态、配置完整性、
+selected audience 的身份／类型、scope 与继承优先级、损坏配置拒绝及无快照旧记录。
+`TestDeploymentPlatformServiceTemplateAccess` 覆盖 owner／普通成员的公共模板发现、
+创建和重新部署，并确认不读取平台私有目录；
+`TestRepositoryMemberCanDeployWithoutPrivateCatalogAccess` 保留 scope 私有绑定重放回归。
+`TestDeploymentRuntimePreservesSavedService` 验证平台未启用时仍能用保存的凭据重连，并拒绝损坏快照。
+`TestLegacyDeploymentRejectsPlatformPrivateTemplate` 验证无快照的旧排队记录在模板验证／创建前拒绝私有或未构建模板。
+这些本地夹具不代表真实 Provider 部署验收通过。
 
 worker 测试还覆盖仅启动时注入 Vite 精确 Host、保留其他环境变量，以及无法解析应用地址时
 拒绝启动。使用公开的 `qiniu/deployment` Vite fixture 和公共 `base` 模板验证真实 worker：

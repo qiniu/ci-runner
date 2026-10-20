@@ -4,6 +4,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Before promoting the Deploy Sandbox service eligibility fix, run the owner/member platform public-template, audience denial, scoped/inherited override, quota and saved-runtime cleanup gates in [Deployment Smoke](docs/deployment-smoke.md#9-sandbox-deploy-acceptance). Local regressions do not replace live provider acceptance.
+
 - Complete individual-repository removal acceptance for the [GitHub context workflow](docs/deployment.md#github-context-routes). Live Installation suspension/cache expiry/recovery and OAuth-token revocation/API denial/in-app browser reauthentication passed on 2026-10-16. GitHub disallowed removing the sole selected repository, so that distinct revocation mode remains unverified.
 
 - Before production promotion of PR #133, verify upgrade, rollback writes and re-upgrade on a disposable copy of the production database. Local SQLite and real PostgreSQL/MySQL regressions cover counter repair and independent deployment startup, but do not replace that snapshot gate. MySQL deployment navigation requires MySQL 8.0+; Deploy remains single-process without mixed-version writers.

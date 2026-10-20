@@ -45,7 +45,7 @@ Sandbox 凭证放进计划。
 确认 PID 后，取消观察流不会停止服务；应用继续运行，直到手动停止或 Sandbox 到期。
 克隆和安装命令仍保留执行超时。
 
-创建部署时从所选账号或组织的可运行公共／自有 Sandbox 目录中选择模板。
+使用平台 Sandbox 服务时只能选择可运行的公共模板；使用 scope 凭据的 owner 也可以选择自有模板。
 `runnerd.yaml` 可以为未传 `template_id` 的 API 客户端配置可选默认值：
 
 ```yaml
@@ -54,7 +54,6 @@ deploy:
   work_root: /var/lib/runnerd/deployments
   max_concurrent_per_scope: 3
   retention_hours: 168
-  allow_admin_fallback: false
 ```
 
 `template_id` 与 Runner Spec 完全分离。`work_root` 是控制器拥有的绝对路径，
@@ -70,9 +69,15 @@ Provider 失败只向服务端日志记录操作名、错误类别及经过校�
 
 区域来自该 scope 的有效 Sandbox endpoint。准入时保存区域标识、endpoint、加密凭据
 和独立 Deploy 模板绑定，后续全局配置变更不会移动已准入部署的区域或模板。重试会重新解析
-当前 scope 的凭据，并按重新部署方式刷新分支源码或复用不可变源码与模板绑定。Deploy 默认不使用平台 CI 兜底；
-仅 `allow_admin_fallback: true` 时允许，且仍遵守已有的启用状态与 audience 限制。
-Deploy 不使用 Fork sponsorship 或 Cache S3 凭据。
+当前 Sandbox 凭据，并按重新部署方式刷新分支源码或复用不可变源码与模板绑定。
+Deploy 与 Jobs 使用相同的 Sandbox 服务资格规则：scope 自有或组织继承凭据优先，
+仅缺少配置时才使用已启用且 audience 允许的平台服务；损坏配置直接拒绝，不再额外要求 Deploy 开关。
+使用平台凭据时，owner 和普通成员都只能列出、选择可运行的公共模板，组织所有权不授予平台私有目录访问权。
+重新部署也要通过公共模板检查，包括删除 scope 凭据后尝试重放原有私有模板的情况。
+没有凭据快照的旧排队记录使用平台服务创建 Sandbox 前，也必须通过这项检查。
+使用 scope 凭据时，owner 保留自有／公共目录，仓库成员保留公共选项及已有私有绑定的重放能力。
+已运行部署的重连和清理继续使用保存的凭据快照，即使平台服务后来被禁用或 audience 改变。
+Deploy 不使用 Fork sponsorship、Runner Spec 匹配或 Cache S3 凭据。
 
 启动恢复只通知独立的 Deploy 调度器；恢复完成后启动后台循环并打开 HTTP 门禁，
 调度器使用独立 context 推进重连、补偿和排队计划。慢克隆／安装不会阻塞启动门禁，也不会

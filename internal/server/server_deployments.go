@@ -232,7 +232,7 @@ func (s *Server) handleUserCreateDeployment(w http.ResponseWriter, r *http.Reque
 		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
 		return
 	}
-	if !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, templateID) {
+	if !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, sandboxSnapshot, templateID) {
 		return
 	}
 	if err := service.ValidateTemplate(r.Context(), templateID); err != nil {
@@ -866,18 +866,24 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 		writeErrorCode(w, http.StatusConflict, "deployment_template_required", "Create a new deployment with an available Sandbox template")
 		return
 	}
-	service, snapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), accountPreferenceScope{Type: deployment.ScopeType, ID: deployment.ScopeID})
+	scope := accountPreferenceScope{Type: deployment.ScopeType, ID: deployment.ScopeID}
+	service, snapshot, snapshotErr := s.sandboxServiceForDeployment(r.Context(), scope)
 	if snapshotErr != nil {
-		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Deploy requires configured scoped Sandbox credentials")
+		writeErrorCode(w, http.StatusConflict, "deployment_sandbox_not_configured", "Configure Sandbox credentials in this account or organization's Preferences before deploying")
+		return
+	}
+	// A saved private binding may be replayed with scoped credentials, but must
+	// not grant access to a private template owned by the platform service.
+	if snapshot.Source == sandboxConfigSourceAdminDefault && !s.authorizeDeploymentTemplate(w, r, account.ID, scope, service, snapshot, deployment.DeploymentTemplateID) {
 		return
 	}
 	if err := service.ValidateTemplate(r.Context(), deployment.DeploymentTemplateID); err != nil {
 		writeErrorCode(w, http.StatusConflict, "deployment_template_unavailable", "The selected Sandbox template is unavailable or has no runnable default build")
 		return
 	}
-	// Repository members may replay an existing saved template binding, including
-	// an owner-created private template. Only new choices require the public-only
-	// catalog gate; retry cannot substitute an arbitrary template ID.
+	// Repository members may replay an existing saved scoped template binding,
+	// including an owner-created private template. Retry cannot substitute an
+	// arbitrary template ID.
 	deployment.ExecutionAccountID = account.ID
 	deployment.SandboxAPIURL, deployment.SandboxAPIKeyEncrypted, deployment.SandboxConfigSource = snapshot.APIURL, snapshot.EncryptedAPIKey, snapshot.Source
 	deployment.SandboxRegion = s.sandboxRegionForAPIURL(snapshot.APIURL)

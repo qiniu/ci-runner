@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -502,26 +501,6 @@ func TestDeploymentReadsAndMutationsRejectRevokedRepositoryAccess(t *testing.T) 
 				t.Fatalf("unauthorized audit: %#v %v", audit, err)
 			}
 		})
-	}
-}
-
-func TestDeployAdminFallbackRequiresExplicitOptIn(t *testing.T) {
-	store := state.New(t.TempDir())
-	srv := newTestServer(t, store, "", &fakeSandbox{})
-	encrypted, err := encryptSecret("fixture-provider-key", srv.cfg.AuthEncryptionKey.Value())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpsertSandboxServiceDefault(state.SandboxServiceDefault{Enabled: true, APIURL: "https://provider.example", APIKeyEncrypted: encrypted}); err != nil {
-		t.Fatal(err)
-	}
-	scope := accountPreferenceScope{Type: state.AccountScopeTypeAccount, ID: 1}
-	if service, _, err := srv.sandboxServiceForDeployment(context.Background(), scope); service != nil || !errors.Is(err, errSandboxServiceNotConfigured) {
-		t.Fatalf("implicit Deploy fallback = %T %v", service, err)
-	}
-	srv.cfg.DeploymentAllowAdminFallback = true
-	if service, snapshot, err := srv.sandboxServiceForDeployment(context.Background(), scope); err != nil || service == nil || snapshot.Source != sandboxConfigSourceAdminDefault {
-		t.Fatalf("explicit Deploy fallback = %T %#v %v", service, snapshot, err)
 	}
 }
 
