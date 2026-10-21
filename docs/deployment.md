@@ -673,12 +673,22 @@ credential, without exposing them to the browser. Connect uses remaining
 lifetime rather than a fixed Sandbox timeout. A local lifecycle check runs every
 five seconds and open sessions revalidate remote access every thirty seconds;
 closed/disconnected streams receive the existing thirty-second idle cleanup.
-Terminal output streams send an SSE comment heartbeat every fifteen seconds and
+Terminal output streams send an SSE comment heartbeat every five seconds and
 renew a thirty-second write deadline before each output/heartbeat. This avoids
 the HTTP server's absolute response timeout closing an active shell while still
 bounding blocked writes. Heartbeats do not appear in shell output, extend Sandbox
 lifetime, or bypass lifecycle and repository authorization checks. Ordinary detail
-refresh does not close the shell. Transport failures still require manual reconnect.
+refresh does not close the shell. A transient transport failure lets EventSource
+resume the same PTY instead of deleting it. SSE output IDs are byte offsets in
+the session's retained tail (64 KiB after trimming, at most 128 KiB before trimming);
+`Last-Event-ID` replays only the missing suffix. Invalid, future or evicted cursors
+close the stream explicitly rather than duplicating output or hiding a gap.
+Each reconnect repeats the normal account/repository/revision authorization.
+Recovery is bounded to twenty seconds per outage, below the thirty-second idle
+cleanup. Old cleanup timers cannot shorten the latest disconnect's grace period.
+A denied reconnect, explicit server closure, unrecoverable gap or recovery timeout
+closes the PTY and requires a manual new connection. Leaving the terminal still
+closes it immediately. This does not extend Sandbox lifetime.
 The shared Runner terminal stream also checks its saved request/Sandbox and exact
 installation/repository identity every five seconds, and the opening account's
 repository access every thirty seconds. Terminal state, changed identity, denied

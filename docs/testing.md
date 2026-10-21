@@ -916,6 +916,21 @@ Deployment revision verification must cover initial #1, atomic next-version crea
 
 ### Deployment terminal checks
 
+Reconnect regression checks additionally cover a ten-second proxy read-idle
+limit across more than a minute of periodic output, HTTP/1.1 and HTTP/2 server
+read/write deadlines, byte-offset suffix replay without duplicates, invalid or
+evicted cursors, closed-session output rejection, and stale idle timers. Run
+`cd ui && bun run test:production --grep 'resumes deployment terminal'` for real
+Chromium EventSource transport loss followed by resume on the same PTY, permission
+denial, explicit server closure, and the twenty-second outage limit. These are
+local transport fixtures, not proof that the production ingress keeps a stream
+open. Production acceptance must run continuous output and an idle shell for more
+than one minute, confirm the same PID survives a transport recovery, then verify
+stop/expiry and access revocation still close it. Keep runnerd and ingress logs
+when diagnosing the initial transport close; heartbeat and local deadline tests
+alone cannot identify a proxy's total request limit.
+
+
 Run `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1` for PTY input/resize/close, repository authorization and per-user session ownership, revision/attempt identity, stopped/expired rejection, and remaining-lifetime Connect coverage. Run `cd ui && bun run test:production --grep 'separates deployment'` for browser tab navigation, manual connection, typing and disconnect with fixture APIs/output. Fixtures do not prove a real Sandbox PTY. For live acceptance, open a running revision, connect, run `pwd` and inspect an application log file, resize, disconnect, reconnect, then stop the deployment and confirm the terminal becomes unavailable. Historical revisions must never open the current Sandbox.
 
 Deployment context checks: run `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` and the deployment production browser fixture. Cover legacy redirects, direct reload/OAuth return, encoded branch names, immutable revision selection, back navigation, and local-only filtered history before pagination. State coverage includes `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`.

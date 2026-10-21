@@ -1230,7 +1230,7 @@ test("separates deployment list, creation, and refreshable detail pages", async 
     window.EventSource = class extends BrowserEventSource {
       constructor(url: string | URL, options?: EventSourceInit) {
         if (String(url).includes("/terminal/")) {
-          const stream = { onmessage: null as ((event: { data: string }) => void) | null, onerror: null, close() {} }
+          const stream = { onmessage: null as ((event: { data: string }) => void) | null, onerror: null, addEventListener() {}, close() {} }
           window.setTimeout(() => stream.onmessage?.({ data: JSON.stringify("Sandbox shell ready\r\n$ ") }), 100)
           return stream as unknown as EventSource
         }
@@ -1694,3 +1694,75 @@ test("ignores an old deployment reauthentication failure after navigation", asyn
   await expect(page.getByRole("heading", { name: "Platform Runner Specs", exact: true })).toBeVisible()
   expect(loginRequests).toBe(0)
 })
+
+for (const ending of ["denied access", "server closure", "prolonged outage"] as const) {
+test(`resumes deployment terminal output after transport loss and closes on ${ending}`, async ({ page }, testInfo) => {
+  test.setTimeout(60000)
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const deployment = { id: "terminal-resume", repository_full_name: "fixture-user/project", ref: "refs/heads/main", commit_sha: "a".repeat(40), status: "running", sandbox_id: "same-sandbox", revision_number: 1, expires_at: new Date(Date.now() + 3600000).toISOString() }
+  let creates = 0
+  let deletes = 0
+  let streams = 0
+  await page.addInitScript(() => {
+    const NativeEventSource = window.EventSource
+    window.EventSource = class extends NativeEventSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options)
+        this.addEventListener("message", (event) => {
+          document.documentElement.dataset.terminalEventIds = `${document.documentElement.dataset.terminalEventIds ?? ""}${event.lastEventId},`
+        })
+      }
+    }
+  })
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/**", async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path.endsWith("/terminal") && request.method() === "POST") {
+      creates++
+      return route.fulfill({ status: 201, json: { session_id: "same-pty", pid: 99, sandbox_id: deployment.sandbox_id } })
+    }
+    if (path.includes("/terminal/")) {
+      if (request.method() === "DELETE") {
+        deletes++
+        return route.fulfill({ json: { status: "ok" } })
+      }
+      if (path.endsWith("/events")) {
+        streams++
+        if (streams >= 3) {
+          if (ending === "prolonged outage") return route.abort("failed")
+          if (ending === "server closure") return route.fulfill({ contentType: "text/event-stream", body: "event: terminal-closed\ndata: {}\n\n" })
+          return route.fulfill({ status: 403, body: "access revoked" })
+        }
+        const id = streams === 1 ? 6 : 13
+        const text = streams === 1 ? "FIRST\r\n" : "SECOND\r\n"
+        // A finite SSE response models a proxy dropping an otherwise healthy
+        // stream. Use the browser's real EventSource retry and cursor handling.
+        return route.fulfill({ contentType: "text/event-stream", body: `id: ${id}\ndata: ${JSON.stringify(text)}\n\n` })
+      }
+      return route.fulfill({ json: { status: "ok" } })
+    }
+    if (path === "/user/deployments/terminal-resume") return route.fulfill({ json: { ...deployment, revisions: [{ ...deployment, number: 1 }] } })
+    if (path === "/user/deployment-repositories") return route.fulfill({ json: deploymentNavigationFixture([deployment]) })
+    if (path === "/user/deployments") return route.fulfill({ json: { items: [deployment], total: 1 } })
+    if (path.endsWith("/events")) return route.fulfill({ json: { events: [], has_more: false } })
+    if (path.endsWith("/resources")) return route.fulfill({ json: {} })
+    return route.fulfill({ status: 404, body: "fixture route not found" })
+  })
+  await page.goto("/github/fixture-user/project/deployments/terminal-resume?branch=main")
+  await page.getByRole("tab", { name: "Terminal", exact: true }).click()
+  await page.getByRole("button", { name: "Connect", exact: true }).click()
+  await expect(page.locator(".xterm-rows")).toContainText("FIRST")
+  await expect(page.locator(".xterm-rows")).toContainText("SECOND", { timeout: 10000 })
+  expect(streams).toBe(2)
+  await expect(page.locator("html")).toHaveAttribute("data-terminal-event-ids", "6,13,")
+  expect(creates).toBe(1)
+  expect(deletes).toBe(0)
+  await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath("terminal-resumed.png") })
+  await expect(page.getByRole("alert")).toContainText("Terminal stream disconnected", { timeout: 25000 })
+  await expect.poll(() => deletes).toBe(1)
+  expect(streams).toBeGreaterThanOrEqual(3)
+  expect(creates).toBe(1)
+})
+}
