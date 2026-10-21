@@ -2164,6 +2164,62 @@ esac
 	}
 }
 
+func TestSandboxConformanceCleanupIgnoresSubshellExit(t *testing.T) {
+	fixture := t.TempDir()
+	callsPath := filepath.Join(fixture, "cleanup-calls")
+	qshell := filepath.Join(fixture, "qshell")
+	writeExecutable(t, qshell, `#!/usr/bin/env bash
+set -euo pipefail
+test "$1 $2 $3" = "sandbox kill sb-parent-only"
+printf 'kill\n' >> "$CLEANUP_CALLS"
+printf 'Killed sandbox sb-parent-only\n'
+`)
+	manifestPath := filepath.Join(fixture, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"images":{"ubuntu-slim":{"entries":[]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(filepath.Join(repositoryRoot(t), "scripts", "run-runner-image-conformance.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Load the real setup and cleanup handler without provisioning or executing
+	// a Sandbox. Explicitly install the inherited EXIT trap in a subshell to
+	// reproduce the watchdog's early-termination race deterministically.
+	setup, _, ok := strings.Cut(string(script), "run_with_timeout() {")
+	if !ok {
+		t.Fatal("conformance timeout helper not found")
+	}
+	probe := filepath.Join(fixture, "cleanup-probe.sh")
+	writeExecutable(t, probe, setup+`
+sandbox_id=sb-parent-only
+(
+  trap cleanup EXIT
+  exit 0
+)
+if [ ! -d "$workdir" ] || [ -e "$CLEANUP_CALLS" ]; then
+  echo 'subshell cleanup removed parent-owned resources' >&2
+  exit 1
+fi
+completion_message='parent cleanup completed'
+`)
+	output, err := runCommand(t, "bash", []string{
+		probe,
+		"--image", "ubuntu-slim", "--executor", "sandbox", "--target", "fixture",
+		"--output", filepath.Join(fixture, "result.json"),
+	},
+		"RUNNER_IMAGES_MANIFEST="+manifestPath, "QSHELL="+qshell, "CLEANUP_CALLS="+callsPath)
+	if err != nil {
+		t.Fatalf("subshell exit damaged parent resources: %v\n%s", err, output)
+	}
+	calls, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(calls) != "kill\n" || !strings.Contains(output, "parent cleanup completed") {
+		t.Fatalf("cleanup must run exactly once in the parent: calls=%q output=%s", calls, output)
+	}
+}
+
 func TestTemplateReleaseSmokeRunsUsabilityAndIdentityContract(t *testing.T) {
 	fixture := t.TempDir()
 	binDir := filepath.Join(fixture, "bin")

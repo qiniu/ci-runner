@@ -105,6 +105,11 @@ completion_message=""
 
 cleanup() {
   original_status=$?
+  # An early-terminated watchdog can run the inherited EXIT trap before Bash
+  # resets it in the child. Only the main shell owns these files and Sandbox.
+  if [ "$BASH_SUBSHELL" -ne 0 ]; then
+    return "$original_status"
+  fi
   trap - EXIT
   cleanup_failed=0
   if [ -n "$active_watchdog_pid" ]; then
