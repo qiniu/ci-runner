@@ -377,6 +377,11 @@ Workflow 完成后确认：
 [部署配置](deployment.md#实现迭代方案)。保留期仅修改一个已结束测试记录的时间戳，
 并非自然等待七天。
 
+终端变更上线前运行 `task ui-terminal-fault-test`，步骤见
+[终端计时断流回归](testing.md#终端计时断流回归)。本地 5／15 秒原 Shell 恢复和
+25 秒超时／空闲回收检查不覆盖已部署的入口代理与远程 Sandbox，需要单独保留
+这些链路的计时生产证据；未计时的手动断网不能证明在 20 秒窗口内恢复。
+
 分别记录本地单元／集成检查、浏览器/UI 检查和真实 Sandbox provider 运行三类证据。Local fake
 和 preview fixture 不能替代本节验收。
 

@@ -413,6 +413,45 @@ allowlist 这两类 warning；它们表示 manual chunk 可能生成浏览器不
 
 `task test` 会重新构建 UI、运行同一套 Bun tests，然后执行带 race detection 和 coverage 的 Go tests。Bun suite 覆盖 helper 和 server-rendered component output；导航、dialog、头像加载/回退，以及角色变更后的权限切换仍需在真实浏览器中验证。修改 onboarding 时还要验证：`/jobs` 自动启动、六个目标、跳转到 `/account/preferences`、遮罩关闭后持续显示设置任务、显式跳过的持久化，以及重播不修改状态。
 
+### 终端计时断流回归
+
+```bash
+task ui-terminal-fault-test
+```
+
+需要 Linux 或 macOS、Go、Bun，以及包含标准库 `pty` 模块的 `python3`。
+Task 会安装匹配的 Chromium 并重新构建内嵌生产 UI。直接运行时，先执行
+`task ui-deps` 并进入 `ui/`，再运行 `bunx playwright install chromium` 和
+`bun run test:terminal-fault`。Linux 缺少浏览器系统库时使用
+`bunx playwright install --with-deps chromium`。无需 runnerd 配置、GitHub 登录、
+Sandbox 凭据或生产地址。首次 Go／浏览器安装完成后约需两分钟；测试串行运行，
+不自动重试。
+
+独立 Playwright suite 会通过 `terminalfault` build tag 和 race detector 启动
+仅监听 loopback 的 Go 测试服务。它提供构建后的 UI，使用真实终端 SSE、回放与
+空闲清理代码，并通过 Python 在本地真实 PTY 中启动交互式 `/bin/sh`。
+认证、部署元数据、Provider 创建和 PTY resize 使用 fixture。loopback HTTP
+代理会断开现有连接，并按计时拒绝新的浏览器请求；使用浏览器原生 EventSource
+与真实时钟：
+
+| 中断时长 | 预期行为 |
+| --- | --- |
+| 5 秒 | 20 秒恢复窗口内恢复，session/PID 和 `Last-Event-ID` 保持一致；60 条编号输出按顺序且仅到达一次，恢复后输入正常。 |
+| 15 秒 | 在接近恢复边界时验证相同断言，不创建替代 Shell，也不提前清理。 |
+| 25 秒 | UI 约 20 秒关闭，并在断网期间尝试 DELETE。因 DELETE 无法到达 runnerd，网络恢复时 Shell 仍存活，随后由真实的 30 秒空闲清理回收；不自动创建替代 Shell 或重连。 |
+
+恢复窗口从首个 EventSource error 开始计算，而非代理中断瞬间。断言保留有界
+调度余量和实际时长，不加速浏览器时钟。测试结束后回收 fixture 和子进程。
+该命令独立于 `task test` 与 `task ui-production-smoke`，Check 中由
+`terminal-fault` job 运行；`RUNNERD_UI_SMOKE_BASE_URL` 不会将它切到线上。
+
+查看 `ui/test-results/` 中的 `terminal-harness-*.log`、每个测试的 `timings.json`、
+原生 `events.json` 和服务端 `metrics.json`、恢复／超时截图，以及失败时保留的 Playwright trace。
+CI 无论成功或失败都会上传这些产物。失败时先核对时长、游标、序号和进程退出
+证据，再决定如何处理，不要直接放宽断言或增加重试。该测试不能证明生产代理、
+GitHub 授权、远程 Sandbox、TTL 或权限撤销验收通过，仍须执行
+[部署 smoke 门槛](deployment-smoke.md#9-sandbox-deploy-验收)。
+
 确认已配置的公共规格（迁移保留旧行，启动不创建规格）：
 
 ```bash

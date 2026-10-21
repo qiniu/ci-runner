@@ -66,6 +66,14 @@ Deploy startup regressions must keep queued plans untouched during `Server.Recov
 
 ## Go Server Or API
 
+Run `task ui-terminal-fault-test` after changing terminal SSE replay, browser
+recovery deadlines or idle cleanup. Its opt-in `terminalfault` Go fixture and
+Chromium exercise real local PTYs under measured 5/15/25-second transport
+outages, preserving the actual 20-second client and 30-second idle deadlines.
+See [Testing](../../docs/testing.md#timed-terminal-transport-faults) for
+prerequisites, artifacts and boundaries; local fixtures do not replace live
+provider, production proxy or authorization-revocation acceptance.
+
 - For focused backend changes, start with the relevant package test.
 - For broad server/API behavior, run `go test ./...`.
 - For pre-merge confidence, run `task test`; it rebuilds UI assets, runs Bun UI tests, and runs Go tests with race and coverage.

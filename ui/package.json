@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "bun test",
     "test:production": "playwright test --config playwright.production.config.ts",
+    "test:terminal-fault": "bun run build && playwright test --config playwright.terminal-fault.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -71,6 +71,7 @@ task deps
 task ui-deps
 task ui-i18n-check
 task ui-production-smoke
+task ui-terminal-fault-test
 task dev
 task smee
 task lint

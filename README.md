@@ -354,6 +354,7 @@ task deps          # Install Go dependencies
 task ui-deps       # Install UI dependencies
 task build         # Build runnerd with embedded production UI
 task ui-production-smoke # Execute the production UI bundle in Chromium
+task ui-terminal-fault-test # Timed SSE outages with Chromium and real local PTYs
 task dev           # Start local dev (runnerd + Vite + smee)
 task lint          # Run linters
 task test          # Rebuild UI + run all tests (Go with race detection + Bun UI tests)
@@ -366,6 +367,11 @@ The `staticcheck` step in `task lint` uses the Go version declared in `go.mod`, 
 For focused UI tests, run `cd ui && bun run test`. Use `task ui-production-smoke`
 after changing UI dependencies, Vite/Rollup configuration, or production asset
 loading.
+
+Run `task ui-terminal-fault-test` after terminal replay, reconnect or idle-cleanup
+changes. It requires Go, Bun and Python 3 on Linux/macOS; see
+[timed terminal transport faults](docs/testing.md#timed-terminal-transport-faults)
+for the scenarios, artifacts and production-verification boundary.
 
 ### Sandbox Templates
 

@@ -42,6 +42,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Maintenance
 
+- Keep `task ui-terminal-fault-test` covering timed recovery, exact cursor/output continuity and real PTY cleanup. Production ingress, remote Sandbox and permission-revocation acceptance remain separate deployment gates; see [Testing](docs/testing.md#timed-terminal-transport-faults).
+
 - Keep [Platform Runner Specs](docs/platform-runner-specs.md) aligned with Admin unified template references and provider-validated directory fields, existing execution behavior, public-directory projection and the per-process cache invalidation contract. Preserve upgrade coverage for legacy ID references with unused public names, displayed public IDs across restarts, and unchanged runtime behavior. The visibility adjustment needs no additional data migration. Production snapshot migration, down-version startup and real regional workflow smoke remain deployment gates.
 
 - Keep Job details focused on the shared Runner event timeline, Web Console, and request details. Jobs and admin request details must use the same event rows and cursor behavior while retaining their authorization boundaries. Workflow step logs remain on GitHub through the Job/Run link; do not restore duplicate log fetching or streaming without a separately validated need. See [Testing: GitHub Actions logs](docs/testing.md#9-how-to-read-github-actions-logs).

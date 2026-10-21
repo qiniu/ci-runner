@@ -427,6 +427,50 @@ browser-unsafe module execution order.
 
 `task test` rebuilds the UI, runs the same Bun suite, and then runs Go tests with race detection and coverage. The Bun suite covers helpers and server-rendered component output; use a real browser to verify navigation, dialogs, avatar loading/fallback, and access transitions after a role change. For onboarding changes, also verify the automatic `/jobs` start, all six targets, the transition to `/account/preferences`, the persistent setup task after the overlay closes, explicit skip persistence, and replay without a state change.
 
+### Timed terminal transport faults
+
+```bash
+task ui-terminal-fault-test
+```
+
+Requires Linux or macOS, Go, Bun and `python3` with its standard-library `pty`
+module. The Task installs matching Chromium and rebuilds the embedded production
+UI. For direct execution after `task ui-deps` and `cd ui`, install Chromium with
+`bunx playwright install chromium`, then run `bun run test:terminal-fault`.
+Linux hosts missing browser system libraries can use
+`bunx playwright install --with-deps chromium`. No runnerd config, GitHub login,
+Sandbox credentials or production endpoint is used. Allow about two minutes
+after the first Go/browser setup; tests run serially without automatic retries.
+
+The dedicated Playwright suite starts a loopback-only Go test fixture with the
+`terminalfault` build tag and race detector. It serves the built UI, uses the
+actual terminal SSE/replay/idle-cleanup code and starts an interactive `/bin/sh`
+in a real local PTY through Python. Authentication, deployment metadata, provider
+creation and PTY resize are fixtures. A loopback HTTP proxy drops existing
+connections and rejects new browser requests for measured intervals, using the
+browser's native EventSource and real clocks:
+
+| Outage | Required behavior |
+| --- | --- |
+| 5 seconds | Resume before the 20-second recovery deadline with the same session/PID and exact `Last-Event-ID`; all 60 numbered outputs arrive once in order and later input works. |
+| 15 seconds | The same assertions near the recovery deadline; no replacement shell or premature cleanup. |
+| 25 seconds | The UI closes around 20 seconds and attempts DELETE during the outage. Because DELETE cannot reach runnerd, the shell remains alive at network restoration and exits through the real 30-second idle cleanup. No automatic replacement or reconnection occurs. |
+
+The recovery deadline starts at the first EventSource error, not the instant the
+proxy is interrupted. The assertions include bounded scheduler allowances and
+retain measured durations; browser clocks are never accelerated. Fixtures and
+child processes are torn down after the suite. This command runs separately from
+`task test` and `task ui-production-smoke`; Check runs it in the `terminal-fault`
+job. `RUNNERD_UI_SMOKE_BASE_URL` does not redirect this local-only suite.
+
+Inspect `ui/test-results/`: `terminal-harness-*.log`, per-test `timings.json`,
+native `events.json` and server `metrics.json`, recovery/timeout screenshots, and retained
+Playwright traces on failure. CI uploads these artifacts on success and failure.
+On failure inspect timing, cursor, sequence and process-exit evidence before
+changing bounds or adding retries. These tests do not establish production proxy,
+GitHub authorization, remote Sandbox, TTL or permission-revocation acceptance;
+retain those [deployment smoke gates](deployment-smoke.md#9-sandbox-deploy-acceptance).
+
 Inspect configured public-name specs (migration preserves existing rows; startup creates none):
 
 ```bash

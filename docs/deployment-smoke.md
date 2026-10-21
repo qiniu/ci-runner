@@ -417,6 +417,13 @@ The 2026-10-14 public API, startup-failure and accelerated retention results are
 recorded in [Deploy configuration](deployment.md#iteration-plan). Retention used
 a timestamp change on one completed test record; it was not a natural seven-day wait.
 
+Run the local [timed terminal fault regression](testing.md#timed-terminal-transport-faults)
+with `task ui-terminal-fault-test` before terminal promotion. Its 5/15-second
+same-Shell recovery and 25-second timeout/idle-reaping checks do not cover the
+deployed ingress or remote Sandbox. Retain separately timed production evidence
+for those paths; an unmeasured manual outage cannot establish recovery within
+the twenty-second window.
+
 Record three evidence classes separately: local unit/integration checks,
 browser/UI checks, and the real Sandbox provider run. Local fakes and preview
 fixtures cannot satisfy this section.

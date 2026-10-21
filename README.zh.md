@@ -348,6 +348,7 @@ task deps          # 安装 Go 依赖
 task ui-deps       # 安装 UI 依赖
 task build         # 构建 runnerd（内嵌生产 UI）
 task ui-production-smoke # 在 Chromium 中执行生产 UI bundle
+task ui-terminal-fault-test # 使用 Chromium 和本地真实 PTY 验证计时断流
 task dev           # 启动本地开发环境（runnerd + Vite + smee）
 task lint          # 运行代码检查
 task test          # 重建 UI + 运行全部测试（Go race detection + Bun UI tests）
@@ -359,6 +360,10 @@ task release-check # 验证发布构建
 
 单独运行 UI 测试时使用 `cd ui && bun run test`。修改 UI 依赖、Vite/Rollup 配置或
 生产静态资源加载逻辑后，还要运行 `task ui-production-smoke`。
+
+修改终端回放、重连或空闲清理后，运行 `task ui-terminal-fault-test`。
+该任务需要 Linux/macOS 上的 Go、Bun 和 Python 3；场景、产物与生产验收边界见
+[终端计时断流回归](docs/zh/testing.md#终端计时断流回归)。
 
 ### 沙箱模板
 

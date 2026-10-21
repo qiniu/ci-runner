@@ -195,6 +195,32 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  terminal-fault:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - uses: oven-sh/setup-bun@v2
+      - run: cd ui && bun install --frozen-lockfile
+      - run: cd ui && bunx playwright install --with-deps chromium
+      - name: Verify real-time terminal recovery and idle cleanup
+        run: cd ui && bun run test:terminal-fault
+      - name: Upload terminal timing and browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: terminal-fault-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ui/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   build:
     runs-on: ubuntu-latest
     steps:

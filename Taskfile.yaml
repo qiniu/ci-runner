@@ -67,6 +67,14 @@ tasks:
       - bunx playwright install chromium
       - bun run test:production
 
+  ui-terminal-fault-test:
+    desc: Verify timed terminal transport outages with Chromium and real local PTYs
+    dir: ui
+    cmds:
+      - bun install --frozen-lockfile
+      - bunx playwright install chromium
+      - bun run test:terminal-fault
+
   lint:
     desc: Run staticcheck, formatting checks, goimports checks, and go vet
     cmds:
