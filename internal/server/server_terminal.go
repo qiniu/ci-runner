@@ -78,12 +78,13 @@ type terminalSession struct {
 	terminal  sandboxrunner.TerminalSession
 	createdAt time.Time
 
-	mu        sync.Mutex
-	buffer    []byte
-	offset    uint64 // total output bytes, including the evicted buffer prefix
-	watchers  map[chan []byte]struct{}
-	closed    bool
-	idleSince time.Time
+	mu          sync.Mutex
+	buffer      []byte
+	offset      uint64  // total output bytes, including the evicted buffer prefix
+	replayStart *uint64 // first cursorless subscription baseline
+	watchers    map[chan []byte]struct{}
+	closed      bool
+	idleSince   time.Time
 }
 
 func newTerminalHub(logger *slog.Logger) *terminalHub {
@@ -220,6 +221,10 @@ func (s *terminalSession) Subscribe() ([]byte, <-chan []byte, func()) {
 	ch := make(chan []byte, 32)
 	s.mu.Lock()
 	initial := append([]byte(nil), s.buffer...)
+	if s.replayStart == nil {
+		start := s.offset - uint64(len(s.buffer))
+		s.replayStart = &start
+	}
 	if s.closed {
 		close(ch)
 		s.mu.Unlock()
@@ -250,13 +255,18 @@ func (s *terminalSession) outputAfter(after *uint64) ([]byte, uint64, bool) {
 		return nil, s.offset, false
 	}
 	bufferStart := s.offset - uint64(len(s.buffer))
-	start := bufferStart
-	if after != nil {
-		if *after < start || *after > s.offset {
-			return nil, s.offset, false
+	if after == nil {
+		if s.replayStart == nil {
+			start := bufferStart
+			s.replayStart = &start
 		}
-		start = *after
+		after = s.replayStart
 	}
+	if *after < bufferStart || *after > s.offset {
+		return nil, s.offset, false
+	}
+	start := *after
+
 	return append([]byte(nil), s.buffer[start-bufferStart:]...), s.offset, true
 }
 
@@ -705,7 +715,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 			if !prepareWrite() {
 				return
 			}
-			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+			if _, err := fmt.Fprintf(w, ": keepalive\n\nid: %d\nevent: terminal-heartbeat\ndata: {}\n\n", *cursor); err != nil {
 				return
 			}
 			if err := controller.Flush(); err != nil {

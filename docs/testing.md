@@ -648,6 +648,12 @@ Common issues:
   fresh Sandbox root disk meets `disk_size_mb` from the selected TOML.
   Confirm the provider team's `DiskMb`, then follow the
   [same-name rebuild steps](default-runner-templates.md) and repeat smoke.
+- Template conformance or release smoke loses `stdout.raw` or its temporary
+  directory: verify cleanup runs only in the main shell. A watchdog terminated
+  during Bash startup can invoke an inherited EXIT trap; it must not remove the
+  main shell's files or kill its Sandbox. Run `go test ./internal/sandboxrunner
+  -run 'TestSandboxConformance|TestTemplateReleaseSmoke' -count=1` for cleanup,
+  timeout and release-evidence regressions.
 - registration token fails: check the [GitHub App permission table](../README.md#required-permissions). Specs without `runner_group` require repository `Administration`; specs with `runner_group` require organization `Self-hosted runners`. Group lookup also needs that organization permission. `runner_group_not_supported` means the scope is not an organization. `runner_group_not_found` means the group is missing or inherited from an enterprise; `runner_group_repository_denied` means the target repository cannot use it. `runner_group_permission_denied`, `runner_group_rate_limited`, `runner_group_timeout` and `runner_group_unavailable` distinguish lookup failures without exposing upstream responses. See [GitHub Runner groups](platform-runner-specs.md#github-runner-groups) for form, YAML and validation behavior.
 
 ## 9. How To Read GitHub Actions Logs
@@ -922,7 +928,7 @@ read/write deadlines, byte-offset suffix replay without duplicates, invalid or
 evicted cursors, closed-session output rejection, and stale idle timers. Run
 `cd ui && bun run test:production --grep 'resumes deployment terminal'` for real
 Chromium EventSource transport loss followed by resume on the same PTY, permission
-denial, explicit server closure, and the twenty-second outage limit. These are
+denial, explicit server closure, repeated empty reconnects, idle-heartbeat recovery, and the twenty-second outage limit. These are
 local transport fixtures, not proof that the production ingress keeps a stream
 open. Production acceptance must run continuous output and an idle shell for more
 than one minute, confirm the same PID survives a transport recovery, then verify

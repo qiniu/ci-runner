@@ -135,7 +135,7 @@ export function useSandboxTerminal({
         setTerminalError(streamDisconnectedMessage)
         closeTerminalSession(session)
       }
-      events.onopen = () => {
+      const streamRecovered = () => {
         if (eventSourceRef.current !== events) return
         if (reconnectTimeoutRef.current !== null) {
           window.clearTimeout(reconnectTimeoutRef.current)
@@ -143,8 +143,10 @@ export function useSandboxTerminal({
         }
       }
       events.addEventListener("terminal-closed", streamFailed)
+      events.addEventListener("terminal-heartbeat", streamRecovered)
       events.onmessage = (event) => {
         if (eventSourceRef.current !== events) return
+        streamRecovered()
         try {
           term.write(JSON.parse(event.data) as string)
         } catch {
@@ -154,7 +156,9 @@ export function useSandboxTerminal({
       events.onerror = () => {
         if (eventSourceRef.current !== events) return
         // Let EventSource resume the same PTY with Last-Event-ID. Bound the
-        // outage below the server's 30-second idle cleanup; repeated failures
+        // outage below the server's 30-second idle cleanup. Only output or a
+        // server heartbeat confirms recovery; headers alone must not reset it.
+        // Repeated failures
         // cannot keep an orphaned shell alive indefinitely.
         if (events.readyState === EventSource.CLOSED) {
           streamFailed()

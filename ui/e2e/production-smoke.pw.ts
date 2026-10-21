@@ -1695,7 +1695,7 @@ test("ignores an old deployment reauthentication failure after navigation", asyn
   expect(loginRequests).toBe(0)
 })
 
-for (const ending of ["denied access", "server closure", "prolonged outage"] as const) {
+for (const ending of ["denied access", "server closure", "prolonged outage", "empty reconnects", "idle heartbeat"] as const) {
 test(`resumes deployment terminal output after transport loss and closes on ${ending}`, async ({ page }, testInfo) => {
   test.setTimeout(60000)
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
@@ -1708,6 +1708,9 @@ test(`resumes deployment terminal output after transport loss and closes on ${en
     window.EventSource = class extends NativeEventSource {
       constructor(url: string | URL, options?: EventSourceInit) {
         super(url, options)
+        this.addEventListener("terminal-heartbeat", () => {
+          document.documentElement.dataset.terminalHeartbeats = "received"
+        })
         this.addEventListener("message", (event) => {
           document.documentElement.dataset.terminalEventIds = `${document.documentElement.dataset.terminalEventIds ?? ""}${event.lastEventId},`
         })
@@ -1730,6 +1733,8 @@ test(`resumes deployment terminal output after transport loss and closes on ${en
       if (path.endsWith("/events")) {
         streams++
         if (streams >= 3) {
+          if (ending === "empty reconnects") return route.fulfill({ contentType: "text/event-stream", body: ": empty\n\n" })
+          if (ending === "idle heartbeat" && streams === 3) return route.fulfill({ contentType: "text/event-stream", body: "id: 13\nevent: terminal-heartbeat\ndata: {}\n\n" })
           if (ending === "prolonged outage") return route.abort("failed")
           if (ending === "server closure") return route.fulfill({ contentType: "text/event-stream", body: "event: terminal-closed\ndata: {}\n\n" })
           return route.fulfill({ status: 403, body: "access revoked" })
@@ -1760,6 +1765,17 @@ test(`resumes deployment terminal output after transport loss and closes on ${en
   expect(deletes).toBe(0)
   await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath("terminal-resumed.png") })
+  if (ending === "idle heartbeat") {
+    await page.clock.install()
+    await page.clock.fastForward(18_000)
+    await expect(page.locator("html")).toHaveAttribute("data-terminal-heartbeats", "received", { timeout: 10000 })
+    await page.clock.fastForward(3_000)
+    await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
+    expect(deletes).toBe(0)
+    await page.getByRole("button", { name: "Disconnect", exact: true }).click()
+    await expect.poll(() => deletes).toBe(1)
+    return
+  }
   await expect(page.getByRole("alert")).toContainText("Terminal stream disconnected", { timeout: 25000 })
   await expect.poll(() => deletes).toBe(1)
   expect(streams).toBeGreaterThanOrEqual(3)

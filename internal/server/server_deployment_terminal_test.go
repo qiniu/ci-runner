@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,13 +44,10 @@ func TestDeploymentTerminalOutputSurvivesHTTPWriteTimeout(t *testing.T) {
 			session.append([]byte(fmt.Sprintf("output %d", i)))
 		}
 	}()
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		if scanner.Text() == `data: "output 7"` {
-			return
-		}
+	if terminalOutputContains(t, resp.Body, "output 7") {
+		return
 	}
-	t.Fatalf("active terminal disconnected at the HTTP response deadline: %v", scanner.Err())
+	t.Fatal("active terminal disconnected before the final output")
 }
 
 func TestDeploymentTerminalOutputWithServerTimeouts(t *testing.T) {
@@ -83,14 +81,44 @@ func TestDeploymentTerminalOutputWithServerTimeouts(t *testing.T) {
 					session.append([]byte(fmt.Sprintf("output %d", i)))
 				}
 			}()
-			scanner := bufio.NewScanner(resp.Body)
-			for scanner.Scan() {
-				if scanner.Text() == `data: "output 7"` {
-					return
+			if terminalOutputContains(t, resp.Body, "output 7") {
+				return
+			}
+			t.Fatal("active terminal disconnected before the final output")
+		})
+	}
+}
+
+// Output can be coalesced into one SSE frame or split across several frames.
+func terminalOutputContains(t *testing.T, body io.Reader, marker string) bool {
+	t.Helper()
+	scanner := bufio.NewScanner(body)
+	var output strings.Builder
+	for scanner.Scan() {
+		if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			var chunk string
+			if json.Unmarshal([]byte(data), &chunk) == nil {
+				output.WriteString(chunk)
+				if strings.Contains(output.String(), marker) {
+					return true
 				}
 			}
-			t.Fatalf("active terminal disconnected at the HTTP response deadline: %v", scanner.Err())
-		})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Logf("terminal stream ended: %v", err)
+	}
+	return false
+}
+
+func TestTerminalOutputAssertionAcceptsCoalescedAndSplitFrames(t *testing.T) {
+	for _, frames := range []string{
+		"data: \"output 6output 7\"\n\n",
+		"data: \"output \"\n\ndata: \"7\"\n\n",
+	} {
+		if !terminalOutputContains(t, strings.NewReader(frames), "output 7") {
+			t.Fatalf("final marker not found in %q", frames)
+		}
 	}
 }
 
@@ -125,6 +153,9 @@ func TestDeploymentTerminalIdleStreamHeartbeat(t *testing.T) {
 		synctest.Wait()
 		if !strings.Contains(rec.Body.String(), `data: "shell output\r\n"`) {
 			t.Fatalf("heartbeat interrupted terminal output: %q", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "id: 0\nevent: terminal-heartbeat\ndata: {}") {
+			t.Fatal("idle heartbeat does not confirm recovery with a replay cursor")
 		}
 		if session.terminal.(*fakeTerminalSession).isClosed() {
 			t.Fatal("an attached idle terminal was closed")
@@ -402,7 +433,7 @@ func TestDeploymentTerminalResumesWithoutDuplicateOutput(t *testing.T) {
 		t.Fatal("SSE interruption closed the PTY")
 	}
 	session.append([]byte(strings.Repeat("x", 128<<10)))
-	for _, id := range []string{"6", "999999999999", "invalid", "-1"} {
+	for _, id := range []string{"", "6", "999999999999", "invalid", "-1"} {
 		if got := stream(id); !strings.Contains(got, "event: terminal-closed") || strings.Contains(got, "data: \"x") {
 			t.Fatalf("invalid or evicted cursor %q silently resumed: %q", id, got)
 		}
@@ -429,6 +460,19 @@ func TestDeploymentTerminalClosedStreamDoesNotReplayOutput(t *testing.T) {
 	srv.streamTerminalSession(rec, httptest.NewRequest("GET", "/events", nil), session)
 	if !strings.Contains(rec.Body.String(), "event: terminal-closed") || strings.Contains(rec.Body.String(), "must not replay") {
 		t.Fatalf("closed shell resumed output: %q", rec.Body.String())
+	}
+}
+
+func TestTerminalReplayBaselinePrecedesFirstOutputRead(t *testing.T) {
+	hub := newTerminalHub(nil)
+	defer hub.Close()
+	session := hub.Add("deployment:first-read", "sandbox", &fakeTerminalSession{})
+	_, _, unsubscribe := session.Subscribe()
+	defer unsubscribe()
+	// Output may overrun the tail after subscription but before the first write.
+	session.append([]byte(strings.Repeat("x", (128<<10)+1)))
+	if _, _, ok := session.outputAfter(nil); ok {
+		t.Fatal("first output read silently moved the subscription baseline")
 	}
 }
 

@@ -681,11 +681,14 @@ lifetime, or bypass lifecycle and repository authorization checks. Ordinary deta
 refresh does not close the shell. A transient transport failure lets EventSource
 resume the same PTY instead of deleting it. SSE output IDs are byte offsets in
 the session's retained tail (64 KiB after trimming, at most 128 KiB before trimming);
-`Last-Event-ID` replays only the missing suffix. Invalid, future or evicted cursors
+`Last-Event-ID` replays only the missing suffix. Cursorless reconnects retain the
+first subscription's baseline, so losing the first event cannot hide an evicted
+prefix. Invalid, future or evicted cursors
 close the stream explicitly rather than duplicating output or hiding a gap.
 Each reconnect repeats the normal account/repository/revision authorization.
 Recovery is bounded to twenty seconds per outage, below the thirty-second idle
-cleanup. Old cleanup timers cannot shorten the latest disconnect's grace period.
+cleanup. Response headers alone do not reset that window; only output or a
+`terminal-heartbeat` SSE event confirms recovery, including for an idle shell. Old cleanup timers cannot shorten the latest disconnect's grace period.
 A denied reconnect, explicit server closure, unrecoverable gap or recovery timeout
 closes the PTY and requires a manual new connection. Leaving the terminal still
 closes it immediately. This does not extend Sandbox lifetime.
