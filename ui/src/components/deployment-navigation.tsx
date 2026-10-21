@@ -77,7 +77,7 @@ export function DeploymentNavigation({ request, selected, selectedID, repository
     setLoading(true)
     void load()
     const poll = () => { if (document.visibilityState !== "hidden") void load(true) }
-    const timer = window.setInterval(poll, 5000)
+    const timer = window.setInterval(poll, 30000)
     document.addEventListener("visibilitychange", poll)
     return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", poll) }
   }, [request, selectedRepository, pageCount, refreshVersion, refresh])

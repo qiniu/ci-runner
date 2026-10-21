@@ -1219,6 +1219,7 @@ test("navigates repository workspaces independently of history and retains selec
 })
 
 test("separates deployment list, creation, and refreshable detail pages", async ({ page }, testInfo) => {
+  test.setTimeout(60000)
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
   const diagnostics = observeBrowserDiagnostics(page)
   const pageLoads = observePageLoads(page)
@@ -1387,6 +1388,10 @@ test("separates deployment list, creation, and refreshable detail pages", async 
   await page.keyboard.type("pwd")
   await page.keyboard.press("Enter")
   await expect.poll(() => terminalInputs.join("")).toContain("pwd\r")
+  const detailPolls = requestedPaths.filter((path) => path === "/user/deployments/deployment-fixture").length
+  await expect.poll(() => requestedPaths.filter((path) => path === "/user/deployments/deployment-fixture").length, { timeout: 15000 }).toBeGreaterThan(detailPolls)
+  await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
+  expect(terminalClosed).toBe(false)
   await page.getByRole("tab", { name: "Deployment logs", exact: true }).click()
   await expect.poll(() => terminalClosed).toBe(true)
   const detailLoads = pageLoads()
@@ -1414,7 +1419,7 @@ test("separates deployment list, creation, and refreshable detail pages", async 
   await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
   terminalClosed = false
   deployment.status = "completed"
-  await expect(page.getByText("The terminal is available only for the current running revision.")).toBeVisible({ timeout: 10000 })
+  await expect(page.getByText("The terminal is available only for the current running revision.")).toBeVisible({ timeout: 15000 })
   await expect.poll(() => terminalClosed).toBe(true)
   await page.getByRole("tab", { name: "Deployment history", exact: true }).click()
   await page.getByRole("button", { name: "Redeploy from this revision", exact: true }).last().click()

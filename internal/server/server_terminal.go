@@ -569,6 +569,15 @@ func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.R
 
 func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	controller := http.NewResponseController(w)
+	// HTTP Server.WriteTimeout is absolute, even while a stream is active.
+	// Renew it for each write, while still bounding a blocked browser connection.
+	prepareWrite := func() bool {
+		err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		return err == nil || errors.Is(err, http.ErrNotSupported)
+	}
+	if !prepareWrite() {
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -587,12 +596,29 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 			return
 		}
 	}
+	// An idle shell has no output. Keep proxies from timing out its SSE stream;
+	// comments do not enter the terminal output or extend the Sandbox lifetime.
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			if !prepareWrite() {
+				return
+			}
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if err := controller.Flush(); err != nil {
+				return
+			}
 		case data, ok := <-ch:
 			if !ok {
+				return
+			}
+			if !prepareWrite() {
 				return
 			}
 			writeTerminalEvent(w, data)

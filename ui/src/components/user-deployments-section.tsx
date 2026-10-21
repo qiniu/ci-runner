@@ -140,6 +140,7 @@ export function UserDeploymentsSection({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const loadedPages = useRef(1)
   const listPageLoading = useRef(false)
+  const pendingLoads = useRef(0)
   const viewKey = deploymentID || listPath
   const contentRef = useRef<HTMLElement>(null)
   const generation = useRef(0)
@@ -236,16 +237,17 @@ export function UserDeploymentsSection({
   }, [i18n.resolvedLanguage])
 
   const loadDeployments = useCallback(async (poll = false) => {
-    if (listPageLoading.current) return
+    if (listPageLoading.current || (poll && pendingLoads.current > 0)) return
+    pendingLoads.current += 1
     const requestGeneration = ++generation.current
-    setLoading(true)
-    setError(null)
+    if (!poll) setLoading(true)
     try {
       const paths = deploymentID
         ? [`/user/deployments/${encodeURIComponent(deploymentID)}${requestedRevision ? `?revision=${requestedRevision}` : ""}`]
         : Array.from({ length: poll ? 1 : loadedPages.current }, (_, index) => index === 0 ? listPath : `${listPath}${listPath.includes("?") ? "&" : "?"}limit=100&offset=${index * 100}`)
       const pages = await Promise.all(paths.map((path) => request(path) as Promise<DeploymentPage & Deployment>))
       if (requestGeneration !== generation.current) return
+      setError(null)
       const next = deploymentID ? [pages[0]] : [...new Map(pages.flatMap((data) => Array.isArray(data.items) ? data.items : []).map((item) => [item.id, item])).values()]
       setHasMore(!deploymentID && (pages[0].total ?? next.length) > (poll ? loadedPages.current * 100 : next.length))
       if (!deploymentID) setStatusCounts(pages[0].status_counts ?? null)
@@ -272,6 +274,7 @@ export function UserDeploymentsSection({
       if (requestGeneration !== generation.current) return
       setError(cause instanceof Error ? cause.message : t("user.deploymentLoadFailed"))
     } finally {
+      pendingLoads.current -= 1
       if (requestGeneration === generation.current) setLoading(false)
     }
   }, [request, t, deploymentID, requestedRevision, listPath])
@@ -300,7 +303,7 @@ export function UserDeploymentsSection({
   useEffect(() => {
     if (!shouldPoll) return
     const poll = () => { if (document.visibilityState !== "hidden") void loadDeployments(true) }
-    const timer = window.setInterval(poll, deploymentID ? 3000 : 5000)
+    const timer = window.setInterval(poll, 10000)
     document.addEventListener("visibilitychange", poll)
     return () => {
       window.clearInterval(timer)
@@ -690,12 +693,11 @@ function useDeploymentEvents(request: Request, id: string | null, revisionNumber
     return () => { generation.current += 1 }
   }, [id, revisionNumber, request, login])
 
-  const load = useCallback(async (older = false) => {
+  const load = useCallback(async (older = false, poll = false) => {
     if (!id || cursor.current.busy) return
     const epoch = generation.current
     cursor.current.busy = true
-    setLoading(true)
-    setError(null)
+    if (!poll) setLoading(true)
     try {
       let next = older ? cursor.current.oldest : cursor.current.newest
       const initial = next === 0
@@ -705,6 +707,7 @@ function useDeploymentEvents(request: Request, id: string | null, revisionNumber
         const page = await request(`${endpoint}${query}`) as EventPage
         if (epoch !== generation.current) return
         if (!Array.isArray(page.events)) throw new Error("Invalid deployment events response")
+        setError(null)
         const incoming = page.events
         setEvents((current) => {
           const merged = new Map(current.map((event) => [event.id, event]))
@@ -734,11 +737,11 @@ function useDeploymentEvents(request: Request, id: string | null, revisionNumber
   useEffect(() => {
     void refresh()
     if (!status || !activeStatuses.has(status)) return
-    const poll = () => { if (document.visibilityState !== "hidden") void refresh() }
-    const timer = window.setInterval(poll, 3000)
+    const poll = () => { if (document.visibilityState !== "hidden") void load(false, true) }
+    const timer = window.setInterval(poll, 10000)
     document.addEventListener("visibilitychange", poll)
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", poll) }
-  }, [refresh, status, login])
+  }, [refresh, load, status, login])
 
   return { events, loading, error, hasOlder, refresh, loadOlder }
 }

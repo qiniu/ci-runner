@@ -128,6 +128,43 @@ async function selectOption(container, id, value) {
 }
 
 describe("deployment interaction", () => {
+  test("paces background refresh without loading flashes or overlapping detail requests", async () => {
+    const timers = new Map()
+    let timerID = 0
+    const interval = spyOn(window, "setInterval").mockImplementation((callback, delay) => { timers.set(++timerID, { callback, delay }); return timerID })
+    const clear = spyOn(window, "clearInterval").mockImplementation((id) => timers.delete(id))
+    const saved = { ...deployment("polling"), revision_number: 1 }
+    let resolveDetail
+    let delayDetail = false
+    const requests = []
+    const request = async (url) => {
+      requests.push(url)
+      if (url.startsWith("/user/deployment-repositories")) return navigationPage([saved])
+      if (url.includes("/events")) return { events: [], has_more: false }
+      if (url.includes("/resources")) return {}
+      if (delayDetail) return new Promise((resolve) => { resolveDetail = resolve })
+      return saved
+    }
+    try {
+      const { container } = await mountPage({ request, deploymentID: saved.id }, { page: "deployments" })
+      expect([...timers.values()].map(({ delay }) => delay).sort((a, b) => a - b)).toEqual([10000, 10000, 30000])
+      requests.length = 0
+      delayDetail = true
+      await act(async () => { for (const { callback } of timers.values()) callback() })
+      expect([...container.querySelectorAll("button")].filter((item) => item.textContent.trim() === "Refresh").every((item) => !item.disabled && !item.querySelector(".animate-spin"))).toBe(true)
+      await act(async () => { for (const { callback } of timers.values()) callback() })
+      expect(requests.filter((url) => url === `/user/deployments/${saved.id}`)).toHaveLength(1)
+      await act(async () => resolveDetail(saved))
+      delayDetail = false
+      requests.length = 0
+      await act(async () => button(container, "Refresh").click())
+      expect(requests).toContain(`/user/deployments/${saved.id}`)
+    } finally {
+      interval.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   test.each([
     ["stop", "running", "Deployment stopped", "部署已停止"],
     ["retry", "completed", "Deployment queued for retry", "部署已重新排队"],

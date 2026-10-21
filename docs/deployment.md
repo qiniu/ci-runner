@@ -305,6 +305,11 @@ from detail opens the repository's deployment list with Running selected. Source
 remain supported. Lists and repository navigation paginate independently and
 refresh without resetting loaded history. Desktop sidebar and content scroll
 independently; narrow screens stack them with bounded sidebar scrolling.
+Lists, active details and active revision logs refresh every ten seconds;
+repository navigation refreshes every thirty seconds. Hidden pages pause these
+polls. Background refresh stays quiet, skips overlapping detail requests, and
+retains loaded content and errors until a successful retry. Manual refresh remains
+available and shows its loading indicator.
 
 List pages use shared single-select Toggle Group segments for All / Running / Processing /
 Stopped / Failed with server-supplied counts. All is the default; clicking the
@@ -668,6 +673,12 @@ credential, without exposing them to the browser. Connect uses remaining
 lifetime rather than a fixed Sandbox timeout. A local lifecycle check runs every
 five seconds and open sessions revalidate remote access every thirty seconds;
 closed/disconnected streams receive the existing thirty-second idle cleanup.
+Terminal output streams send an SSE comment heartbeat every fifteen seconds and
+renew a thirty-second write deadline before each output/heartbeat. This avoids
+the HTTP server's absolute response timeout closing an active shell while still
+bounding blocked writes. Heartbeats do not appear in shell output, extend Sandbox
+lifetime, or bypass lifecycle and repository authorization checks. Ordinary detail
+refresh does not close the shell. Transport failures still require manual reconnect.
 
 ## GitHub context routes
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +10,85 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/state"
 )
+
+func TestDeploymentTerminalOutputSurvivesHTTPWriteTimeout(t *testing.T) {
+	srv := &Server{terminals: newTerminalHub(nil)}
+	defer srv.terminals.Close()
+	session := srv.terminals.Add("deployment:active", "sandbox", &fakeTerminalSession{})
+	httpServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.streamTerminalSession(&loggingResponseWriter{ResponseWriter: w}, r, session)
+	}))
+	httpServer.Config.WriteTimeout = 100 * time.Millisecond
+	httpServer.Start()
+	defer httpServer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", httpServer.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpServer.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	go func() {
+		for i := range 8 {
+			time.Sleep(40 * time.Millisecond)
+			session.append([]byte(fmt.Sprintf("output %d", i)))
+		}
+	}()
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		if scanner.Text() == `data: "output 7"` {
+			return
+		}
+	}
+	t.Fatalf("active terminal disconnected at the HTTP response deadline: %v", scanner.Err())
+}
+
+func TestDeploymentTerminalIdleStreamHeartbeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := &Server{terminals: newTerminalHub(nil)}
+		defer srv.terminals.Close()
+		session := srv.terminals.Add("deployment:heartbeat", "sandbox", &fakeTerminalSession{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			srv.streamTerminalSession(rec, httptest.NewRequest("GET", "/events", nil).WithContext(ctx), session)
+		}()
+		defer func() {
+			cancel()
+			<-done
+			time.Sleep(terminalIdleCloseDelay + time.Second)
+			synctest.Wait()
+		}()
+		synctest.Wait()
+		for range 2 {
+			time.Sleep(15 * time.Second)
+			synctest.Wait()
+		}
+		if strings.Count(rec.Body.String(), ": keepalive\n\n") != 2 {
+			t.Fatalf("idle stream has no periodic SSE heartbeat: %q", rec.Body.String())
+		}
+		session.append([]byte("shell output\r\n"))
+		synctest.Wait()
+		if !strings.Contains(rec.Body.String(), `data: "shell output\r\n"`) {
+			t.Fatalf("heartbeat interrupted terminal output: %q", rec.Body.String())
+		}
+		if session.terminal.(*fakeTerminalSession).isClosed() {
+			t.Fatal("an attached idle terminal was closed")
+		}
+	})
+}
 
 func TestDeploymentTerminalPrefersSavedProvider(t *testing.T) {
 	var calls atomic.Int32
