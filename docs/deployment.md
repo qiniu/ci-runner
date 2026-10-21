@@ -679,6 +679,11 @@ the HTTP server's absolute response timeout closing an active shell while still
 bounding blocked writes. Heartbeats do not appear in shell output, extend Sandbox
 lifetime, or bypass lifecycle and repository authorization checks. Ordinary detail
 refresh does not close the shell. Transport failures still require manual reconnect.
+The shared Runner terminal stream also checks its saved request/Sandbox and exact
+installation/repository identity every five seconds, and the opening account's
+repository access every thirty seconds. Terminal state, changed identity, denied
+access or an authorization refresh failure closes the PTY and attached streams;
+heartbeats and continuous output cannot keep a revoked shell alive.
 
 ## GitHub context routes
 

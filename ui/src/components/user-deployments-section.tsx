@@ -237,6 +237,7 @@ export function UserDeploymentsSection({
   }, [i18n.resolvedLanguage])
 
   const loadDeployments = useCallback(async (poll = false) => {
+    // Release this same counter in finally, even if the view replaces the ref.
     const pending = pendingLoads.current
     if (listPageLoading.current || (poll && pending.count > 0)) return
     pending.count += 1

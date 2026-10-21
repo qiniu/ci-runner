@@ -498,6 +498,10 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	_, account, ok := s.requireUserSession(w, r)
+	if !ok {
+		return
+	}
 	if !runnerTerminalAvailable(st) {
 		writeError(w, http.StatusConflict, "terminal is only available while a sandbox job is active")
 		return
@@ -548,11 +552,48 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 	}
 	pending = nil
 	sessionMu.Unlock()
+	go s.watchRunnerTerminal(terminalCtx, st, account.ID, session.id)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session_id": session.id,
 		"pid":        terminal.PID(),
 		"sandbox_id": st.SandboxID,
 	})
+}
+
+func (s *Server) watchRunnerTerminal(ctx context.Context, expected state.RunnerState, accountID int64, sessionID string) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = s.terminals.CloseSession(closeCtx, sessionID)
+	}()
+	nextAccessCheck := time.Now().Add(30 * time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, ok := s.terminals.Get(sessionID); !ok {
+				return
+			}
+			current, err := s.store.ReadState(expected.ID)
+			if err != nil || !runnerTerminalAvailable(current) || current.SandboxID != expected.SandboxID ||
+				current.GitHubInstallationID != expected.GitHubInstallationID || current.RepositoryFullName != expected.RepositoryFullName {
+				return
+			}
+			if time.Now().Before(nextAccessCheck) {
+				continue
+			}
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			access, err := s.userAuthorizedRepositoryAccess(checkCtx, accountID)
+			cancel()
+			if err != nil || !hasRepositoryAccess(access, current.GitHubInstallationID, current.RepositoryFullName) {
+				return
+			}
+			nextAccessCheck = time.Now().Add(30 * time.Second)
+		}
+	}
 }
 
 func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +632,9 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
 	}()
 	if len(initial) > 0 {
+		if !prepareWrite() {
+			return
+		}
 		writeTerminalEvent(w, initial)
 		if err := controller.Flush(); err != nil {
 			return
