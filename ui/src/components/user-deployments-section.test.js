@@ -128,6 +128,57 @@ async function selectOption(container, id, value) {
 }
 
 describe("deployment interaction", () => {
+  test.each(["deployment", "filter", "account", "request", "rejected account"])("isolates pending loads after a %s context switch", async (scenario) => {
+    const timers = new Map()
+    let timerID = 0
+    const interval = spyOn(window, "setInterval").mockImplementation((callback) => { timers.set(++timerID, callback); return timerID })
+    const clear = spyOn(window, "clearInterval").mockImplementation((id) => timers.delete(id))
+    let finishOld, rejectOld, finishNew
+    const oldPending = new Promise((resolve, reject) => { finishOld = resolve; rejectOld = reject })
+    const newPending = new Promise((resolve) => { finishNew = resolve })
+    let switched = false
+    let newLoads = 0
+    const old = { ...deployment("previous"), repository_full_name: "previous/private", revision_number: 1 }
+    const current = { ...deployment(scenario === "deployment" ? "current" : "previous"), repository_full_name: "current/project", revision_number: 1 }
+    const page = (item) => scenario === "filter" ? { items: [item], total: 1 } : item
+    const request = async (url) => {
+      if (url.startsWith("/user/deployment-repositories")) return { items: [], has_more: false }
+      if (url.includes("/events")) return { events: [], has_more: false }
+      if (url.includes("/resources")) return {}
+      if (!switched) return oldPending
+      newLoads += 1
+      return newLoads === 2 ? newPending : page(current)
+    }
+    const poll = async () => act(async () => { for (const callback of [...timers.values()]) callback() })
+    try {
+      const mounted = await mountPage({ request, deploymentID: scenario === "filter" ? undefined : "previous" }, { page: "deployments" })
+      switched = true
+      const next = scenario === "deployment" ? { deploymentID: "current" }
+        : scenario === "filter" ? { locationSearch: "?status=running" }
+        : scenario === "request" ? { request: (...args) => request(...args) }
+        : { currentLogin: "next-account" }
+      await act(async () => mounted.root.render(createElement(UserDeploymentsSection, { ...mounted.props, ...next })))
+      await settle()
+      expect(newLoads).toBe(1)
+      await poll()
+      expect(newLoads).toBe(2)
+      await poll()
+      expect(newLoads).toBe(2)
+      // A stale completion must not release the new page's in-flight request.
+      await act(async () => scenario === "rejected account" ? rejectOld(new Error("previous account error")) : finishOld(page(old)))
+      await poll()
+      expect(newLoads).toBe(2)
+      expect(mounted.container.textContent).not.toContain("previous/private")
+      expect(mounted.container.textContent).not.toContain("previous account error")
+      await act(async () => finishNew(page(current)))
+      await poll()
+      expect(newLoads).toBe(3)
+    } finally {
+      interval.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   test("paces background refresh without loading flashes or overlapping detail requests", async () => {
     const timers = new Map()
     let timerID = 0

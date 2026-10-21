@@ -140,7 +140,7 @@ export function UserDeploymentsSection({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const loadedPages = useRef(1)
   const listPageLoading = useRef(false)
-  const pendingLoads = useRef(0)
+  const pendingLoads = useRef({ count: 0 })
   const viewKey = deploymentID || listPath
   const contentRef = useRef<HTMLElement>(null)
   const generation = useRef(0)
@@ -237,8 +237,9 @@ export function UserDeploymentsSection({
   }, [i18n.resolvedLanguage])
 
   const loadDeployments = useCallback(async (poll = false) => {
-    if (listPageLoading.current || (poll && pendingLoads.current > 0)) return
-    pendingLoads.current += 1
+    const pending = pendingLoads.current
+    if (listPageLoading.current || (poll && pending.count > 0)) return
+    pending.count += 1
     const requestGeneration = ++generation.current
     if (!poll) setLoading(true)
     try {
@@ -274,7 +275,7 @@ export function UserDeploymentsSection({
       if (requestGeneration !== generation.current) return
       setError(cause instanceof Error ? cause.message : t("user.deploymentLoadFailed"))
     } finally {
-      pendingLoads.current -= 1
+      pending.count -= 1
       if (requestGeneration === generation.current) setLoading(false)
     }
   }, [request, t, deploymentID, requestedRevision, listPath])
@@ -291,6 +292,8 @@ export function UserDeploymentsSection({
   useEffect(() => { setStatusCounts(null) }, [sourceListPath, currentLogin])
 
   useEffect(() => {
+    // Old requests release only their captured counter, never the next view's.
+    pendingLoads.current = { count: 0 }
     void loadDeployments()
     return () => {
       generation.current += 1
