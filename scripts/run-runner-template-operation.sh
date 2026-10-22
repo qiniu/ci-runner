@@ -181,7 +181,10 @@ trap cleanup EXIT
 
 case "$operation" in
   build)
-    bash "$script_root/scripts/prepare-runner-archive.sh"
+    # Only Linux templates COPY the staged Linux Runner archive chunks.
+    if grep -q 'common/\.build/actions-runner/' "$template_dir/Dockerfile" 2>/dev/null; then
+      bash "$script_root/scripts/prepare-runner-archive.sh"
+    fi
     build_command_status=0
     (
       cd "$template_dir"

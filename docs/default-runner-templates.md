@@ -59,7 +59,8 @@ installation, including cache-resumed builds. The checked local archive is
 cached under `.build/`; the chunks under `templates/common/.build/` are ignored
 by Git.
 The pin is the image's preinstalled bootstrap baseline. Public-name specs use that copy directly; the regular template rebuild process advances it. Private-ID specs use a separate registration preflight: runnerd resolves and
-validates GitHub's official Linux application descriptors, and a stale Sandbox
+validates GitHub's official application descriptors for the Runner platform
+(Linux, or Windows when the spec labels include `windows`), and a stale Sandbox
 downloads, checksum-verifies, extracts, and version-verifies the selected
 archive before `config.sh`. Both paths leave GitHub's official self-update
 enabled after registration.

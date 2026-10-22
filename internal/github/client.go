@@ -791,10 +791,14 @@ func (c *Client) fetchRunnerApplications(ctx context.Context, target runnerTarge
 	}
 	applications := make([]RunnerApplication, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		if descriptor.OS != "linux" {
+		// The list is shared by both platforms. Skip architectures runnerd
+		// cannot install so a new GitHub asset cannot block the others; a
+		// malformed supported descriptor still fails the lookup.
+		if !runnerapplication.SupportedArchitecture(descriptor.OS, descriptor.Architecture) {
 			continue
 		}
 		application, err := runnerapplication.FromDescriptor(
+			descriptor.OS,
 			descriptor.Architecture,
 			descriptor.Filename,
 			descriptor.DownloadURL,
@@ -806,7 +810,7 @@ func (c *Client) fetchRunnerApplications(ctx context.Context, target runnerTarge
 		applications = append(applications, application)
 	}
 	if len(applications) == 0 {
-		return nil, fmt.Errorf("github runner applications response contains no supported Linux application")
+		return nil, fmt.Errorf("github runner applications response contains no supported Linux or Windows application")
 	}
 	return applications, nil
 }

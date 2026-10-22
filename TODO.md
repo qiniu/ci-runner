@@ -41,6 +41,10 @@ This file tracks active project work. Completed behavior should move into `READM
 - Extend the existing fixture-backed account/Organization Runner Spec form coverage with broader scope-switching browser scenarios; stale-scope response isolation currently has component coverage.
 - Run one real personal-account and one real Organization GitHub Actions workflow through the scoped Runner Specs path, including Sandbox template validation, cleanup, and the repository-only outsider authorization boundary. For organization Runner groups, verify allowed and denied repository preflight, group + labels routing, GitHub workflow restrictions and cleanup; see [the group contract](docs/platform-runner-specs.md#github-runner-groups).
 - Execute the deployment canary for the scoped Runner Specs routes and update `docs/user-scoped-runner-configuration.md` with origin, version, and cleanup evidence; local fixture-backed browser smoke is not a deployment substitute.
+- Promote the preview Windows 11 Runner: confirm Windows Sandbox and `windows11` base-template support in each supported region, build and smoke `github-runner-windows-11` there, run one full `task dev` webhook-to-cleanup workflow with a fixed-ID Windows spec in each region, and decide whether it joins the published public-name catalog. The disk is 50 GiB with about 11 GiB free after setup; the build only guarantees 10 GiB free and does not enlarge it.
+- Let the `Actions Runner Update` automation also refresh the Windows win-x64 archive pin in `templates/github-runner-windows-11/template.env`; until then the pin-consistency test fails that automation PR and the Windows pin must be updated by hand.
+- Deregister the GitHub Runner when runnerd destroys a Sandbox before its Job starts. The in-Sandbox `config remove` cleanup never runs in that case, so an offline Runner remains registered (observed on Windows; the Linux path has the same shape).
+- Add Windows variants of the fixed-target network diagnostics and the Web Console, which currently assume a POSIX shell.
 
 ## Maintenance
 

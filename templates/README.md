@@ -13,6 +13,7 @@
 | `ubuntu-24.04-large` | `github-runner-ubuntu-24-04-large` | Ubuntu 24.04 x64 (80 GiB minimum disk size) | large | verified |
 | `ubuntu-26.04-large` | `github-runner-ubuntu-26-04-large` | Ubuntu 26.04 x64 (80 GiB minimum disk size) | preview | verified |
 | `ubuntu-latest` | `github-runner-ubuntu-24-04` | Ubuntu 24.04 x64 | stable logical mapping | verified |
+| `windows-11` | `github-runner-windows-11` | Windows 11 25H2 x64 (minimal core) | preview | development |
 
 The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-diff.md),
 [Ubuntu 22.04](github-runner-ubuntu-22.04/software-diff.md),
@@ -20,6 +21,12 @@ The image-specific reports are [Ubuntu Slim](github-runner-ubuntu-slim/software-
 [Ubuntu 26.04](github-runner-ubuntu-26.04/software-diff.md).
 `ubuntu-latest` is a logical mapping to the 24.04 physical template and has no
 fifth source directory.
+
+The Windows 11 template is built with qshell on top of the provider's
+`windows11` template rather than a Docker base image; see its
+[README](github-runner-windows-11/README.md).
+It is not part of the Ubuntu compatibility manifest, publication, or catalog
+gates below.
 
 The four standard physical templates were published, catalog-checked, and release-smoke
 verified in `cn-yangzhou-1` and `us-south-1` on 2026-08-03. The regional IDs

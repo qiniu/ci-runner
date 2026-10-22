@@ -7,7 +7,15 @@ import (
 	"strings"
 )
 
+const (
+	OSLinux   = "linux"
+	OSWindows = "win"
+)
+
 type Application struct {
+	// OS is the GitHub Runner package OS: OSLinux or OSWindows. Empty means
+	// OSLinux for callers that predate Windows support.
+	OS             string
 	Architecture   string
 	Version        string
 	DownloadURL    string
@@ -16,12 +24,12 @@ type Application struct {
 
 // FromDescriptor validates a GitHub Runner package descriptor and returns the
 // normalized application metadata used at the Sandbox boundary.
-func FromDescriptor(architecture, filename, downloadURL, checksum string) (Application, error) {
-	if err := validateArchitecture(architecture); err != nil {
+func FromDescriptor(os, architecture, filename, downloadURL, checksum string) (Application, error) {
+	if err := validateArchitecture(os, architecture); err != nil {
 		return Application{}, err
 	}
-	prefix := "actions-runner-linux-" + architecture + "-"
-	const suffix = ".tar.gz"
+	prefix := "actions-runner-" + os + "-" + architecture + "-"
+	suffix := archiveSuffix(os)
 	if !strings.HasPrefix(filename, prefix) || !strings.HasSuffix(filename, suffix) {
 		return Application{}, fmt.Errorf("github runner application has invalid filename %q", filename)
 	}
@@ -30,6 +38,7 @@ func FromDescriptor(architecture, filename, downloadURL, checksum string) (Appli
 		return Application{}, fmt.Errorf("github runner application has invalid version in filename %q", filename)
 	}
 	return Normalize(Application{
+		OS:             os,
 		Architecture:   architecture,
 		Version:        version,
 		DownloadURL:    downloadURL,
@@ -37,16 +46,19 @@ func FromDescriptor(architecture, filename, downloadURL, checksum string) (Appli
 	})
 }
 
-// Normalize validates application metadata against the official Linux Runner
-// release contract and canonicalizes its checksum.
+// Normalize validates application metadata against the official Runner
+// release contract and canonicalizes its OS and checksum.
 func Normalize(application Application) (Application, error) {
-	if err := validateArchitecture(application.Architecture); err != nil {
+	if application.OS == "" {
+		application.OS = OSLinux
+	}
+	if err := validateArchitecture(application.OS, application.Architecture); err != nil {
 		return Application{}, err
 	}
 	if !validVersion(application.Version) {
 		return Application{}, fmt.Errorf("github runner application has invalid version %q", application.Version)
 	}
-	filename := "actions-runner-linux-" + application.Architecture + "-" + application.Version + ".tar.gz"
+	filename := "actions-runner-" + application.OS + "-" + application.Architecture + "-" + application.Version + archiveSuffix(application.OS)
 	wantURL := "https://github.com/actions/runner/releases/download/v" + application.Version + "/" + filename
 	if application.DownloadURL != wantURL {
 		return Application{}, fmt.Errorf("github runner application has invalid download URL %q", application.DownloadURL)
@@ -62,13 +74,30 @@ func Normalize(application Application) (Application, error) {
 	return application, nil
 }
 
-func validateArchitecture(architecture string) error {
-	switch architecture {
-	case "x64", "arm64", "arm":
+// SupportedArchitecture reports whether runnerd can install the official
+// Runner for os and architecture.
+func SupportedArchitecture(os, architecture string) bool {
+	return validateArchitecture(os, architecture) == nil
+}
+
+func validateArchitecture(os, architecture string) error {
+	switch {
+	case os == OSLinux && (architecture == "x64" || architecture == "arm64" || architecture == "arm"):
 		return nil
+	case os == OSWindows && (architecture == "x64" || architecture == "arm64"):
+		return nil
+	case os != OSLinux && os != OSWindows:
+		return fmt.Errorf("github runner application has unsupported OS %q", os)
 	default:
-		return fmt.Errorf("github runner application has unsupported Linux architecture %q", architecture)
+		return fmt.Errorf("github runner application has unsupported %s architecture %q", os, architecture)
 	}
+}
+
+func archiveSuffix(os string) string {
+	if os == OSWindows {
+		return ".zip"
+	}
+	return ".tar.gz"
 }
 
 func validVersion(version string) bool {

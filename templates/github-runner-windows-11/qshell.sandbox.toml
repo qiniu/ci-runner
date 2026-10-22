@@ -1,0 +1,19 @@
+# GitHub runner Windows 11 Qiniu sandbox template.
+#
+# This tracked file is the stable build input. Use the Taskfile build target so
+# qshell writes any generated template_id only to a temporary copy:
+#   task template-build-windows-11
+#
+# Prefer a stable name over a committed environment-specific template_id.
+# Windows templates cannot start from a Docker image; build on the provider's
+# windows11 template instead and keep its 50 GiB disk.
+
+name = "github-runner-windows-11"
+from_template = "windows11"
+dockerfile = "./Dockerfile"
+path = ".."
+cpu_count = 8
+memory_mb = 8192
+disk_size_mb = 51200
+ready_cmd = "ver"
+no_cache = false

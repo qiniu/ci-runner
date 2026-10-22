@@ -263,6 +263,8 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 
 > **⚠️ 个人账号注意：** `runner_group` 需要调用组织级 GitHub API。如果仓库属于个人账号（而非组织），必须将 `runner_group` 留**空**，否则组织组预检会拒绝启动。
 
+- **Windows Runner（预览）**：labels 包含 `windows` 的 spec 走 Windows 启动路径：使用 PowerShell 启动脚本和 envd 默认用户，固定 ID 预检下载 Windows 版 Runner，且不要求 Docker。请绑定 [`github-runner-windows-11`](templates/github-runner-windows-11/README.md) 模板 ID，labels 示例为 `self-hosted,windows,x64,qiniu,windows-11`。网络诊断和 Web Console 暂不支持 Windows Sandbox。
+
 匹配始终遵守 `required_labels ⊆ job_labels ⊆ labels`。迁移后的 Ubuntu 规格保留 `qiniu` 与准确 OS label 的要求，管理员修改目录时也会改变 workflow 契约。启用与公开发布是独立开关。
 
 内部 Runner Group 和 Repository Policy 已移除。旧管理 API 现在统一返回

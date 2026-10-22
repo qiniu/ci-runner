@@ -46,7 +46,7 @@ Actions Runner 版本、Linux x64 归档校验和及归档大小，仅在 `runti
 安装，缓存续跑无需恢复 `/tmp` 中间文件。本机已校验的归档缓存在 `.build/`，
 分片位于被 Git 忽略的 `templates/common/.build/`。`common/` 是共享源码目录，并非新的
 Sandbox 物理模板。
-该固定版本是镜像的预装启动基线。公共名称规格使用该副本，常规模板重建流程负责推进版本。私有 ID 规格使用独立的注册前预检：runnerd 解析并严格校验 GitHub 官方 Linux 应用描述，
+该固定版本是镜像的预装启动基线。公共名称规格使用该副本，常规模板重建流程负责推进版本。私有 ID 规格使用独立的注册前预检：runnerd 解析并严格校验与 Runner 平台对应的 GitHub 官方应用描述（Linux；spec labels 含 `windows` 时为 Windows），
 过期的 Sandbox 会在 `config.sh` 前下载归档、校验 SHA-256、解包并再次核对版本。
 两条路径在注册后都继续保留 GitHub 官方自更新能力。
 2.337.0 基线已完成双区域、8 模板重建、catalog、标准 workflow 与 large

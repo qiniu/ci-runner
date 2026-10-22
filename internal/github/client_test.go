@@ -154,10 +154,11 @@ func TestListRunnerApplicationsRepository(t *testing.T) {
 	if gotPath != "/repos/o/r/actions/runners/downloads" {
 		t.Fatalf("unexpected path: %s", gotPath)
 	}
-	if len(applications) != 3 {
-		t.Fatalf("expected 3 Linux applications, got %#v", applications)
+	if len(applications) != 4 {
+		t.Fatalf("expected 3 Linux applications and 1 Windows application, got %#v", applications)
 	}
 	want := RunnerApplication{
+		OS:             "linux",
 		Architecture:   "x64",
 		Version:        "2.337.0",
 		DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
@@ -165,6 +166,16 @@ func TestListRunnerApplicationsRepository(t *testing.T) {
 	}
 	if applications[0] != want {
 		t.Fatalf("unexpected x64 application: %#v", applications[0])
+	}
+	wantWindows := RunnerApplication{
+		OS:             "win",
+		Architecture:   "x64",
+		Version:        "2.337.0",
+		DownloadURL:    "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip",
+		SHA256Checksum: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	}
+	if applications[3] != wantWindows {
+		t.Fatalf("unexpected Windows x64 application: %#v", applications[3])
 	}
 }
 
@@ -220,6 +231,24 @@ func TestListRunnerApplicationsRejectsInvalidResponses(t *testing.T) {
 				t.Fatal("expected invalid response to fail")
 			}
 		})
+	}
+}
+
+func TestListRunnerApplicationsSkipsUnsupportedArchitectures(t *testing.T) {
+	const validChecksum = "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `[`+
+			`{"os":"win","architecture":"x86","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x86-2.337.0.zip","filename":"actions-runner-win-x86-2.337.0.zip","sha256_checksum":"`+validChecksum+`"},`+
+			`{"os":"linux","architecture":"x64","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz","filename":"actions-runner-linux-x64-2.337.0.tar.gz","sha256_checksum":"`+validChecksum+`"}]`)
+	}))
+	defer ts.Close()
+
+	applications, err := NewClient(ts.URL, ts.Client()).ListRunnerApplications(t.Context(), "o/r", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applications) != 1 || applications[0].OS != "linux" || applications[0].Architecture != "x64" {
+		t.Fatalf("applications = %#v, want only the supported Linux x64 descriptor", applications)
 	}
 }
 

@@ -24,7 +24,34 @@ import (
 	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
 
+// Platform selects the guest OS contract used to launch the runner.
+type Platform string
+
+const (
+	PlatformLinux   Platform = "linux"
+	PlatformWindows Platform = "windows"
+)
+
+// PlatformForLabels returns PlatformWindows when the runner labels include
+// GitHub's windows label, and PlatformLinux otherwise.
+func PlatformForLabels(labels []string) Platform {
+	for _, label := range labels {
+		if strings.EqualFold(strings.TrimSpace(label), "windows") {
+			return PlatformWindows
+		}
+	}
+	return PlatformLinux
+}
+
+func (p Platform) runnerApplicationOS() string {
+	if p == PlatformWindows {
+		return runnerapplication.OSWindows
+	}
+	return runnerapplication.OSLinux
+}
+
 type StartInput struct {
+	Platform            Platform
 	RequestID           string
 	RunnerName          string
 	RepositoryURL       string
@@ -134,6 +161,7 @@ printf 'template_version=%s\nrunner_version=%s\n' \
 )
 
 type RecoverInput struct {
+	Platform       Platform
 	RequestID      string
 	SandboxID      string
 	PID            uint32
@@ -229,6 +257,7 @@ var (
 	ErrTemplateStateUnavailable     = errors.New("template default build state cannot be confirmed")
 	ErrSandboxNotFound              = errors.New("sandbox not found")
 	ErrRunnerNotFound               = errors.New("runner process not found")
+	ErrRunnerApplicationMissing     = errors.New("github runner applications contain no application")
 	ErrNetworkDiagnosticTarget      = errors.New("unsupported network diagnostic target")
 	ErrNetworkDiagnosticExecution   = errors.New("network diagnostic command failed")
 	ErrNetworkDiagnosticOutputLimit = errors.New("network diagnostic output limit exceeded")
@@ -244,6 +273,32 @@ type E2BService struct {
 
 const runnerBootstrapUser = "root"
 
+// Windows envd rejects root; its default user is an elevated administrator.
+const windowsRunnerBootstrapUser = qnsandbox.DefaultUser
+
+const (
+	windowsStartRunnerScriptPath = `C:\ProgramData\qiniu-runner\start-github-runner.ps1`
+	// Windows envd runs commands through cmd.exe.
+	windowsStartRunnerCommand = `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ` + windowsStartRunnerScriptPath
+	// The runtime probe runs through cmd.exe only: PowerShell startup alone can
+	// exceed the five-second budget in a freshly created Sandbox. findstr prints
+	// only the allowlisted template-version lines, the separator splits them
+	// from the preinstalled Runner's --version output, and exit /b 0 keeps a
+	// missing file from discarding the values that were found.
+	windowsRuntimeEnvironmentCommand = `findstr /b /c:"IMAGE_VERSION=" /c:"ImageVersion=" C:\ProgramData\qiniu-runner\image.env 2>nul` +
+		` & echo ` + windowsRuntimeRunnerVersionSeparator +
+		` & if exist C:\actions-runner\bin\Runner.Listener.exe C:\actions-runner\bin\Runner.Listener.exe --version 2>nul` +
+		` & exit /b 0`
+	windowsRuntimeRunnerVersionSeparator = "RUNNERD_PREINSTALLED_RUNNER_VERSION"
+)
+
+func (p Platform) bootstrapUser() string {
+	if p == PlatformWindows {
+		return windowsRunnerBootstrapUser
+	}
+	return runnerBootstrapUser
+}
+
 const (
 	effectiveRunnerVersionLimit  = 256
 	effectiveRunnerVersionMarker = "RUNNERD_EFFECTIVE_RUNNER_VERSION="
@@ -254,6 +309,9 @@ var effectiveRunnerVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(
 
 //go:embed scripts/start-github-runner.sh
 var startRunnerScriptTemplate string
+
+//go:embed scripts/start-github-runner.ps1
+var windowsStartRunnerScriptTemplate string
 
 func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BService, error) {
 	cfg := &qnsandbox.Config{APIKey: apiKey, Endpoint: endpoint, HTTPClient: httpClient}
@@ -528,6 +586,11 @@ func sandboxAlias(alias *string) string {
 }
 
 func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartResult, error) {
+	// An empty manifest skips preflight, so resolved applications without one
+	// for this platform must fail before a Sandbox exists.
+	if len(input.RunnerApplications) > 0 && !HasRunnerApplication(input.Platform, input.RunnerApplications) {
+		return StartResult{}, fmt.Errorf("%w for platform %s", ErrRunnerApplicationMissing, input.Platform)
+	}
 	timeout := sandboxTimeoutSeconds(input.Timeout)
 	allowInternet := true
 	metadata := qnsandbox.Metadata{
@@ -543,9 +606,15 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	if err != nil {
 		return StartResult{}, err
 	}
-	runtimeEnvironment := readRuntimeEnvironment(ctx, sb)
+	runtimeEnvironment := readRuntimeEnvironment(ctx, sb, input.Platform)
 
-	if _, err := sb.Files().Write(ctx, "/tmp/start-github-runner.sh", []byte(startScript(input, sb.ID()))); err != nil {
+	var scriptPath, script, cmd string
+	if input.Platform == PlatformWindows {
+		scriptPath, script, cmd = windowsStartRunnerScriptPath, windowsStartScript(input, sb.ID()), windowsStartRunnerCommand
+	} else {
+		scriptPath, script, cmd = "/tmp/start-github-runner.sh", startScript(input, sb.ID()), "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
+	}
+	if _, err := sb.Files().Write(ctx, scriptPath, []byte(script)); err != nil {
 		_ = sb.Kill(ctx)
 		return StartResult{}, fmt.Errorf("write runner script: %w", err)
 	}
@@ -553,11 +622,10 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	if commandCtx == nil {
 		commandCtx = context.Background()
 	}
-	cmd := "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
 	effectiveVersion := &effectiveRunnerVersionCapture{}
 	handle, err := sb.Commands().Start(
 		commandCtx, cmd,
-		qnsandbox.WithCommandUser(runnerBootstrapUser),
+		qnsandbox.WithCommandUser(input.Platform.bootstrapUser()),
 		qnsandbox.WithTag("github-runner"),
 		qnsandbox.WithOnStdout(func(data []byte) {
 			effectiveVersion.Observe(data)
@@ -620,7 +688,7 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 		}
 		return StartResult{}, fmt.Errorf("connect sandbox %s: %w", sandboxID, err)
 	}
-	runtimeEnvironment := readRuntimeEnvironment(ctx, sb)
+	runtimeEnvironment := readRuntimeEnvironment(ctx, sb, input.Platform)
 	processes, err := sb.Commands().List(ctx)
 	if err != nil {
 		return StartResult{}, fmt.Errorf("list sandbox %s processes: %w", sandboxID, err)
@@ -737,17 +805,21 @@ func (c *effectiveRunnerVersionCapture) Version() string {
 	return c.version
 }
 
-func readRuntimeEnvironment(ctx context.Context, sb *qnsandbox.Sandbox) runtimeEnvironment {
+func readRuntimeEnvironment(ctx context.Context, sb *qnsandbox.Sandbox, platform Platform) runtimeEnvironment {
+	command, parse := runtimeEnvironmentCommand, parseRuntimeEnvironment
+	if platform == PlatformWindows {
+		command, parse = windowsRuntimeEnvironmentCommand, parseWindowsRuntimeEnvironment
+	}
 	result, err := sb.Commands().Run(
 		ctx,
-		runtimeEnvironmentCommand,
-		qnsandbox.WithCommandUser(runnerBootstrapUser),
+		command,
+		qnsandbox.WithCommandUser(platform.bootstrapUser()),
 		qnsandbox.WithTimeout(runtimeEnvironmentTimeout),
 	)
 	if err != nil || result == nil || result.ExitCode != 0 {
 		return runtimeEnvironment{}
 	}
-	return parseRuntimeEnvironment(result.Stdout)
+	return parse(result.Stdout)
 }
 
 func (s *E2BService) RunNetworkDiagnostic(ctx context.Context, sandboxID string, target NetworkDiagnosticTarget) (NetworkDiagnosticResult, error) {
@@ -990,6 +1062,47 @@ func parseRuntimeEnvironment(output string) runtimeEnvironment {
 	return environment
 }
 
+// parseWindowsRuntimeEnvironment reads the plain cmd.exe probe output: the
+// first allowlisted image.env line before the separator, then the first
+// nonempty line after it. Values over the limit are dropped.
+func parseWindowsRuntimeEnvironment(output string) runtimeEnvironment {
+	var environment runtimeEnvironment
+	limited := func(value string) string {
+		if len(value) > runtimeEnvironmentValueLimit {
+			return ""
+		}
+		return value
+	}
+	afterSeparator := false
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == windowsRuntimeRunnerVersionSeparator {
+			afterSeparator = true
+			continue
+		}
+		if afterSeparator {
+			if line != "" {
+				environment.RunnerVersion = limited(line)
+				break
+			}
+			continue
+		}
+		if environment.TemplateVersion != "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || (key != "IMAGE_VERSION" && key != "ImageVersion") {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		environment.TemplateVersion = limited(value)
+	}
+	return environment
+}
+
 func (s *E2BService) findRunnerSandbox(ctx context.Context, requestID string) (string, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
@@ -1139,13 +1252,23 @@ func (s *e2bTerminalSession) Close(ctx context.Context) error {
 }
 
 func startScript(input StartInput, sandboxID string) string {
+	return renderStartScript(startRunnerScriptTemplate, input, sandboxID)
+}
+
+// windowsStartScript stays ASCII because Windows PowerShell 5.1 reads BOM-less
+// scripts with the system ANSI code page; arguments travel as base64.
+func windowsStartScript(input StartInput, sandboxID string) string {
+	return renderStartScript(windowsStartRunnerScriptTemplate, input, sandboxID)
+}
+
+func renderStartScript(template string, input StartInput, sandboxID string) string {
 	labels := strings.Join(input.Labels, ",")
 	requireDocker := "0"
 	if input.RequireDocker {
 		requireDocker = "1"
 	}
 	return fmt.Sprintf(
-		startRunnerScriptTemplate,
+		template,
 		base64.StdEncoding.EncodeToString([]byte(input.RepositoryURL)),
 		base64.StdEncoding.EncodeToString([]byte(input.RegistrationToken)),
 		base64.StdEncoding.EncodeToString([]byte(input.RunnerName)),
@@ -1162,11 +1285,20 @@ func startScript(input StartInput, sandboxID string) string {
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3AccessKeyID)),
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SecretKey)),
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SessionToken)),
-		base64.StdEncoding.EncodeToString([]byte(runnerApplicationsManifest(input.RunnerApplications))),
+		base64.StdEncoding.EncodeToString([]byte(runnerApplicationsManifest(input.Platform, input.RunnerApplications))),
 	)
 }
 
-func runnerApplicationsManifest(applications []RunnerApplication) string {
+// HasRunnerApplication reports whether applications include a valid
+// descriptor for platform.
+func HasRunnerApplication(platform Platform, applications []RunnerApplication) bool {
+	return runnerApplicationsManifest(platform, applications) != ""
+}
+
+func runnerApplicationsManifest(platform Platform, applications []RunnerApplication) string {
+	// Bounds the manifest per platform. It must stay at least the largest
+	// number of architectures runnerapplication supports for one OS (Linux
+	// x64, arm64 and arm), or a supported descriptor is silently dropped.
 	const maxApplications = 3
 	lines := make([]string, 0, min(len(applications), maxApplications))
 	for _, application := range applications {
@@ -1174,7 +1306,7 @@ func runnerApplicationsManifest(applications []RunnerApplication) string {
 			break
 		}
 		normalized, err := runnerapplication.Normalize(application)
-		if err != nil {
+		if err != nil || normalized.OS != platform.runnerApplicationOS() {
 			continue
 		}
 		// Normalize guarantees these TSV fields cannot contain tabs or newlines.
