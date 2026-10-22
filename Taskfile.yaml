@@ -113,6 +113,11 @@ tasks:
       - cd ui && bun run test
       - GORACE=atexit_sleep_ms=0 go test -v -trimpath -failfast -race -cover -coverprofile=coverage.txt {{.GO_PACKAGES}}
 
+  state-online-migration-test:
+    desc: Verify online migration capture, replay, handoff, rollback, and crash recovery
+    cmds:
+      - go test -race ./internal/state -run TestOnlineMigration -count=1
+
   build:
     desc: Build the local binary into bin/
     deps:

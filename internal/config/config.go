@@ -18,6 +18,7 @@ type Config struct {
 	StateDir                  string
 	StateBackend              string
 	StateDatabaseDSN          Secret
+	OnlineMigration           OnlineMigrationConfig
 	GitHubAppID               int64
 	GitHubAppInstallationID   int64
 	GitHubAppSlug             string
@@ -53,6 +54,13 @@ type Config struct {
 	DeploymentRetention       time.Duration
 }
 
+type OnlineMigrationConfig struct {
+	Directory               string `yaml:"directory"`
+	PostgresDSN             Secret `yaml:"postgres_dsn"`
+	Initialize              bool   `yaml:"initialize"`
+	PauseBudgetMilliseconds int    `yaml:"pause_budget_milliseconds"`
+}
+
 type SandboxRegionConfig struct {
 	ID            string `yaml:"id"`
 	Label         string `yaml:"label"`
@@ -69,9 +77,10 @@ type fileConfig struct {
 		IdleTimeoutSec  int    `yaml:"idle_timeout_seconds"`
 	} `yaml:"server"`
 	Database struct {
-		Backend   string `yaml:"backend"`
-		DSN       Secret `yaml:"dsn"`
-		LegacyURL Secret `yaml:"url"`
+		Backend         string                `yaml:"backend"`
+		DSN             Secret                `yaml:"dsn"`
+		LegacyURL       Secret                `yaml:"url"`
+		OnlineMigration OnlineMigrationConfig `yaml:"online_migration"`
 	} `yaml:"database"`
 	Auth struct {
 		EncryptionKey   Secret `yaml:"encryption_key"`
@@ -185,6 +194,7 @@ func LoadFile(path string) (Config, error) {
 		HTTPIdleTimeout:           durationSeconds(raw.Server.IdleTimeoutSec, 120),
 		StateBackend:              strings.ToLower(defaultString(raw.Database.Backend, "sqlite")),
 		StateDatabaseDSN:          defaultSecret(raw.Database.DSN, raw.Database.LegacyURL),
+		OnlineMigration:           raw.Database.OnlineMigration,
 		GitHubAppID:               raw.GitHub.App.ID,
 		GitHubAppInstallationID:   raw.GitHub.App.InstallationID,
 		GitHubAppSlug:             strings.TrimSpace(raw.GitHub.App.Slug),
@@ -226,6 +236,9 @@ func LoadFile(path string) (Config, error) {
 			cfg.StateDatabaseDSN = Secret(resolveConfigPath(configDir, cfg.StateDatabaseDSN.Value()))
 		}
 		cfg.StateDir = filepath.Dir(cfg.StateDatabaseDSN.Value())
+	}
+	if cfg.OnlineMigration.Directory != "" {
+		cfg.OnlineMigration.Directory = resolveConfigPath(configDir, cfg.OnlineMigration.Directory)
 	}
 	if strings.TrimSpace(cfg.DeploymentWorkRoot) == "" {
 		baseDir := cfg.StateDir
@@ -300,6 +313,15 @@ func (c Config) validate() error {
 	}
 	if c.StateBackend != "sqlite" && c.StateBackend != "postgres" && c.StateBackend != "mysql" {
 		return fmt.Errorf("invalid config database.backend: must be sqlite, postgres, or mysql")
+	}
+	migration := c.OnlineMigration
+	if migration.Directory != "" || migration.PostgresDSN.Value() != "" || migration.Initialize || migration.PauseBudgetMilliseconds != 0 {
+		if c.StateBackend != "sqlite" || migration.Directory == "" || strings.TrimSpace(migration.PostgresDSN.Value()) == "" {
+			return fmt.Errorf("invalid config database.online_migration: requires sqlite backend, directory and postgres_dsn")
+		}
+		if migration.PauseBudgetMilliseconds != 0 && (migration.PauseBudgetMilliseconds < 50 || migration.PauseBudgetMilliseconds > 5000) {
+			return fmt.Errorf("invalid config database.online_migration.pause_budget_milliseconds: must be 50..5000")
+		}
 	}
 	if strings.TrimRight(c.GitHubAPIBaseURL, "/") != defaultGitHubAPIBaseURL {
 		return fmt.Errorf("invalid config github.api_base_url: only %s is supported", defaultGitHubAPIBaseURL)

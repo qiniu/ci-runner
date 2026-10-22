@@ -2,6 +2,8 @@
 
 ## Runtime Shape
 
+- Online SQLite-to-PostgreSQL migration is disabled by default; see `docs/sqlite-postgres-online-migration.md`. Explicit configuration holds durable authority before startup backfills and uses private local commands in the running process. All Store operations and whole audit callbacks pin one epoch; only a bounded barrier changes authority. Keep SQL capture and replica checkpoint commits atomic, reverse proof refresh online, and business/capture/driver payloads redacted. Never fall back after authority publication or uncertainty. Terminal finalization alone permits standalone startup on the final primary; old replicas stay fenced. Run `task state-online-migration-test` and opt-in real PostgreSQL/server gates against disposable `_test` databases. Production Runner/Deployment/original-PTY acceptance and process upgrades remain separate release gates.
+
 - `runnerd` is a single Go service that receives GitHub `workflow_job` webhooks, admits jobs by repository and labels, creates Qiniu sandboxes, registers ephemeral GitHub Actions self-hosted runners, and cleans them up.
 - Runtime config is file-first. `runnerd` reads `./runnerd.yaml` by default, or another path passed with `--config`.
 - Local development should use `runnerd.local.yaml` for secrets and sqlite state.

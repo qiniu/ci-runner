@@ -4,6 +4,9 @@
 
 在把 runnerd 部署视为可以承载真实 GitHub Actions 流量前，使用这份 checklist 做生产风格验证。
 
+在线切库默认关闭，生产使用仍需独立验收。按[迁移方案](sqlite-postgres-online-migration.md)的阶段门禁执行；
+普通启动、健康检查和重启恢复不能证明数据库迁移无感。
+
 ## 前置条件
 
 - 一个可通过 HTTPS 接收 GitHub webhooks 和 console 登录的 runnerd 部署。

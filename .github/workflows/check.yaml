@@ -172,8 +172,10 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go.sum
-      - name: Verify schema, catalog, audited mutations, and deployment queries on PostgreSQL and MySQL
-        run: go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
+      - name: Verify schema, catalog, deployments, and online migration on SQL backends
+        run: |
+          go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|OnlineMigration(Capture|Replication|Handoff|Verification|Runtime|Rollback|Journal)|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
+          go test ./internal/server -run TestOnlineMigrationServerSQLBackends -count=1 -v
 
   ui-production-smoke:
     runs-on: ubuntu-latest

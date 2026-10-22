@@ -4,6 +4,10 @@
 
 Use this checklist before treating a runnerd deployment as ready for real GitHub Actions traffic.
 
+Opt-in online database cutover still requires production acceptance. Follow the gates in
+the [migration plan](sqlite-postgres-online-migration.md); ordinary startup,
+health checks and restart recovery do not establish seamless database migration.
+
 ## Prerequisites
 
 - A runnerd deployment reachable over HTTPS for GitHub webhooks and console sign-in.

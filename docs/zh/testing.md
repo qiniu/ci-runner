@@ -8,6 +8,16 @@
 
 ## 1. 本地配置文件
 
+[SQLite 到 PostgreSQL 在线迁移方案](sqlite-postgres-online-migration.md)包含运维步骤与验收边界。
+`task state-online-migration-test` 执行带 race 的 state 专项；设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`
+和 `RUNNERD_POSTGRES_TEST_DSN` 后还覆盖真实 PG 捕获、复制、切库、回退子进程退出、在线锚点刷新及启动/收尾。
+专用数据库名须以 `_test` 结尾，测试表会被重置。同环境执行
+`go test -race ./internal/server -run TestOnlineMigrationServerSQLBackends -count=1`
+可验证同一 Server/worker/SSE/假 PTY 的往返切换，使用独立 schema。
+默认使用临时 SQLite 并跳过 PG 检查。故障覆盖行/位点/连接失败、journal 缺失/损坏、基线中断、身份漂移及 authority 不确定。
+生产副本、真实 Runner/Deployment/原终端仍需独立验收。UI 构建会替换嵌入资源，应与 Go 编译串行执行。
+忽略的 `var/` 临时 Go 文件若存在混合包会阻塞 `go test ./...`；项目 `task test` 检查 `./cmd/... ./internal/...`，无需改动这些文件。
+
 服务现在默认读取 `./runnerd.yaml`；也可以通过 `--config` 指向别的路径：
 
 ```bash
@@ -66,7 +76,7 @@ worker:
   retry_max_attempts: 5
 ```
 
-如果需要避免敏感值被直接展示，先构建 runnerd，再将每个原值通过 stdin 传给 `./bin/runnerd --obfuscate-config-value`，然后把生成的 `RUNNERD_ENC(v1:...)` 填入 YAML。明文配置仍保持兼容。支持的字段包括 `database.dsn`/`database.url`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password` 和 `github.oauth.client_secret`。运行时包装类型还会在意外的文本格式、结构化日志、JSON 和 YAML 输出中显示掩码。该能力仅用于混淆：解码 key 位于 runnerd 内，能够检查或执行二进制的主机用户仍可恢复原值。
+如果需要避免敏感值被直接展示，先构建 runnerd，再将每个原值通过 stdin 传给 `./bin/runnerd --obfuscate-config-value`，然后把生成的 `RUNNERD_ENC(v1:...)` 填入 YAML。明文配置仍保持兼容。支持的字段包括 `database.dsn`/`database.url`、`database.online_migration.postgres_dsn`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password` 和 `github.oauth.client_secret`。运行时包装类型还会在意外的文本格式、结构化日志、JSON 和 YAML 输出中显示掩码。该能力仅用于混淆：解码 key 位于 runnerd 内，能够检查或执行二进制的主机用户仍可恢复原值。
 
 Sandbox service API URL 和 API Key 不在 `runnerd.yaml` 中配置。登录后，`/repositories` 会展示所选账户或组织的有效 Sandbox 来源，但不再内嵌 credential editor。配置缺失时，可管理的 scope 会链接到 `/account/preferences` 或 `/organizations/{login}/preferences`，Settings 是唯一写入入口。组织 installation 可因用户仅拥有仓库权限而可见，但 Sandbox 管理权要求用户具有 GitHub 组织的 active owner membership（`role == admin`）；Settings 只列出当前账户和所有者可管理的组织。普通组织成员、outside collaborator、空或未知 role 只能读取脱敏 readiness（`manageable: false` 和有效来源），不能读取 API URL、密钥状态、Cache S3 字段、继承来源账号元数据、templates、runner-created instances 或 scoped custom Runner Specs。membership 查询失败时，请求会被拒绝，且不会返回组织配置。本地 runnerd admin role 不能绕过 GitHub 组织所有者检查。默认关闭的平台兜底仍由管理员在 `/admin/sandbox_service` 管理。fallback audience 为 `all` 或 `selected`；selected entries 按仓库 owner 的稳定 GitHub account ID 和 type 匹配。API Key 使用 `auth.encryption_key` 加密保存。对于公共名称绑定的规格，解析顺序为 runner request 已保存快照、installation custom/inherited 配置、符合条件的个人账户配置、符合条件的组织赞助、已启用且 audience eligible 的 admin default，最后才是未配置错误。赞助会在创建 Sandbox 前重新校验稳定的 Fork/source/owner 身份，以及所选审批、权限或成员模式；它不会提供 Cache S3 或自定义 Spec。测试必须覆盖三种模式、公共名称绑定边界、容量延后、撤销、fresh retry 清空快照、owner-only 审计 API，以及账户／Organization UI 路由隔离。
 
