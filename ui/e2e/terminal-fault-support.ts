@@ -14,6 +14,18 @@ export type TerminalMetrics = {
   streams: { session_id: string; last_event_id: string }[]
 }
 
+// Timers can fire before a performance.now() deadline. Keep traffic blocked
+// until the monotonic clock actually reaches it, including after rescheduling.
+export function scheduleAtMonotonicDeadline(deadline: number, callback: () => void) {
+  const check = () => {
+    const remaining = deadline - performance.now()
+    if (remaining > 0) timer = setTimeout(check, Math.ceil(remaining))
+    else callback()
+  }
+  let timer = setTimeout(check, Math.max(0, Math.ceil(deadline - performance.now())))
+  return () => clearTimeout(timer)
+}
+
 // All traffic is loopback-only. A real proxy drops the active SSE connection and
 // rejects subsequent requests using native EventSource retries and browser timers.
 export async function startTerminalFaultHarness(logPath: string) {
@@ -34,7 +46,7 @@ export async function startTerminalFaultHarness(logPath: string) {
   let backend = ""
   let faulted = false
   let blockedRequests = 0
-  let restoreTimer: ReturnType<typeof setTimeout> | undefined
+  let cancelRestoration: (() => void) | undefined
   const active = new Set<{ response: ServerResponse; upstream: ClientRequest }>()
   const proxy = createServer((incoming, response) => {
     if (faulted) {
@@ -54,7 +66,7 @@ export async function startTerminalFaultHarness(logPath: string) {
   })
 
   async function close() {
-    clearTimeout(restoreTimer)
+    cancelRestoration?.()
     faulted = false
     proxy.closeAllConnections()
     await new Promise<void>(resolve => proxy.close(() => resolve()))
@@ -111,10 +123,10 @@ export async function startTerminalFaultHarness(logPath: string) {
       const startedAt = Date.now()
       for (const entry of active) { entry.upstream.destroy(); entry.response.destroy() }
       const restored = new Promise<{ actualOutageMs: number; blockedRequests: number }>(resolve => {
-        restoreTimer = setTimeout(() => {
+        cancelRestoration = scheduleAtMonotonicDeadline(started + durationMs, () => {
           faulted = false
           resolve({ actualOutageMs: performance.now() - started, blockedRequests })
-        }, durationMs)
+        })
       })
       return { startedAt, restored }
     },

@@ -441,7 +441,10 @@ Sandbox 凭据或生产地址。首次 Go／浏览器安装完成后约需两分
 | 25 秒 | UI 约 20 秒关闭，并在断网期间尝试 DELETE。因 DELETE 无法到达 runnerd，网络恢复时 Shell 仍存活，随后由真实的 30 秒空闲清理回收；不自动创建替代 Shell 或重连。 |
 
 恢复窗口从首个 EventSource error 开始计算，而非代理中断瞬间。断言保留有界
-调度余量和实际时长，不加速浏览器时钟。测试结束后回收 fixture 和子进程。
+调度余量和实际时长，不加速浏览器时钟。即使计时器提前触发，代理也会重新核对
+单调时钟截止时间后才恢复流量。5 秒场景会在早期游标观察后等待额外一帧，
+并以首个 error 之前最后一个数据／心跳事件的游标核对回放，避免在途输出导致
+断言使用过期游标。测试结束后回收 fixture 和子进程。
 该命令独立于 `task test` 与 `task ui-production-smoke`，Check 中由
 `terminal-fault` job 运行；`RUNNERD_UI_SMOKE_BASE_URL` 不会将它切到线上。
 

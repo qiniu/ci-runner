@@ -458,7 +458,11 @@ browser's native EventSource and real clocks:
 
 The recovery deadline starts at the first EventSource error, not the instant the
 proxy is interrupted. The assertions include bounded scheduler allowances and
-retain measured durations; browser clocks are never accelerated. Fixtures and
+retain measured durations; browser clocks are never accelerated. The proxy
+rechecks its monotonic deadline before restoring traffic, even if a timer fires
+early. The 5-second case waits for an extra frame after an early cursor observation
+and verifies replay against the final data/heartbeat event preceding the first
+error, so in-flight output cannot make the cursor assertion stale. Fixtures and
 child processes are torn down after the suite. This command runs separately from
 `task test` and `task ui-production-smoke`; Check runs it in the `terminal-fault`
 job. `RUNNERD_UI_SMOKE_BASE_URL` does not redirect this local-only suite.

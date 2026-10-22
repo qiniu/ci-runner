@@ -65,10 +65,22 @@ for (const outageMs of [5000, 15000, 25000]) {
       await input.pressSequentially('set +m; i=1; while [ "$i" -le 60 ]; do printf "__SEQ_%03d PID=%s\\n" "$i" "$$"; i=$((i+1)); sleep 0.5; done; printf "__END PID=%s\\n" "$$"')
       await input.press("Enter")
       await expect.poll(() => page.evaluate(() => window.terminalFaultEvidence.output)).toContain("__SEQ_006 PID=")
-      const prior = await page.evaluate(() => window.terminalFaultEvidence.events.filter(event => event.kind === "message" || event.kind === "terminal-heartbeat").at(-1)!.id)
+      const earlyCursor = await page.evaluate(() => window.terminalFaultEvidence.events.filter(event => event.kind === "message" || event.kind === "terminal-heartbeat").at(-1)!.id)
+      if (outageMs === 5000) {
+        // Force the scheduling race: another frame arrives after this early
+        // observation but before injection. It must advance the resume cursor.
+        await expect.poll(() => page.evaluate(() => window.terminalFaultEvidence.events.filter(event => event.kind === "message" || event.kind === "terminal-heartbeat").at(-1)!.id)).not.toBe(earlyCursor)
+      }
       const outage = harness.inject(outageMs)
       await expect.poll(() => page.evaluate(() => window.terminalFaultEvidence.events.some(event => event.kind === "error"))).toBe(true)
-      const firstError = await page.evaluate(() => window.terminalFaultEvidence.events.find(event => event.kind === "error")!.at)
+      const disconnected = await page.evaluate(() => {
+        const events = window.terminalFaultEvidence.events
+        const errorIndex = events.findIndex(event => event.kind === "error")
+        const previous = events.slice(0, errorIndex).findLast(event => event.kind === "message" || event.kind === "terminal-heartbeat")!
+        return { at: events[errorIndex].at, cursor: previous.id }
+      })
+      const firstError = disconnected.at
+      const prior = disconnected.cursor
       let closedAt = 0
       const waitForClosure = async () => {
         if (outageMs < 20_000) return
@@ -76,7 +88,7 @@ for (const outageMs of [5000, 15000, 25000]) {
         closedAt = await page.evaluate(() => performance.now())
       }
       const [restored] = await Promise.all([outage.restored, waitForClosure()])
-      Object.assign(timing, restored, { shellPID: session.pid })
+      Object.assign(timing, restored, { shellPID: session.pid, earlyCursor, disconnectCursor: prior })
       expect(Number(timing.actualOutageMs)).toBeGreaterThanOrEqual(outageMs)
       // gstack-timing-ok: real-time fault injection measures the production recovery window.
       expect(Number(timing.actualOutageMs)).toBeLessThan(outageMs + 1000)
