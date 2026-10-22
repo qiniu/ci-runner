@@ -349,6 +349,101 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 	}
 }
 
+type waitingMetricsCountingStore struct {
+	state.Store
+	profileScans atomic.Int32
+	activeScans  atomic.Int32
+	failProfiles atomic.Bool
+}
+
+func (s *waitingMetricsCountingStore) ListProfiles() ([]state.RunnerProfile, error) {
+	s.profileScans.Add(1)
+	if s.failProfiles.Load() {
+		return nil, errors.New("profile metrics lookup failed")
+	}
+	return s.Store.ListProfiles()
+}
+
+func (s *waitingMetricsCountingStore) ListActiveStates() ([]state.RunnerState, error) {
+	s.activeScans.Add(1)
+	return s.Store.ListActiveStates()
+}
+
+func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
+	var terminal atomic.Bool
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if terminal.Load() {
+			fmt.Fprint(w, `{"id":1001,"status":"unknown"}`)
+			return
+		}
+		fmt.Fprint(w, `{"id":1001,"status":"waiting"}`)
+	}))
+	defer gh.Close()
+	base := state.New(t.TempDir())
+	srv := newTestServer(t, base, gh.URL, &fakeSandbox{})
+	srv.Close()
+	sendQueueTestWebhook(t, srv, "workflow_job", "queued")
+	req, err := base.ReadRequest("1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &waitingMetricsCountingStore{Store: base}
+	srv.store = store
+	srv.cfg.RetryBaseDelay, srv.cfg.RetryMaxDelay = time.Hour, time.Hour
+	check := func() {
+		t.Helper()
+		st := queueTestState(t, base)
+		st.Status, st.LeaseOwner = state.StatusCreating, "test-worker"
+		st.LeaseExpiresAt = time.Now().Add(time.Minute)
+		if err := base.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); start || err != nil {
+			t.Fatalf("unexpected start=%v err=%v", start, err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		check()
+	}
+	if store.profileScans.Load() != 0 || store.activeScans.Load() != 0 || !srv.waitingMetricsDirty.Load() {
+		t.Fatalf("waiting polls scanned aggregates: profiles=%d active=%d dirty=%v", store.profileScans.Load(), store.activeScans.Load(), srv.waitingMetricsDirty.Load())
+	}
+	srv.reconcileOnce(context.Background())
+	if store.profileScans.Load() != 1 || srv.waitingMetricsDirty.Load() {
+		t.Fatalf("waiting metric updates were not coalesced: scans=%d dirty=%v", store.profileScans.Load(), srv.waitingMetricsDirty.Load())
+	}
+	retries := expvar.Get("e2b_runner_retry_state").(*expvar.Map).Get("default|queued")
+	if retries == nil || retries.(*expvar.Int).Value() != 1 {
+		t.Fatalf("coalesced refresh lost retry gauge: %v", retries)
+	}
+	srv.reconcileOnce(context.Background())
+	if store.profileScans.Load() != 1 {
+		t.Fatal("reconciliation without new waiting changes refreshed aggregates")
+	}
+	check()
+	store.failProfiles.Store(true)
+	srv.reconcileOnce(context.Background())
+	if !srv.waitingMetricsDirty.Load() {
+		t.Fatal("failed aggregate lookup discarded the pending refresh")
+	}
+	store.failProfiles.Store(false)
+	srv.reconcileOnce(context.Background())
+	if srv.waitingMetricsDirty.Load() || store.profileScans.Load() != 3 {
+		t.Fatal("pending metrics did not recover after aggregate lookup failure")
+	}
+	// Terminal failures must still refresh gauges synchronously.
+	st := queueTestState(t, base)
+	st.RetryCount = srv.cfg.RetryMaxAttempts
+	if err := base.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	terminal.Store(true)
+	check()
+	if queueTestState(t, base).Status != state.StatusFailed || store.profileScans.Load() != 4 {
+		t.Fatal("terminal failure did not refresh gauges immediately")
+	}
+}
+
 type completionFailureStore struct {
 	state.Store
 	readCount int

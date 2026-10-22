@@ -11,7 +11,13 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
-const workflowJobWaitCode = "github_job_waiting"
+const (
+	workflowJobWaitCode         = "github_job_waiting"
+	workflowJobStatusCodePrefix = "github_job_status_"
+	// Frozen evidence emitted by the pre-fix startup path. Keep this literal
+	// independent of current log wording so historical repairs remain valid.
+	historicalWorkflowJobWaitingSkip = "runner skipped before sandbox start: workflow job is waiting"
+)
 
 func isWorkflowJobWaiting(status string) bool {
 	switch status {
@@ -49,7 +55,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		lookupErr = fmt.Errorf("workflow job lookup returned a different job")
 	}
 	if !stale && lookupErr == nil && job.Status == "queued" {
-		if st.LastErrorCode == workflowJobWaitCode || strings.HasPrefix(st.LastErrorCode, "github_job_status_") {
+		if st.LastErrorCode == workflowJobWaitCode || strings.HasPrefix(st.LastErrorCode, workflowJobStatusCodePrefix) {
 			st.NextRetryAt = time.Time{}
 			st.Error, st.FailureStage, st.FailureReason = "", "", ""
 			st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
@@ -75,14 +81,14 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		message = "workflow job changed during status lookup; recheck required"
 	}
 	if !known {
-		code, message = "github_job_status_unknown", "unrecognized workflow job status"
+		code, message = workflowJobStatusCodePrefix+"unknown", "unrecognized workflow job status"
 		if lookupErr != nil {
 			// Do not persist upstream response bodies or credentials.
-			code, message = "github_job_status_unavailable", "workflow job status lookup failed"
+			code, message = workflowJobStatusCodePrefix+"unavailable", "workflow job status lookup failed"
 			errorCode, _ := classifyRetryableError("github_job_status", lookupErr)
 			if errorCode == "http_rate_limited" || errorCode == "github_secondary_rate_limit" {
 				rateLimited = true
-				code, message = "github_job_status_rate_limited", "workflow job status lookup rate limited"
+				code, message = workflowJobStatusCodePrefix+"rate_limited", "workflow job status lookup rate limited"
 			}
 		}
 	}
@@ -123,7 +129,13 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "next_retry_at", st.NextRetryAt)
 	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s next_check=%s\n", job.Status, job.RunnerName, st.Status, code, st.NextRetryAt.Format(time.RFC3339))))
 	s.signalQueue()
-	s.refreshMetrics()
+	if st.Status == state.StatusFailed {
+		s.refreshMetrics()
+	} else {
+		// Coalesce waiting polls into the existing five-second reconciliation
+		// cycle instead of scanning all active requests for every waiting Job.
+		s.waitingMetricsDirty.Store(true)
+	}
 	return false, nil
 }
 
@@ -163,7 +175,7 @@ func (s *Server) retryHistoricalWaitingJob(ctx context.Context, id string) (stat
 		return st, state.ErrRetryNotAllowed
 	}
 	control, err := s.store.ReadLog(id, "control.log", 16<<10)
-	if err != nil || !strings.HasSuffix(strings.TrimSpace(string(control)), "runner skipped before sandbox start: workflow job is waiting") {
+	if err != nil || !strings.HasSuffix(strings.TrimSpace(string(control)), historicalWorkflowJobWaitingSkip) {
 		return st, state.ErrRetryNotAllowed
 	}
 	req, err := s.store.ReadRequest(id)

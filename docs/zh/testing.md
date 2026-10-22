@@ -696,7 +696,9 @@ Runner 名称，不重复创建 Runner。后续 queued 投递只可清除已知�
 释放 lease 和创建容量，脱敏原因码为 `github_job_status_rate_limited`。
 限流解除后，无需新 webhook 即可通过轮询恢复启动。状态检查的终态失败在
 失败状态成功持久化后计入既有 Runner 操作和 Workflow Job 失败计数；
-等待退避不计为终态失败。GitHub Job 已完成但本地终态读写失败时，
+等待退避不计为终态失败。等待产生的指标变化合并到既有五秒协调周期，
+避免每次轮询都扫描全部活动请求；指标读取失败保留待刷新标记，
+终态失败仍立即刷新。GitHub Job 已完成但本地终态读写失败时，
 错误进入正常启动失败处理，释放 lease 和创建容量；临时存储错误可重试，
 不会启动 Runner。控制事件记录决策、原因和
 下次复查时间；服务日志关联 webhook action 与 Delivery ID，不持久化原始 payload。

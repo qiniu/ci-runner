@@ -50,6 +50,7 @@ type Server struct {
 	loopWG               sync.WaitGroup
 
 	recoveryMetricsDeferred atomic.Int32
+	waitingMetricsDirty     atomic.Bool
 
 	publicTemplatesMu    sync.RWMutex
 	publicTemplatesCache cachedPublicTemplates

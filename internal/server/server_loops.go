@@ -109,21 +109,22 @@ func (s *Server) processQueuedRequests(ctx context.Context) {
 	}
 }
 
-func (s *Server) refreshMetrics() {
+func (s *Server) refreshMetrics() bool {
 	if s.recoveryMetricsDeferred.Load() > 0 {
-		return
+		return false
 	}
 	profiles, err := s.store.ListProfiles()
 	if err != nil {
 		s.logger.Error("refresh metrics list profiles", "error", err)
-		return
+		return false
 	}
 	states, err := s.store.ListActiveStates()
 	if err != nil {
 		s.logger.Error("refresh metrics list states", "error", err)
-		return
+		return false
 	}
 	metrics.Refresh(profiles, states)
+	return true
 }
 
 func (s *Server) sweepOnce(ctx context.Context) {
@@ -244,6 +245,9 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 	}
 	s.reconcileMismatchedCompletedJobs(ctx)
 	s.reconcileCompletedWorkflowJobs(ctx)
+	if s.waitingMetricsDirty.Swap(false) && !s.refreshMetrics() {
+		s.waitingMetricsDirty.Store(true)
+	}
 }
 
 func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
