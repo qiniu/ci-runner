@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"expvar"
 	"fmt"
 	"net/http"
@@ -345,6 +346,75 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type completionFailureStore struct {
+	state.Store
+	readCount int
+	failRead  bool
+	failWrite bool
+}
+
+func (s *completionFailureStore) ReadState(id string) (state.RunnerState, error) {
+	s.readCount++
+	// startRunner reads once, then the startup check reads before and after
+	// GitHub. Fail the final read inside completeWithoutSandbox only once.
+	if s.failRead && s.readCount == 4 {
+		return state.RunnerState{}, errors.New("temporary completion state read failure")
+	}
+	return s.Store.ReadState(id)
+}
+
+func (s *completionFailureStore) WriteState(st state.RunnerState) error {
+	if s.failWrite && st.Status == state.StatusCompleted {
+		s.failWrite = false
+		return errors.New("temporary completion state write failure")
+	}
+	return s.Store.WriteState(st)
+}
+
+func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
+	for _, operation := range []string{"read", "write"} {
+		t.Run(operation, func(t *testing.T) {
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, `{"id":1001,"status":"completed","conclusion":"cancelled"}`)
+			}))
+			defer gh.Close()
+			base := state.New(t.TempDir())
+			fake := &fakeSandbox{}
+			srv := newTestServer(t, base, gh.URL, fake)
+			srv.Close()
+			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
+			st := queueTestState(t, base)
+			st.LeaseOwner = "test-worker"
+			st.LeaseExpiresAt = time.Now().Add(time.Minute)
+			if err := base.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			srv.store = &completionFailureStore{Store: base, failRead: operation == "read", failWrite: operation == "write"}
+			srv.startRunner(context.Background(), "1001", "test-worker")
+			st = queueTestState(t, base)
+			if st.Status != state.StatusQueued || st.RetryCount != 1 || st.NextRetryAt.IsZero() || st.LeaseOwner != "" || !st.LeaseExpiresAt.IsZero() || !st.CreatingAt.IsZero() {
+				t.Fatalf("completion persistence failure must release creation capacity and schedule retry: %#v", st)
+			}
+			if !st.CompletedAt.IsZero() || st.GitHubJobStatus != "" || fake.startedCount() != 0 {
+				t.Fatalf("failed completion must not claim success or provision a Runner: %#v", st)
+			}
+			if n, err := base.InFlightCount(); err != nil || n != 0 {
+				t.Fatalf("completion failure retained capacity: n=%d err=%v", n, err)
+			}
+			control, err := base.ReadLog("1001", "control.log", 0)
+			if err != nil || strings.Contains(string(control), "runner skipped before sandbox start") {
+				t.Fatalf("completion failure logged success: err=%v log=%s", err, control)
+			}
+			// A subsequent normal attempt can retain GitHub's terminal result.
+			srv.startRunner(context.Background(), "1001", "test-worker")
+			st = queueTestState(t, base)
+			if st.Status != state.StatusCompleted || st.GitHubJobConclusion != "cancelled" || st.GitHubJobObservedAt.IsZero() || st.LeaseOwner != "" || !st.NextRetryAt.IsZero() || fake.startedCount() != 0 {
+				t.Fatalf("completion did not recover after the store failure: %#v", st)
+			}
+		})
 	}
 }
 

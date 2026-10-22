@@ -636,15 +636,14 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 }
 
 // completeWithoutSandbox is called with the request lock held, only for a terminal Job.
-func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reason string) {
+func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reason string) error {
 	st, err := s.store.ReadState(id)
 	if err != nil {
-		s.logger.Error("read runner state for skip", "id", id, "error", err)
-		return
+		return fmt.Errorf("read runner state for skip: %w", err)
 	}
 	if st.Status == state.StatusCompleted || st.Status == state.StatusStopping || st.Status == state.StatusRunning {
 		s.logger.Info("runner skip ignored because state already advanced", "id", id, "status", st.Status, "reason", reason)
-		return
+		return nil
 	}
 	if shouldRecordAssignedJob(st, job) {
 		st.AssignedJobID = job.ID
@@ -660,8 +659,7 @@ func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reaso
 	st.LeaseExpiresAt = time.Time{}
 	st.NextRetryAt = time.Time{}
 	if err := s.store.WriteState(st); err != nil {
-		s.logger.Error("write skipped runner state", "id", id, "error", err)
-		return
+		return fmt.Errorf("write skipped runner state: %w", err)
 	}
 	s.logger.Info("runner skipped before sandbox start", "id", id, "job_id", job.ID, "job_status", job.Status, "job_conclusion", job.Conclusion, "reason", reason)
 	s.store.AppendLog(id, "control.log", []byte("runner skipped before sandbox start: "+reason+"\n"))
@@ -672,6 +670,7 @@ func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reaso
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, workflowNameFor(job.WorkflowName), jobName, st.ProfileName, "workflow_job", conclusion)
 	}
 	s.refreshMetrics()
+	return nil
 }
 
 func (s *Server) markWorkflowJobInProgress(id string, job github.WorkflowJob) (state.RunnerState, bool, error) {

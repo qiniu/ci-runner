@@ -724,7 +724,9 @@ the lease and creation capacity. The sanitized reason is
 clears without requiring another webhook. Terminal status-check failures
 increment the existing Runner operation and Workflow Job failure counters
 only after the failed state is persisted; waiting deferrals do not count as
-terminal failures.
+terminal failures. If persisting a completed Job fails, propagate the error
+through normal startup failure handling to release the lease and creation
+capacity; a temporary store failure retries without starting a Runner.
 Control events show the decision/reason/next check, and service logs correlate
 webhook action with Delivery ID. Raw webhook bodies are not persisted.
 

@@ -62,8 +62,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return true, nil
 	}
 	if !stale && lookupErr == nil && job.Status == "completed" {
-		s.completeWithoutSandbox(req.ID, job, "workflow job is completed/"+job.Conclusion)
-		return false, nil
+		return false, s.completeWithoutSandbox(req.ID, job, "workflow job is completed/"+job.Conclusion)
 	}
 	// GitHub owns approval/concurrency timeouts. Keep recognized nonterminal
 	// states recoverable until GitHub reports queued or completed, at a capped
