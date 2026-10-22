@@ -872,21 +872,31 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		if writeErr := s.writeRunnerCleanupStart(id, &st, time.Now()); writeErr != nil {
 			return
 		}
-		if cleanupErr := s.cleanupSandboxAfterExit(id, st); cleanupErr != nil {
-			st.Error = st.Error + "; cleanup sandbox: " + cleanupErr.Error()
+		sandboxErr := s.cleanupSandboxAfterExit(id, st)
+		if sandboxErr != nil {
+			st.Error = st.Error + "; cleanup sandbox: " + sandboxErr.Error()
 		}
-		if cleanupErr := s.cleanupGitHubRunner(context.Background(), st); cleanupErr != nil {
-			if s.scheduleCleanupRetry(&st, cleanupErr) {
+		githubErr := s.cleanupGitHubRunner(context.Background(), st)
+		if githubErr != nil {
+			if s.scheduleCleanupRetry(&st, githubErr) {
 				s.writeStateOrLog(id, st, "schedule github runner cleanup retry")
 				s.refreshMetrics()
 				return
 			}
-			st.Error = appendError(st.Error, "github runner cleanup: "+cleanupErr.Error())
+			st.Error = appendError(st.Error, "github runner cleanup: "+githubErr.Error())
 		}
 		st.Status = state.StatusFailed
-		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
-		s.recordWorkflowRunDuration(st, "", workflowJobName(st, github.WorkflowJob{}), "failure")
+		if sandboxErr == nil && githubErr == nil {
+			s.retryRunnerExitedWithoutJob(id, &st)
+		}
+		if st.Status == state.StatusFailed {
+			metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
+			s.recordWorkflowRunDuration(st, "", workflowJobName(st, github.WorkflowJob{}), "failure")
+		}
 		s.writeStateOrLog(id, st, "write failed exit state")
+		if st.Status == state.StatusQueued {
+			s.signalQueue()
+		}
 		return
 	}
 	exitCode := result.ExitCode
@@ -906,9 +916,10 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	if writeErr := s.writeRunnerCleanupStart(id, &st, time.Now()); writeErr != nil {
 		return
 	}
-	if cleanupErr := s.cleanupSandboxAfterExit(id, st); cleanupErr != nil {
+	sandboxErr := s.cleanupSandboxAfterExit(id, st)
+	if sandboxErr != nil {
 		st.Status = state.StatusFailed
-		st.Error = "cleanup sandbox after runner exit: " + cleanupErr.Error()
+		st.Error = "cleanup sandbox after runner exit: " + sandboxErr.Error()
 	} else if runnerFailed {
 		st.Status = state.StatusFailed
 	} else {
@@ -926,12 +937,42 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		st.FailureReason = "github_runner_cleanup_failed"
 		st.Error = appendError(st.Error, "github runner cleanup: "+cleanupErr.Error())
 	}
+	if st.Status == state.StatusCompleted || (sandboxErr == nil && st.FailureStage == "runner_exit") {
+		s.retryRunnerExitedWithoutJob(id, &st)
+	}
 	if st.Status == state.StatusFailed {
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
 		s.recordWorkflowRunDuration(st, "", workflowJobName(st, github.WorkflowJob{}), "failure")
 	}
 	s.writeStateOrLog(id, st, "write exited state")
+	if st.Status == state.StatusQueued {
+		s.signalQueue()
+	}
 	s.refreshMetrics()
+}
+
+var errRunnerExitedWithoutJob = errors.New("runner process exited before accepting a job")
+
+// retryRunnerExitedWithoutJob requeues a request whose Runner ended before it
+// accepted any Job. GitHub can terminate a listener while run.sh still exits 0,
+// and a lost Sandbox output stream ends an idle Runner too; no reconciler
+// requeues that original Job, so retry through the bounded start path, which
+// rechecks the Job before creating another Sandbox.
+func (s *Server) retryRunnerExitedWithoutJob(id string, st *state.RunnerState) {
+	if st.WorkflowJobID == 0 || st.AssignedJobID != 0 || st.AssignedJobName != "" {
+		return
+	}
+	err := errRunnerExitedWithoutJob
+	if st.Error != "" {
+		err = fmt.Errorf("%w: %s", errRunnerExitedWithoutJob, st.Error)
+	}
+	result := s.applyFailure(st, "runner_exit", err, true)
+	if st.Status == state.StatusQueued {
+		st.TerminationSource = ""
+		st.RunnerExitCode = nil
+	}
+	s.logger.Warn("runner exited before accepting a job", "id", id, "workflow_job_id", st.WorkflowJobID, "status", st.Status, "retry_count", st.RetryCount)
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(result.logLine+"\n"))
 }
 
 func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
@@ -1739,6 +1780,9 @@ func classifyRetryableError(stage string, err error) (string, bool) {
 	var resolutionErr *defaultTemplateResolutionError
 	if errors.As(err, &resolutionErr) {
 		return resolutionErr.Reason, false
+	}
+	if errors.Is(err, errRunnerExitedWithoutJob) {
+		return "runner_exited_without_job", true
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout", true

@@ -2235,6 +2235,82 @@ func TestRunnerExitedWithExitCode0TransitionsToCompleted(t *testing.T) {
 	requireRunnerEventStageMessage(t, store, st.ID, "sandbox_cleanup", "sandbox cleaned after runner exit")
 }
 
+func TestRunnerExitedBeforeAcceptingJobRetriesOriginalJob(t *testing.T) {
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"runners":[]}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001" {
+			w.Write([]byte(`{"id":1001,"status":"completed","conclusion":"success"}`))
+			return
+		}
+		t.Errorf("unexpected github request: %s %s", r.Method, r.URL.String())
+	}))
+	defer ghServer.Close()
+
+	for _, tc := range []struct {
+		name         string
+		assignedName string
+		retryCount   int
+		result       sandboxrunner.ExitResult
+		exitErr      error
+		wantStatus   string
+	}{
+		{name: "no_job_accepted", wantStatus: state.StatusQueued},
+		{name: "stream_lost_before_job", result: sandboxrunner.ExitResult{ExitCode: -1, Error: "deadline_exceeded: context deadline exceeded"}, wantStatus: state.StatusQueued},
+		{name: "process_error_before_job", exitErr: errors.New("stream closed"), wantStatus: state.StatusQueued},
+		{name: "job_accepted", assignedName: runnerJobStartedMarker, wantStatus: state.StatusCompleted},
+		{name: "retries_exhausted", retryCount: -1, wantStatus: state.StatusFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := state.New(t.TempDir())
+			srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
+			_, st, err := store.CreateRequest(state.RunnerRequest{
+				ID:                 "exit-no-job",
+				Source:             "test",
+				Labels:             []string{"self-hosted"},
+				RunnerName:         "e2b-exit-no-job",
+				RepositoryFullName: "o/r",
+				ProfileName:        "default",
+				JobID:              1001,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status = state.StatusRunning
+			st.SandboxID = "sb-exit-no-job"
+			st.ProcessPID = 42
+			st.WorkflowJobID = 1001
+			st.AssignedJobName = tc.assignedName
+			st.RetryCount = tc.retryCount
+			if tc.retryCount < 0 {
+				st.RetryCount = srv.cfg.RetryMaxAttempts
+			}
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+
+			srv.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: st.SandboxID, processPID: st.ProcessPID}, tc.result, tc.exitErr)
+
+			got, err := store.ReadState(st.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != tc.wantStatus {
+				t.Fatalf("status = %s, want %s (%#v)", got.Status, tc.wantStatus, got)
+			}
+			if tc.wantStatus == state.StatusQueued {
+				if got.RetryCount != 1 || got.NextRetryAt.IsZero() || got.FailureReason != "runner_exited_without_job" || got.SandboxID != "" || got.TerminationSource != "" || got.RunnerExitCode != nil {
+					t.Fatalf("unexpected retry state %#v", got)
+				}
+				requireRunnerEventStageMessage(t, store, st.ID, "runner_exit", "exited before accepting a job")
+			}
+		})
+	}
+}
+
 func TestRunnerExitedForAttemptPersistsExitCodeAfterExplicitStop(t *testing.T) {
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
@@ -2600,6 +2676,7 @@ func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
 	st.Status = state.StatusRunning
 	st.SandboxID = "sb-exited-retained-job"
 	st.ProcessPID = 42
+	st.AssignedJobName = runnerJobStartedMarker
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}

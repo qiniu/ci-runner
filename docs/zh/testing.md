@@ -789,6 +789,7 @@ curl -fsS -b "$COOKIE_JAR" \
 Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精确查找，先解析该标识，再跳转到规范的 `/admin/runner_requests/{id}` 资源页面。表格会让每个请求字段保持单行展示；当视口窄于完整数据宽度时允许横向滚动，纵向滚动仍由页面承载而不是嵌套在表格中。请求资源页面聚合请求状态、诊断结论、带明确来源／新鲜度的 GitHub Job 终态快照或历史实时回退，以及一条按时间排序的“运行记录”。页面展示持久化的 Started、Stopping、Completed 与 Failed 时间，Sandbox 区域、解析后的模板 ID、模板版本、预装 Runner 版本与实际运行 Runner 版本，经过本地化的终止来源及其稳定标识，并且只在真实观察到进程结果时展示退出码。历史记录或部分采集的环境字段显示为 `-`。请求存在存活的 running attempt 时，同一页面会渐进展示固定目标网络诊断控件，并直接呈现解析地址、实际连接 IP、分阶段耗时、HTTP 状态、退出码和稳定错误类别；不存在自由输入目标，成功或失败后刷新现有时间线，不再建立第二套诊断记录页面或导出格式。Cleanup Duration 只使用 `stopping_at` 到当前状态所选择终态时间之间的区间计算；未创建 Sandbox 就完成的请求会保持 `stopping_at` 为空。缺失、无效、倒置或 Go 零时间会显示为不可用，绝不把 `updated_at` 当作清理终点。每条持久化的 control/stdout/stderr 事件都保留为独立时间线行，消息和可选阶段标识直接进入页面正常流，不再使用嵌套输出卡片或折叠交互。页面先加载最新 200 条混合事件，再通过 `GET /runner_requests/{id}/events?before_id=<event-id>` 使用独占游标读取更早记录。活动请求每 5 秒通过一页或多页独占 `after_id` 请求追平新增事件，同时保持历史游标独立，因此不会遗漏事件或丢弃管理员已经加载的历史。独立的 `/admin/diagnostics` 页面只负责 runnerd 运行时检查，展示脱敏摘要和 pprof discovery，只有管理员主动加载或刷新时才请求并渲染可能体积较大的 expvar 快照。旧的 `/admin/diagnostics?runner=...` 链接会先解析标识，再重定向到规范的请求资源。
 
 空闲 Runner sweeper 使用额外的 `idle_cleanup` 终止来源，避免把从未接受 Job 的 Runner 成功清理误标成失败清理。
+Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），只要 Sandbox 和 GitHub Runner 注册都清理成功，请求就不记为完成或失败，而是按有限次数安排 `runner_exited_without_job` 重试；下次启动会先复查原 Job 再创建 Sandbox，重试耗尽后明确失败。
 
 每个已接受的进程退出 watcher 都绑定到本次执行的 Sandbox ID 和 PID。若匹配的进程结果在 Webhook、管理员操作或恢复路径已经完成清理或安排清理重试后到达，runnerd 只补写此前缺失的退出码和 `runner_exit` 事件，不改变首次终止来源，也不重复清理。旧尝试的延迟回调只要有任一身份值不再匹配就会被忽略。
 
