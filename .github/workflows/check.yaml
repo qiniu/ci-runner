@@ -172,6 +172,8 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@v2
+      - run: cd ui && bun install --frozen-lockfile && bun run build
       - name: Verify schema, catalog, deployments, and online migration on SQL backends
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|OnlineMigration(Capture|Replication|Handoff|Verification|Runtime|Rollback|Journal)|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
