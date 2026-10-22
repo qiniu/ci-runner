@@ -283,6 +283,7 @@ export const en = {
     diagnosticFindings: "Findings",
     runnerRequestContext: "Request context",
     runnerRequestContextDescription: "Persisted runnerd state for this request.",
+    lastStarted: "Last started",
     stoppingAt: "Stopping at",
     completedAt: "Completed at",
     cleanupDuration: "Cleanup duration",

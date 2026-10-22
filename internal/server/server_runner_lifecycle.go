@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/github"
@@ -26,6 +27,8 @@ const (
 	runnerEventStageSandboxCleanup      = "sandbox_cleanup"
 	runnerEventStageGitHubRunnerCleanup = "github_cleanup"
 	runnerEventStageRunnerCleanup       = "runner_cleanup"
+	runnerEventStageRunnerRequeue       = "runner_requeue"
+	runnerEventStageTiming              = "runner_timing"
 )
 
 type runnerAttemptIdentity struct {
@@ -347,6 +350,7 @@ func (s *Server) rejectAdmission(req state.RunnerRequest, payload []byte, reason
 }
 
 func (s *Server) startRunner(ctx context.Context, id, workerID string) {
+	initialLockWaitStartedAt := time.Now()
 	unlock := s.lockRunner(id)
 	req, err := s.store.ReadRequest(id)
 	if err != nil {
@@ -354,6 +358,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.logger.Error("read runner request", "id", id, "error", err)
 		return
 	}
+	s.appendRunnerTiming(id, "initial_lock_wait", initialLockWaitStartedAt)
 	st, err := s.store.ReadState(id)
 	if err != nil {
 		unlock()
@@ -365,6 +370,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.logger.Info("runner start skipped because request is not queued", "id", id, "status", st.Status)
 		s.store.AppendLog(id, "control.log", []byte("runner start skipped because request is not queued\n"))
 		return
+	}
+	if !req.CreatedAt.IsZero() {
+		s.appendRunnerWallTiming(id, "queue_wait", req.CreatedAt)
 	}
 	s.admissionMu.Lock()
 	profile, err := s.profileForRunnerRequest(req)
@@ -417,17 +425,22 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	st.Status = state.StatusCreating
 	st.LeaseOwner = workerID
 	st.LeaseExpiresAt = time.Now().UTC().Add(s.cfg.WorkerLeaseTTL)
-	if err := s.store.WriteState(st); err != nil {
+	creatingStatePersistStartedAt := time.Now()
+	writeErr := s.store.WriteState(st)
+	s.appendRunnerTiming(id, "creating_state_persist", creatingStatePersistStartedAt)
+	if writeErr != nil {
 		s.admissionMu.Unlock()
 		unlock()
 		_ = s.store.ReleaseLease(id, workerID)
-		s.logger.Error("write creating state", "id", id, "error", err)
+		s.logger.Error("write creating state", "id", id, "error", writeErr)
 		return
 	}
 	s.admissionMu.Unlock()
 	unlock()
 
+	jobCheckStartedAt := time.Now()
 	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
+	s.appendRunnerTiming(id, "github_job_check", jobCheckStartedAt)
 	if err != nil {
 		s.failStart(id, st, "github_job_status", err)
 		return
@@ -437,18 +450,25 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	}
 
 	if strings.TrimSpace(req.RunnerGroup) != "" {
-		if err := s.gh.ValidateRunnerGroup(ctx, req.GitHubInstallationID, req.RepositoryFullName, req.RunnerGroup); err != nil {
+		runnerGroupCheckStartedAt := time.Now()
+		err := s.gh.ValidateRunnerGroup(ctx, req.GitHubInstallationID, req.RepositoryFullName, req.RunnerGroup)
+		s.appendRunnerTiming(id, "github_runner_group", runnerGroupCheckStartedAt)
+		if err != nil {
 			s.failStart(id, st, "github_runner_group", newRunnerGroupValidationFailure(err))
 			return
 		}
 	}
 
+	sandboxConfigStartedAt := time.Now()
 	sandboxService, sandboxConfig, err := s.sandboxServiceAndConfigForRunnerRequestContext(ctx, req)
+	s.appendRunnerTiming(id, "sandbox_config", sandboxConfigStartedAt)
 	if err != nil {
 		s.failStart(id, st, "sandbox_config", err)
 		return
 	}
+	snapshotStartedAt := time.Now()
 	if err := s.persistSandboxServiceSnapshot(id, sandboxConfig); err != nil {
+		s.appendRunnerTiming(id, "sandbox_snapshot", snapshotStartedAt)
 		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
 			s.deferCreatingRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
 			s.signalQueue()
@@ -457,32 +477,37 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.failStart(id, st, "sandbox_config", err)
 		return
 	}
+	s.appendRunnerTiming(id, "sandbox_snapshot", snapshotStartedAt)
 	templateID := profile.TemplateID
 	var runnerApplications []sandboxrunner.RunnerApplication
-	if profile.TemplateSource == state.TemplateSourcePublic {
+	templateResolutionStartedAt := time.Now()
+	templateID, err = func() (string, error) {
+		if profile.TemplateSource != state.TemplateSourcePublic {
+			return templateID, nil
+		}
 		catalog, ok := sandboxService.(sandboxrunner.DefaultTemplateCatalog)
 		if !ok {
-			s.failStart(id, st, "template_resolution", newDefaultTemplateResolutionError(
+			return "", newDefaultTemplateResolutionError(
 				strings.TrimSpace(profile.DefaultTemplateName),
 				defaultTemplateResolutionReasonNoCatalog,
-			))
-			return
+			)
 		}
 		templates, err := catalog.ListDefaultTemplates(ctx)
 		if err != nil {
-			s.failStart(id, st, "template_resolution", fmt.Errorf(
+			return "", fmt.Errorf(
 				"list default templates for %q: %w",
 				strings.TrimSpace(profile.DefaultTemplateName),
 				err,
-			))
-			return
+			)
 		}
-		templateID, err = resolveDefaultTemplateID(profile.DefaultTemplateName, templates)
-		if err != nil {
-			s.failStart(id, st, "template_resolution", err)
-			return
-		}
+		return resolveDefaultTemplateID(profile.DefaultTemplateName, templates)
+	}()
+	s.appendRunnerTiming(id, "template_resolution", templateResolutionStartedAt)
+	if err != nil {
+		s.failStart(id, st, "template_resolution", err)
+		return
 	}
+	runnerApplicationsStartedAt := time.Now()
 	if profile.TemplateSource != state.TemplateSourcePublic {
 		s.logger.Info("resolving github runner applications", "id", id)
 		s.store.AppendLog(id, "control.log", []byte("resolving github runner applications for preflight update\n"))
@@ -493,11 +518,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		}
 		runnerApplications = append([]sandboxrunner.RunnerApplication(nil), applications...)
 	}
+	s.appendRunnerTiming(id, "github_runner_applications", runnerApplicationsStartedAt)
 
 	s.logger.Info("creating github registration token", "id", id)
 	s.store.AppendLog(id, "control.log", []byte("creating github registration token\n"))
 	createStartedAt := time.Now()
 	token, err := s.gh.CreateRegistrationToken(ctx, req.RepositoryFullName, req.RunnerGroup)
+	s.appendRunnerTiming(id, "github_registration", createStartedAt)
 	if err != nil {
 		s.failStart(id, st, "github_registration", err)
 		return
@@ -507,6 +534,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	exitCh := make(chan struct{})
 	exitWatchAttempt := make(chan runnerAttemptIdentity, 1)
 	startStage := "sandbox_start"
+	sandboxStartStartedAt := time.Now()
 	result, err := func() (sandboxrunner.StartResult, error) {
 		createCtx, cancel := context.WithTimeout(ctx, s.cfg.SandboxCreateTimeout)
 		defer cancel()
@@ -540,6 +568,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			},
 		}
 
+		cacheCredentialsStartedAt := time.Now()
 		if req.GitHubInstallationID > 0 {
 			storage, storageErr := s.cacheStorageForInstallation(req.GitHubInstallationID, sandboxConfig.APIURL)
 			if storageErr != nil {
@@ -574,16 +603,20 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 				}
 			}
 		}
+		s.appendRunnerTiming(id, "cache_credentials", cacheCredentialsStartedAt)
 
 		return sandboxService.StartRunner(createCtx, input)
 	}()
+	s.appendRunnerTiming(id, "sandbox_start", sandboxStartStartedAt)
 	if err != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
 		s.failStart(id, st, startStage, err)
 		return
 	}
 
+	runningLockWaitStartedAt := time.Now()
 	unlock = s.lockRunner(id)
+	s.appendRunnerTiming(id, "running_lock_wait", runningLockWaitStartedAt)
 	current, err := s.store.ReadState(id)
 	if err != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
@@ -617,11 +650,14 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	st.Error = ""
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
-	if err := s.store.WriteState(st); err != nil {
+	runningStatePersistStartedAt := time.Now()
+	writeErr = s.store.WriteState(st)
+	s.appendRunnerTiming(id, "running_state_persist", runningStatePersistStartedAt)
+	if writeErr != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
 		unlock()
-		s.logger.Error("write running state", "id", id, "error", err)
-		s.store.AppendLog(id, "control.log", []byte("write running state failed: "+err.Error()+"\n"))
+		s.logger.Error("write running state", "id", id, "error", writeErr)
+		s.store.AppendLog(id, "control.log", []byte("write running state failed: "+writeErr.Error()+"\n"))
 		s.cleanupStartedSandbox(id, result)
 		return
 	}
@@ -714,6 +750,35 @@ func (s *Server) appendRunnerStdout(id string, data []byte) {
 	if strings.Contains(text, "RUNNERD_JOB_COMPLETED") {
 		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerHook, []byte("runner completed job hook received\n"))
 	}
+}
+
+func (s *Server) appendRunnerTiming(id, stage string, startedAt time.Time) {
+	if startedAt.IsZero() {
+		return
+	}
+	s.appendRunnerTimingDuration(id, stage, time.Since(startedAt), "monotonic")
+}
+
+func (s *Server) appendRunnerWallTiming(id, stage string, startedAt time.Time) {
+	if startedAt.IsZero() {
+		return
+	}
+	duration := time.Now().UTC().Sub(startedAt)
+	clock := "wall"
+	if duration < 0 {
+		duration = 0
+		clock = "wall_skew"
+	}
+	s.appendRunnerTimingDuration(id, stage, duration, clock)
+}
+
+func (s *Server) appendRunnerTimingDuration(id, stage string, duration time.Duration, clock string) {
+	if duration < 0 {
+		return
+	}
+	s.store.AppendStagedLog(id, "control.log", runnerEventStageTiming, []byte(fmt.Sprintf(
+		"stage=%s duration_ms=%d clock=%s\n", stage, duration.Milliseconds(), clock,
+	)))
 }
 
 func (s *Server) markRunnerJobStarted(id string) {
@@ -1396,6 +1461,8 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		s.logger.Info("runner stop skipped because already completed", "id", id)
 		return st, recorded, nil
 	}
+	cleanupStartedAt := time.Now()
+	defer func() { s.appendRunnerTiming(id, "cleanup", cleanupStartedAt) }()
 	if shouldRecordAssignedJob(st, job) {
 		st.AssignedJobID = job.ID
 		st.AssignedJobName = job.Name
@@ -2200,12 +2267,30 @@ func discoverPprofArtifacts() ([]pprofAddress, []string) {
 }
 
 func (s *Server) lockRunner(id string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(id))
-	mu := &s.locks[int(h.Sum32()%uint32(len(s.locks)))]
-	mu.Lock()
+	s.runnerLocksMu.Lock()
+	if s.runnerLocks == nil {
+		s.runnerLocks = make(map[string]*runnerRequestLock)
+	}
+	lock := s.runnerLocks[id]
+	if lock == nil {
+		lock = &runnerRequestLock{}
+		s.runnerLocks[id] = lock
+	}
+	lock.refs++
+	s.runnerLocksMu.Unlock()
+
+	lock.mu.Lock()
+	var once sync.Once
 	return func() {
-		mu.Unlock()
+		once.Do(func() {
+			lock.mu.Unlock()
+			s.runnerLocksMu.Lock()
+			lock.refs--
+			if lock.refs == 0 && s.runnerLocks[id] == lock {
+				delete(s.runnerLocks, id)
+			}
+			s.runnerLocksMu.Unlock()
+		})
 	}
 }
 

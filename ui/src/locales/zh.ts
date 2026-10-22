@@ -283,6 +283,7 @@ export const zh = {
     diagnosticFindings: "诊断结论",
     runnerRequestContext: "请求上下文",
     runnerRequestContextDescription: "该请求在 runnerd 中持久化的完整状态。",
+    lastStarted: "最近一次开始时间",
     stoppingAt: "停止开始时间",
     completedAt: "完成时间",
     cleanupDuration: "清理耗时",

@@ -40,7 +40,8 @@ type Server struct {
 
 	admissionMu          sync.Mutex
 	forkSponsorshipLocks [64]sync.Mutex
-	locks                [64]sync.Mutex
+	runnerLocksMu        sync.Mutex
+	runnerLocks          map[string]*runnerRequestLock
 	queueNotify          chan struct{}
 	deploymentNotify     chan struct{}
 	startOnce            sync.Once
@@ -76,6 +77,14 @@ type Server struct {
 	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
 	userRepositoryAccessEpoch map[int64]uint64
 	userRepositoryAccessGroup singleflight.Group
+}
+
+// runnerRequestLock serializes lifecycle mutations for one request. refs keeps
+// idle lock entries bounded while allowing waiters to retain the same entry
+// until they acquire and release its mutex.
+type runnerRequestLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 type cachedPullTitle struct {
