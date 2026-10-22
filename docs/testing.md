@@ -8,6 +8,21 @@ Run `task lint` for local quality checks. Its `staticcheck` step uses the Go ver
 
 ## 1. Local Config File
 
+The [online SQLite-to-PostgreSQL migration plan](sqlite-postgres-online-migration.md)
+contains the operational runbook and acceptance boundary. `task state-online-migration-test`
+runs race-enabled state tests; set `RUNNERD_CATALOG_BACKEND_TESTS=1` and
+`RUNNERD_POSTGRES_TEST_DSN` to exercise real PostgreSQL capture, replication, cutover,
+rollback child exits, online proof refresh and startup/finalization. The disposable database
+must end in `_test`; its test tables are reset. Run
+`go test -race ./internal/server -run TestOnlineMigrationServerSQLBackends -count=1`
+with the same environment for the same Server/worker/SSE/fake-PTY roundtrip (isolated schema).
+Default invocation uses temporary SQLite and skips opt-in PostgreSQL tests.
+Faults include row/checkpoint/connection failures, missing/damaged journal, partial baselines,
+identity drift and authority uncertainty. Production-copy/live Runner/Deployment/original-PTY
+acceptance remains separate. Run UI-building tasks and Go compilation sequentially: Vite replaces
+embedded asset files during its build. Existing ignored `var/` scratch files with mixed Go packages
+can block `go test ./...`; canonical `task test` covers `./cmd/... ./internal/...` without modifying them.
+
 The service reads `./runnerd.yaml` by default. You can also pass another path with `--config`:
 
 ```bash
@@ -68,7 +83,7 @@ worker:
   retry_max_attempts: 5
 ```
 
-To hide sensitive values from direct display, build runnerd and pipe each value through `./bin/runnerd --obfuscate-config-value`; paste the resulting `RUNNERD_ENC(v1:...)` value into the YAML. Plaintext values remain compatible. Supported fields are `database.dsn`/`database.url`, `auth.session_secret`, `auth.encryption_key`, `github.webhook_secret`, `github.token`, `github.basic_auth.password`, and `github.oauth.client_secret`. Their runtime wrapper masks accidental text, structured-log, JSON, and YAML output. This is obfuscation only: the decoding key is part of runnerd, so a host user able to inspect or execute the binary can recover the value.
+To hide sensitive values from direct display, build runnerd and pipe each value through `./bin/runnerd --obfuscate-config-value`; paste the resulting `RUNNERD_ENC(v1:...)` value into the YAML. Plaintext values remain compatible. Supported fields are `database.dsn`/`database.url`, `database.online_migration.postgres_dsn`, `auth.session_secret`, `auth.encryption_key`, `github.webhook_secret`, `github.token`, `github.basic_auth.password`, and `github.oauth.client_secret`. Their runtime wrapper masks accidental text, structured-log, JSON, and YAML output. This is obfuscation only: the decoding key is part of runnerd, so a host user able to inspect or execute the binary can recover the value.
 
 Sandbox service API URL and API Key are not configured in `runnerd.yaml`. After signing in, `/repositories` shows the effective Sandbox source for the selected account or organization but never embeds the credential editor. When configuration is missing, a manageable scope links to `/account/preferences` or `/organizations/{login}/preferences`; Settings remains the single write surface. For organization installations, visibility can come from repository-only access, while Sandbox management requires an active GitHub organization membership with `role == admin` (an organization owner). Settings lists only the signed-in account and owner-manageable organizations. Ordinary members, outside collaborators, and empty/unknown roles receive only redacted readiness (`manageable: false` plus the effective source) and cannot read API URL, secret state, Cache S3 fields, inheritance-account metadata, templates, runner-created instances, or scoped custom Runner Specs. Failed membership lookups reject the request without returning organization configuration. A local runnerd admin role does not bypass this GitHub organization-owner check. The disabled-by-default platform fallback remains admin-managed at `/admin/sandbox_service`. Its audience is either `all` or `selected`; selected entries match the repository owner's stable GitHub account ID and type. The API Key is encrypted with `auth.encryption_key`. For public-name Specs, resolution order is a saved runner-request snapshot, installation custom/inherited settings, an eligible personal account, eligible organization sponsorship, the enabled and audience-eligible admin default, then a not-configured error. Sponsorship revalidates stable fork/source/owner identities and the selected approval, permission, or membership mode before Sandbox creation; it never supplies Cache S3 or custom Specs. Cover all three modes, public-binding sponsorship behavior, capacity defer, revocation, fresh-retry snapshot clearing, owner-only audited APIs, and account/Organization UI route isolation.
 

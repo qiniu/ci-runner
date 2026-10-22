@@ -29,6 +29,7 @@ func main() {
 	configPath := flag.String("config", "runnerd.yaml", "path to runnerd config file")
 	bootstrapAdmin := flag.String("bootstrap-admin", "", "set an admin account as provider:subject (for example github:12345678) and exit without starting the server")
 	obfuscateConfigValue := flag.Bool("obfuscate-config-value", false, "read a secret from stdin and print a RUNNERD_ENC value")
+	migrationCommand := flag.String("migration-command", "", "send status/prepare/baseline/replay/verify/cutover/rollback/finish/abort/prune to the running process over its private local socket")
 	flag.Parse()
 	if *obfuscateConfigValue {
 		if !runObfuscateConfigValue(os.Stdin, os.Stdout, os.Stderr) {
@@ -42,12 +43,34 @@ func main() {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	store := state.NewWithOptions(state.Options{
-		Backend:        cfg.StateBackend,
-		DatabaseDSN:    cfg.StateDatabaseDSN.Value(),
-		MigrateOnStart: true,
-	})
-	if err := initializeStateStore(store, logger); err != nil {
+	if *migrationCommand != "" {
+		if err := sendMigrationCommand(context.Background(), cfg.OnlineMigration.Directory, *migrationCommand, os.Stdout); err != nil {
+			logger.Error("migration command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+	var store state.Store
+	var migration *state.OnlineMigrationRuntime
+	if cfg.OnlineMigration.Directory != "" {
+		initCtx, cancel := context.WithTimeout(context.Background(), cfg.RecoveryTimeout)
+		migration, err = state.OpenOnlineMigration(initCtx, state.OnlineMigrationOptions{
+			Directory: cfg.OnlineMigration.Directory, SQLiteDSN: cfg.StateDatabaseDSN.Value(),
+			PostgresDSN: cfg.OnlineMigration.PostgresDSN.Value(), Initialize: cfg.OnlineMigration.Initialize,
+			PauseBudget: time.Duration(cfg.OnlineMigration.PauseBudgetMilliseconds) * time.Millisecond,
+		})
+		cancel()
+		if err == nil {
+			store = migration.Store()
+		}
+	} else {
+		store = state.NewWithOptions(state.Options{
+			Backend:     cfg.StateBackend,
+			DatabaseDSN: cfg.StateDatabaseDSN.Value(), MigrateOnStart: true,
+		})
+		err = initializeStateStore(store, logger)
+	}
+	if err != nil {
 		logger.Error("initialize state store", "error", err)
 		os.Exit(1)
 	}
@@ -112,6 +135,15 @@ func main() {
 	cancelRecovery()
 	handler.Start()
 	gate.ready.Store(true)
+	if migration != nil {
+		control, err := startMigrationControl(cfg.OnlineMigration.Directory, migration)
+		if err != nil {
+			logger.Error("start local migration control", "error", err)
+			os.Exit(1)
+		}
+		defer control.Close()
+		go migration.Run(context.Background(), logger)
+	}
 	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)

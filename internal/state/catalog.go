@@ -144,8 +144,12 @@ func (s *DBStore) saveProfile(profile RunnerProfile, conditional bool, expectedU
 	var result *gorm.DB
 	switch {
 	case conditional && expectedUpdatedAt != nil:
+		expected, err := migrationExpectedUpdatedAt(db, "runner_profiles", map[string]any{"name": record.Name}, *expectedUpdatedAt)
+		if err != nil {
+			return RunnerProfile{}, err
+		}
 		result = db.Model(&runnerProfileRecord{}).
-			Where("name = ? AND updated_at = ?", record.Name, *expectedUpdatedAt).Updates(updates)
+			Where("name = ? AND updated_at = ?", record.Name, expected).Updates(updates)
 	case conditional:
 		// A no-op ON CONFLICT reports success with MySQL clientFoundRows.
 		// Use a real insert and translate duplicate errors only at this boundary.

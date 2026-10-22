@@ -23,6 +23,21 @@ Also inspect the diff and keep `docs/README.md` aligned when adding, removing, o
 
 ## State Schema
 
+`task state-online-migration-test` runs race-enabled inventory, protocol,
+transactional capture, consistent artifact, resumable baseline, transactional replay
+and same-position verification, handoff, rollback, startup/finalization and retention tests. Its PostgreSQL gate
+uses `RUNNERD_CATALOG_BACKEND_TESTS=1` plus a dedicated
+`RUNNERD_POSTGRES_TEST_DSN` ending in `_test`; default invocation skips it.
+Migration tests must not use production DBs. Source capture remains opt-in and
+requires explicit runtime configuration. Run the real PostgreSQL server gate with
+`go test -race ./internal/server -run TestOnlineMigrationServerSQLBackends -count=1`
+to preserve the same Server/worker/SSE/fake PTY across a roundtrip. This does not replace live provider acceptance. Snapshot creation uses an
+independent WAL reader and `VACUUM INTO`, not an in-place source vacuum.
+Keep cross-dialect microsecond normalization explicit. Verify IDs above 2^53,
+NULL/false/zero values, composite keys, binary text ordering, resume identity,
+concurrent consumers, streaming source availability and whole-group rollback
+on row/checkpoint failures, disconnects or malformed/incomplete outbox data.
+
 For runner-request payload persistence changes, extend the existing state tests: assert accepted and rejected requests leave `github_payload_json` empty, `workflow_job` and `workflow_run` context survives reopening the database, and legacy metadata/installation-ID backfills preserve historical payloads. Keep repeated-migration coverage; do not use tests that create new requests as a substitute for legacy raw-payload fixtures.
 
 When touching `internal/state/records.go`, GORM tags, indexes, or migration helpers in `internal/state/db.go`, run:

@@ -55,6 +55,18 @@ func (s *DBStore) Ensure() error {
 	if err != nil {
 		return err
 	}
+	// Active migration databases require durable authority recovery before even
+	// startup backfills. Removing migration configuration must never reopen an
+	// old replica as an ordinary primary.
+	standalone := db.Migrator().HasTable(&migrationControlRecord{})
+	if standalone {
+		if err := validateStandaloneMigrationDB(db); err != nil {
+			if pool, poolErr := db.DB(); poolErr == nil {
+				_ = pool.Close()
+			}
+			return err
+		}
+	}
 	if s.opts.MigrateOnStart && !s.migrated {
 		if err := s.migrate(db); err != nil {
 			return err
@@ -63,6 +75,12 @@ func (s *DBStore) Ensure() error {
 	}
 	if s.opts.Backend == BackendSQLite {
 		if err := enableSQLiteForeignKeys(db); err != nil {
+			return err
+		}
+	}
+	if standalone {
+		db, err = migrationStandaloneTimeDB(db)
+		if err != nil {
 			return err
 		}
 	}
@@ -196,6 +214,12 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+	return initializeStateBackfills(db)
+}
+
+// Captured startup resolves authority and validates schema before calling this
+// against the primary only. Schema DDL is forbidden during active migration.
+func initializeStateBackfills(db *gorm.DB) error {
 	if err := backfillDeploymentRevisions(db); err != nil {
 		return err
 	}

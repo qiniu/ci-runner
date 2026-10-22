@@ -7,6 +7,7 @@ Use these docs alongside the root `README.md`.
 The public, bilingual end-user guides are served at [runner.qiniuinc.com/docs](https://runner.qiniuinc.com/docs). They cover hosted onboarding, runnerd deployment, managed workflows, organization fork sponsorship, custom template build-to-use lifecycle, and troubleshooting. Their paired Markdown sources live under `ui/src/content/site-docs/{en,zh}/` so the deployed UI and its guide navigation ship together.
 
 - [Platform Runner Specs](platform-runner-specs.md): database authority, public/private bindings, publication, runtime policy, migration and compatibility.
+- [Online SQLite to PostgreSQL Migration Plan](sqlite-postgres-online-migration.md): active implementation phases, transactional replication, process-local cutover, rollback and release gates; not yet a supported production operation.
 - [Local Testing And GitHub Setup](testing.md): local configuration, GitHub App/OAuth setup, webhook forwarding, admin API examples, timed terminal fault injection, and troubleshooting.
 - [Deployment Smoke Checklist](deployment-smoke.md): production-style smoke checklist for a real GitHub App, webhook, Qiniu sandbox template, runner pickup, cleanup, and diagnostics.
 - [Deploy configuration](deployment.md): the repository configuration contract for the Sandbox Deploy feature.

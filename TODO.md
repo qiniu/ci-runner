@@ -4,6 +4,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Rehearse and authorize the [online SQLite to PostgreSQL migration](docs/sqlite-postgres-online-migration.md) on a production copy before rollout. Transaction capture, resumable baseline/replay, same-process cutover, reverse verification/rollback, startup authority, protected local commands and finalization are implemented; local real-database/server gates do not prove production readiness. Preserve a real Runner Job, Deployment and the same open PTY, measure ingress/lease/latency and disk budgets, and rehearse the preparation-release process upgrade separately. Tracking: https://github.com/qbox/sandbox/issues/535.
+
 - Before promoting the Deploy Sandbox service eligibility fix, run the owner/member platform public-template, personal-repository collaborator versus Installation-owner audience, audience denial, scoped/inherited override, quota and saved-runtime cleanup gates in [Deployment Smoke](docs/deployment-smoke.md#9-sandbox-deploy-acceptance). Local regressions do not replace live provider acceptance.
 
 - Complete individual-repository removal acceptance for the [GitHub context workflow](docs/deployment.md#github-context-routes). Live Installation suspension/cache expiry/recovery and OAuth-token revocation/API denial/in-app browser reauthentication passed on 2026-10-16. GitHub disallowed removing the sole selected repository, so that distinct revocation mode remains unverified.

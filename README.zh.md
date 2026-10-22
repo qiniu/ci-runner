@@ -110,6 +110,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
 - 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL，但多实例共享数据库尚未验证。
+- [SQLite 到 PostgreSQL 在线迁移](docs/zh/sqlite-postgres-online-migration.md#11-操作手册与发布门槛)提供事务复制、同进程切库及受控回退，默认关闭，生产使用仍需独立演练。只修改 DSN 不会复制数据。
 - CI 会创建全新的 PostgreSQL 与 MySQL schema，并在已有 catalog 上重复执行迁移，再验证 policy-free matching。本地 opt-in 的真实方言命令见 [docs/zh/testing.md](docs/zh/testing.md)。
 - 已有 SQLite `runner_requests` 和 `runner_profiles` 表会在启动时补建缺失的 model columns 和 indexes，不会重建整张表，从而保留历史 runner 字段以及旧 profile rows 和 indexes。创建缺失索引不会重写 rows，但大数据库可能出现短暂的启动 I/O 和锁等待；迁移与查询计划检查见 [docs/zh/testing.md](docs/zh/testing.md)。
 - **不支持** GitHub Enterprise Server，请使用 GitHub.com App。
@@ -129,7 +130,7 @@ printf '%s' "$secret_value" | ./bin/runnerd --obfuscate-config-value
 unset secret_value
 ```
 
-支持的字段：`database.dsn`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password`、`github.oauth.client_secret`。这些值在日志和序列化输出中也会显示为 `******`。
+支持的字段：`database.dsn`、`database.online_migration.postgres_dsn`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password`、`github.oauth.client_secret`。这些值在日志和序列化输出中也会显示为 `******`。
 
 > **注意：** 此功能仅防止直接查看配置时的明文泄漏，解码 key 内置在二进制中，不能抵御主机级别的攻击者。
 
@@ -356,6 +357,7 @@ task ui-terminal-fault-test # 使用 Chromium 和本地真实 PTY 验证计时�
 task dev           # 启动本地开发环境（runnerd + Vite + smee）
 task lint          # 运行代码检查
 task test          # 重建 UI + 运行全部测试（Go race detection + Bun UI tests）
+task state-online-migration-test # 验证迁移事务捕获、基线、回放与一致性
 task docker-check  # 验证服务 Dockerfile
 task release-check # 验证发布构建
 ```
