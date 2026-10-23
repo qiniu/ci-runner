@@ -587,7 +587,7 @@ describe("admin diagnostics", () => {
       expect(html).toContain("2.338.0")
       expect(html).toContain("codex/test-sync-concurrent-wait-20260905")
       expect(html).toContain("runner communication lost")
-      expect(html).toContain("开始时间")
+      expect(html).toContain("最近一次开始时间")
       expect(html).toContain("停止开始时间")
       expect(html).toContain("完成时间")
       expect(html).toContain("失败时间")

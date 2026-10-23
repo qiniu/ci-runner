@@ -46,7 +46,7 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
       <Detail label={t("user.commit")} value={runner.head_sha || "-"} />
       <Detail label={t("common.created")} value={formatTime(runner.created_at, i18n.resolvedLanguage)} />
       <Detail label={t("common.updated")} value={formatTime(runner.updated_at, i18n.resolvedLanguage)} />
-      <Detail label={t("common.started")} value={formatTime(runner.running_at, i18n.resolvedLanguage)} />
+      <Detail label={t("common.lastStarted")} value={formatTime(runner.running_at, i18n.resolvedLanguage)} />
       <Detail label={t("admin.stoppingAt")} value={formatTime(runner.stopping_at, i18n.resolvedLanguage)} />
       <Detail label={t("admin.completedAt")} value={formatTime(runner.completed_at, i18n.resolvedLanguage)} />
       <Detail label={t("user.failedAt")} value={formatTime(runner.failed_at, i18n.resolvedLanguage)} />

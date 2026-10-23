@@ -1633,7 +1633,7 @@ function RunnerJobLogPanel({
             <DetailField label={t("common.runnerSpec")} value={job.runner_spec_name || t("user.matchedByLabels")} />
             <DetailField label={t("user.workflowRun")} value={workflowRunValue(job, t)} />
             <DetailField label={t("user.queued")} value={formatTime(job.created_at, i18n.resolvedLanguage)} />
-            <DetailField label={t("common.started")} value={job.running_at ? formatTime(job.running_at, i18n.resolvedLanguage) : "-"} />
+            <DetailField label={t("common.lastStarted")} value={job.running_at ? formatTime(job.running_at, i18n.resolvedLanguage) : "-"} />
             <DetailField label={t("user.finished")} value={job.completed_at || job.failed_at ? formatTime(job.completed_at || job.failed_at, i18n.resolvedLanguage) : "-"} />
             <DetailField label={t("user.commit")} value={job.head_sha || "-"} />
           </div>

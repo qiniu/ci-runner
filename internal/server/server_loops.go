@@ -286,8 +286,12 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			unlock()
 			continue
 		}
+		var timings runnerTimings
+		requeueStartedAt := time.Now()
 		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued)
+		timings.record("requeue", requeueStartedAt)
 		unlock()
+		timings.flush(s, st.ID)
 		if requeueErr != nil {
 			s.logger.Error("requeue mismatched completed workflow job", "id", st.ID, "workflow_job_id", current.WorkflowJobID, "assigned_job_id", current.AssignedJobID, "error", requeueErr)
 			continue
@@ -309,7 +313,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 		}
 		// Keep the returned state aligned with WriteState's CAS-persisted version.
 		next.Version++
-		s.store.AppendLog(st.ID, "control.log", []byte(fmt.Sprintf("runner completed different workflow job %d; original workflow job %d is no longer queued\n", observed.ID, st.WorkflowJobID)))
+		s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageRunnerRequeue, []byte(fmt.Sprintf("runner completed different workflow job %d; original workflow job %d is no longer queued\n", observed.ID, st.WorkflowJobID)))
 		return false, next, nil
 	}
 	next := st
@@ -350,7 +354,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	}
 	// Keep the returned state aligned with WriteState's CAS-persisted version.
 	next.Version++
-	s.store.AppendLog(st.ID, "control.log", []byte(fmt.Sprintf("runner completed different workflow job %d; original workflow job %d is queued, requeued request\n", observed.ID, st.WorkflowJobID)))
+	s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageRunnerRequeue, []byte(fmt.Sprintf("runner completed different workflow job %d; original workflow job %d is queued, requeued request\n", observed.ID, st.WorkflowJobID)))
 	s.signalQueue()
 	return true, next, nil
 }

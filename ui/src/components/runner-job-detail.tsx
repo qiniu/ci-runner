@@ -184,7 +184,7 @@ export function RunnerJobDetail({ id, apiBase, onBack, onOpenJob, request }: Run
                 <SummaryMetric label={t("common.runnerSpec")} value={job.runner_spec_name || t("user.matchedByLabels")} />
                 <SummaryMetric label={t("user.workflowRun")} value={workflowRunLink(job)} />
                 <SummaryMetric label={t("user.queued")} value={formatTime(job.created_at, locale)} />
-                <SummaryMetric label={t("common.started")} value={formatTime(job.running_at, locale)} />
+                <SummaryMetric label={t("common.lastStarted")} value={formatTime(job.running_at, locale)} />
                 <SummaryMetric label={t("user.finished")} value={formatTime(job.completed_at || job.failed_at, locale)} />
               </>
             ) : (

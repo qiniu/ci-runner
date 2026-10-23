@@ -42,6 +42,7 @@ export const en = {
     visibility: "Visibility",
     resources: "Resources",
     started: "Started",
+    lastStarted: "Last started",
     expires: "Expires",
     region: "Region",
     apiKey: "API Key",

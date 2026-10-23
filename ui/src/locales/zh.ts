@@ -42,6 +42,7 @@ export const zh = {
     visibility: "可见性",
     resources: "资源",
     started: "开始时间",
+    lastStarted: "最近一次开始时间",
     expires: "过期时间",
     region: "区域",
     apiKey: "API Key",
