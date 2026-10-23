@@ -286,8 +286,12 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			unlock()
 			continue
 		}
+		var timings runnerTimings
+		requeueStartedAt := time.Now()
 		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued)
+		timings.record("requeue", requeueStartedAt)
 		unlock()
+		timings.flush(s, st.ID)
 		if requeueErr != nil {
 			s.logger.Error("requeue mismatched completed workflow job", "id", st.ID, "workflow_job_id", current.WorkflowJobID, "assigned_job_id", current.AssignedJobID, "error", requeueErr)
 			continue
@@ -300,8 +304,6 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 }
 
 func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed github.WorkflowJob, queued bool) (bool, state.RunnerState, error) {
-	requeueStartedAt := time.Now()
-	defer func() { s.appendRunnerTiming(st.ID, "requeue", requeueStartedAt) }()
 	if !queued {
 		next := st
 		next.AssignedJobID = 0

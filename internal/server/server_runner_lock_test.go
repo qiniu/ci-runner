@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/github"
+	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
@@ -131,7 +133,9 @@ func TestRunnerTimingRecordsGitHubRunnerGroupStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := &Server{store: store, logger: slog.Default()}
-	srv.appendRunnerTiming("timing-request", "github_runner_group", time.Now().Add(-time.Millisecond))
+	var timings runnerTimings
+	timings.record("github_runner_group", time.Now().Add(-time.Millisecond))
+	timings.flush(srv, "timing-request")
 
 	events, _, err := store.ListRunnerEvents("timing-request", 0, 10, "control_log")
 	if err != nil {
@@ -151,7 +155,9 @@ func TestRunnerWallTimingRecordsClockSkewInsteadOfDroppingEvidence(t *testing.T)
 		t.Fatal(err)
 	}
 	srv := &Server{store: store, logger: slog.Default()}
-	srv.appendRunnerWallTiming("wall-timing-request", "queue_wait", time.Now().UTC().Add(time.Hour))
+	var timings runnerTimings
+	timings.recordWall("queue_wait", time.Now().UTC().Add(time.Hour))
+	timings.flush(srv, "wall-timing-request")
 
 	events, _, err := store.ListRunnerEvents("wall-timing-request", 0, 10, "control_log")
 	if err != nil {
@@ -185,5 +191,164 @@ func TestRunnerCleanupTimingSkipsCompletedRequest(t *testing.T) {
 		if event.Stage == runnerEventStageTiming && strings.Contains(event.Message, "stage=cleanup ") {
 			t.Fatalf("completed request recorded cleanup timing: %#v", event)
 		}
+	}
+}
+
+func TestRunnerLockWaitersReuseEntryAndReleaseReferences(t *testing.T) {
+	srv := &Server{}
+	first := srv.lockRunner("request")
+	entry := srv.runnerLocks["request"]
+	acquired := make(chan func(), 1)
+	go func() { acquired <- srv.lockRunner("request") }()
+
+	deadline := time.After(time.Second)
+	for {
+		srv.runnerLocksMu.Lock()
+		refs := entry.refs
+		same := srv.runnerLocks["request"] == entry
+		srv.runnerLocksMu.Unlock()
+		if !same {
+			t.Fatal("waiter replaced the held lock entry")
+		}
+		if refs == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("waiter did not retain the lock entry")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	first()
+	var second func()
+	select {
+	case second = <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not acquire the released lock")
+	}
+	first() // A duplicate unlock must not release the waiter's reference or mutex.
+	srv.runnerLocksMu.Lock()
+	if srv.runnerLocks["request"] != entry || entry.refs != 1 {
+		t.Errorf("waiter entry lost after duplicate unlock: refs=%d", entry.refs)
+	}
+	srv.runnerLocksMu.Unlock()
+	if entry.mu.TryLock() {
+		entry.mu.Unlock()
+		t.Error("duplicate unlock released the waiter's mutex")
+	}
+	second()
+	second()
+	srv.runnerLocksMu.Lock()
+	defer srv.runnerLocksMu.Unlock()
+	if len(srv.runnerLocks) != 0 {
+		t.Errorf("unused lock entries were not reclaimed: %v", srv.runnerLocks)
+	}
+}
+
+type timingObservingStore struct {
+	state.Store
+	onReadRequest func()
+	onTiming      func(string)
+}
+
+func (s *timingObservingStore) ReadRequest(id string) (state.RunnerRequest, error) {
+	s.onReadRequest()
+	return s.Store.ReadRequest(id)
+}
+
+func (s *timingObservingStore) AppendStagedLog(id, name, stage string, data []byte) {
+	if stage == runnerEventStageTiming {
+		s.onTiming(string(data))
+	}
+	s.Store.AppendStagedLog(id, name, stage, data)
+}
+
+func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("profile_enabled_%t", enabled), func(t *testing.T) {
+			base := state.New(t.TempDir())
+			events := &lifecycleEventRecorder{}
+			ghServer := httptest.NewServer(githubRunnerAPI(t))
+			defer ghServer.Close()
+			sandbox := &lifecycleSandboxService{events: events}
+			upsertLifecycleProfile(t, base, state.RunnerProfile{
+				Name: "custom", Labels: []string{"self-hosted", "custom"},
+				TemplateID: "custom-id", Enabled: enabled, MaxConcurrency: 10,
+			})
+			const id = "timed-start"
+			if _, _, err := base.CreateRequest(state.RunnerRequest{
+				ID: id, RepositoryFullName: "o/r", ProfileName: "custom",
+				Labels: []string{"self-hosted", "custom"}, SandboxAPIURL: "https://us-south-1.example",
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			reads := make(chan time.Time, 10)
+			batches := make(chan string, 10)
+			store := &timingObservingStore{Store: base, onReadRequest: func() { reads <- time.Now() }}
+			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
+			store.onTiming = func(message string) {
+				// A synchronous diagnostics write may be slow; neither lifecycle
+				// nor global admission should remain locked during that write.
+				srv.runnerLocksMu.Lock()
+				entry := srv.runnerLocks[id]
+				if entry != nil {
+					if entry.mu.TryLock() {
+						entry.mu.Unlock()
+					} else {
+						t.Error("timing persistence held the request lock")
+					}
+				}
+				srv.runnerLocksMu.Unlock()
+				if srv.admissionMu.TryLock() {
+					srv.admissionMu.Unlock()
+				} else {
+					t.Error("timing persistence held the admission lock")
+				}
+				batches <- message
+			}
+			done := make(chan struct{})
+			go func() {
+				srv.startRunner(t.Context(), id, "worker-test")
+				close(done)
+			}()
+			var batch string
+			select {
+			case batch = <-batches:
+			case <-time.After(3 * time.Second):
+				t.Fatal("startup timings were not flushed before waiting for process exit")
+			}
+			firstRead := <-reads
+			firstLine := strings.Split(batch, "\n")[0]
+			_, observed, _ := strings.Cut(firstLine, "observed_at=")
+			observedAt, err := time.Parse(time.RFC3339Nano, observed)
+			if err != nil || observedAt.After(firstRead) {
+				t.Fatalf("initial lock timing includes request read: %q, read at %v", firstLine, firstRead)
+			}
+			if enabled {
+				for _, stage := range []string{"creating_state_persist", "github_runner_applications", "sandbox_start", "running_lock_wait", "running_state_persist"} {
+					if !strings.Contains(batch, "stage="+stage+" ") {
+						t.Errorf("missing startup timing %q: %s", stage, batch)
+					}
+				}
+				select {
+				case <-done:
+					t.Error("successful startup did not wait for process exit")
+				default:
+				}
+				sandbox.startInputs()[0].OnExit(sandboxrunner.ExitResult{}, nil)
+			}
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("startup did not finish")
+			}
+			// Cleanup may have its own batch, but startup must be written once.
+			close(batches)
+			for message := range batches {
+				if strings.Contains(message, "stage=initial_lock_wait ") {
+					t.Error("startup timings were persisted more than once")
+				}
+			}
+		})
 	}
 }
