@@ -49,10 +49,14 @@ type runnerCapacityObservation struct {
 	reserved       bool
 }
 
-func (c *runnerAdmissionCapacity) observe(req state.RunnerRequest) *runnerCapacityObservation {
+func (c *runnerAdmissionCapacity) observe(req state.RunnerRequest, profileName string) *runnerCapacityObservation {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := runnerCapacityProfileKey(req)
+	// Requests can retain an alias spelling under a case-insensitive database
+	// collation. Use the reloaded row's name, not Go case folding, so aliases
+	// share capacity while distinct names on case-sensitive backends do not.
+	key.name = profileName
 	if c.profiles == nil {
 		c.profiles = make(map[runnerCapacityKey]*runnerCapacityCounter)
 	}
@@ -109,7 +113,7 @@ func (o *runnerCapacityObservation) finish() {
 // excluding spec mutations while permitting independent Store operations.
 // The capacity mutex protects only memory; no Store call runs under it.
 func (s *Server) reserveRunnerCapacity(req state.RunnerRequest, profile state.RunnerProfile, timings *runnerTimings) (release func(), stage string, err error) {
-	observation := s.runnerCapacity.observe(req)
+	observation := s.runnerCapacity.observe(req, profile.Name)
 	defer func() {
 		if release == nil {
 			observation.finish()

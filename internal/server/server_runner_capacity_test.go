@@ -15,15 +15,16 @@ import (
 
 type admissionBlockingStore struct {
 	state.Store
-	stage          string
-	armed, used    atomic.Bool
-	entered        chan struct{}
-	release        chan struct{}
-	writeFailure   error
-	writeConflict  bool
-	progressMu     sync.Mutex
-	progress       map[string][]func()
-	ready, workers sync.WaitGroup
+	stage                   string
+	armed, used             atomic.Bool
+	entered                 chan struct{}
+	release                 chan struct{}
+	writeFailure            error
+	writeConflict           bool
+	caseInsensitiveProfiles bool
+	progressMu              sync.Mutex
+	progress                map[string][]func()
+	ready, workers          sync.WaitGroup
 }
 
 func (s *admissionBlockingStore) AppendStagedLog(id, name, stage string, data []byte) {
@@ -50,9 +51,23 @@ func (s *admissionBlockingStore) block(stage string) bool {
 }
 
 func (s *admissionBlockingStore) GetProfile(name string) (state.RunnerProfile, error) {
-	profile, err := s.Store.GetProfile(name)
+	profile, err := s.Store.GetProfile(s.lookupProfileName(name))
 	s.block("profile_lookup")
 	return profile, err
+}
+
+// Model a case-insensitive catalog lookup while keeping the fixture database
+// portable. The regression pauses before any creating write, so both durable
+// counts are zero under either SQLite or a case-insensitive MySQL collation.
+func (s *admissionBlockingStore) lookupProfileName(name string) string {
+	if s.caseInsensitiveProfiles && strings.EqualFold(name, "shared") {
+		return "shared"
+	}
+	return name
+}
+
+func (s *admissionBlockingStore) GetScopedProfile(scope state.RunnerProfileScope, name string) (state.ScopedRunnerProfile, error) {
+	return s.Store.GetScopedProfile(scope, s.lookupProfileName(name))
 }
 
 func (s *admissionBlockingStore) InFlightCount() (int, error) {
@@ -361,4 +376,43 @@ func TestRunnerAdmissionConcurrentEnqueueIsIdempotent(t *testing.T) {
 		t.Fatalf("created %d requests, want 1", created.Load())
 	}
 	assertAdmissionState(t, store.Store, "duplicate", state.StatusQueued)
+}
+
+func TestRunnerAdmissionUsesReloadedProfileName(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		insensitive bool
+		scopes      []int64
+	}{
+		{"global_case_insensitive", true, nil},
+		{"scoped_case_insensitive", true, []int64{1, 1}},
+		{"distinct_case_sensitive_specs", false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, store, fake, release := admissionTestFixture(t, "creating_state_persist", 10, 1, tc.scopes...)
+			store.caseInsensitiveProfiles = tc.insensitive
+			if !tc.insensitive {
+				upsertLifecycleProfile(t, store.Store, state.RunnerProfile{Name: "SHARED", Labels: []string{"self-hosted", "custom"}, TemplateID: "custom-id", Enabled: true, MaxConcurrency: 1})
+			}
+			st := assertAdmissionState(t, store.Store, "b", state.StatusQueued)
+			st.ProfileName = "SHARED"
+			if err := store.Store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			a := startAdmissionTestRunner(t, srv, "a")
+			awaitAdmissionTest(t, store.entered, "creating write not reached")
+			awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, "b"), "second admission did not decide capacity")
+			want, starts := state.StatusRunning, 2
+			if tc.insensitive {
+				want, starts = state.StatusQueued, 1
+			}
+			assertAdmissionState(t, store.Store, "b", want)
+			release()
+			awaitAdmissionTest(t, a, "first startup did not finish")
+			if got := len(fake.startInputs()); got != starts {
+				t.Fatalf("started %d Sandboxes, want %d", got, starts)
+			}
+			assertCapacityReleased(t, srv)
+		})
+	}
 }
