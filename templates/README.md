@@ -71,22 +71,31 @@ a Runner upgrade retains the earlier provisioned layers. This is a shared
 source directory, not another physical Sandbox
 template or provider-side inheritance layer.
 
-The weekly/manual `Actions Runner Update` workflow validates GitHub's latest
-stable Linux x64 release metadata and downloaded bytes, enforces the
-sixteen-chunk 256-MiB archive limit, updates this shared pin, regenerates
-`runner-images-compatibility.json`, and passes
-`task template-check-all` before creating or refreshing the one automation PR.
-Lower versions and equal-version metadata drift fail closed; only an exact
-version/size/digest match is a no-op. The digest verifies consistency with the
-same GitHub release metadata, while human review remains the provenance trust
-boundary.
+Fenno runs the daily Runner maintenance task from `.fennoai.yml` and follows
+[maintain-actions-runner](../.agents/skills/maintain-actions-runner/SKILL.md).
+The updater verifies GitHub's latest stable Linux x64 and Windows x64 assets,
+including downloaded size and SHA-256, before changing the shared Linux pin
+and the three `RUNNER_WIN_X64_*` fields in
+`github-runner-windows-11/template.env`. It rejects archives above 256 MiB (the
+Linux sixteen-chunk ceiling), downgrades and same-version metadata drift.
+An exact version/size/digest match on both platforms is a no-op. The digest
+verifies consistency with GitHub metadata; human review remains the merge
+trust boundary.
 
-It explicitly dispatches the full `Check` workflow on that PR branch. The
-workflow has no Sandbox credentials and never performs a remote build or
-publication. After merge, an operator performs the two-region build,
-publication, catalog checks, and real Sandbox smoke locally with the existing
-Task targets. This keeps long remote builds inspectable without placing
-production Sandbox credentials in GitHub Actions.
+After regenerating `runner-images-compatibility.json` and passing
+`task template-check-all` and the Windows/common pin consistency test, Fenno
+maintains one upgrade PR. It follows all Check runs for the current PR head,
+dispatching a first run only when no matching run exists. Failed, cancelled or
+timed-out runs require diagnosis rather than a replacement dispatch.
+
+The manual `Actions Runner Update` workflow only verifies a proposal. It has no
+schedule and cannot push branches, create PRs or dispatch Check. Neither source
+maintenance entrypoint receives Sandbox credentials or builds/publishes templates.
+After merge, an operator performs the two-region build, publication, catalog
+checks and real Sandbox smoke locally with the existing Task targets, retaining
+production Job evidence in a versioned promotion record. Confirm Fenno's
+repository access, timezone and single-task execution before switching schedules;
+see [activation and acceptance](../docs/default-runner-templates.md#activation-and-acceptance).
 
 Publication state is restricted to `development`, `published`, or `verified`.
 `published` means the physical template is public in both supported regions.

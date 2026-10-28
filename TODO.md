@@ -28,21 +28,24 @@ This file tracks active project work. Completed behavior should move into `READM
 - Decide whether expvar diagnostics need a Prometheus/export adapter or histogram-style latency views for deployment observability.
 - After the `ui-production-smoke` check has reported on `main`, enable it as a required status check in branch protection; the repository currently has no required status checks.
 - Define a privacy-safe documentation activation funnel for `/docs` (guide entry, hosted/deploy path selection, and first successful job) before adding analytics; do not collect repository names, workflow names, credentials, or log content.
-- Complete [Issue #68](https://github.com/qiniu/ci-runner/issues/68) and
-  [Issue #112](https://github.com/qiniu/ci-runner/issues/112) through the next
-  real Actions Runner release: after the automated source PR merges, use the
-  existing local Task targets to sequentially rebuild and publish all eight
-  templates in both regions, check both catalogs, run real Sandbox smoke, and
-  retain the build/catalog/smoke evidence in Issue #68. Keep production
-  Sandbox credentials out of GitHub Actions and stop for operator review rather
-  than attempting an uncertain automatic rollback.
+- Before merging the Runner maintenance schedule migration, confirm Fenno's
+  repository permissions, actual timezone, single-task execution and runtime
+  budget; after merge, retain real no-op, changed, failure-recovery and
+  repeated-run evidence. Source pin updates already cover Linux and Windows;
+  the manual Actions workflow validates only and cannot create an upgrade PR.
+- Complete [Issue #68](https://github.com/qiniu/ci-runner/issues/68) through the
+  first real Actions Runner upgrade: after the verified source PR merges, use
+  existing local Task targets to rebuild and publish all eight Linux templates
+  in both regions, check catalogs, run real Sandbox smoke and standard/large
+  production Jobs, and retain evidence in a versioned promotion record linked
+  from Issue #68. Keep production Sandbox credentials out of Fenno and GitHub
+  Actions; stop for operator review rather than attempting uncertain rollback.
 - Keep old-schema upgrade coverage whenever state records or GORM tags change; the current migration path is a narrow legacy compatibility pass followed by `AutoMigrate`, with additive-only handling for existing SQLite `runner_requests` and `runner_profiles`, not a full handwritten migration history.
 - Run the scoped Runner Specs release gates when dedicated environments are available: PostgreSQL/MySQL audited-mutation and fresh-schema tests, a production SQLite snapshot migration, and the SQLite down-version startup check against the documented baseline.
 - Extend the existing fixture-backed account/Organization Runner Spec form coverage with broader scope-switching browser scenarios; stale-scope response isolation currently has component coverage.
 - Run one real personal-account and one real Organization GitHub Actions workflow through the scoped Runner Specs path, including Sandbox template validation, cleanup, and the repository-only outsider authorization boundary. For organization Runner groups, verify allowed and denied repository preflight, group + labels routing, GitHub workflow restrictions and cleanup; see [the group contract](docs/platform-runner-specs.md#github-runner-groups).
 - Execute the deployment canary for the scoped Runner Specs routes and update `docs/user-scoped-runner-configuration.md` with origin, version, and cleanup evidence; local fixture-backed browser smoke is not a deployment substitute.
 - Promote the preview Windows 11 Runner: confirm Windows Sandbox and `windows11` base-template support in each supported region, build and smoke `github-runner-windows-11` there, run one full `task dev` webhook-to-cleanup workflow with a fixed-ID Windows spec in each region, and decide whether it joins the published public-name catalog. The disk is 50 GiB with about 11 GiB free after setup; the build only guarantees 10 GiB free and does not enlarge it.
-- Let the `Actions Runner Update` automation also refresh the Windows win-x64 archive pin in `templates/github-runner-windows-11/template.env`; until then the pin-consistency test fails that automation PR and the Windows pin must be updated by hand.
 - Deregister the GitHub Runner when runnerd destroys a Sandbox before its Job starts. The in-Sandbox `config remove` cleanup never runs in that case, so an offline Runner remains registered (observed on Windows; the Linux path has the same shape).
 - Add Windows variants of the fixed-target network diagnostics and the Web Console, which currently assume a POSIX shell.
 

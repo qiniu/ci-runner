@@ -35,12 +35,17 @@ task template-check-all
 - `task lint` runs `staticcheck` with the Go version declared in `go.mod`, matching CI and avoiding newer host Go export data unsupported by the installed analyzer.
 - `task ui-i18n-check` validates the English/Chinese resource contract, typed i18next keys, and untranslated visible literals before UI copy changes are handed off.
 - `task template-runner-update-test` exercises stable-release, downgrade,
-  canonical-asset, digest/size, atomic-write, and no-op behavior for the shared
-  Actions Runner pin updater. `task template-check-all` includes it; use
-  Node.js 24 for both commands.
-- Keep `Actions Runner Update` source-only: it may refresh the dedicated update
-  branch/PR and dispatch Check, but it must not receive Sandbox credentials or
-  perform template builds, publication, or rollback.
+  canonical-asset, digest/size, per-file atomic writes, rollback, and no-op
+  behavior for the Linux/Windows Actions Runner pin updater.
+  `task template-check-all` includes it; use Node.js 24 for both commands.
+- Fenno owns the daily source-maintenance schedule and upgrade branch/PR; follow
+  [maintain-actions-runner](../skills/maintain-actions-runner/SKILL.md). Query all
+  Check runs for the current head, including failures, and dispatch only when
+  none exists. Existing unsuccessful runs require diagnosis and bounded retry
+  handling, not a fresh dispatch.
+- The manual `Actions Runner Update` workflow validates only: it has no schedule
+  and cannot write branches/PRs or dispatch Check. Neither entrypoint may receive
+  Sandbox credentials or perform template builds, publication, or rollback.
 
 ## Documentation Sync
 
