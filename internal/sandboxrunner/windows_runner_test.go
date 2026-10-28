@@ -432,3 +432,23 @@ func TestWindowsTemplateRunnerPinMatchesCommonPin(t *testing.T) {
 		t.Fatalf("Windows runner pin %s does not match common pin %s; update template.env with the win-x64 archive digest and size", windows, common)
 	}
 }
+
+func TestWindowsTemplateDownloadUsesBoundedHTTP11Transfer(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile(filepath.Join(repositoryRoot(t), "templates/github-runner-windows-11/scripts/setup-template.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	for _, want := range []string{
+		"--http1.1",
+		"--speed-limit 1024",
+		"--speed-time 60",
+		"--max-time 900",
+		"--continue-at -",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("Windows template download does not contain %q", want)
+		}
+	}
+}

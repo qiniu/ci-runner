@@ -40,8 +40,10 @@ function Get-CheckedDownload([string]$name, [string]$url, [string]$sha256, [long
   $path = Join-Path $downloadRoot $name
   Log "downloading $url"
   for ($attempt = 1; ; $attempt++) {
-    # curl.exe ships with Windows 11; --continue-at resumes partial transfers.
-    & curl.exe --fail --location --silent --show-error --connect-timeout 10 --max-time 900 --max-filesize ($size + 1) --continue-at - --output $path $url
+    # curl.exe ships with Windows 11; resume partial transfers, keep the
+    # GitHub release connection on HTTP/1.1 for the Windows Schannel path, and
+    # abort a stalled transfer before the per-attempt deadline.
+    & curl.exe --http1.1 --fail --location --silent --show-error --connect-timeout 10 --speed-limit 1024 --speed-time 60 --max-time 900 --max-filesize ($size + 1) --continue-at - --output $path $url
     if ($LASTEXITCODE -eq 0) {
       break
     }
