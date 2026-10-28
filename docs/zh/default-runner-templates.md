@@ -55,33 +55,57 @@ workflow 门槛，证据保留在
 
 ## 自动创建 Runner 基线更新 PR
 
-`.github/workflows/actions-runner-update.yaml` 每周二 02:23 UTC 运行，也支持
-`workflow_dispatch`。它读取 GitHub 最新稳定的 `actions/runner` release；如果发现
-draft、prerelease、降级、非规范或重复的 Linux x64 资产、格式错误的元数据，或下载
-归档超过 16 个分块、256 MiB 上限，或内容的字节数/SHA-256 与 release 元数据不一致，
-就会直接失败；响应一旦超过声明字节数会立即停止读取。仓库已固定同一版本时是幂等
-no-op 的前提是 GitHub 提供的大小和 digest 仍与 pin 一致；元数据漂移会失败关闭。
-`latest` 低于当前 pin 时也会保留为可见的降级失败，而不是静默 no-op。no-op 路径不
-下载归档，也不创建重复 PR。
+Fenno 是 Runner 基线升级 PR 的唯一周期写入方。根目录 `.fennoai.yml` 配置每天
+09:00 执行；启用前确认仓库调度器实际使用 `Asia/Shanghai`。任务遵循项目内的
+[maintain-actions-runner](../../.agents/skills/maintain-actions-runner/SKILL.md)，
+使用运行环境提供的 Git 身份，每次从 GitHub 恢复状态。平台应限制为一个维护任务
+执行，并提供 GitHub contents、PR、Actions、Issues 权限，以及 Node.js 24、Go、
+Task、jq、Docker 和 gh。配置合并不代表 Fenno 服务已经启用。
 
-digest 对比证明下载字节与 GitHub release 元数据一致，但资产与 digest 来自同一个
-release，因此它不提供独立的来源认证。源码更新在合并或推广前仍以人工 PR review
-作为可信边界。
+`scripts/update-actions-runner-pin.mjs` 校验官方最新稳定版的 Linux x64 `.tar.gz`
+和 Windows x64 `.zip` 资产。draft、prerelease、任一平台降级、缺失或重复资产、
+非规范 URL、无效元数据以及超过 256 MiB 的归档均失败关闭；Linux 的此上限来自
+16 个 COPY 分块。下载设有五分钟期限，超过声明大小立即停止，并核对 SHA-256。
+全部待更新资产验证通过后才写 pin。同版本的大小或摘要漂移会失败；正常 no-op
+不下载任一归档。
 
-发现经过校验的新版本后，工作流更新 `templates/common/actions-runner.env`，重新生成
-`templates/runner-images-compatibility.json`，并运行 `task template-check-all`。只有门槛
-通过后，才使用 `--force-with-lease` 更新专用的
-`automation/actions-runner-update` 分支，并创建或刷新唯一的升级 PR。仓库
-`GITHUB_TOKEN` 具有 `contents`、`pull-requests` 和 `actions` 写权限。由于该 token
-创建的事件不会递归触发普通 `push` 或 `pull_request` 工作流，更新流程会显式在 PR
-head 上调度 `check.yaml`。每周检查失败会在 Actions 及 run summary 中保持可见；
-检查成功时，稳定版发布后最迟 7 天会被发现。
+更新器修改共享 Linux pin，以及 `templates/github-runner-windows-11/template.env`
+中的三个 `RUNNER_WIN_X64_*` 字段，保留其他 Windows 工具 pin；Linux 已为最新时，
+也可以补齐较旧的 Windows pin。每个文件独立原子替换，第二个文件写入失败时恢复
+第一个文件；进程崩溃不具备跨文件事务保证，应从已验证的远端状态重新生成，不能
+提交半成品。离线测试同时指定 `--release-json`、`--asset-file`、
+`--windows-asset-file`、`--pin-file` 和 `--windows-pin-file`。
 
-这套自动化只修改源码，不接收 Sandbox 凭据，不能构建、发布或取消发布模板。升级
-PR 经过审查并合并后，operator 使用现有的本地 Task 在两个区域重建并发布 8 个
-模板、核对 catalog、执行真实 Sandbox smoke 并保留证据。生产 Sandbox 凭据只放在
-operator 当前 shell 中，不进入 GitHub Actions；结果不确定时停止并交由 operator
-处理，不执行不确定的自动回滚。
+有更新时重新生成 `templates/runner-images-compatibility.json`，运行
+`task template-check-all` 和 Windows／共享 pin 一致性测试，并检查三个文件的允许
+修改范围。Fenno 维护唯一的 `automation/actions-runner-update` PR，以明确租约保护
+分支更新，相同提案保留原 SHA，review 和合并由人工完成。CI 必须对应当前 PR head；
+查询该 head 的全部 `check.yaml` 运行，不按状态筛选，只有完全没有运行记录时才首次
+调度。排队或执行中的运行继续跟进，完整成功的 Check 可复用。失败、取消或超时均为
+已有运行，应先诊断，不能当作缺失；确定性或原因未明的失败不得在次日创建替代运行，
+只有已确认的瞬时错误才允许对原运行作有界重试。失败记录按状态去重，不每天重复
+评论；维护工具缺陷通过独立修复 PR 处理，不能放宽验证条件。
+
+`.github/workflows/actions-runner-update.yaml` 保留为手动只读验证入口：没有 cron、
+分支推送、PR 修改或 Sandbox 凭据，不与 Fenno 竞争升级分支。摘要给出校验版本和
+是否需要更新。普通 Check CI 同时执行磁盘回归检查，其 mock 不受宿主机
+`/etc/environment` 重置 PATH 的影响。
+
+digest 证明下载内容与 GitHub 元数据一致，不提供独立来源认证，人工 review 仍为
+合并信任边界。合并后 Agent 创建或复用带版本号的发布记录，必要时关联首次升级
+验收 Issue；无变化时安静结束，首次验收 Issue 关闭不停止后续维护。
+
+源码自动化不接收 Sandbox 凭据，不构建、发布、取消发布或回滚模板。operator 继续
+在本地用现有 Task 完成双区域各八个 Linux 模板的构建、发布、catalog、真实 Sandbox
+smoke 和 standard／large 生产 Job 验证。Windows pin 同步不扩大 Linux 清单的生产
+发布范围。生产凭据只在 operator 当前 shell 中使用，不确定结果交由人工处理。
+
+### 启用与验收
+
+合并调度迁移前确认 Fenno 仓库权限、时区、单任务互斥和执行预算；删除旧 cron 却未
+启用 Fenno 会失去周期检查。合并后记录真实 Fenno 的 no-op、changed、失败恢复和
+重复执行运行链接。本地 fixture 只能验证更新器，不能证明外部调度器或实际 PR 权限
+可用。首次真实升级只有在源码 PR、区域模板和生产 Job 证据完整后才能完成验收。
 
 ## 公共 Catalog API
 

@@ -407,25 +407,22 @@ registration and replaces a stale writable copy before the current Job can be
 accepted. Official self-update remains enabled after registration for both
 paths.
 
-The `Actions Runner Update` workflow checks GitHub's latest stable Runner every
-Tuesday at 02:23 UTC and also supports manual dispatch. It accepts only the
-canonical Linux x64 asset within the sixteen-chunk 256-MiB limit, verifies
-the downloaded digest and byte count against GitHub's release metadata, updates
-the shared pin and generated compatibility assertions, and passes
-`task template-check-all` before creating or refreshing the single
-`automation/actions-runner-update` pull request. Because a PR created with
-`GITHUB_TOKEN` does not recursively trigger `pull_request`, the updater
-explicitly dispatches the full `Check` workflow for that branch. This workflow
-never builds, publishes, or unpublishes Sandbox templates. After merge, an
-operator uses the existing local `template-build-*`, `template-publish-*`,
-`template-defaults-check`, and `template-smoke` tasks for the two-region
-promotion so long remote builds remain easy to inspect and production Sandbox
-credentials never enter GitHub Actions.
-A lower latest release is treated as a downgrade alert rather than a no-op. An
-equal version is a no-op only when its GitHub-provided size and digest still
-match the pin; metadata drift fails closed. Human review remains the provenance
-boundary because the digest and asset metadata come from the same GitHub
-release.
+Fenno checks the official stable Runner daily through `.fennoai.yml` and the
+project's `maintain-actions-runner` skill. Its deterministic updater verifies
+Linux x64 and Windows x64 archives, synchronizes their pins, regenerates the
+compatibility manifest, and runs template checks before maintaining the single
+`automation/actions-runner-update` PR. Identical proposals do not create new
+commits; Check evidence must match the current PR head. Human review and merge
+remain required. The manual `Actions Runner Update` workflow only validates a
+proposal and cannot push, create PRs, or publish templates.
+
+Confirm Fenno's actual timezone, permissions and single-task execution before
+switching on the daily schedule. Source automation receives no production
+Sandbox credentials. After merge, an operator uses the existing local build,
+publish, catalog and smoke Tasks for two-region promotion and retains real Job
+evidence in the versioned release record. See
+[Public Runner Templates](docs/default-runner-templates.md#automated-runner-baseline-update-prs)
+for activation, asset validation, no-op/failure behavior and acceptance boundaries.
 
 Template source validation requires Node.js 24, and template builds require
 qshell 2.19.13 or newer. Standard configs request

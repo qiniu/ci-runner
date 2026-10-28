@@ -11,6 +11,8 @@ This directory contains project-local guidance for future agents.
 
 ## Skills
 
+- `skills/maintain-actions-runner/SKILL.md`: scheduled Fenno Runner upgrades, asset verification, unique PR/CI tracking, and operator promotion handoff.
+
 - `skills/runnerd-state-schema/SKILL.md`: use when changing state records, GORM tags, indexes, or schema migration compatibility.
 - `skills/runnerd-dev-smoke/SKILL.md`: use when validating `task dev`, Vite proxy behavior, smee forwarding, or local startup fixes.
 

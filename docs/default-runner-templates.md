@@ -71,41 +71,77 @@ standard workflow, and large workflow gates recorded in
 
 ## Automated Runner baseline update PRs
 
-`.github/workflows/actions-runner-update.yaml` runs every Tuesday at 02:23 UTC
-and through `workflow_dispatch`. It reads GitHub's latest stable
-`actions/runner` release and fails closed for drafts, prereleases, downgrades,
-noncanonical Linux x64 assets, duplicate assets, malformed metadata, or any
-archive larger than the sixteen-chunk 256-MiB limit, or any downloaded
-size/SHA-256 mismatch. A response that exceeds its declared size is stopped
-immediately. A lower latest release remains a visible downgrade failure rather
-than becoming a silent no-op. An already pinned release is a no-op only when
-its GitHub-provided size and digest still match the pin; metadata drift fails
-closed. The no-op path does not download the archive or create another PR.
+Fenno is the sole scheduled writer of Runner baseline upgrade PRs. The root
+`.fennoai.yml` requests a daily run at 09:00; confirm the repository scheduler
+uses `Asia/Shanghai` before activation. The scheduled agent follows
+[maintain-actions-runner](../.agents/skills/maintain-actions-runner/SKILL.md),
+uses the supplied task identity, and restores state from GitHub on each run.
+Configure one active maintenance task and verify the runtime's GitHub
+contents/PRs/Actions/Issues permissions, Node.js 24, Go, Task, jq, Docker and gh.
+A merged configuration alone is not evidence that the Fenno service is enabled.
 
-The digest comparison establishes consistency between the downloaded bytes and
-GitHub's release metadata; it is not independent provenance because both the
-asset and digest come from the same release. Human PR review remains the trust
-boundary before a source update is merged or promoted.
+`scripts/update-actions-runner-pin.mjs` reads the latest stable `actions/runner`
+release and validates both canonical Linux x64 `.tar.gz` and Windows x64 `.zip`
+assets. It rejects drafts, prereleases, downgrades on either platform,
+missing/duplicate assets, malformed metadata, and archives above 256 MiB (the
+Linux sixteen-chunk ceiling). Each changed archive is streamed with a
+five-minute deadline, a declared-size bound and SHA-256 verification. All
+changed assets are verified before either pin is written. Same-version metadata
+drift fails closed; a verified no-op downloads neither archive.
 
-For a verified upgrade, the workflow updates
-`templates/common/actions-runner.env`, regenerates
-`templates/runner-images-compatibility.json`, and runs
-`task template-check-all`. Only then does it replace the dedicated
-`automation/actions-runner-update` branch with `--force-with-lease` and create
-or refresh its one PR against the default branch. The repository
-`GITHUB_TOKEN` has `contents`, `pull-requests`, and `actions` write permission.
-Since events created by that token do not recursively run ordinary `push` or
-`pull_request` workflows, the updater explicitly dispatches `check.yaml` on the
-PR head. Any failed weekly run remains visible in Actions and its run summary;
-the successful weekly cadence detects a stable release within seven days.
+The updater writes the shared Linux pin and only the three `RUNNER_WIN_X64_*`
+fields in `templates/github-runner-windows-11/template.env`, preserving other
+Windows tool pins. It can bring an older Windows pin up to the already-current
+Linux baseline. Each file replacement is atomic; an observed second-write
+failure restores the first file. A process crash is not a cross-file
+transaction: discard partial task changes and regenerate from verified remote
+state before committing. For offline tests, use `--release-json`, `--asset-file`,
+`--windows-asset-file`, `--pin-file`, and `--windows-pin-file` together.
 
-This automation changes source only. It receives no Sandbox credentials and
-cannot build, publish, or unpublish a template. After the PR is reviewed and
-merged, an operator uses the existing local Task targets to rebuild all eight
-templates in both regions, publish them, verify the catalogs and real Sandbox
-smoke, and retain the evidence. Keep the production Sandbox credentials in the
-operator's current shell rather than GitHub Actions, and stop for operator
-review instead of attempting an uncertain automatic rollback.
+After a change, regenerate `templates/runner-images-compatibility.json`, run
+`task template-check-all` and the Windows/common pin consistency test, and
+inspect the three-file allowlist. Fenno maintains the single
+`automation/actions-runner-update` PR, protects branch updates with an explicit
+lease, and leaves review and merge to humans. Identical proposals keep their
+existing SHA. CI evidence must match the current PR head: query all matching
+`check.yaml` runs, regardless of status, and dispatch only when none exists.
+Follow queued/running checks and reuse successful full checks. Failed, cancelled
+or timed-out runs require diagnosis; they never count as absent. Deterministic
+or unclassified failures do not trigger replacement runs on subsequent days;
+only a diagnosed transient error permits a bounded retry of the existing run.
+A failed maintenance check is recorded without daily duplicate comments;
+maintenance tool fixes use a separate PR instead of relaxing verification.
+
+`.github/workflows/actions-runner-update.yaml` remains a manual, read-only
+verification fallback. It has no cron, branch push, PR mutation or Sandbox
+credentials, so it cannot race Fenno for branch ownership. Its summary reports
+the validated version and whether changes would be required. Ordinary Check CI
+also runs the disk-gate regression, which isolates mock disks from the host's
+`/etc/environment` PATH.
+
+The digest comparison establishes consistency with GitHub release metadata,
+not independent provenance; human PR review remains the merge trust boundary.
+After merge, the agent creates or reuses a versioned promotion record and links
+it to the first-upgrade acceptance Issue when applicable. Unchanged runs stay
+quiet; closing the initial acceptance Issue does not stop future maintenance.
+
+Source automation receives no Sandbox credentials and cannot build, publish,
+unpublish or roll back templates. An operator uses the existing local Task
+targets to rebuild all eight Linux templates in both regions, publish them,
+verify catalogs and real Sandbox smoke, and retain standard/large production
+Job evidence. Windows pin synchronization does not add Windows production
+promotion to that Linux acceptance checklist. Keep production credentials in
+the operator's shell and stop for review on uncertain outcomes.
+
+### Activation and acceptance
+
+Before merging the schedule migration, confirm Fenno's repository access,
+timezone, one-task concurrency and execution budget; removing the old cron
+without enabling Fenno leaves no periodic check. After merge, retain the actual
+Fenno run links for no-op, changed, failure recovery and repeated-run behavior.
+Local fixture tests validate the updater, not the external scheduler or live PR
+permissions. The first real upgrade remains incomplete until the reviewed
+source PR and regional template/production Job evidence are both available.
 
 ## Public catalog API
 

@@ -50,7 +50,12 @@ case "$*" in
   sandbox\ exec\ *)
     command="${*: -1}"
     if [[ "$command" == *'disk_bytes=$(lsblk -bndo SIZE'* ]]; then
-      bash -c "$command"
+      # The real executor sources /etc/environment, which can replace PATH on
+      # Linux hosts. Functions survive that reset and never probe the host disk.
+      findmnt() { printf '/dev/root\n'; }
+      lsblk() { printf '%s\n' "${MOCK_DISK_BYTES:-$((MOCK_DISK_MIB * 1048576))}"; }
+      export -f findmnt lsblk
+      bash -c "PATH=/usr/bin:/bin; $command"
     else
       echo '__QINIU_RUNNER_CONFORMANCE_REMOTE_STARTED__'
     fi
@@ -69,17 +74,7 @@ cat >"$workdir/curl" <<'EOF'
 set -euo pipefail
 cat "$MOCK_CATALOG"
 EOF
-cat >"$workdir/findmnt" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '/dev/root\n'
-EOF
-cat >"$workdir/lsblk" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$((MOCK_DISK_MIB * 1048576))"
-EOF
-chmod +x "$workdir/qshell" "$workdir/curl" "$workdir/findmnt" "$workdir/lsblk"
+chmod +x "$workdir/qshell" "$workdir/curl"
 
 cat >"$workdir/bash-env" <<EOF
 bash() {
@@ -204,6 +199,9 @@ fi
 jq -e '.results | any(.name == "runtime root disk size" and .exit_status == 0)' \
   "$workdir/standard-smoke"/*.json >/dev/null
 MOCK_DISK_MIB=20479 RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-low-smoke" \
+  expect_failure 'conformance failed: ubuntu-24.04 / Release smoke / runtime root disk size' \
+  bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04 sb-fixture
+MOCK_DISK_MIB=20480 MOCK_DISK_BYTES=invalid RUNNER_SMOKE_OUTPUT_DIR="$workdir/standard-low-smoke" \
   expect_failure 'conformance failed: ubuntu-24.04 / Release smoke / runtime root disk size' \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04 sb-fixture
 MOCK_DISK_MIB=81920 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-smoke" \

@@ -118,19 +118,21 @@ Runner pin COPY after provisioning so upgrades preserve earlier cache layers.
 The pin is the preinstalled baseline of the public templates built here.
 Public-name specs use the selected image's baseline directly;
 these public images continue to follow the regular rebuild process.
-The weekly/manual `Actions Runner Update` workflow may update only this shared
-pin and `templates/runner-images-compatibility.json` after validating the
-latest stable release, canonical Linux x64 asset metadata, downloaded size and
-SHA-256, the sixteen-chunk archive-size ceiling, and downgrade protection. It
-must stop reading as soon as downloaded bytes exceed release metadata, use
-Node.js 24, and pass `task template-check-all`. It may update only the dedicated
-automation branch with `--force-with-lease`, create
-or refresh one PR, and explicitly dispatch `check.yaml` for that PR head. Keep
-this source-only workflow free of Sandbox credentials and build/publish steps;
-regional template promotion belongs to a separately protected manual workflow.
-Treat a lower latest version and equal-version size/digest drift as visible hard
-failures. The digest proves consistency with GitHub's release metadata, not
-independent provenance; human review remains the merge trust boundary.
+Fenno owns the daily Actions Runner source-maintenance schedule through
+`.fennoai.yml` and `.agents/skills/maintain-actions-runner/SKILL.md`. Confirm its
+actual timezone, one-task execution and repository permissions before activation.
+The updater validates official Linux x64 and Windows x64 assets, including size,
+SHA-256, a 256-MiB bound, same-version metadata drift and downgrade protection,
+before changing either pin. Ordinary upgrades may change only the shared pin,
+`templates/runner-images-compatibility.json`, and the three `RUNNER_WIN_X64_*`
+fields in `templates/github-runner-windows-11/template.env`. Use Node.js 24,
+`task template-check-all`, and the Windows/common pin consistency test. Maintain
+one upgrade PR with explicit branch leases and current-head full Check evidence;
+unchanged proposals do not churn commits. The manual `Actions Runner Update`
+workflow validates only and never writes a branch/PR. Maintenance fixes belong
+in a separate PR. Human review remains the merge trust boundary. No source
+maintenance task receives production Sandbox credentials or runs build/publish
+operations; operators retain local regional promotion and production acceptance.
 Before registering a Runner with a private-ID binding, runnerd must
 resolve GitHub's official Runner applications for the selected platform, validate the GitHub-owned release URL,
 filename, architecture, version, and SHA-256 in runnerd, then pass only those

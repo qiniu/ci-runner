@@ -176,7 +176,12 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   execute the real CLI against fixture release/archive files and prove that
   draft/prerelease, downgrade, noncanonical/duplicate asset, malformed
   metadata, downloaded size/SHA-256 mismatch, and same-version no-op paths
-  never corrupt the pin.
+  never corrupt either Linux or Windows pin. Cover Windows download failures,
+  preservation of unrelated Windows tooling fields, rollback after a second-file
+  write failure, and repeated-run no-op behavior. Run the disk-gate fixture on
+  Linux with a PATH-setting `/etc/environment` as well as the local host, and
+  the Go Windows/common pin consistency test. Fenno activation, real PR/CI
+  permissions and production promotion remain separate live gates.
   A live API no-op may use a temporary authenticated `GITHUB_TOKEN`; never log
   the token. Workflow verification does not authorize a Sandbox build or
   publication.

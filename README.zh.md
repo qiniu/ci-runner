@@ -397,21 +397,16 @@ Actions Runner 版本固定值位于 `templates/common/`。
 在当前 Job 能被领取前替换过期的可写副本。两条路径在注册后都继续保留 GitHub
 官方自更新能力。
 
-`Actions Runner Update` 工作流每周二 02:23 UTC 检查 GitHub 最新稳定版，也支持
-手动触发。同版本只有在 GitHub 提供的大小和 digest 仍与 pin 一致时才是 no-op，
-且不会下载归档；元数据漂移会失败关闭。发现更高版本后，工作流只接受规范的
-Linux x64 资产，对下载归档重新计算 SHA-256 与字节数，并与 GitHub release 元数据
-核对；超过 16 个分块、256 MiB 上限的归档会被拒绝。随后工作流再更新公共 pin 和
-生成的 compatibility 断言；只有
-`task template-check-all` 通过后，才会创建或刷新唯一的
-`automation/actions-runner-update` PR。由于 `GITHUB_TOKEN` 创建的 PR 不会递归触发
-普通 `pull_request` 事件，更新工作流会显式为该分支调度完整 `Check` 工作流。它绝不
-构建、发布或取消发布 Sandbox 模板。升级 PR 合并后，operator 使用现有的本地
-`template-build-*`、`template-publish-*`、`template-defaults-check` 和
-`template-smoke` Task 完成双区域推广，便于排查耗时较长的远程构建，也避免将生产
-Sandbox 凭据放入 GitHub Actions。
-`latest` 低于当前 pin 时会作为降级异常失败，而不是静默 no-op。由于 digest 与资产
-元数据来自同一个 GitHub release，人工 review 仍是来源可信边界。
+Fenno 通过 `.fennoai.yml` 和项目内 `maintain-actions-runner` Skill 每天检查官方
+Runner 稳定版。确定性更新器验证 Linux x64 与 Windows x64 归档，同步 pin，生成
+兼容性清单并通过模板检查后，维护唯一的 `automation/actions-runner-update` PR。
+相同提案不重复提交，Check 证据必须匹配当前 PR head，review 和合并由人工完成。
+手动 `Actions Runner Update` 工作流只验证提案，不推送分支、创建 PR 或发布模板。
+
+启用前确认 Fenno 的实际时区、权限和单任务执行限制。源码自动化不接收生产 Sandbox
+凭据；合并后由 operator 在本地使用现有构建、发布、catalog 和 smoke Task 完成
+双区域推广，在版本化发布记录中保留真实 Job 证据。完整启用、资产校验、no-op、失败
+恢复与验收边界见[公共 Runner 模板](docs/zh/default-runner-templates.md#自动创建-runner-基线更新-pr)。
 
 模板源码验证要求 Node.js 24，模板构建要求 qshell 2.19.13 或更高版本。标准配置为
 新模板请求 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，

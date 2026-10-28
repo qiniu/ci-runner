@@ -22,6 +22,11 @@ const requiredPinKeys = [
   "RUNNER_ARCHIVE_SIZE",
 ];
 const maxRunnerArchiveSize = 256 * 1024 * 1024;
+const windowsPinKeys = [
+  "RUNNER_WIN_X64_VERSION",
+  "RUNNER_WIN_X64_ARCHIVE_SHA256",
+  "RUNNER_WIN_X64_ARCHIVE_SIZE",
+];
 
 function fail(message) {
   throw new Error(message);
@@ -30,12 +35,17 @@ function fail(message) {
 function parseArguments(argv) {
   const options = {
     pinFile: join(repositoryRoot, "templates", "common", "actions-runner.env"),
+    windowsPinFile: join(
+      repositoryRoot, "templates", "github-runner-windows-11", "template.env",
+    ),
     githubOutput: process.env.GITHUB_OUTPUT,
   };
   const names = new Map([
     ["--release-json", "releaseJson"],
     ["--asset-file", "assetFile"],
     ["--pin-file", "pinFile"],
+    ["--windows-pin-file", "windowsPinFile"],
+    ["--windows-asset-file", "windowsAssetFile"],
     ["--github-output", "githubOutput"],
   ]);
   const seen = new Set();
@@ -44,13 +54,16 @@ function parseArguments(argv) {
     const key = names.get(name);
     const value = argv[index + 1];
     if (!key || value === undefined || value.startsWith("--")) {
-      fail(`usage: ${basename(process.argv[1])} [--release-json PATH] [--asset-file PATH] [--pin-file PATH] [--github-output PATH]`);
+      fail(`usage: ${basename(process.argv[1])} [--release-json PATH] [--asset-file PATH] [--pin-file PATH] [--windows-pin-file PATH] [--windows-asset-file PATH] [--github-output PATH]`);
     }
     if (seen.has(name)) {
       fail(`duplicate option ${name}`);
     }
     seen.add(name);
     options[key] = resolve(value);
+  }
+  if (options.pinFile === options.windowsPinFile) {
+    fail("Linux and Windows pin paths must be different");
   }
   return options;
 }
@@ -74,6 +87,23 @@ function compareVersions(left, right) {
     }
   }
   return 0;
+}
+
+function parseWindowsPin(contents) {
+  const values = windowsPinKeys.map((key, index) => {
+    const matches = contents.split(/\r?\n/).filter((line) => line.startsWith(`${key}=`));
+    if (matches.length !== 1) fail(`Windows pin must contain exactly one ${key}`);
+    return `${requiredPinKeys[index]}=${matches[0].slice(key.length + 1)}`;
+  });
+  return parsePin(values.join("\n"));
+}
+
+function windowsPinContents(contents, version, digest, size) {
+  const values = [version, digest, size];
+  return contents.replace(
+    /^(RUNNER_WIN_X64_(?:VERSION|ARCHIVE_SHA256|ARCHIVE_SIZE))=[^\r\n]*/gm,
+    (_line, key) => `${key}=${values[windowsPinKeys.indexOf(key)]}`,
+  );
 }
 
 function parsePin(contents) {
@@ -150,7 +180,18 @@ function validateRelease(release) {
   ) {
     fail("release published_at must be an RFC 3339 UTC timestamp");
   }
-  const assetName = `actions-runner-linux-x64-${version}.tar.gz`;
+  return {
+    version,
+    versionParts,
+    releaseUrl,
+    publishedAt: release.published_at,
+    linux: validateAsset(release, version, "linux-x64", "tar.gz"),
+    windows: validateAsset(release, version, "win-x64", "zip"),
+  };
+}
+
+function validateAsset(release, version, platform, extension) {
+  const assetName = `actions-runner-${platform}-${version}.${extension}`;
   const matchingAssets = Array.isArray(release.assets)
     ? release.assets.filter((asset) => asset?.name === assetName)
     : [];
@@ -176,10 +217,7 @@ function validateRelease(release) {
     );
   }
   return {
-    version,
-    versionParts,
-    releaseUrl,
-    publishedAt: release.published_at,
+    assetName,
     assetUrl,
     digest: digestMatch[1],
     size: asset.size,
@@ -280,35 +318,68 @@ async function emitResult(result, githubOutput) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const current = parsePin(await readFile(options.pinFile, "utf8"));
+  const linuxContents = await readFile(options.pinFile, "utf8");
+  const windowsContents = await readFile(options.windowsPinFile, "utf8");
+  const current = parsePin(linuxContents);
+  const windowsCurrent = parseWindowsPin(windowsContents);
   const release = validateRelease(await loadLatestRelease(options.releaseJson));
-  const comparison = compareVersions(
-    release.versionParts,
-    parseVersion(current.version, "pinned Runner version"),
-  );
-  if (comparison < 0) {
-    fail(`refusing to downgrade from ${current.version} to ${release.version}`);
+  const pins = [
+    {
+      current, asset: release.linux, file: options.pinFile,
+      contents: linuxContents, archive: options.assetFile, render: pinContents,
+    },
+    {
+      current: windowsCurrent, asset: release.windows, file: options.windowsPinFile,
+      contents: windowsContents, archive: options.windowsAssetFile,
+      render: (version, digest, size) => windowsPinContents(windowsContents, version, digest, size),
+    },
+  ];
+  // Check both metadata records before downloading or changing either file.
+  for (const pin of pins) {
+    pin.comparison = compareVersions(
+      release.versionParts, parseVersion(pin.current.version, "pinned Runner version"),
+    );
+    if (pin.comparison < 0) {
+      fail(`refusing to downgrade from ${pin.current.version} to ${release.version}`);
+    }
+    if (
+      pin.comparison === 0 &&
+      (pin.current.digest !== pin.asset.digest || pin.current.size !== pin.asset.size)
+    ) {
+      fail(`release metadata for current Runner ${release.version} differs from the pinned archive (${basename(pin.file)})`);
+    }
   }
+  const changes = pins.filter((pin) => pin.comparison > 0);
   const result = {
-    changed: comparison > 0,
+    changed: changes.length > 0,
     version: release.version,
     release_url: release.releaseUrl,
     published_at: release.publishedAt,
   };
-  if (comparison === 0) {
-    if (current.digest !== release.digest || current.size !== release.size) {
-      fail(
-        `release metadata for current Runner ${current.version} differs from the pinned archive`,
-      );
+  // Fully verify every changed platform before writing any pin.
+  for (const pin of changes) {
+    try {
+      await downloadAndVerify(pin.archive, pin.asset);
+    } catch (error) {
+      fail(`verify ${pin.asset.assetName}: ${error.message}`);
     }
-    await emitResult(result, options.githubOutput);
-    return;
   }
-  const verified = await downloadAndVerify(options.assetFile, release);
-  await writePinAtomically(
-    options.pinFile,
-    pinContents(release.version, verified.digest, verified.size),
-  );
+  const written = [];
+  try {
+    for (const pin of changes) {
+      await writePinAtomically(
+        pin.file, pin.render(release.version, pin.asset.digest, pin.asset.size),
+      );
+      written.push(pin);
+    }
+  } catch (error) {
+    for (const pin of written.reverse()) {
+      await writePinAtomically(pin.file, pin.contents).catch((rollbackError) => {
+        process.stderr.write(`actions runner update: could not restore ${pin.file}: ${rollbackError.message}\n`);
+      });
+    }
+    throw error;
+  }
   await emitResult(result, options.githubOutput);
 }
 

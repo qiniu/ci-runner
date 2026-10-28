@@ -1,0 +1,20 @@
+schedule:
+  - name: 每日维护 Actions Runner 版本
+    # Intended: 09:00 Asia/Shanghai. Confirm the Fenno repository scheduler
+    # timezone before activation; cron alone does not declare a timezone.
+    cron: "0 9 * * *"
+    branch: main
+    agent: codex
+    prompt: |
+      完整读取并执行 .agents/skills/maintain-actions-runner/SKILL.md。
+      Git author/committer 使用运行环境 repository_setup 明确提供的身份，
+      不覆盖为个人身份；若要求 identity-only 初始化，先读取工具参数说明。
+      本任务授权安装必要验证工具、创建任务 worktree 和专用分支、
+      git commit -s、推送任务分支、创建或更新唯一升级 PR、
+      必要的独立自动化修复 PR、调度并跟进对应 head 的完整 Check，
+      以及按 Skill 去重更新 #68 的进展和版本化发布记录。
+      不在 main 上修改或提交，不向远端 main 推送。
+      不自动合并、关闭 Issue、触发 reviewer bot 或执行生产模板操作。
+      不读取生产 Sandbox 凭据，不跳过或放宽失败的验证门槛。
+      无变化时安静结束；有进展或阻塞时给出版本、分支/PR、
+      当前 head 的 CI、失败阶段和后续发布验收缺项。

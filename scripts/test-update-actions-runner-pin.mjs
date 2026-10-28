@@ -35,6 +35,23 @@ function canonicalAsset(version, contents, overrides = {}) {
   };
 }
 
+function windowsArchive(contents) {
+  return Buffer.from(`windows-${contents}`);
+}
+
+function windowsAsset(version, contents, overrides = {}) {
+  const asset = canonicalAsset(version, contents, overrides);
+  const name = `actions-runner-win-x64-${version}.zip`;
+  return { ...asset, name,
+    browser_download_url: `https://github.com/actions/runner/releases/download/v${version}/${name}`,
+    ...overrides };
+}
+
+function windowsPin(version, contents) {
+  return "# Preserve unrelated Windows tooling pins.\nTEMPLATE_NAME=github-runner-windows-11\n" +
+    pin(version, contents).replaceAll("RUNNER_", "RUNNER_WIN_X64_") + "GIT_VERSION=2.56.0\n";
+}
+
 function stableRelease(version, contents, overrides = {}) {
   return {
     tag_name: `v${version}`,
@@ -42,7 +59,7 @@ function stableRelease(version, contents, overrides = {}) {
     prerelease: false,
     published_at: "2026-09-22T00:00:00Z",
     html_url: `https://github.com/actions/runner/releases/tag/v${version}`,
-    assets: [canonicalAsset(version, contents)],
+    assets: [canonicalAsset(version, contents), windowsAsset(version, windowsArchive(contents))],
     ...overrides,
   };
 }
@@ -63,8 +80,11 @@ async function fixture(t, { currentVersion = "2.336.0", currentContents = Buffer
   const releasePath = join(directory, "release.json");
   const archivePath = join(directory, "runner.tar.gz");
   const outputPath = join(directory, "github-output");
+  const windowsPinPath = join(directory, "template.env");
+  const windowsArchivePath = join(directory, "runner.zip");
+  await writeFile(windowsPinPath, windowsPin(currentVersion, windowsArchive(currentContents)));
   await writeFile(pinPath, pin(currentVersion, currentContents));
-  return { directory, pinPath, releasePath, archivePath, outputPath };
+  return { directory, pinPath, releasePath, archivePath, outputPath, windowsPinPath, windowsArchivePath };
 }
 
 async function runCli(
@@ -76,22 +96,26 @@ async function runCli(
     includeArchive = true,
     environment = {},
     nodeArguments = [],
+    windowsContents = windowsArchive(archive),
   } = {},
 ) {
   await writeFile(paths.releasePath, `${JSON.stringify(release)}\n`);
   if (includeArchive) {
     await writeFile(paths.archivePath, archive);
+    await writeFile(paths.windowsArchivePath, windowsContents);
   }
   const args = [
     "--release-json",
     paths.releasePath,
     "--pin-file",
     paths.pinPath,
+    "--windows-pin-file",
+    paths.windowsPinPath,
     "--github-output",
     paths.outputPath,
   ];
   if (includeArchive) {
-    args.push("--asset-file", paths.archivePath);
+    args.push("--asset-file", paths.archivePath, "--windows-asset-file", paths.windowsArchivePath);
   }
   args.push(...additionalArgs);
   return spawnCli(args, { environment, nodeArguments });
@@ -99,9 +123,11 @@ async function runCli(
 
 async function assertRejectedWithoutMutation(paths, release, archive, message, options) {
   const before = await readFile(paths.pinPath);
+  const windowsBefore = await readFile(paths.windowsPinPath);
   const result = await runCli(paths, release, archive, options);
   assert.notEqual(result.status, 0, result.stdout);
   assert.deepEqual(await readFile(paths.pinPath), before);
+  assert.deepEqual(await readFile(paths.windowsPinPath), windowsBefore);
   assert.match(result.stderr, message);
 }
 
@@ -109,6 +135,8 @@ for (const [option, value] of [
   ["--release-json", "releasePath"],
   ["--asset-file", "archivePath"],
   ["--pin-file", "pinPath"],
+  ["--windows-pin-file", "windowsPinPath"],
+  ["--windows-asset-file", "windowsArchivePath"],
   ["--github-output", "outputPath"],
 ]) {
   test(`duplicate ${option} is rejected`, async (t) => {
@@ -147,7 +175,7 @@ test("atomic pin write preserves its primary error when cleanup also fails", asy
   assert.match(result.stderr, /actions runner update: primary rename failure/);
 });
 
-test("verified upgrade atomically rewrites the pin and emits Actions outputs", async (t) => {
+test("verified upgrade rewrites both pins and emits Actions outputs", async (t) => {
   const paths = await fixture(t);
   const archive = Buffer.from("verified-runner-2.337.0");
   const release = stableRelease("2.337.0", archive);
@@ -162,6 +190,7 @@ test("verified upgrade atomically rewrites the pin and emits Actions outputs", a
     published_at: "2026-09-22T00:00:00Z",
   });
   assert.equal(await readFile(paths.pinPath, "utf8"), pin("2.337.0", archive));
+  assert.equal(await readFile(paths.windowsPinPath, "utf8"), windowsPin("2.337.0", windowsArchive(archive)));
   assert.equal(
     await readFile(paths.outputPath, "utf8"),
     [
@@ -189,6 +218,7 @@ test("verified upgrade does not require temporary archive storage", async (t) =>
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(await readFile(paths.pinPath, "utf8"), pin("2.337.0", archive));
+  assert.equal(await readFile(paths.windowsPinPath, "utf8"), windowsPin("2.337.0", windowsArchive(archive)));
 });
 
 test("already pinned release is a no-op and does not download an archive", async (t) => {
@@ -329,7 +359,8 @@ test("download size mismatch is rejected without changing the pin", async (t) =>
   const paths = await fixture(t);
   const archive = Buffer.from("runner");
   const release = stableRelease("2.337.0", archive, {
-    assets: [canonicalAsset("2.337.0", archive, { size: archive.length + 1 })],
+    assets: [canonicalAsset("2.337.0", archive, { size: archive.length + 1 }),
+      windowsAsset("2.337.0", windowsArchive(archive))],
   });
   await assertRejectedWithoutMutation(
     paths,
@@ -349,4 +380,104 @@ test("download stops when received bytes exceed release metadata", async (t) => 
     downloadedContents,
     /downloaded archive exceeded release metadata size 6/,
   );
+});
+
+for (const { name, overrides, message } of invalidAssetCases) {
+  test(`Windows ${name} rejects both pins before writing`, async (t) => {
+    const paths = await fixture(t);
+    const archive = Buffer.from("runner");
+    const release = stableRelease("2.337.0", archive, {
+      assets: [canonicalAsset("2.337.0", archive),
+        windowsAsset("2.337.0", windowsArchive(archive), overrides)],
+    });
+    await assertRejectedWithoutMutation(paths, release, archive, message);
+  });
+}
+
+for (const count of [0, 2]) {
+  test(`${count} Windows assets reject both pins`, async (t) => {
+    const paths = await fixture(t);
+    const archive = Buffer.from("runner");
+    const release = stableRelease("2.337.0", archive, {
+      assets: [canonicalAsset("2.337.0", archive),
+        ...Array.from({ length: count }, () => windowsAsset("2.337.0", windowsArchive(archive)))],
+    });
+    await assertRejectedWithoutMutation(paths, release, archive,
+      /expected exactly one actions-runner-win-x64-2\.337\.0\.zip asset/);
+  });
+}
+
+for (const contents of [Buffer.from("windows-runnex"), Buffer.from("short"), Buffer.from("windows-runner-too-long")]) {
+  test(`Windows corrupt download (${contents.length} bytes) leaves both pins intact`, async (t) => {
+    const paths = await fixture(t);
+    const archive = Buffer.from("runner");
+    await assertRejectedWithoutMutation(paths, stableRelease("2.337.0", archive), archive,
+      /downloaded archive (SHA-256|size|exceeded)/, { windowsContents: contents });
+  });
+}
+
+test("Windows metadata drift blocks a Linux upgrade before any write", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  await writeFile(paths.windowsPinPath, windowsPin("2.337.0", Buffer.from("different")));
+  await assertRejectedWithoutMutation(paths, stableRelease("2.337.0", archive), archive,
+    /release metadata for current Runner .* differs/);
+});
+
+test("a newer Windows pin is never downgraded", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  await writeFile(paths.windowsPinPath, windowsPin("2.338.0", windowsArchive(archive)));
+  await assertRejectedWithoutMutation(paths, stableRelease("2.337.0", archive), archive,
+    /refusing to downgrade from 2\.338\.0/);
+});
+
+test("an older Windows pin is repaired when Linux is already current", async (t) => {
+  const archive = Buffer.from("runner");
+  const paths = await fixture(t, { currentVersion: "2.337.0", currentContents: archive });
+  await writeFile(paths.windowsPinPath, windowsPin("2.336.0", Buffer.from("old-windows")));
+  const result = await runCli(paths, stableRelease("2.337.0", archive), archive);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).changed, true);
+  assert.equal(await readFile(paths.pinPath, "utf8"), pin("2.337.0", archive));
+  assert.equal(await readFile(paths.windowsPinPath, "utf8"), windowsPin("2.337.0", windowsArchive(archive)));
+});
+
+test("failure writing Windows restores the previous Linux pin", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  const preload = `data:text/javascript,${encodeURIComponent(`
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const rename = fs.promises.rename;
+    fs.promises.rename = async (source, target) => {
+      if (target.endsWith("/template.env")) throw new Error("Windows write failure");
+      return rename(source, target);
+    };
+    syncBuiltinESMExports();
+  `)}`;
+  await assertRejectedWithoutMutation(paths, stableRelease("2.337.0", archive), archive,
+    /Windows write failure/, { nodeArguments: ["--import", preload] });
+});
+
+test("a second run is a no-op and needs neither downloaded archive", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  const release = stableRelease("2.337.0", archive);
+  const first = await runCli(paths, release, archive);
+  assert.equal(first.status, 0, first.stderr);
+  await rm(paths.archivePath);
+  await rm(paths.windowsArchivePath);
+  const second = await runCli(paths, release, archive, { includeArchive: false });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).changed, false);
+});
+
+test("duplicate Windows pin fields are rejected without mutation", async (t) => {
+  const paths = await fixture(t);
+  const archive = Buffer.from("runner");
+  await writeFile(paths.windowsPinPath,
+    (await readFile(paths.windowsPinPath, "utf8")) + "RUNNER_WIN_X64_VERSION=2.336.0\n");
+  await assertRejectedWithoutMutation(paths, stableRelease("2.337.0", archive), archive,
+    /Windows pin must contain exactly one RUNNER_WIN_X64_VERSION/);
 });
