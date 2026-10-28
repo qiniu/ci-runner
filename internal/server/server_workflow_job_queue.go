@@ -193,8 +193,8 @@ func (s *Server) retryHistoricalWaitingJob(ctx context.Context, id string) (stat
 	}
 	unlock := s.lockRunner(id)
 	defer unlock()
-	s.admissionMu.Lock()
-	defer s.admissionMu.Unlock()
+	s.admissionMu.RLock()
+	defer s.admissionMu.RUnlock()
 	profile, err := s.profileForRunnerRequest(req)
 	if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
 		return st, state.ErrRetryNotAllowed

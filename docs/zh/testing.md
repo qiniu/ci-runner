@@ -786,7 +786,11 @@ curl -fsS -b "$COOKIE_JAR" \
 
 Runner 启动诊断将每次启动的耗时合并为一条 `runner_timing` control 事件。每行包含固定阶段、`duration_ms`、时钟来源和 UTC 采集时间 `observed_at`；事件自身的时间表示稍后的持久化时间。耗时先在内存中采集，释放生命周期锁和 admission 锁后再写入。清理和错配 Job 重新排队的耗时也遵循此规则。`queue_wait` 从持久化创建时间计算，可能跨越多次尝试；系统时钟倒退时保留零值并标记 `clock=wall_skew`。“最近一次开始时间”表示最近一次执行尝试，不能仅用创建到开始的间隔衡量单次启动耗时。
 
-启动准入阶段依次记录：`request_read`（`ReadRequest`）、`initial_state_read`（`ReadState`）、`admission_lock_wait`（仅全局准入锁的获取等待）、`profile_lookup`（全局或作用域规格查询）、`global_capacity_check`（`InFlightCount`）、`profile_capacity_check`（所选规格的全局或作用域在途数量检查），之后是 `creating_state_persist`。Sandbox 启动后，`running_state_read` 单独记录 `running_lock_wait` 与 `running_state_persist` 之间的状态重读。各段采用单调时钟，以 `observed_at` 为结束观察点，不包含相邻阶段；记录的是整个具名操作的耗时，包括 Store／连接等待和查询执行，而不是纯 SQL 执行时间。规格校验在本地完成；容量检查可能直接返回而不查询数据库。查询失败或容量延后仍保留已执行阶段，不生成后续阶段。初始请求读取失败时仍不写入计时事件。固定阶段名不包含请求数据、SQL、凭证或错误文本。
+启动准入阶段依次记录：`request_read`（`ReadRequest`）、`initial_state_read`（`ReadState`）、`admission_lock_wait`（获取规格变更共享保护锁的等待）、`profile_lookup`（全局或作用域规格查询）、`global_capacity_check`（`InFlightCount`）、`profile_capacity_check`（所选规格的全局或作用域在途数量检查），之后是 `capacity_reservation` 和 `creating_state_persist`。Sandbox 启动后，`running_state_read` 单独记录 `running_lock_wait` 与 `running_state_persist` 之间的状态重读。各段采用单调时钟，以 `observed_at` 为结束观察点，不包含相邻阶段；记录的是整个具名操作的耗时，包括 Store／连接等待和查询执行，而不是纯 SQL 执行时间。规格校验在本地完成；容量检查可能直接返回而不查询数据库。查询失败或容量延后仍保留已执行阶段，不生成后续阶段。初始请求读取失败时仍不写入计时事件。固定阶段名不包含请求数据、SQL、凭证或错误文本。
+
+启动与入队准入共享读锁，规格变更持独占锁。单个请求的规格查询、容量查询或 creating 状态写入变慢时，不再串行阻塞其他普通请求；规格变更仍不能插入规格重读至 creating CAS 写入之间。另一个短时内存锁负责预留全局及精确规格作用域容量，锁内不执行 Store I/O。对锁外读取的数量，同时计入读取前尚未落库的预留，以及读取期间新增的准入，包括读取返回前已完成写入的请求。无法确定是否重叠时保守多计，避免超发；保守拒绝沿用五秒延后，并释放 worker 租约。creating 写入返回后即释放预留，写入错误或 CAS 冲突也一样；后续查询由数据库中的 creating、running、stopping 记录计数。没有读取者或预留时移除规格观察记录，重启后依赖持久化计数。此保证仍限定单个 runnerd 进程，不代表支持多实例准入。
+
+`capacity_reservation` 记录 Store 查询之后的最终内存容量决策；`admission_lock_wait` 现在表示与规格变更的竞争，不再表示排在其他普通准入后面。数据库或连接竞争仍可能拖慢 Store 操作，独占规格变更也仍可能延后准入。阻塞式 Store 回归要求在释放首个请求前，另一请求已推进到 running；过时查询与未落库写入测试覆盖全局／作用域容量、写入失败、版本冲突、重复启动和租约释放。生产耗时验收仍需部署后在实际负载下进行。
 
 排查 `queue_wait` 之后的空白区间时，将 `admission_lock_wait`、`profile_lookup`、两项容量检查与 `creating_state_persist` 对照；`running_lock_wait` 之后的状态重读也可与写入分开分析。Store 阶段较慢本身不能区分连接池等待、数据库锁、查询执行或其他 Store 开销。不要累加所有启动阶段：`queue_wait` 是累计墙钟年龄，`sandbox_start` 包含 `cache_credentials`。受控的 Store 延迟和准入锁竞争测试验证耗时归属、提前返回证据及释放锁后落盘；线上根因仍需发布后在实际负载下确认。
 

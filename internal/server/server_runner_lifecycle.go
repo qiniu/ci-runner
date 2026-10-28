@@ -271,8 +271,8 @@ func (s *Server) enqueueWorkflowJob(repositoryFullName string, githubInstallatio
 	// Keep profile matching and request creation in one critical section with
 	// scoped spec updates/deletes. Moving the reads before this lock allows a
 	// mutation to commit between the match and persisted request snapshot.
-	s.admissionMu.Lock()
-	defer s.admissionMu.Unlock()
+	s.admissionMu.RLock()
+	defer s.admissionMu.RUnlock()
 	match, err := s.matchProfileForAdmission(repositoryFullName, githubInstallationID, job.Labels)
 	if err != nil {
 		return state.RunnerState{}, false, err
@@ -305,8 +305,8 @@ func (s *Server) matchProfileForAdmission(repository string, installationID int6
 }
 
 func (s *Server) enqueueRunnerRequest(req state.RunnerRequest, payload []byte) (state.RunnerState, bool, error) {
-	s.admissionMu.Lock()
-	defer s.admissionMu.Unlock()
+	s.admissionMu.RLock()
+	defer s.admissionMu.RUnlock()
 	return s.enqueueRunnerRequestLocked(req, payload)
 }
 
@@ -381,60 +381,36 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		timings.recordWall("queue_wait", req.CreatedAt)
 	}
 	admissionLockWaitStartedAt := time.Now()
-	s.admissionMu.Lock()
+	s.admissionMu.RLock()
 	timings.record("admission_lock_wait", admissionLockWaitStartedAt)
 	profileLookupStartedAt := time.Now()
 	profile, err := s.profileForRunnerRequest(req)
 	timings.record("profile_lookup", profileLookupStartedAt)
 	if err != nil {
-		s.admissionMu.Unlock()
+		s.admissionMu.RUnlock()
 		unlock()
 		s.failStart(id, st, "profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
 		return
 	}
 	if err := validateRequestedProfile(profile, req.RequestedLabels); err != nil {
-		s.admissionMu.Unlock()
+		s.admissionMu.RUnlock()
 		unlock()
 		s.failStart(id, st, "profile_validation", err)
 		return
 	}
-	globalCapacityStartedAt := time.Now()
-	inFlight, err := s.store.InFlightCount()
-	timings.record("global_capacity_check", globalCapacityStartedAt)
-	if err != nil {
-		s.admissionMu.Unlock()
+	releaseCapacity, capacityStage, err := s.reserveRunnerCapacity(req, profile, &timings)
+	if err != nil || releaseCapacity == nil {
+		s.admissionMu.RUnlock()
 		unlock()
-		_ = s.store.ReleaseLease(id, workerID)
-		s.logger.Error("check global concurrency", "id", id, "error", err)
-		return
-	}
-	if inFlight >= s.cfg.MaxConcurrentRunners {
-		s.admissionMu.Unlock()
-		unlock()
-		s.logger.Info("runner start deferred because global concurrency is at capacity", "id", id, "in_flight", inFlight, "limit", s.cfg.MaxConcurrentRunners)
+		if err != nil {
+			_ = s.store.ReleaseLease(id, workerID)
+			s.logger.Error("check runner capacity", "id", id, "stage", capacityStage, "error", err)
+			return
+		}
+		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
 		s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
 		s.signalQueue()
 		return
-	}
-	if req.ProfileName != "" {
-		profileCapacityStartedAt := time.Now()
-		rejected, err := s.profileAtCapacityFor(req, profile)
-		timings.record("profile_capacity_check", profileCapacityStartedAt)
-		if err != nil {
-			s.admissionMu.Unlock()
-			unlock()
-			_ = s.store.ReleaseLease(id, workerID)
-			s.logger.Error("check profile concurrency", "id", id, "profile", req.ProfileName, "error", err)
-			return
-		}
-		if rejected {
-			s.admissionMu.Unlock()
-			unlock()
-			s.logger.Info("runner start deferred because profile is at capacity", "id", id, "profile", req.ProfileName)
-			s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
-			s.signalQueue()
-			return
-		}
 	}
 	st.Status = state.StatusCreating
 	st.LeaseOwner = workerID
@@ -442,14 +418,15 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	creatingStatePersistStartedAt := time.Now()
 	writeErr := s.store.WriteState(st)
 	timings.record("creating_state_persist", creatingStatePersistStartedAt)
+	releaseCapacity()
 	if writeErr != nil {
-		s.admissionMu.Unlock()
+		s.admissionMu.RUnlock()
 		unlock()
 		_ = s.store.ReleaseLease(id, workerID)
 		s.logger.Error("write creating state", "id", id, "error", writeErr)
 		return
 	}
-	s.admissionMu.Unlock()
+	s.admissionMu.RUnlock()
 	unlock()
 
 	jobCheckStartedAt := time.Now()
@@ -2165,42 +2142,12 @@ func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerP
 	return state.RunnerProfile{}, state.ErrNotFound
 }
 
-func (s *Server) profileAtCapacityFor(req state.RunnerRequest, profile state.RunnerProfile) (bool, error) {
-	if profile.MaxConcurrency <= 0 {
-		return false, nil
+func (s *Server) inFlightForRunnerProfile(req state.RunnerRequest) (int, error) {
+	key := runnerCapacityProfileKey(req)
+	if key.source == "global" {
+		return s.store.InFlightCountForProfile(key.name)
 	}
-	source := req.ProfileSource
-	if source == "" {
-		source = "global"
-	}
-	if source == "global" {
-		inFlight, err := s.store.InFlightCountForProfile(req.ProfileName)
-		if err != nil {
-			return false, err
-		}
-		if profile.MaxConcurrency > 0 && inFlight >= profile.MaxConcurrency {
-			return true, nil
-		}
-		return false, nil
-	}
-	if req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
-		inFlight, err := s.store.InFlightCountForProfileScope(source, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, req.ProfileName)
-		if err != nil {
-			return false, err
-		}
-		if profile.MaxConcurrency > 0 && inFlight >= profile.MaxConcurrency {
-			return true, nil
-		}
-	} else if profile.MaxConcurrency > 0 {
-		inFlight, err := s.store.InFlightCountForProfile(req.ProfileName)
-		if err != nil {
-			return false, err
-		}
-		if inFlight >= profile.MaxConcurrency {
-			return true, nil
-		}
-	}
-	return false, nil
+	return s.store.InFlightCountForProfileScope(key.source, state.RunnerProfileScope{Type: key.scopeType, ID: key.scopeID}, key.name)
 }
 
 func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []string) error {

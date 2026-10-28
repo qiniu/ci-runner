@@ -9466,11 +9466,11 @@ func TestProfileAtCapacityUsesGlobalCountAcrossScopes(t *testing.T) {
 		}
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
-	limited, err := srv.profileAtCapacityFor(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3}, profile)
+	inFlight, err := srv.inFlightForRunnerProfile(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !limited {
+	if inFlight < profile.MaxConcurrency {
 		t.Fatal("global profile capacity must include in-flight requests from other scopes")
 	}
 }
