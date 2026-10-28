@@ -354,14 +354,18 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	initialLockWaitStartedAt := time.Now()
 	unlock := s.lockRunner(id)
 	timings.record("initial_lock_wait", initialLockWaitStartedAt)
+	requestReadStartedAt := time.Now()
 	req, err := s.store.ReadRequest(id)
+	timings.record("request_read", requestReadStartedAt)
 	if err != nil {
 		unlock()
 		s.logger.Error("read runner request", "id", id, "error", err)
 		return
 	}
 	defer timings.flush(s, id)
+	initialStateReadStartedAt := time.Now()
 	st, err := s.store.ReadState(id)
+	timings.record("initial_state_read", initialStateReadStartedAt)
 	if err != nil {
 		unlock()
 		s.logger.Error("read runner state", "id", id, "error", err)
@@ -376,8 +380,12 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	if !req.CreatedAt.IsZero() {
 		timings.recordWall("queue_wait", req.CreatedAt)
 	}
+	admissionLockWaitStartedAt := time.Now()
 	s.admissionMu.Lock()
+	timings.record("admission_lock_wait", admissionLockWaitStartedAt)
+	profileLookupStartedAt := time.Now()
 	profile, err := s.profileForRunnerRequest(req)
+	timings.record("profile_lookup", profileLookupStartedAt)
 	if err != nil {
 		s.admissionMu.Unlock()
 		unlock()
@@ -390,7 +398,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.failStart(id, st, "profile_validation", err)
 		return
 	}
+	globalCapacityStartedAt := time.Now()
 	inFlight, err := s.store.InFlightCount()
+	timings.record("global_capacity_check", globalCapacityStartedAt)
 	if err != nil {
 		s.admissionMu.Unlock()
 		unlock()
@@ -407,7 +417,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		return
 	}
 	if req.ProfileName != "" {
+		profileCapacityStartedAt := time.Now()
 		rejected, err := s.profileAtCapacityFor(req, profile)
+		timings.record("profile_capacity_check", profileCapacityStartedAt)
 		if err != nil {
 			s.admissionMu.Unlock()
 			unlock()
@@ -606,7 +618,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	runningLockWaitStartedAt := time.Now()
 	unlock = s.lockRunner(id)
 	timings.record("running_lock_wait", runningLockWaitStartedAt)
+	runningStateReadStartedAt := time.Now()
 	current, err := s.store.ReadState(id)
+	timings.record("running_state_read", runningStateReadStartedAt)
 	if err != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
 		unlock()
