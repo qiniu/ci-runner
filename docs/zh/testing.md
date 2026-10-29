@@ -1046,3 +1046,44 @@ go test ./internal/server -run '^TestDeploymentLivePullRequestMetadata$' -count=
 保留版本、标题持久化以及生命周期字段不变。旧记录的空标题可通过正常元数据接口补齐。
 证据明确记录本轮是否触发回填，并分别记录初次和后续请求耗时。本测试不验证浏览器
 OAuth、布局、私有 Contents 权限、第二账号授权或真实资源释放。
+
+## CI Runner 账户与仓库并发限制
+
+运维人员在 `runnerd.yaml` 中配置可选限制，重启 runnerd 后生效：
+
+```yaml
+worker:
+  max_concurrent_runners: 100
+  account_concurrency_limits:
+    example-org: 20
+    example-user: 5
+  repository_concurrency_limits:
+    example-org/large-project: 4
+```
+
+账户指 Job 仓库所属的 GitHub 用户或组织，以请求保存的 `repository_full_name`
+的 owner 部分识别，不按工作流触发者、OAuth 账户、App Installation ID、凭据提供者
+或 fork 赞助方计数。组织下所有仓库共享账户限制；fork 计入自身 owner 和仓库，
+同时遵守已有的赞助限制。手动请求及重装 App 的请求使用相同归属规则。
+全局及自定义 Runner Specs 跨模板汇总。配置键不区分大小写，精确匹配，不支持通配符。
+账户、仓库改名或仓库转移时需要同步配置；历史请求按保存的归属名称计数直到结束。
+
+未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
+全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
+占用额度，排队和终态不占用。创建状态落库前使用内存预留，失败时释放；重启后从持久状态
+恢复计数。并发协调仅支持单个 runnerd 进程。
+
+达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
+继续执行；容量等待不消耗失败重试次数，也不承诺严格均分调度机会。
+`last_error_code` 通过 `runner_capacity_global`、`runner_capacity_profile`、
+`runner_capacity_account`、`runner_capacity_repository` 标明受限维度。
+Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因变化；同一限制的重复检查
+不会重复追加容量事件，成功准入后清除等待原因。
+
+配置需要重启生效，不提供热加载或新的 Settings 界面。降低上限保留已有 Runner，
+占用降至上限以下才允许新增；删除配置或设为零解除该维度限制，其他限制继续生效。
+这些配置不改变 Sandbox Deploy 配额和仓库授权。
+
+本地回归覆盖跨规格/仓库的过期计数读取与创建预留、独立作用域、落库失败释放、
+数据库重开后的计数，以及大量受限请求后仍能调度其他仓库的场景。
+真实 GitHub/Sandbox 的完成、清理、降低额度后的重启恢复及负载排队时间仍需上线验收。

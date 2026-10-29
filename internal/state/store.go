@@ -556,6 +556,8 @@ type RunnerRequestStore interface {
 	ListStatesForGitHubInstallationRepositories(access []GitHubInstallationRepositoryAccess, limit, offset int) ([]RunnerState, int64, error)
 	ActiveCount() (int, error)
 	InFlightCount() (int, error)
+	InFlightCountForRepositoryOwner(owner string) (int, error)
+	InFlightCountForRepository(repositoryFullName string) (int, error)
 	ActiveCountForProfile(name string) (int, error)
 	InFlightCountForProfile(name string) (int, error)
 	ActiveCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)

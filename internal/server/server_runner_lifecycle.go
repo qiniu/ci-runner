@@ -408,9 +408,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			return
 		}
 		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
-		s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
+		s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second), capacityStage)
 		s.signalQueue()
 		return
+	}
+	if strings.HasPrefix(st.LastErrorCode, "runner_capacity_") {
+		st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
+		st.NextRetryAt = time.Time{}
 	}
 	st.Status = state.StatusCreating
 	st.LeaseOwner = workerID
@@ -2003,7 +2007,7 @@ func (s *Server) retryOrFail(st state.RunnerState, stage string, err error) {
 	s.refreshMetrics()
 }
 
-func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time) {
+func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time, capacityStage string) {
 	unlock := s.lockRunner(id)
 	defer unlock()
 	st, err := s.store.ReadState(id)
@@ -2016,6 +2020,12 @@ func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time) 
 		_ = s.store.ReleaseLease(id, workerID)
 		return
 	}
+	dimension := strings.TrimSuffix(capacityStage, "_capacity_check")
+	code := "runner_capacity_" + dimension
+	changed := st.LastErrorCode != code
+	st.LastErrorCode = code
+	st.LastErrorMessage = "Waiting for " + dimension + " Runner concurrency capacity"
+	st.LastErrorRetryable = true
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
 	st.NextRetryAt = nextAttempt
@@ -2023,6 +2033,10 @@ func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time) 
 	if err := s.store.WriteState(st); err != nil {
 		s.logger.Error("defer queued request", "id", id, "error", err)
 		_ = s.store.ReleaseLease(id, workerID)
+		return
+	}
+	if changed {
+		s.store.AppendStagedLog(id, "control.log", "runner_capacity", []byte(st.LastErrorMessage+"\n"))
 	}
 }
 

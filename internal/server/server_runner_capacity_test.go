@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -89,6 +91,18 @@ func (s *admissionBlockingStore) InFlightCountForProfileScope(source string, sco
 	return count, err
 }
 
+func (s *admissionBlockingStore) InFlightCountForRepositoryOwner(owner string) (int, error) {
+	count, err := s.Store.InFlightCountForRepositoryOwner(owner)
+	s.block("account_capacity_check")
+	return count, err
+}
+
+func (s *admissionBlockingStore) InFlightCountForRepository(repository string) (int, error) {
+	count, err := s.Store.InFlightCountForRepository(repository)
+	s.block("repository_capacity_check")
+	return count, err
+}
+
 func (s *admissionBlockingStore) WriteState(st state.RunnerState) error {
 	if st.Status == state.StatusCreating && s.block("creating_state_persist") {
 		if s.writeFailure != nil {
@@ -146,7 +160,15 @@ func admissionTestFixture(t *testing.T, stage string, globalLimit, profileLimit 
 	}
 	store := &admissionBlockingStore{Store: base, stage: stage, entered: make(chan struct{}), release: make(chan struct{})}
 	fake := &lifecycleSandboxService{events: &lifecycleEventRecorder{}}
-	gh := httptest.NewServer(githubRunnerAPI(t))
+	handler := githubRunnerAPI(t)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Model the same GitHub API for all repositories in the admission fixture.
+		parts := strings.SplitN(r.URL.Path, "/", 5)
+		if len(parts) == 5 && parts[1] == "repos" {
+			r.URL.Path = "/repos/o/r/" + parts[4]
+		}
+		handler(w, r)
+	}))
 	t.Cleanup(gh.Close)
 	srv := newRunnerLifecycleTestServer(t, store, gh.URL, fake)
 	srv.Close()
@@ -215,8 +237,36 @@ func assertCapacityReleased(t *testing.T, srv *Server) {
 	t.Helper()
 	srv.runnerCapacity.mu.Lock()
 	defer srv.runnerCapacity.mu.Unlock()
-	if srv.runnerCapacity.pending != 0 || len(srv.runnerCapacity.profiles) != 0 {
-		t.Fatal("capacity reservations or profile observations leaked")
+	if srv.runnerCapacity.pending != 0 || len(srv.runnerCapacity.profiles) != 0 || len(srv.runnerCapacity.accounts) != 0 || len(srv.runnerCapacity.repositories) != 0 {
+		t.Fatal("capacity reservations or observations leaked")
+	}
+}
+
+func TestRunnerCapacityReservesAccountAndRepositoryAcrossProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		accountLimit, repositoryLimit int
+		want                          string
+	}{
+		{"account", 1, 0, "account_capacity_check"},
+		{"repository", 0, 1, "repository_capacity_check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capacity := &runnerAdmissionCapacity{}
+			first := capacity.observe(state.RunnerRequest{GitHubInstallationID: 123, RepositoryFullName: "Acme/Repo", ProfileName: "one"}, "one")
+			second := capacity.observe(state.RunnerRequest{GitHubInstallationID: 123, RepositoryFullName: "acme/repo", ProfileName: "two"}, "two")
+			if stage := first.reserve(0, 10, 0, 10, 0, tc.accountLimit, 0, tc.repositoryLimit); stage != "" {
+				t.Fatalf("first reserve: %s", stage)
+			}
+			if stage := second.reserve(0, 10, 0, 10, 0, tc.accountLimit, 0, tc.repositoryLimit); stage != tc.want {
+				t.Fatalf("second reserve: %s, want %s", stage, tc.want)
+			}
+			first.finish()
+			second.finish()
+			if len(capacity.accounts) != 0 || len(capacity.repositories) != 0 {
+				t.Fatal("scope observations leaked")
+			}
+		})
 	}
 }
 
@@ -413,6 +463,175 @@ func TestRunnerAdmissionUsesReloadedProfileName(t *testing.T) {
 				t.Fatalf("started %d Sandboxes, want %d", got, starts)
 			}
 			assertCapacityReleased(t, srv)
+		})
+	}
+}
+
+func TestRunnerScopeCapacityConcurrentAdmission(t *testing.T) {
+	for _, dimension := range []string{"account", "repository"} {
+		for _, stage := range []string{"creating_state_persist", dimension + "_capacity_check"} {
+			t.Run(dimension+"/"+stage, func(t *testing.T) {
+				srv, store, fake, release := admissionTestFixture(t, stage, 10, 0)
+				if dimension == "account" {
+					srv.cfg.RunnerAccountConcurrency = map[string]int{"o": 1}
+				} else {
+					srv.cfg.RunnerRepositoryConcurrency = map[string]int{"o/r": 1}
+				}
+				// Separate Specs and, for account limits, separate repositories must still share a quota.
+				upsertLifecycleProfile(t, store.Store, state.RunnerProfile{Name: "second", Labels: []string{"self-hosted", "custom"}, TemplateID: "custom-id", Enabled: true})
+				b := assertAdmissionState(t, store.Store, "b", state.StatusQueued)
+				b.ProfileName = "second"
+				if dimension == "account" {
+					b.RepositoryFullName = "O/another"
+				} else {
+					b.RepositoryFullName = "O/R"
+				}
+				if err := store.Store.WriteState(b); err != nil {
+					t.Fatal(err)
+				}
+				aDone := startAdmissionTestRunner(t, srv, "a")
+				awaitAdmissionTest(t, store.entered, "first admission did not block")
+				awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, "b"), "second admission blocked")
+				release()
+				awaitAdmissionTest(t, aDone, "first admission did not finish")
+				winner, deferred := "a", "b"
+				if stage != "creating_state_persist" {
+					winner, deferred = deferred, winner
+				}
+				assertAdmissionState(t, store.Store, winner, state.StatusRunning)
+				queued := assertAdmissionState(t, store.Store, deferred, state.StatusQueued)
+				if queued.LastErrorCode != "runner_capacity_"+dimension || queued.RetryCount != 0 || queued.LeaseOwner != "" || queued.NextRetryAt.IsZero() {
+					t.Fatalf("invalid capacity wait: %#v", queued)
+				}
+				if len(fake.startInputs()) != 1 {
+					t.Fatal("scope quota oversubscribed")
+				}
+				assertCapacityReleased(t, srv)
+				// A new controller reconstructs usage from persisted states, not reservations.
+				srv.runnerCapacity = runnerAdmissionCapacity{}
+				awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, deferred), "restart capacity check stalled")
+				assertAdmissionState(t, store.Store, deferred, state.StatusQueued)
+				finished := assertAdmissionState(t, store.Store, winner, state.StatusRunning)
+				finished.Status = state.StatusCompleted
+				if err := store.Store.WriteState(finished); err != nil {
+					t.Fatal(err)
+				}
+				awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, deferred), "released capacity was not reusable")
+				resumed := assertAdmissionState(t, store.Store, deferred, state.StatusRunning)
+				if strings.HasPrefix(resumed.LastErrorCode, "runner_capacity_") {
+					t.Fatal("stale capacity reason survived admission")
+				}
+				assertCapacityReleased(t, srv)
+			})
+		}
+	}
+}
+
+func TestRunnerScopeCapacityDoesNotBlockIndependentRepository(t *testing.T) {
+	for _, dimension := range []string{"account", "repository"} {
+		t.Run(dimension, func(t *testing.T) {
+			srv, store, fake, release := admissionTestFixture(t, "creating_state_persist", 10, 0)
+			if dimension == "account" {
+				srv.cfg.RunnerAccountConcurrency = map[string]int{"o": 1, "other": 1}
+			} else {
+				srv.cfg.RunnerRepositoryConcurrency = map[string]int{"o/r": 1, "o/other": 1}
+			}
+			b := assertAdmissionState(t, store.Store, "b", state.StatusQueued)
+			if dimension == "account" {
+				b.RepositoryFullName = "other/r"
+			} else {
+				b.RepositoryFullName = "o/other"
+			}
+			if err := store.Store.WriteState(b); err != nil {
+				t.Fatal(err)
+			}
+			a := startAdmissionTestRunner(t, srv, "a")
+			awaitAdmissionTest(t, store.entered, "first admission did not reserve")
+			awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, "b"), "independent repository blocked")
+			assertAdmissionState(t, store.Store, "b", state.StatusRunning)
+			release()
+			awaitAdmissionTest(t, a, "first admission did not finish")
+			if len(fake.startInputs()) != 2 {
+				t.Fatal("independent capacity was unavailable")
+			}
+			assertCapacityReleased(t, srv)
+		})
+	}
+}
+
+func TestRunnerScopeCapacityReleasesFailedWrite(t *testing.T) {
+	for _, dimension := range []string{"account", "repository"} {
+		t.Run(dimension, func(t *testing.T) {
+			srv, store, _, release := admissionTestFixture(t, "creating_state_persist", 10, 0)
+			if dimension == "account" {
+				srv.cfg.RunnerAccountConcurrency = map[string]int{"o": 1}
+			} else {
+				srv.cfg.RunnerRepositoryConcurrency = map[string]int{"o/r": 1}
+			}
+			store.writeFailure = errors.New("creating failed")
+			a := startAdmissionTestRunner(t, srv, "a")
+			awaitAdmissionTest(t, store.entered, "creating did not block")
+			awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, "b"), "capacity check stalled")
+			assertAdmissionState(t, store.Store, "b", state.StatusQueued)
+			release()
+			awaitAdmissionTest(t, a, "failed write stalled")
+			assertCapacityReleased(t, srv)
+			awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, "b"), "released slot was not reusable")
+			assertAdmissionState(t, store.Store, "b", state.StatusRunning)
+			assertCapacityReleased(t, srv)
+		})
+	}
+}
+
+func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
+	for _, dimension := range []string{"account", "repository"} {
+		t.Run(dimension, func(t *testing.T) {
+			srv, store, _, _ := admissionTestFixture(t, "", 10, 0)
+			if dimension == "account" {
+				srv.cfg.RunnerAccountConcurrency = map[string]int{"o": 1}
+			} else {
+				srv.cfg.RunnerRepositoryConcurrency = map[string]int{"o/r": 1}
+			}
+			active := assertAdmissionState(t, store.Store, "a", state.StatusQueued)
+			active.Status = state.StatusRunning
+			if err := store.Store.WriteState(active); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Store.ReleaseLease("b", "worker"); err != nil {
+				t.Fatal(err)
+			}
+			for i := range 20 {
+				if _, _, err := store.Store.CreateRequest(state.RunnerRequest{ID: fmt.Sprintf("busy-%02d", i), RepositoryFullName: "o/r", ProfileName: "shared"}, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			repository := "o/independent"
+			if dimension == "account" {
+				repository = "other/independent"
+			}
+			if _, _, err := store.Store.CreateRequest(state.RunnerRequest{ID: "independent", RepositoryFullName: repository, ProfileName: "shared"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			for i := range 22 {
+				req, _, claimed, err := store.Store.ClaimNextRunnable("worker", time.Now(), time.Minute)
+				if err != nil || !claimed {
+					t.Fatalf("queue exhausted before independent request: %v", err)
+				}
+				awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, req.ID), "claimed request stalled")
+				if req.ID == "independent" {
+					if i != 21 {
+						t.Fatalf("fixture did not exercise backlog: skipped %d requests", i)
+					}
+					assertAdmissionState(t, store.Store, req.ID, state.StatusRunning)
+					assertCapacityReleased(t, srv)
+					return
+				}
+				queued := assertAdmissionState(t, store.Store, req.ID, state.StatusQueued)
+				if queued.LeaseOwner != "" || queued.NextRetryAt.IsZero() {
+					t.Fatal("blocked request retained queue lease")
+				}
+			}
+			t.Fatal("busy scope blocked independent request")
 		})
 	}
 }

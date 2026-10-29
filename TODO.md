@@ -4,6 +4,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Complete deployed acceptance for CI Runner account/repository concurrency: configure limits, verify an unrelated repository progresses under backlog, cleanup releases slots, and restart with a reduced limit retains existing Runners. Local regression coverage is documented in [Testing](docs/testing.md#ci-runner-account-and-repository-concurrency).
+
 - Before promoting the Deploy Sandbox service eligibility fix, run the owner/member platform public-template, personal-repository collaborator versus Installation-owner audience, audience denial, scoped/inherited override, quota and saved-runtime cleanup gates in [Deployment Smoke](docs/deployment-smoke.md#9-sandbox-deploy-acceptance). Local regressions do not replace live provider acceptance.
 
 - Complete individual-repository removal acceptance for the [GitHub context workflow](docs/deployment.md#github-context-routes). Live Installation suspension/cache expiry/recovery and OAuth-token revocation/API denial/in-app browser reauthentication passed on 2026-10-16. GitHub disallowed removing the sole selected repository, so that distinct revocation mode remains unverified.

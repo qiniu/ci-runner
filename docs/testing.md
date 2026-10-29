@@ -1141,3 +1141,56 @@ legacy titles may be filled through the normal metadata endpoint. Evidence says
 whether that backfill was exercised and records initial/warm request latency
 separately. It does not test browser OAuth, layout, private Contents access,
 second-account authorization, or live resource release.
+
+## CI Runner account and repository concurrency
+
+Operators configure optional limits in `runnerd.yaml` and restart runnerd:
+
+```yaml
+worker:
+  max_concurrent_runners: 100
+  account_concurrency_limits:
+    example-org: 20
+    example-user: 5
+  repository_concurrency_limits:
+    example-org/large-project: 4
+```
+
+An account means the GitHub user or organization owning the Job's repository,
+identified by the owner part of its saved `repository_full_name`. It is not the
+person triggering the workflow, the OAuth account, App Installation ID, credential
+owner or fork sponsor. An organization's repositories share its account limit;
+a fork uses its own owner and repository, alongside any existing sponsorship limit.
+Manual requests and App reinstallations therefore use the same ownership limits.
+All Runner Specs, including scoped custom Specs, count together within each owner
+and repository. Keys are exact names, case-insensitive, without wildcard matching.
+Update configuration when renaming an owner or repository or transferring a repository;
+historical requests retain their saved ownership names until they finish.
+
+Missing entries and `0` add no limit. Negative limits, invalid names and duplicate
+keys after normalization reject startup. Global, Runner Spec, account and repository
+limits must all allow admission. `creating`, `running` and `stopping` consume
+capacity; queued and terminal requests do not. Pending creating writes are reserved
+in memory; durable state supplies counts after restart. Failed writes release their
+reservation. This coordination supports one runnerd process only.
+
+At capacity, requests stay queued, release their worker lease and become eligible
+again after five seconds, allowing the queue to process other eligible repositories.
+This does not consume the failure retry budget or promise equal scheduling shares.
+`last_error_code` identifies `runner_capacity_global`, `runner_capacity_profile`,
+`runner_capacity_account` or `runner_capacity_repository`; Job details show the
+waiting message and the event timeline records changes under `runner_capacity`.
+The reason clears on successful admission. Repeated checks of the same restriction
+do not append duplicate capacity events.
+
+Configuration changes require restart; there is no live reload or new Settings UI.
+Reducing a limit preserves existing Runner requests and stops new admissions until
+usage falls below the new limit. Removing a limit or setting it to zero restores
+unrestricted admission at that dimension, while other limits remain effective.
+These settings do not change Sandbox Deploy quotas or repository authorization.
+
+Local regression coverage includes stale count reads and pending writes across
+Specs/repositories, independent scopes, failed persistence, durable counts on reopen,
+and a backlog of restricted requests followed by an eligible repository. Real
+GitHub/Sandbox acceptance must still verify completion, cleanup, restart with reduced
+limits and waiting time under representative workloads.

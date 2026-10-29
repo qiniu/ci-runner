@@ -106,6 +106,8 @@ Jobs provide deployment history and a creation link pinned to the selected Job c
 | `github` | Webhook secret, auth method (App / PAT / basic), OAuth, allowed repositories |
 | `worker` | Lease, retry, and concurrency settings |
 
+Operators can set `worker.account_concurrency_limits` by GitHub repository owner and `worker.repository_concurrency_limits` by `owner/repo`. They aggregate across Runner Specs; omitted entries or `0` preserve existing behavior. Restart to apply changes; see [concurrency configuration](docs/testing.md#ci-runner-account-and-repository-concurrency).
+
 Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.

@@ -230,6 +230,61 @@ func TestInFlightCountForProfileExcludesScopedCustomRequestsWithSameName(t *test
 	}
 }
 
+func TestInFlightCountForRunnerAccountAndRepository(t *testing.T) {
+	dir := t.TempDir()
+	store := New(dir)
+	requests := []RunnerRequest{
+		{ID: "account-one-a", GitHubInstallationID: 101, RepositoryFullName: "Acme/One"},
+		{ID: "account-one-b", GitHubInstallationID: 101, RepositoryFullName: "acme/two"},
+		{ID: "account-two", GitHubInstallationID: 202, RepositoryFullName: "acme/one"},
+	}
+	for _, request := range requests {
+		_, state, err := store.CreateRequest(request, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Status = StatusRunning
+		if err := store.WriteState(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accountCount, err := store.InFlightCountForRepositoryOwner("ACME")
+	if err != nil || accountCount != 3 {
+		t.Fatalf("owner acme count = %d, err=%v; want 3", accountCount, err)
+	}
+	repositoryCount, err := store.InFlightCountForRepository("ACME/ONE")
+	if err != nil || repositoryCount != 2 {
+		t.Fatalf("repository acme/one count = %d, err=%v; want 2", repositoryCount, err)
+	}
+	for _, status := range []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping, StatusCompleted, StatusFailed} {
+		_, st, err := store.CreateRequest(RunnerRequest{ID: "lifecycle-" + status, RepositoryFullName: "owner/repo"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.Status = status
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Reopening cannot reset durable capacity or count queued/terminal rows.
+	reopened := New(dir)
+	for _, count := range []func() (int, error){
+		func() (int, error) { return reopened.InFlightCountForRepositoryOwner("owner") },
+		func() (int, error) { return reopened.InFlightCountForRepository("OWNER/REPO") },
+	} {
+		got, err := count()
+		if err != nil || got != 3 {
+			t.Fatalf("reopened in-flight count=%d, err=%v, want 3", got, err)
+		}
+	}
+	for _, owner := range []string{"own", "owner%", "owner_", "", "acme%"} {
+		got, err := store.InFlightCountForRepositoryOwner(owner)
+		if err != nil || got != 0 {
+			t.Fatalf("owner %q unexpectedly matched %d requests: %v", owner, got, err)
+		}
+	}
+}
+
 // ---------- ReleaseLease ----------
 
 func TestReleaseLeaseClears(t *testing.T) {

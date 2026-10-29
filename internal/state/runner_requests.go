@@ -770,6 +770,44 @@ func (s *DBStore) InFlightCount() (int, error) {
 	return int(count), nil
 }
 
+func (s *DBStore) InFlightCountForRepositoryOwner(owner string) (int, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return 0, err
+	}
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	if owner == "" {
+		return 0, nil
+	}
+	var count int64
+	if err := db.Model(&runnerRequestRecord{}).
+		Where("LOWER(repository_full_name) LIKE ? ESCAPE '!'", strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(owner)+"/%").
+		Where("status IN ?", []string{StatusCreating, StatusRunning, StatusStopping}).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+func (s *DBStore) InFlightCountForRepository(repositoryFullName string) (int, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return 0, err
+	}
+	repositoryFullName = strings.TrimSpace(repositoryFullName)
+	if repositoryFullName == "" {
+		return 0, nil
+	}
+	var count int64
+	if err := db.Model(&runnerRequestRecord{}).
+		Where("LOWER(repository_full_name) = LOWER(?)", repositoryFullName).
+		Where("status IN ?", []string{StatusCreating, StatusRunning, StatusStopping}).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
 func (s *DBStore) ActiveCountForProfile(name string) (int, error) {
 	return s.countStatesForProfileSource(name, []string{"", "global"}, []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping})
 }

@@ -99,6 +99,11 @@ cache:
   sts_endpoint: https://sts-ov.qiniuapi.com
 
 worker:
+  # Optional CI Runner limits keyed by GitHub owner login and owner/repository.
+  # Omit a key (or use 0) for unlimited at that scope. These limits apply
+  # across all Runner Specs and templates for the account/repository.
+  account_concurrency_limits: {} # Example: {your-org: 20}
+  repository_concurrency_limits: {} # Example: {your-org/project: 5}
   max_concurrent_runners: 100
   runner_idle_timeout_seconds: 300
   recovery_timeout_seconds: 120

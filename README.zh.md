@@ -106,6 +106,8 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 | `github`   | Webhook secret、鉴权方式（App / PAT / basic）、OAuth、允许的仓库 |
 | `worker`   | Lease、重试和并发设置                                            |
 
+运维可通过 `worker.account_concurrency_limits` 按 GitHub 仓库 owner、通过 `worker.repository_concurrency_limits` 按 `owner/repo` 配置跨 Runner Specs 的并发上限。未配置或 `0` 保持原行为，重启生效；详见[并发配置](docs/zh/testing.md#ci-runner-账户与仓库并发限制)。
+
 要点：
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
