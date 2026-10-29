@@ -107,7 +107,7 @@ func TestWindowsStartScriptUsesEphemeralRunnerAndHooks(t *testing.T) {
 	t.Parallel()
 	script := windowsStartScript(StartInput{Platform: PlatformWindows}, "sandbox-1")
 	for _, want := range []string{
-		"'--jitconfig', $jitConfig",
+		"@('run', '--jitconfig', $jitConfig)",
 		"$env:ACTIONS_RUNNER_HOOK_JOB_STARTED = Join-Path $hookRoot 'job-started.ps1'",
 		"$env:ACTIONS_RUNNER_HOOK_JOB_COMPLETED = Join-Path $hookRoot 'job-completed.ps1'",
 		`RUNNERD_EFFECTIVE_RUNNER_VERSION=`,
@@ -173,7 +173,8 @@ func TestWindowsStartScriptOmitsReusableTokenAndScrubsBootstrap(t *testing.T) {
 	}
 	scrub := strings.Index(script, "Set-Content -LiteralPath $PSCommandPath")
 	launch := strings.Index(script, "$runner = Start-Process")
-	if scrub < 0 || launch < scrub || !strings.Contains(script, "'--jitconfig', $jitConfig") || !strings.HasSuffix(strings.TrimSpace(script), "exit $runnerExitCode") {
+	reset := strings.Index(script, "$listenerArguments = @('run')")
+	if scrub < 0 || launch < scrub || reset < launch || !strings.Contains(script, "-ArgumentList $listenerArguments") || !strings.Contains(script, "@('run', '--jitconfig', $jitConfig)") || !strings.HasSuffix(strings.TrimSpace(script), "exit $runnerExitCode") {
 		t.Fatal("JIT bootstrap must scrub file before launch and preserve exit status")
 	}
 }
@@ -460,6 +461,22 @@ func TestWindowsTemplateDownloadUsesBoundedHTTP11Transfer(t *testing.T) {
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("Windows template download does not contain %q", want)
+		}
+	}
+}
+
+func TestWindowsListenerRestartsWithoutReplayingJIT(t *testing.T) {
+	script := windowsStartScript(StartInput{Platform: PlatformWindows, JITConfig: "e30="}, "sandbox")
+	initial := strings.Index(script, "$listenerArguments = @('run', '--jitconfig', $jitConfig)")
+	loop := strings.Index(script, "  do {")
+	launch := strings.Index(script, "-ArgumentList $listenerArguments")
+	saved := strings.Index(script, "$listenerArguments = @('run')")
+	if initial < 0 || loop < initial || launch < loop || saved < launch || strings.Contains(script, "'run.cmd'") {
+		t.Fatal("JIT must only be supplied to initial listener invocation")
+	}
+	for _, code := range []string{"$runnerExitCode -eq 2", "$runnerExitCode -eq 3", "$runnerExitCode -eq 4", "update.finished"} {
+		if !strings.Contains(script, code) {
+			t.Fatalf("missing retry/update handoff %s", code)
 		}
 	}
 }

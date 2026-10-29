@@ -28,16 +28,22 @@ func (s *windowsJITSandbox) StartRunner(ctx context.Context, input sandboxrunner
 }
 
 func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
-	for _, scenario := range []string{"success", "sandbox failure", "cleanup failure", "lost response"} {
+	for _, scenario := range []string{"success", "sandbox failure", "cleanup failure", "lost response", "rate limited", "secondary rate limited"} {
 		t.Run(scenario, func(t *testing.T) {
 			fail := scenario != "success"
 			var cleanupUnavailable atomic.Bool
 			cleanupUnavailable.Store(scenario == "cleanup failure")
 			var removed atomic.Bool
 			var registered atomic.Bool
+			var posts atomic.Int64
 			ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners":
+					if posts.Load() > 0 && (scenario == "rate limited" || scenario == "secondary rate limited") {
+						t.Error("definitively rejected JIT must not reconcile")
+						w.WriteHeader(http.StatusTooManyRequests)
+						return
+					}
 					if registered.Load() {
 						_, _ = w.Write([]byte(`{"runners":[{"id":71,"name":"e2b-win-jit"}]}`))
 					} else {
@@ -46,6 +52,16 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
 					_, _ = w.Write([]byte(`[{"os":"win","architecture":"x64","filename":"actions-runner-win-x64-2.337.0.zip","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip","sha256_checksum":"1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc"}]`))
 				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/generate-jitconfig":
+					posts.Add(1)
+					if scenario == "rate limited" {
+						w.WriteHeader(http.StatusTooManyRequests)
+						return
+					}
+					if scenario == "secondary rate limited" {
+						w.WriteHeader(http.StatusForbidden)
+						_, _ = w.Write([]byte("secondary rate limit"))
+						return
+					}
 					registered.Store(true)
 					if scenario == "lost response" {
 						w.WriteHeader(http.StatusGatewayTimeout)
@@ -72,11 +88,25 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 			service := &windowsJITSandbox{lifecycleSandboxService: &lifecycleSandboxService{}, fail: fail}
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, service)
 			createLifecycleRequest(t, store, "win-jit", "windows", 0)
+			if scenario == "rate limited" || scenario == "secondary rate limited" {
+				st, _ := store.ReadState("win-jit")
+				st.RetryCount = srv.cfg.RetryMaxAttempts
+				if err := store.WriteState(st); err != nil {
+					t.Fatal(err)
+				}
+			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			// Let the successful fake command exit after the state reaches running.
 			if fail {
 				srv.startRunner(ctx, "win-jit", "test-worker")
+				if scenario == "rate limited" || scenario == "secondary rate limited" {
+					pending, err := store.ReadState("win-jit")
+					if err != nil || pending.Status != state.StatusQueued || pending.NextRetryAt.IsZero() || removed.Load() {
+						t.Fatalf("lost rate-limit deferral: status=%s reason=%s err=%v", pending.Status, pending.FailureReason, err)
+					}
+					return
+				}
 				if scenario == "cleanup failure" {
 					pending, err := store.ReadState("win-jit")
 					if err != nil || pending.Status != state.StatusStopping || pending.FailureReason != "jit_cleanup_pending" {

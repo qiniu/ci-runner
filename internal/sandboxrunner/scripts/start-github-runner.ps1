@@ -337,28 +337,47 @@ try {
   Write-Output 'starting GitHub Actions runner'
   # The runner inherits this process's stdout, so its output streams to runnerd
   # while this loop relays the job-started marker.
-  $runner = Start-Process -FilePath (Join-Path $workdir 'run.cmd') -WorkingDirectory $workdir -ArgumentList @('--jitconfig', $jitConfig) -NoNewWindow -PassThru
-  $jitConfig = $null
-  # Cache the process handle so ExitCode stays available after exit.
-  $null = $runner.Handle
+  $listenerArguments = @('run', '--jitconfig', $jitConfig)
   $hookSignalRelayed = $false
-  # Poll only until the one marker is relayed, then block until exit.
-  while (-not $hookSignalRelayed -and -not $runner.WaitForExit(100)) {
-    if (Test-Path -LiteralPath $hookSignalPath -PathType Leaf) {
-      # Relay at most one marker. Removing the file acknowledges it to the hook.
-      $hookSignalRelayed = $true
-      try {
-        $hookSignal = [IO.File]::ReadAllText($hookSignalPath)
-        Remove-Item -LiteralPath $hookSignalPath -Force -ErrorAction SilentlyContinue
-        [Console]::Out.Write($hookSignal)
-        [Console]::Out.Flush()
-      } catch {
-        # The hook timed out and removed the marker first.
+  do {
+    # Consume JIT once. Replaying it overwrites hidden configuration files on
+    # Windows; later listener launches must use the saved configuration instead.
+    $runner = Start-Process -FilePath $runnerListener -WorkingDirectory $workdir -ArgumentList $listenerArguments -NoNewWindow -PassThru
+    $listenerArguments = @('run')
+    $jitConfig = $null
+    # Cache the process handle so ExitCode stays available after exit.
+    $null = $runner.Handle
+    # Poll only until the one marker is relayed, then block until exit.
+    while (-not $hookSignalRelayed -and -not $runner.WaitForExit(100)) {
+      if (Test-Path -LiteralPath $hookSignalPath -PathType Leaf) {
+        # Relay at most one marker. Removing the file acknowledges it to the hook.
+        $hookSignalRelayed = $true
+        try {
+          $hookSignal = [IO.File]::ReadAllText($hookSignalPath)
+          Remove-Item -LiteralPath $hookSignalPath -Force -ErrorAction SilentlyContinue
+          [Console]::Out.Write($hookSignal)
+          [Console]::Out.Flush()
+        } catch {
+          # The hook timed out and removed the marker first.
+        }
       }
     }
-  }
-  $runner.WaitForExit()
-  $runnerExitCode = $runner.ExitCode
+    $runner.WaitForExit()
+    $runnerExitCode = $runner.ExitCode
+    if ($runnerExitCode -eq 2) {
+      Start-Sleep -Seconds 5
+    } elseif ($runnerExitCode -eq 3 -or $runnerExitCode -eq 4) {
+      # Match the official helper's bounded update handoff before relaunching.
+      $updateFinished = Join-Path $workdir 'update.finished'
+      for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (Test-Path -LiteralPath $updateFinished) {
+          Remove-Item -LiteralPath $updateFinished -Force -ErrorAction SilentlyContinue
+          break
+        }
+        Start-Sleep -Seconds 1
+      }
+    }
+  } while ($runnerExitCode -eq 2 -or $runnerExitCode -eq 3 -or $runnerExitCode -eq 4)
 } finally {
   Remove-Item -LiteralPath $hookSignalPath, "$hookSignalPath.tmp" -Force -ErrorAction SilentlyContinue
   # Ephemeral Runner deregistration is owned by GitHub and runnerd's API

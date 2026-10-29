@@ -16,6 +16,8 @@ import (
 type RunnerJITConfig struct {
 	Runner        Runner `json:"runner"`
 	EncodedConfig string `json:"encoded_jit_config"`
+	// CleanupRequired is true once a create request may have reached GitHub.
+	CleanupRequired bool `json:"-"`
 }
 
 func (c RunnerJITConfig) String() string   { return "[REDACTED JIT configuration]" }
@@ -67,12 +69,12 @@ func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, n
 	resp, err := c.do(req, target.repositoryFullName)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return RunnerJITConfig{}, context.Canceled
+			return RunnerJITConfig{CleanupRequired: true}, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return RunnerJITConfig{}, context.DeadlineExceeded
+			return RunnerJITConfig{CleanupRequired: true}, context.DeadlineExceeded
 		}
-		return RunnerJITConfig{}, errors.New("github JIT Runner temporary network error")
+		return RunnerJITConfig{CleanupRequired: true}, errors.New("github JIT Runner temporary network error")
 	}
 	defer resp.Body.Close()
 	// Error bodies and parsing errors may contain credentials; never retain them.
@@ -82,15 +84,16 @@ func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, n
 		if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "secondary rate limit") {
 			category = "secondary rate limit"
 		}
-		return RunnerJITConfig{}, &apiError{Operation: "github JIT Runner", StatusCode: resp.StatusCode, Body: category, RetryAfter: resp.Header.Get("Retry-After"), RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining")}
+		uncertain := resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout
+		return RunnerJITConfig{CleanupRequired: uncertain}, &apiError{Operation: "github JIT Runner", StatusCode: resp.StatusCode, Body: category, RetryAfter: resp.Header.Get("Retry-After"), RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining")}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil || len(body) > 1<<20 {
-		return RunnerJITConfig{}, errors.New("invalid github JIT Runner response size")
+		return RunnerJITConfig{CleanupRequired: true}, errors.New("invalid github JIT Runner response size")
 	}
-	var out RunnerJITConfig
+	out := RunnerJITConfig{CleanupRequired: true}
 	if json.Unmarshal(body, &out) != nil {
-		return RunnerJITConfig{}, errors.New("invalid github JIT Runner response")
+		return RunnerJITConfig{CleanupRequired: true}, errors.New("invalid github JIT Runner response")
 	}
 	if out.Runner.ID <= 0 || out.Runner.Name != name || out.EncodedConfig == "" {
 		return out, errors.New("invalid github JIT Runner configuration")

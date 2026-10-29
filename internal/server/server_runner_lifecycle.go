@@ -530,6 +530,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			jitAdopted = true // No JIT request was sent by this stale start.
 			return
 		}
+		if !jit.CleanupRequired {
+			jitAdopted = true
+		}
 		if jit.Runner.Name == req.RunnerName {
 			jitRunnerID = jit.Runner.ID
 		}
