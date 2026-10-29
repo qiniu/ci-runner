@@ -511,6 +511,22 @@ func TestRunnerScopeCapacityConcurrentAdmission(t *testing.T) {
 				srv.runnerCapacity = runnerAdmissionCapacity{}
 				awaitAdmissionTest(t, startAdmissionTestRunner(t, srv, deferred), "restart capacity check stalled")
 				assertAdmissionState(t, store.Store, deferred, state.StatusQueued)
+				events, _, err := store.Store.ListRunnerEvents(deferred, 0, 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				capacityEvents := 0
+				for _, event := range events {
+					if event.Stage == runnerEventStageTiming {
+						t.Fatal("capacity polling appended timing events")
+					}
+					if event.Stage == "runner_capacity" {
+						capacityEvents++
+					}
+				}
+				if capacityEvents != 1 {
+					t.Fatalf("repeated capacity check appended %d capacity events", capacityEvents)
+				}
 				finished := assertAdmissionState(t, store.Store, winner, state.StatusRunning)
 				finished.Status = state.StatusCompleted
 				if err := store.Store.WriteState(finished); err != nil {
@@ -613,7 +629,9 @@ func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := range 22 {
-				req, _, claimed, err := store.Store.ClaimNextRunnable("worker", time.Now(), time.Minute)
+				// Model a backlog taking longer than the deferral window: every
+				// previously blocked row is eligible again on the next claim.
+				req, _, claimed, err := store.Store.ClaimNextRunnable("worker", time.Now().Add(time.Minute), time.Minute)
 				if err != nil || !claimed {
 					t.Fatalf("queue exhausted before independent request: %v", err)
 				}

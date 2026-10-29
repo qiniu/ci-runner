@@ -362,7 +362,12 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.logger.Error("read runner request", "id", id, "error", err)
 		return
 	}
-	defer timings.flush(s, id)
+	capacityDeferred := false
+	defer func() {
+		if !capacityDeferred {
+			timings.flush(s, id)
+		}
+	}()
 	initialStateReadStartedAt := time.Now()
 	st, err := s.store.ReadState(id)
 	timings.record("initial_state_read", initialStateReadStartedAt)
@@ -408,6 +413,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			return
 		}
 		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
+		capacityDeferred = true
 		s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second), capacityStage)
 		s.signalQueue()
 		return

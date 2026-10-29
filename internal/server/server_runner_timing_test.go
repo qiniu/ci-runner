@@ -247,7 +247,7 @@ func TestRunnerStartupRecordsAdmissionWaitBeforeProfileLookup(t *testing.T) {
 	}
 }
 
-func TestRunnerStartupRetainsTimingsWhenCapacityDefers(t *testing.T) {
+func TestRunnerStartupSkipsTimingsWhenCapacityDefers(t *testing.T) {
 	for _, stage := range []string{"global_capacity_check", "profile_capacity_check"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, store, batches := newStartupTimingFixture(t)
@@ -255,17 +255,8 @@ func TestRunnerStartupRetainsTimingsWhenCapacityDefers(t *testing.T) {
 			srv.startRunner(t.Context(), "timing-start", "test-worker")
 			select {
 			case batch := <-batches:
-				samples := parseStartupTimings(t, batch)
-				if _, ok := samples[stage]; !ok {
-					t.Errorf("missing capacity decision timing: %s", batch)
-				}
-				for _, absent := range []string{"creating_state_persist", "sandbox_start", "running_state_read"} {
-					if _, ok := samples[absent]; ok {
-						t.Errorf("capacity deferral recorded %s", absent)
-					}
-				}
+				t.Fatalf("capacity-only deferral appended timing events: %s", batch)
 			default:
-				t.Fatal("deferred startup did not flush timings")
 			}
 			st, err := store.Store.ReadState("timing-start")
 			if err != nil || st.Status != state.StatusQueued || len(store.sandbox.startInputs()) != 0 {

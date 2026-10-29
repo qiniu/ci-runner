@@ -720,3 +720,42 @@ func TestReadRequestReturnsErrorForMissingID(t *testing.T) {
 		t.Error("ReadRequest: expected error for missing id, got nil")
 	}
 }
+
+func TestClaimNextRunnableOrdersByEligibilityTime(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		id            string
+		queued, retry time.Time
+	}{
+		{"old-deferred", now.Add(-time.Hour), now.Add(-time.Second)},
+		{"fresh", now.Add(-time.Minute), time.Time{}},
+		{"due-retry", now.Add(-2 * time.Hour), now.Add(-30 * time.Second)},
+		{"future", now.Add(-3 * time.Hour), now.Add(time.Minute)},
+	} {
+		_, st, err := store.CreateRequest(RunnerRequest{ID: tc.id}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.NextRetryAt = tc.retry
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		db, err := store.dbOrEnsure()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Model(&runnerRequestRecord{}).Where("id = ?", tc.id).Update("queued_at", tc.queued).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{"fresh", "due-retry", "old-deferred"} {
+		req, _, claimed, err := store.ClaimNextRunnable("worker", now, time.Minute)
+		if err != nil || !claimed || req.ID != want {
+			t.Fatalf("claim=%s claimed=%t err=%v, want %s", req.ID, claimed, err, want)
+		}
+	}
+	if _, _, claimed, err := store.ClaimNextRunnable("worker", now, time.Minute); err != nil || claimed {
+		t.Fatalf("claimed future or leased request: claimed=%t err=%v", claimed, err)
+	}
+}

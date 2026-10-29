@@ -52,3 +52,38 @@ func TestRunnerConcurrencyConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerConcurrencyConfigDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values map[string]int
+		want   []string
+	}{
+		{"name", map[string]int{" bad/name ": 3}, []string{`[" bad/name "]=3`, "expected GitHub owner login"}},
+		{"negative", map[string]int{" Acme ": -2}, []string{`[" Acme "]=-2`, "nonnegative"}},
+		{"duplicate", map[string]int{"Acme": 2, "acme": 3}, []string{`["acme"]=3`, `duplicate normalized key "acme"`, `"Acme"`}},
+		{"deterministic", map[string]int{"z!": 4, "a!": 5}, []string{`["a!"]=5`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := normalizeRunnerConcurrencyLimits(tc.values, false)
+			if err == nil {
+				t.Fatal("invalid config accepted")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q missing %q", err, want)
+				}
+			}
+		})
+	}
+	for _, repository := range []bool{false, true} {
+		key := "Handle_Enterprise"
+		if repository {
+			key += "/Build.Tools"
+		}
+		got, err := normalizeRunnerConcurrencyLimits(map[string]int{key: 2}, repository)
+		if err != nil || got[strings.ToLower(key)] != 2 {
+			t.Fatalf("managed user login rejected: %v", err)
+		}
+	}
+}

@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -269,12 +271,16 @@ func LoadFile(path string) (Config, error) {
 // credential scope, App installation or selected Runner Spec.
 func normalizeRunnerConcurrencyLimits(raw map[string]int, repository bool) (map[string]int, error) {
 	field := "worker.account_concurrency_limits"
+	expected := "GitHub owner login"
 	if repository {
 		field = "worker.repository_concurrency_limits"
+		expected = "owner/repository"
 	}
 	limits := make(map[string]int, len(raw))
-	for key, limit := range raw {
-		key = strings.ToLower(strings.TrimSpace(key))
+	originalKeys := make(map[string]string, len(raw))
+	for _, rawKey := range slices.Sorted(maps.Keys(raw)) {
+		limit := raw[rawKey]
+		key := strings.ToLower(strings.TrimSpace(rawKey))
 		parts := strings.Split(key, "/")
 		wantParts := 1
 		if repository {
@@ -286,18 +292,22 @@ func normalizeRunnerConcurrencyLimits(raw map[string]int, repository bool) (map[
 				valid = false
 			}
 			for _, ch := range part {
-				if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || i == 1 && (ch == '_' || ch == '.')) {
+				if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || i == 1 && ch == '.') {
 					valid = false
 				}
 			}
 		}
-		if !valid || limit < 0 {
-			return nil, fmt.Errorf("invalid config %s: expected %s and a nonnegative concurrency limit", field, map[bool]string{false: "GitHub owner login", true: "owner/repository"}[repository])
+		if !valid {
+			return nil, fmt.Errorf("invalid config %s[%q]=%d: expected %s", field, rawKey, limit, expected)
+		}
+		if limit < 0 {
+			return nil, fmt.Errorf("invalid config %s[%q]=%d: concurrency limit must be nonnegative", field, rawKey, limit)
 		}
 		if _, exists := limits[key]; exists {
-			return nil, fmt.Errorf("invalid config %s: duplicate normalized key", field)
+			return nil, fmt.Errorf("invalid config %s[%q]=%d: duplicate normalized key %q (also configured as %q)", field, rawKey, limit, key, originalKeys[key])
 		}
 		limits[key] = limit
+		originalKeys[key] = rawKey
 	}
 	return limits, nil
 }

@@ -1163,7 +1163,9 @@ owner or fork sponsor. An organization's repositories share its account limit;
 a fork uses its own owner and repository, alongside any existing sponsorship limit.
 Manual requests and App reinstallations therefore use the same ownership limits.
 All Runner Specs, including scoped custom Specs, count together within each owner
-and repository. Keys are exact names, case-insensitive, without wildcard matching.
+and repository. Keys are exact names, case-insensitive, without wildcard matching; owner logins
+may include underscores for Enterprise Managed Users. Validation reports the
+original key and limit in deterministic key order.
 Update configuration when renaming an owner or repository or transferring a repository;
 historical requests retain their saved ownership names until they finish.
 
@@ -1175,13 +1177,16 @@ in memory; durable state supplies counts after restart. Failed writes release th
 reservation. This coordination supports one runnerd process only.
 
 At capacity, requests stay queued, release their worker lease and become eligible
-again after five seconds, allowing the queue to process other eligible repositories.
+again after five seconds. Claims are ordered by next eligibility time (or original
+queue time for fresh requests), so expired deferrals rejoin behind already-waiting
+requests instead of reclaiming their original position.
 This does not consume the failure retry budget or promise equal scheduling shares.
 `last_error_code` identifies `runner_capacity_global`, `runner_capacity_profile`,
 `runner_capacity_account` or `runner_capacity_repository`; Job details show the
 waiting message and the event timeline records changes under `runner_capacity`.
 The reason clears on successful admission. Repeated checks of the same restriction
-do not append duplicate capacity events.
+do not append duplicate capacity events. Capacity-only deferrals also skip timing
+events to keep repeated polling from growing the timeline.
 
 Configuration changes require restart; there is no live reload or new Settings UI.
 Reducing a limit preserves existing Runner requests and stops new admissions until

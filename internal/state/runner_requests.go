@@ -833,6 +833,9 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 			Where("status = ?", StatusQueued).
 			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now.UTC()).
 			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now.UTC()).
+			// A deferred request rejoins at its next eligibility time instead of
+			// repeatedly jumping ahead of newer requests by its original age.
+			Order("COALESCE(next_retry_at, queued_at) ASC").
 			Order("queued_at ASC").
 			First(&candidate).Error; err != nil {
 			return err
