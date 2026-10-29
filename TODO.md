@@ -26,6 +26,7 @@ This file tracks active project work. Completed behavior should move into `READM
 - Add an effective-config diagnostics view or config validation workflow if operators need to inspect runtime config from the UI.
 - Verify DB lease behavior with two runnerd processes sharing the same database before documenting multi-instance support.
 - Decide whether expvar diagnostics need a Prometheus/export adapter or histogram-style latency views for deployment observability.
+- After landing the Template Check split, retain current-head GitHub evidence for both workflows, verify unrelated PRs skip Template Check and relevant/manual runs execute it, and confirm Fenno follows both workflows. Local Dockerfile checks do not establish hosted trigger behavior or regional template acceptance.
 - After the `ui-production-smoke` check has reported on `main`, enable it as a required status check in branch protection; the repository currently has no required status checks.
 - Define a privacy-safe documentation activation funnel for `/docs` (guide entry, hosted/deploy path selection, and first successful job) before adding analytics; do not collect repository names, workflow names, credentials, or log content.
 - Before merging the Runner maintenance schedule migration, confirm Fenno's

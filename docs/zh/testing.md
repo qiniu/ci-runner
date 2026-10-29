@@ -6,6 +6,29 @@
 
 本地质量检查使用 `task lint`；其中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
 
+## CI 检查范围
+
+`Check` 在 PR 和 main 推送时运行应用测试、构建及发布归档验证。
+`Template Check`（`.github/workflows/template-check.yaml`）仅在 Dockerfile、
+`.dockerignore`、`.goreleaser.yml`、`Taskfile.yaml`、`templates/`、`scripts/`
+或相关 CI / 发布 workflow 变更时运行，也支持手动触发。普通应用代码和 UI
+文档改动不会触发它。
+
+独立 job 分别检查模板源码（Node.js 24 版本更新器、模板矩阵、磁盘门槛和归档准备）、
+上游兼容性报告、服务 Dockerfile（含两个发布架构）及 Linux 模板 Dockerfile。
+源码测试不依赖镜像仓库 job。模板 Docker 检查使用共享的 `templates/` 上下文，
+不重复构建 UI。`docker build --check` 仍会请求镜像仓库元数据；ECR 返回
+`429 / Data limit exceeded` 时保留明确失败，不据此认定源码回归。
+重试前检查实际失败步骤，不静默忽略失败。
+
+本地使用 `task docker-check` 和 `task template-check-all`；完整模板检查需要
+Node.js 24、Docker 和网络。静态检查通过不代表真实构建或运行通过。
+Tag 触发的 `Release` 继续使用 `Dockerfile.release` 构建并发布服务镜像；
+各区域 Sandbox 模板构建和发布仍遵循独立验收。Runner 升级 PR 必须取得两个
+workflow 对应当前 head 的证据，包括维护自动化需要显式调度的情况。
+不要把按路径触发的 workflow 设置为所有 PR 无条件必需的检查，因为无关 PR
+不会生成这些检查。
+
 ## 1. 本地配置文件
 
 服务现在默认读取 `./runnerd.yaml`；也可以通过 `--config` 指向别的路径：

@@ -79,16 +79,18 @@ Task、jq、Docker 和 gh。配置合并不代表 Fenno 服务已经启用。
 有更新时重新生成 `templates/runner-images-compatibility.json`，运行
 `task template-check-all` 和 Windows／共享 pin 一致性测试，并检查三个文件的允许
 修改范围。Fenno 维护唯一的 `automation/actions-runner-update` PR，以明确租约保护
-分支更新，相同提案保留原 SHA，review 和合并由人工完成。CI 必须对应当前 PR head；
-查询该 head 的全部 `check.yaml` 运行，不按状态筛选，只有完全没有运行记录时才首次
-调度。排队或执行中的运行继续跟进，完整成功的 Check 可复用。失败、取消或超时均为
+分支更新，相同提案保留原 SHA，review 和合并由人工完成。当前 PR head 的
+Check（`check.yaml`）和 Template Check（`template-check.yaml`）必须全部通过。
+分别查询每个 workflow 对应该 head 的全部运行，不按状态筛选；只有该 workflow
+完全没有运行记录时才首次调度。排队或执行中的运行继续跟进，同一 workflow 的
+成功运行可复用。失败、取消或超时均为
 已有运行，应先诊断，不能当作缺失；确定性或原因未明的失败不得在次日创建替代运行，
 只有已确认的瞬时错误才允许对原运行作有界重试。失败记录按状态去重，不每天重复
 评论；维护工具缺陷通过独立修复 PR 处理，不能放宽验证条件。
 
 `.github/workflows/actions-runner-update.yaml` 保留为手动只读验证入口：没有 cron、
 分支推送、PR 修改或 Sandbox 凭据，不与 Fenno 竞争升级分支。摘要给出校验版本和
-是否需要更新。普通 Check CI 同时执行磁盘回归检查，其 mock 不受宿主机
+是否需要更新。Template Check 执行磁盘回归检查，其 mock 不受宿主机
 `/etc/environment` 重置 PATH 的影响。
 
 digest 证明下载内容与 GitHub 元数据一致，不提供独立来源认证，人工 review 仍为

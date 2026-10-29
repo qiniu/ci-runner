@@ -266,37 +266,3 @@ jobs:
             fi
             test "$(tar -tzf "$archive" | wc -l | tr -d ' ')" = "1"
           done
-
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-      - run: cd ui && bun install --frozen-lockfile && bun run build
-      - name: Test Actions Runner pin updater
-        run: node --test scripts/test-update-actions-runner-pin.mjs
-      - name: Check service Dockerfile
-        run: docker build --check -f Dockerfile .
-      - name: Check public runner template matrix
-        run: bash scripts/check-runner-template-matrix.sh
-      - name: Test template disk gates independently of host environment
-        run: bash scripts/test-runner-template-disk.sh
-      - name: Check pinned runner image compatibility
-        run: bash scripts/check-runner-image-compatibility.sh
-      - name: Check Qiniu sandbox template Dockerfiles
-        run: |
-          for template in \
-            github-runner-ubuntu-slim \
-            github-runner-ubuntu-22.04 \
-            github-runner-ubuntu-24.04 \
-            github-runner-ubuntu-26.04
-          do
-            docker build --check --platform=linux/amd64 \
-              -f "templates/$template/Dockerfile" \
-              "templates/$template"
-          done
