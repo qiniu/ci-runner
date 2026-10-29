@@ -50,7 +50,8 @@ func TestWindowsStartScriptEncodesEveryArgument(t *testing.T) {
 		Platform:            PlatformWindows,
 		RequestID:           `req'$(calc)`,
 		RepositoryURL:       `https://github.com/o/r'; calc; '`,
-		RegistrationToken:   `tok"&calc`,
+		RegistrationToken:   `unused-token`,
+		JITConfig:           `jit"&calc`,
 		RunnerName:          "runner`calc",
 		Labels:              []string{"self-hosted", "windows", `x64'$(calc)`},
 		RunnerGroup:         `group';calc;'`,
@@ -80,7 +81,7 @@ func TestWindowsStartScriptEncodesEveryArgument(t *testing.T) {
 	for _, raw := range []string{
 		input.RequestID,
 		input.RepositoryURL,
-		input.RegistrationToken,
+		input.JITConfig,
 		input.RunnerName,
 		strings.Join(input.Labels, ","),
 		input.RunnerGroup,
@@ -106,14 +107,11 @@ func TestWindowsStartScriptUsesEphemeralRunnerAndHooks(t *testing.T) {
 	t.Parallel()
 	script := windowsStartScript(StartInput{Platform: PlatformWindows}, "sandbox-1")
 	for _, want := range []string{
-		"'--ephemeral', '--unattended', '--replace'",
-		"'--runnergroup', $runnerGroup",
+		"'--jitconfig', $jitConfig",
 		"$env:ACTIONS_RUNNER_HOOK_JOB_STARTED = Join-Path $hookRoot 'job-started.ps1'",
 		"$env:ACTIONS_RUNNER_HOOK_JOB_COMPLETED = Join-Path $hookRoot 'job-completed.ps1'",
 		`RUNNERD_EFFECTIVE_RUNNER_VERSION=`,
 		`RUNNERD_JOB_STARTED`,
-		"& $runnerListener configure @configArguments",
-		"& $runnerListener remove --token $registrationToken",
 		"Get-FileHash -LiteralPath $runnerUpdateArchive -Algorithm SHA256",
 		"--max-filesize 536870912",
 	} {
@@ -164,14 +162,27 @@ func TestWindowsStartScriptChecksDockerBeforePreflight(t *testing.T) {
 	}
 }
 
-func TestWindowsStartScriptToleratesRunnerRemovalFailure(t *testing.T) {
+func TestWindowsStartScriptOmitsReusableTokenAndScrubsBootstrap(t *testing.T) {
 	t.Parallel()
-	script := windowsStartScript(StartInput{Platform: PlatformWindows}, "sandbox-1")
-	cleanup := script[strings.LastIndex(script, "} finally {"):]
-	try := strings.Index(cleanup, "try {")
-	remove := strings.Index(cleanup, "& $runnerListener remove --token $registrationToken")
-	if try < 0 || remove < try || !strings.Contains(cleanup[remove:], "} catch {") || !strings.HasSuffix(strings.TrimSpace(script), "exit $runnerExitCode") {
-		t.Fatalf("runner removal can mask the runner exit code:\n%s", cleanup)
+	token := "reusable-registration-secret"
+	script := windowsStartScript(StartInput{Platform: PlatformWindows, RegistrationToken: token, JITConfig: "e30="}, "sandbox-1")
+	for _, forbidden := range []string{token, base64.StdEncoding.EncodeToString([]byte(token)), "$registrationToken", "configure @configArguments", "remove --token"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("Windows bootstrap contains forbidden credential path: %s", forbidden)
+		}
+	}
+	scrub := strings.Index(script, "Set-Content -LiteralPath $PSCommandPath")
+	launch := strings.Index(script, "$runner = Start-Process")
+	if scrub < 0 || launch < scrub || !strings.Contains(script, "'--jitconfig', $jitConfig") || !strings.HasSuffix(strings.TrimSpace(script), "exit $runnerExitCode") {
+		t.Fatal("JIT bootstrap must scrub file before launch and preserve exit status")
+	}
+}
+
+func TestWindowsStartRunnerRejectsReusableRegistrationBeforeSandbox(t *testing.T) {
+	for _, in := range []StartInput{{Platform: PlatformWindows, RegistrationToken: "secret"}, {Platform: PlatformWindows, JITConfig: "e30=", RegistrationToken: "secret"}} {
+		if _, err := (&E2BService{}).StartRunner(t.Context(), in); err == nil {
+			t.Fatal("unsafe Windows credential accepted")
+		}
 	}
 }
 

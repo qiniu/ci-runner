@@ -53,7 +53,7 @@ flowchart LR
   Runnerd <-->|"GORM store"| DB
   Runnerd -->|"create sandbox with template_id"| QiniuSandbox
   QiniuSandbox --> Sandbox
-  Sandbox -->|"registers with token"| GitHub
+  Sandbox -->|"Linux token / Windows JIT"| GitHub
   Sandbox -->|"stdout / stderr / control events"| Runnerd
   Runnerd -->|"diagnostics summary"| Browser
   Runnerd -->|"discover /debug/vars"| Pprof
@@ -112,7 +112,7 @@ sequenceDiagram
     alt capacity reached
       Worker->>Store: keep queued with next_retry_at
     else capacity available
-      Worker->>GH: create registration token
+      Worker->>GH: Linux registration token / Windows JIT configuration
       Worker->>QiniuSandbox: start template with runner labels
       QiniuSandbox->>Runner: launch actions runner
       Runner->>GH: register and pick up job
@@ -242,7 +242,7 @@ Admission uses the GitHub webhook payload repository and labels. A runner reques
 - an enabled Runner Spec satisfies `required_labels ⊆ job_labels ⊆ labels`;
 - the matched spec is enabled.
 
-After the repository allowlist check, a resolved account or Organization scope first checks an exact scoped custom label set. A disabled exact custom match explicitly shadows the global catalog with `profile_scope_disabled`; if no exact custom match exists, matching falls back to the unchanged global catalog. If no scope can be resolved, the same global catalog remains the compatibility path. Internal Runner Groups and Repository Policies no longer exist or participate in matching. When a spec includes a GitHub runner group, runnerd creates an organization runner for the job repository owner and passes that group as `--runnergroup`.
+After the repository allowlist check, a resolved account or Organization scope first checks an exact scoped custom label set. A disabled exact custom match explicitly shadows the global catalog with `profile_scope_disabled`; if no exact custom match exists, matching falls back to the unchanged global catalog. If no scope can be resolved, the same global catalog remains the compatibility path. Internal Runner Groups and Repository Policies no longer exist or participate in matching. When a spec includes a GitHub runner group, runnerd creates an organization runner for the job repository owner; Linux passes the group as `--runnergroup`, while Windows selects its group ID in the JIT configuration request.
 
 Capacity is checked later when the worker starts a queued request. Global specs enforce their global limit; scoped custom specs enforce their own scope limit, and all requests remain subject to `worker.max_concurrent_runners`. Requests above a limit remain `queued` and are retried later. A queued request whose persisted spec is now disabled or no longer satisfies its requested labels fails at `profile_validation` instead of launching from stale admission state. Transient placement/rate-limit signals are treated as queue deferrals instead of hard failures.
 

@@ -803,7 +803,7 @@ curl -fsS -b "$COOKIE_JAR" \
 
 `/runner_requests/{id}/diagnostics` 仅供管理员按需调用，并使用规范的内部 Request ID。它会汇总请求状态、最新 200 条 `control_log` 生命周期事件和 GitHub Job 证据。Sandbox 就绪后、Runner 启动前，runnerd 会记录所选 Sandbox 区域和解析后的物理模板 ID，再执行一个尽力而为、最多 5 秒的探测，从 `IMAGE_VERSION` 或 `ImageVersion` 取得镜像版本，并通过 `/opt/actions-runner/bin/Runner.Listener --version` 取得预装 GitHub Actions Runner 版本。探测只解码这两个白名单值，每项最多 256 字节，绝不持久化或记录完整环境、代理值、token、key 或 cache credential。Runner 注册会保留 GitHub 官方自更新能力；Job 开始前，固定的 runnerd hook 会验证工作目录中 Runner 副本的版本，并通过受权限保护的一次性 FIFO，把一个有界标记和 `RUNNERD_JOB_STARTED` 发送给外层启动进程；官方 hook stdout 只进入 GitHub Job 日志，Sandbox 命令回调不会收到它。Sandbox 服务只接受外层进程转发的首个合法 Job 前标记，将值冻结在内存中，忽略之后所有 Workflow 输出中的版本证据，并且只通过匹配 Sandbox/PID attempt 的退出回调写入 `effective_runner_version`。hook 会在 Workflow step 开始前删除 FIFO，外层进程也会在清理时删除或停止未使用的通道。即使 provider 清理导致没有命令结果，冻结值仍可保留；如果 runnerd 在捕获后重启，因为恢复流程不会信任 Job 开始后的 Workflow 输出，这个尽力而为字段可能保持为空。Windows Sandbox 改为探测 `C:\actions-runner\bin\Runner.Listener.exe --version` 和 `C:\ProgramData\qiniu-runner\image.env`。Windows 没有 FIFO，也没有单独的非特权 Runner 用户，因此 hook 会原子地发布一个标记文件，由外层脚本转发一次；hook 会在 Workflow step 开始前最多等待 10 秒完成转发，超时则丢弃未被读取的标记，因此 Workflow 最多只能伪造这个仅用于展示的版本字段。探测或捕获失败不会阻塞 Runner 启动、完成或清理；已知区域和模板标识仍会保存，无法取得的值保持为空。重新重试或因 Job 错配重新排队时会清除上一次环境快照。区域物理模板 ID 只保存在 Runner Request，不会写回公共名称绑定的 Runner Spec。现有 SQLite 表只会增量添加可空列，因此历史记录继续有效。
 
-私有 ID 规格会经过强制注册前更新门禁。runnerd 在申请注册令牌前，从 GitHub 的仓库级或 Organization 级接口取得官方应用描述，校验 GitHub-owned URL、文件名、架构、版本与 SHA-256，且不会把 API 凭证传入 Sandbox。过期的可写 Runner 需要 `curl`、`tar`、`sha256sum`、`mktemp` 和 `timeout`；包含全部重试在内的下载过程采用五分钟硬截止和 512 MiB 上限，并在 `config.sh` 前完成归档及候选版本校验和工作目录替换。Windows Sandbox 使用系统自带的 `curl.exe`、`Get-FileHash` 和 `Expand-Archive`，采用相同的总截止时间、大小上限和校验；注册时直接调用 `Runner.Listener.exe configure` 而不经过 `config.cmd`；切换未完成时，由脚本的 `finally` 块恢复旧目录。候选目录和旧目录备份会放在同一个随机同级更新根目录中，直至切换完成；旧目录移走后若收到可捕获的 HUP、INT 或 TERM，会恢复旧目录；如果恢复本身失败，则保留并报告备份路径。已安装版本与目标一致或更新时，会跳过这些工具和网络要求，且绝不会降级。查询或 Sandbox 预检失败都会阻止注册；服务端查询失败阶段记为 `github_runner_downloads`，归档版本不匹配时会同时报告实际版本和目标版本。由于模板不可变，在用户重建模板前，每个新 Sandbox 都会按预期重复下载。公共名称规格不走该门禁，继续依赖已测试的固定版本。对刻意使用旧版自定义模板的生产验收，应确认完成 Job 的详情页显示 `runner_version != effective_runner_version`，证明当前任务由刷新后的 Runner 执行。
+私有 ID 规格会经过强制注册前更新门禁。runnerd 在申请 Linux 注册凭据或 Windows JIT 配置前，从 GitHub 的仓库级或 Organization 级接口取得官方应用描述，校验 GitHub-owned URL、文件名、架构、版本与 SHA-256，且不会把 API 凭证传入 Sandbox。过期的可写 Runner 需要 `curl`、`tar`、`sha256sum`、`mktemp` 和 `timeout`；包含全部重试在内的下载过程采用五分钟硬截止和 512 MiB 上限，并在 `config.sh` 前完成归档及候选版本校验和工作目录替换。Windows 会在创建 Sandbox 前预创建 JIT 身份，但仅在来宾预检成功后启动；启动失败时通过 API 清理该身份。Windows Sandbox 使用系统自带的 `curl.exe`、`Get-FileHash` 和 `Expand-Archive`，采用相同的总截止时间、大小上限和校验；使用服务端创建的一次性 JIT 配置，通过 `run.cmd --jitconfig` 启动，不使用可重复注册令牌或 `config.cmd`；切换未完成时，由脚本的 `finally` 块恢复旧目录。候选目录和旧目录备份会放在同一个随机同级更新根目录中，直至切换完成；旧目录移走后若收到可捕获的 HUP、INT 或 TERM，会恢复旧目录；如果恢复本身失败，则保留并报告备份路径。已安装版本与目标一致或更新时，会跳过这些工具和网络要求，且绝不会降级。查询或 Sandbox 预检失败都会阻止 Runner 启动；服务端查询失败阶段记为 `github_runner_downloads`，归档版本不匹配时会同时报告实际版本和目标版本。由于模板不可变，在用户重建模板前，每个新 Sandbox 都会按预期重复下载。公共名称规格不走该门禁，继续依赖已测试的固定版本。对刻意使用旧版自定义模板的生产验收，应确认完成 Job 的详情页显示 `runner_version != effective_runner_version`，证明当前任务由刷新后的 Runner 执行。
 
 `POST /runner_requests/{id}/network-diagnostics` 是独立的管理员专用操作，只能用于仍为 `running` 且已持久化 Sandbox ID 和 Runner PID 的请求。JSON body 的 `target` 仅接受 `github_api`、`ubuntu_archive` 或 `llvm_apt`；服务端不接受浏览器传入的 URL、host、command、header 或 credential，也不跟随重定向。固定 Sandbox 命令最多记录 8 个 DNS 地址、实际连接 IP、DNS/TCP/TLS/首字节/总耗时、HTTP 状态、退出码，以及最多 512 字节的稳定探测错误类别；原始命令 stderr 和 provider 细节会被丢弃。完整操作上限为 10 秒，连接上限 3 秒、传输上限 8 秒，range 和最大下载量均限制为 65,536 字节。命令 stdout/stderr 合计输出另行限制为 65,536 字节，超过预算会取消命令。同一个 Request ID/Sandbox ID/PID attempt 同时只能运行一个探测，完成后有 30 秒冷却时间。handler 在 provider I/O 期间不持有 Runner 生命周期锁，provider 调用后会重新加载请求；状态或 attempt identity 变化时丢弃结果。安全的结构化结果或通用 provider 失败结果会写入 `control.log` 的 `network_diagnostic` stage；绝不改变请求状态、重试字段、终止归属、清理流程或 GitHub workflow timeout。历史及终态请求仍可查看，但不能执行实时探测。
 
@@ -837,11 +837,13 @@ apt 管理的 `packaging` 保持不变、pipx 工具目录兼容、普通用户�
 
 ### Windows Runner 端到端测试
 
+Windows 要求 `RUNNERD_E2E_JIT_CONFIG`、与其绑定的 `RUNNERD_E2E_RUNNER_NAME` 和精确标签；通过 GitHub 仓库级或组织级 `generate-jitconfig` API 创建，指定 Runner group ID 和 `work_folder: ..\work`。配置必须保密，不得打印。仅提供注册令牌时启动会失败。启动文件在 listener 启动前清空；这不构成对当前 Runner 自身凭据或同用户进程内存的隔离。
+
 `internal/sandboxrunner` 中的 `TestWindowsRunnerE2E` 会在真实 Windows Sandbox 上依次执行
 `StartRunner`、`RecoverRunner`、一个真实 GitHub Actions job 和 `StopRunner`。只有设置
 `RUNNERD_WINDOWS_E2E=1` 时才会运行，需要 `QINIU_SANDBOX_API_URL`、`QINIU_API_KEY`、
-`RUNNERD_E2E_TEMPLATE_ID`、`RUNNERD_E2E_REPOSITORY_URL` 和新生成的
-`RUNNERD_E2E_REGISTRATION_TOKEN`。可选设置 `RUNNERD_E2E_TEMPLATE_VERSION`、
+`RUNNERD_E2E_TEMPLATE_ID`、`RUNNERD_E2E_REPOSITORY_URL`、精确的 `RUNNERD_E2E_RUNNER_NAME` 和新生成的
+`RUNNERD_E2E_JIT_CONFIG`。可选设置 `RUNNERD_E2E_TEMPLATE_VERSION`、
 `RUNNERD_E2E_LABELS`，以及一条 bash 命令 `RUNNERD_E2E_TRIGGER_CMD`：Runner 开始监听后由它触发一个匹配的
 job；不设置时请手动触发。测试从 `templates/github-runner-windows-11/template.env` 读取模板 Runner
 的预期版本和压缩包摘要；GitHub 官方自升级后，实际运行版本更高也视为通过。
@@ -849,6 +851,8 @@ job；不设置时请手动触发。测试从 `templates/github-runner-windows-1
 ```bash
 RUNNERD_WINDOWS_E2E=1 go test -tags development ./internal/sandboxrunner -run TestWindowsRunnerE2E -v -timeout 25m
 ```
+
+调用者负责预创建的 GitHub Runner 身份：启动或测试失败后，应通过 GitHub API 删除该精确 Runner；`StopRunner` 只删除 Sandbox。这个直连服务测试不证明控制器清理或官方自更新接管完成。
 
 它不覆盖 webhook、Runner Spec 和 Web UI；这条链路请用 `task dev`，并配置一个 labels 包含
 `windows` 的固定 ID spec 验证。

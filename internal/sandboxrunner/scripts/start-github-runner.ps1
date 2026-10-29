@@ -225,7 +225,8 @@ if (-not (Test-Path -LiteralPath $runnerListener -PathType Leaf)) {
 
 
 $runnerURL = Decode-Argument '%[1]s'
-$registrationToken = Decode-Argument '%[2]s'
+$jitConfig = Decode-Argument '%[2]s'
+if ($jitConfig -notmatch '^[A-Za-z0-9+/]+={0,2}$') { Fail 'missing or invalid Windows JIT configuration' }
 $runnerName = Decode-Argument '%[3]s'
 $runnerLabels = Decode-Argument '%[4]s'
 $runnerGroup = Decode-Argument '%[5]s'
@@ -326,32 +327,18 @@ Write-Output 'RUNNERD_JOB_COMPLETED'
 $env:ACTIONS_RUNNER_HOOK_JOB_STARTED = Join-Path $hookRoot 'job-started.ps1'
 $env:ACTIONS_RUNNER_HOOK_JOB_COMPLETED = Join-Path $hookRoot 'job-completed.ps1'
 
-$configArguments = @('--url', $runnerURL, '--token', $registrationToken, '--name', $runnerName, '--labels', $runnerLabels, '--work', $runnerJobWork, '--ephemeral', '--unattended', '--replace')
-if ($runnerGroup) {
-  $configArguments += @('--runnergroup', $runnerGroup)
-}
-
-Write-Output "configuring GitHub Actions runner $runnerName"
-$retriesLeft = 10
-while ($true) {
-  & $runnerListener configure @configArguments
-  if ($LASTEXITCODE -eq 0) {
-    break
-  }
-  $retriesLeft--
-  if ($retriesLeft -eq 0) {
-    Fail 'GitHub Actions runner configuration failed' 2
-  }
-  Write-Output 'GitHub Actions runner configuration failed, retrying'
-  Start-Sleep -Seconds 1
-}
+# JIT configuration authorizes exactly one pre-created ephemeral Runner.
+# Remove the bootstrap file before any workflow can read its contents. Same-user
+# administrators are not isolated from process memory or that Runner's own credentials.
+Set-Content -LiteralPath $PSCommandPath -Value '# Runner bootstrap consumed' -Encoding ASCII
 
 $runnerExitCode = 1
 try {
   Write-Output 'starting GitHub Actions runner'
   # The runner inherits this process's stdout, so its output streams to runnerd
   # while this loop relays the job-started marker.
-  $runner = Start-Process -FilePath (Join-Path $workdir 'run.cmd') -WorkingDirectory $workdir -NoNewWindow -PassThru
+  $runner = Start-Process -FilePath (Join-Path $workdir 'run.cmd') -WorkingDirectory $workdir -ArgumentList @('--jitconfig', $jitConfig) -NoNewWindow -PassThru
+  $jitConfig = $null
   # Cache the process handle so ExitCode stays available after exit.
   $null = $runner.Handle
   $hookSignalRelayed = $false
@@ -374,12 +361,7 @@ try {
   $runnerExitCode = $runner.ExitCode
 } finally {
   Remove-Item -LiteralPath $hookSignalPath, "$hookSignalPath.tmp" -Force -ErrorAction SilentlyContinue
-  # Ephemeral runners usually unregister after their job, so removal often
-  # fails. Like the Linux path, ignore that and keep the runner exit code.
-  try {
-    & $runnerListener remove --token $registrationToken
-  } catch {
-    [Console]::Error.WriteLine('GitHub Actions runner removal failed')
-  }
+  # Ephemeral Runner deregistration is owned by GitHub and runnerd's API
+  # cleanup. No reusable registration/removal token is sent to the guest.
 }
 exit $runnerExitCode
