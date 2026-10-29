@@ -1327,7 +1327,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		if st.Status == state.StatusCreating {
 			switch {
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && (!hasJob || job.Status == "queued" || isWorkflowJobWaiting(job.Status)):
-				return s.requeueInterruptedCreation(st.ID, stateVersion)
+				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && strings.EqualFold(strings.TrimSpace(job.Status), "in_progress"):
 				s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "recovery", "sandbox_not_found", "runner sandbox no longer exists after interrupted creation")
 				return nil
@@ -1338,7 +1338,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 					return fmt.Errorf("stop sandbox without runner before requeue: %w", stopErr)
 				}
 				s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("stopped sandbox without runner process after restart\n"))
-				return s.requeueInterruptedCreation(st.ID, stateVersion)
+				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
 			}
 		}
 		// A running request must reconnect to its persisted PID. If that exact
@@ -1430,7 +1430,7 @@ func (s *Server) remainingSandboxTimeout(st state.RunnerState, now time.Time) ti
 	return min(remaining, s.cfg.SandboxTimeout)
 }
 
-func (s *Server) requeueInterruptedCreation(id string, stateVersion int64) error {
+func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
 	unlock := s.lockRunner(id)
 	defer unlock()
 	st, err := s.store.ReadState(id)
@@ -1439,6 +1439,20 @@ func (s *Server) requeueInterruptedCreation(id string, stateVersion int64) error
 	}
 	if st.Version != stateVersion || st.Status != state.StatusCreating {
 		return nil
+	}
+	req, err := s.store.ReadRequest(id)
+	if err != nil {
+		return fmt.Errorf("read interrupted runner request: %w", err)
+	}
+	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+		// A crash can leave a JIT identity without a Sandbox. Reconcile before
+		// requeueing: the next start may finish early for an already-completed Job.
+		if err := s.cleanupGitHubRunner(ctx, st); err != nil {
+			if persistErr := s.writeWindowsJITCleanupPending(&st); persistErr != nil {
+				return fmt.Errorf("retain interrupted JIT cleanup: %w", persistErr)
+			}
+			return fmt.Errorf("cleanup interrupted JIT Runner: %w", err)
+		}
 	}
 	st.Status = state.StatusQueued
 	st.SandboxID = ""
@@ -2397,16 +2411,26 @@ func (s *Server) retainWindowsJITCleanup(id string, attemptAt time.Time) {
 	if err != nil || current.Status == state.StatusRunning || current.SandboxID != "" || !current.LastAttemptAt.Equal(attemptAt) {
 		return
 	}
-	markRunnerCleanupStarted(&current, time.Now().UTC())
-	setTerminationSource(&current, state.TerminationSourceFailureCleanup)
+	if err := s.writeWindowsJITCleanupPending(&current); err != nil {
+		s.logger.Error("retain JIT Runner cleanup", "id", id, "error", err)
+	}
+}
+
+// The caller holds the request lock through cleanup and persistence.
+func (s *Server) writeWindowsJITCleanupPending(current *state.RunnerState) error {
+	markRunnerCleanupStarted(current, time.Now().UTC())
+	setTerminationSource(current, state.TerminationSourceFailureCleanup)
 	current.FailureStage = "github_registration"
 	current.FailureReason = "jit_cleanup_pending"
 	current.Error = "JIT Runner cleanup pending"
 	current.LeaseOwner = ""
 	current.LeaseExpiresAt = time.Time{}
 	current.NextRetryAt = s.nextRetryAt(1, time.Now().UTC())
-	s.writeStateOrLog(id, current, "retain JIT Runner cleanup")
-	s.store.AppendStagedLog(id, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("JIT Runner cleanup pending; recovery will reconcile registration\n"))
+	if err := s.store.WriteState(*current); err != nil {
+		return err
+	}
+	s.store.AppendStagedLog(current.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("JIT Runner cleanup pending; recovery will reconcile registration\n"))
+	return nil
 }
 
 var errRunnerCreationSuperseded = errors.New("runner creation attempt superseded")

@@ -881,6 +881,9 @@ still stop the build. This does not replace regional Sandbox build/smoke gates.
 Windows Sandbox. It is skipped unless `RUNNERD_WINDOWS_E2E=1`, and needs
 `QINIU_SANDBOX_API_URL`, `QINIU_API_KEY`, `RUNNERD_E2E_TEMPLATE_ID`,
 `RUNNERD_E2E_REPOSITORY_URL`, and a fresh `RUNNERD_E2E_JIT_CONFIG` with the exact `RUNNERD_E2E_RUNNER_NAME` and requested labels. Create JIT configuration with the GitHub repository or organization `generate-jitconfig` API, using the intended Runner group ID and `work_folder` of `..\work`. Keep the configuration private; never log it. Windows requires JIT and fails closed if only a registration token is supplied. The startup file is scrubbed before listener launch; same-user process memory and the current Runner credentials remain outside this isolation claim.
+
+Windows interrupted-creation recovery removes any pre-created JIT Runner before requeueing, including when the next Job check may finish the request without a Sandbox. Failed deletion persists a stopping request for the normal cleanup retry loop. Regression coverage includes absent Sandboxes, absent processes, and cleanup failure followed by a successful sweep.
+
 Optionally set `RUNNERD_E2E_TEMPLATE_VERSION`, `RUNNERD_E2E_LABELS`, and a
 `RUNNERD_E2E_TRIGGER_CMD` bash command that queues one matching job after the
 Runner starts listening; otherwise trigger the job manually. The test reads the

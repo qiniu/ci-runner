@@ -839,6 +839,8 @@ apt 管理的 `packaging` 保持不变、pipx 工具目录兼容、普通用户�
 
 Windows 要求 `RUNNERD_E2E_JIT_CONFIG`、与其绑定的 `RUNNERD_E2E_RUNNER_NAME` 和精确标签；通过 GitHub 仓库级或组织级 `generate-jitconfig` API 创建，指定 Runner group ID 和 `work_folder: ..\work`。配置必须保密，不得打印。仅提供注册令牌时启动会失败。启动文件在 listener 启动前清空；这不构成对当前 Runner 自身凭据或同用户进程内存的隔离。
 
+Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。
+
 `internal/sandboxrunner` 中的 `TestWindowsRunnerE2E` 会在真实 Windows Sandbox 上依次执行
 `StartRunner`、`RecoverRunner`、一个真实 GitHub Actions job 和 `StopRunner`。只有设置
 `RUNNERD_WINDOWS_E2E=1` 时才会运行，需要 `QINIU_SANDBOX_API_URL`、`QINIU_API_KEY`、
