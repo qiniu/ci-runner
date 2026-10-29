@@ -10,9 +10,14 @@ Run `task lint` for local quality checks. Its `staticcheck` step uses the Go ver
 
 `Check` runs application tests, builds and release archive validation on PRs and
 main pushes. `Template Check` (`.github/workflows/template-check.yaml`) runs only
-when Dockerfiles, `.dockerignore`, `.goreleaser.yml`, `Taskfile.yaml`, `templates/`,
-`scripts/`, or the related CI/release workflows change; it also supports manual
-dispatch. Ordinary application and UI documentation changes do not trigger it.
+when its declared inputs change; `.github/template-check-paths.json` selects
+individual jobs. Service Docker/release inputs run only service Docker checks;
+template source/scripts, compatibility inputs and Linux template Docker inputs
+select their respective jobs. Shared `Taskfile.yaml`, application `check.yaml`
+and unrelated scripts do not trigger it. Template documentation/configuration
+can run source checks without contacting an image registry. Manual dispatch
+runs all four jobs. Changes to the workflow or filter configuration also run all
+jobs; the path regression test guards event/job filter consistency.
 
 The independent jobs cover template source tests (Node.js 24 pin updater, matrix,
 disk gates and archive preparation), upstream compatibility reports, service

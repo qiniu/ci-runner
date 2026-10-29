@@ -9,10 +9,13 @@
 ## CI 检查范围
 
 `Check` 在 PR 和 main 推送时运行应用测试、构建及发布归档验证。
-`Template Check`（`.github/workflows/template-check.yaml`）仅在 Dockerfile、
-`.dockerignore`、`.goreleaser.yml`、`Taskfile.yaml`、`templates/`、`scripts/`
-或相关 CI / 发布 workflow 变更时运行，也支持手动触发。普通应用代码和 UI
-文档改动不会触发它。
+`Template Check`（`.github/workflows/template-check.yaml`）按声明的输入触发，
+由 `.github/template-check-paths.json` 分别选择 job。服务 Docker / 发布输入
+只运行服务 Docker 检查；模板源码及专用脚本、兼容性输入、Linux 模板 Docker
+输入分别运行对应检查。共享 `Taskfile.yaml`、普通 `check.yaml` 和无关脚本
+不触发它。模板文档和配置可只运行源码检查，不访问镜像仓库。手动触发运行
+全部四个 job；修改 workflow 或筛选配置也运行全部 job。路径回归测试验证
+workflow 触发路径与 job 输入一致。
 
 独立 job 分别检查模板源码（Node.js 24 版本更新器、模板矩阵、磁盘门槛和归档准备）、
 上游兼容性报告、服务 Dockerfile（含两个发布架构）及 Linux 模板 Dockerfile。
