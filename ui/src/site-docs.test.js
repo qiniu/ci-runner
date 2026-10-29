@@ -103,6 +103,10 @@ describe("public site documentation catalog", () => {
       expect(markdown).toContain("8 GiB")
       expect(markdown).toContain("20 GiB")
       expect(markdown).toContain("80 GiB")
+      expect(markdown).toContain("50 GiB")
+      expect(markdown).toContain("Windows 11 25H2 x64")
+      expect(markdown).toContain("runs-on: [qiniu, windows-11]")
+      expect(markdown).toContain("shell: pwsh")
       expect(markdown).toContain("Sandbox provider")
       expect(markdown).toContain(language === "en" ? "large labels are available after an operator creates and enables" : "large 标签需要 operator 创建并启用")
       expect(markdown).toContain(language === "en" ? "Requires an enabled custom Runner Spec" : "需要启用自定义 Runner Spec")
@@ -121,6 +125,7 @@ describe("public site documentation catalog", () => {
         "ubuntu-latest-large",
         "ubuntu-26.04",
         "ubuntu-26.04-large",
+        "windows-11",
       ])
     }
   })
