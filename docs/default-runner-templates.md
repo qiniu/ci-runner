@@ -103,9 +103,10 @@ After a change, regenerate `templates/runner-images-compatibility.json`, run
 inspect the three-file allowlist. Fenno maintains the single
 `automation/actions-runner-update` PR, protects branch updates with an explicit
 lease, and leaves review and merge to humans. Identical proposals keep their
-existing SHA. CI evidence must match the current PR head: query all matching
-`check.yaml` runs, regardless of status, and dispatch only when none exists.
-Follow queued/running checks and reuse successful full checks. Failed, cancelled
+existing SHA. Both Check (`check.yaml`) and Template Check (`template-check.yaml`)
+must pass for the current PR head. Query all matching runs for each workflow,
+regardless of status, and dispatch that workflow only when none exists.
+Follow queued/running checks and reuse successful runs of the same workflow. Failed, cancelled
 or timed-out runs require diagnosis; they never count as absent. Deterministic
 or unclassified failures do not trigger replacement runs on subsequent days;
 only a diagnosed transient error permits a bounded retry of the existing run.
@@ -115,8 +116,8 @@ maintenance tool fixes use a separate PR instead of relaxing verification.
 `.github/workflows/actions-runner-update.yaml` remains a manual, read-only
 verification fallback. It has no cron, branch push, PR mutation or Sandbox
 credentials, so it cannot race Fenno for branch ownership. Its summary reports
-the validated version and whether changes would be required. Ordinary Check CI
-also runs the disk-gate regression, which isolates mock disks from the host's
+the validated version and whether changes would be required. Template Check
+runs the disk-gate regression, which isolates mock disks from the host's
 `/etc/environment` PATH.
 
 The digest comparison establishes consistency with GitHub release metadata,

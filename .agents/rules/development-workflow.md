@@ -40,12 +40,19 @@ task template-check-all
   `task template-check-all` includes it; use Node.js 24 for both commands.
 - Fenno owns the daily source-maintenance schedule and upgrade branch/PR; follow
   [maintain-actions-runner](../skills/maintain-actions-runner/SKILL.md). Query all
-  Check runs for the current head, including failures, and dispatch only when
-  none exists. Existing unsuccessful runs require diagnosis and bounded retry
-  handling, not a fresh dispatch.
+  `Check` and `Template Check` runs for the current head, including failures.
+  Both must pass for Runner upgrades; dispatch each workflow only when no run
+  exists for that workflow/head. Existing unsuccessful runs require diagnosis
+  and bounded retry handling, not a fresh dispatch.
 - The manual `Actions Runner Update` workflow validates only: it has no schedule
-  and cannot write branches/PRs or dispatch Check. Neither entrypoint may receive
+  and cannot write branches/PRs or dispatch either CI workflow. Neither entrypoint may receive
   Sandbox credentials or perform template builds, publication, or rollback.
+
+- `Template Check` (`template-check.yaml`) owns template source tests, upstream
+  compatibility and Dockerfile checks. It runs only for related build/template/
+  script changes or manual dispatch; `Check` retains application validation.
+  Keep registry-dependent jobs separate from source tests, use `templates/` as
+  the Linux template build context, and do not treat `--check` as a real build.
 
 ## Documentation Sync
 

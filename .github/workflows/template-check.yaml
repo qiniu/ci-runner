@@ -1,0 +1,104 @@
+name: Template Check
+
+# Registry availability must not gate unrelated application or documentation PRs.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "Dockerfile*"
+      - ".dockerignore"
+      - ".goreleaser.yml"
+      - "Taskfile.yaml"
+      - "templates/**"
+      - "scripts/**"
+      - ".github/workflows/check.yaml"
+      - ".github/workflows/template-check.yaml"
+      - ".github/workflows/actions-runner-update.yaml"
+      - ".github/workflows/release.yaml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "Dockerfile*"
+      - ".dockerignore"
+      - ".goreleaser.yml"
+      - "Taskfile.yaml"
+      - "templates/**"
+      - "scripts/**"
+      - ".github/workflows/check.yaml"
+      - ".github/workflows/template-check.yaml"
+      - ".github/workflows/actions-runner-update.yaml"
+      - ".github/workflows/release.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: template-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  template-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Test Actions Runner pin updater
+        run: node --test scripts/test-update-actions-runner-pin.mjs
+      - name: Check public runner template matrix
+        run: bash scripts/check-runner-template-matrix.sh
+      - name: Test template disk gates independently of host environment
+        run: bash scripts/test-runner-template-disk.sh
+      - name: Test Runner archive preparation
+        run: bash scripts/test-prepare-runner-archive.sh
+
+  template-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check pinned runner image compatibility against upstream reports
+        run: bash scripts/check-runner-image-compatibility.sh
+
+  service-dockerfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      # --check does not execute build steps or require generated UI/binaries.
+      - name: Check service Dockerfile
+        run: docker build --check -f Dockerfile .
+      - name: Check release Dockerfile for both published architectures
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            docker build --check --platform="$platform" -f Dockerfile.release .
+          done
+
+  template-dockerfiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      # Match qshell and task template-check-all's shared build context.
+      - name: Check Qiniu sandbox template Dockerfiles
+        run: |
+          for template in \
+            github-runner-ubuntu-slim \
+            github-runner-ubuntu-22.04 \
+            github-runner-ubuntu-24.04 \
+            github-runner-ubuntu-26.04
+          do
+            docker build --check --platform=linux/amd64 \
+              -f "templates/$template/Dockerfile" templates
+          done

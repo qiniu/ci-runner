@@ -364,6 +364,8 @@ task release-check # 验证发布构建
 
 `task lint` 中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
 
+`Check` workflow 验证应用改动。`Template Check` 仅在相关构建、模板、脚本文件变更或手动触发时运行源码测试、上游兼容性和 Dockerfile 检查；它不构建或发布镜像，镜像仓库错误会在独立 job 中保留。参见 [CI 检查范围](docs/zh/testing.md#ci-检查范围)。
+
 单独运行 UI 测试时使用 `cd ui && bun run test`。修改 UI 依赖、Vite/Rollup 配置或
 生产静态资源加载逻辑后，还要运行 `task ui-production-smoke`。
 
@@ -400,7 +402,8 @@ Actions Runner 版本固定值位于 `templates/common/`。
 Fenno 通过 `.fennoai.yml` 和项目内 `maintain-actions-runner` Skill 每天检查官方
 Runner 稳定版。确定性更新器验证 Linux x64 与 Windows x64 归档，同步 pin，生成
 兼容性清单并通过模板检查后，维护唯一的 `automation/actions-runner-update` PR。
-相同提案不重复提交，Check 证据必须匹配当前 PR head，review 和合并由人工完成。
+相同提案不重复提交，当前 PR head 的 Check 和 Template Check 必须全部通过；
+review 和合并由人工完成。
 手动 `Actions Runner Update` 工作流只验证提案，不推送分支、创建 PR 或发布模板。
 
 启用前确认 Fenno 的实际时区、权限和单任务执行限制。源码自动化不接收生产 Sandbox

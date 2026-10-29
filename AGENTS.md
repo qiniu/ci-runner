@@ -92,6 +92,8 @@ Use `task smee` for standalone GitHub webhook forwarding. It reads `.smee-url` a
 
 Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`.
 
+`Check` validates the application. `Template Check` (`.github/workflows/template-check.yaml`) runs template source tests, upstream compatibility and Dockerfile checks for related build/template/script changes or manual dispatch. Keep registry checks independent of source tests, use the shared `templates/` build context, and require both workflows on Runner upgrade PRs. Dockerfile `--check` does not replace real image builds or regional template acceptance.
+
 Public runner templates are built with `qiniu/qshell` 2.19.13 or newer.
 The preview `github-runner-windows-11` template also uses qshell, but its
 `qshell.sandbox.toml` sets `from_template = "windows11"` because Windows
@@ -127,7 +129,7 @@ before changing either pin. Ordinary upgrades may change only the shared pin,
 `templates/runner-images-compatibility.json`, and the three `RUNNER_WIN_X64_*`
 fields in `templates/github-runner-windows-11/template.env`. Use Node.js 24,
 `task template-check-all`, and the Windows/common pin consistency test. Maintain
-one upgrade PR with explicit branch leases and current-head full Check evidence;
+one upgrade PR with explicit branch leases and current-head Check and Template Check evidence;
 unchanged proposals do not churn commits. The manual `Actions Runner Update`
 workflow validates only and never writes a branch/PR. Maintenance fixes belong
 in a separate PR. Human review remains the merge trust boundary. No source

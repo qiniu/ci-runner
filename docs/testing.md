@@ -6,6 +6,33 @@ This guide explains how to test the service with a local Qiniu sandbox environme
 
 Run `task lint` for local quality checks. Its `staticcheck` step uses the Go version declared in `go.mod`, matching CI.
 
+## CI scope
+
+`Check` runs application tests, builds and release archive validation on PRs and
+main pushes. `Template Check` (`.github/workflows/template-check.yaml`) runs only
+when Dockerfiles, `.dockerignore`, `.goreleaser.yml`, `Taskfile.yaml`, `templates/`,
+`scripts/`, or the related CI/release workflows change; it also supports manual
+dispatch. Ordinary application and UI documentation changes do not trigger it.
+
+The independent jobs cover template source tests (Node.js 24 pin updater, matrix,
+disk gates and archive preparation), upstream compatibility reports, service
+Dockerfiles (including both release architectures), and Linux template
+Dockerfiles. Source tests do not depend on registry jobs. Docker checks use the
+shared `templates/` context and do not rebuild the UI. `docker build --check`
+still requests registry metadata: an ECR `429 / Data limit exceeded` is a visible
+registry failure, not proof of a source regression. Inspect the actual failed
+step before retrying; no failure is silently ignored.
+
+For local checks, use `task docker-check` and `task template-check-all` (Node.js
+24, Docker and network required for the full template gate). A green static
+check does not prove a real build or runtime. Tag-triggered `Release` still
+builds/publishes service images with `Dockerfile.release`; regional Sandbox
+template builds and promotion retain their existing separate acceptance gates.
+Runner upgrade PRs require current-head evidence from both workflows, including
+when maintenance automation must dispatch them explicitly. Do not configure a
+path-filtered workflow as an unconditional required check: unrelated PRs do not
+create its checks.
+
 ## 1. Local Config File
 
 The service reads `./runnerd.yaml` by default. You can also pass another path with `--config`:

@@ -370,6 +370,8 @@ task release-check # Verify release build
 
 The `staticcheck` step in `task lint` uses the Go version declared in `go.mod`, matching CI.
 
+The `Check` workflow validates application changes. `Template Check` runs source tests, upstream compatibility and Dockerfile checks only for related build/template/script changes, or by manual dispatch. It does not build or publish images; registry failures stay visible in their own jobs. See [CI scope](docs/testing.md#ci-scope).
+
 For focused UI tests, run `cd ui && bun run test`. Use `task ui-production-smoke`
 after changing UI dependencies, Vite/Rollup configuration, or production asset
 loading.
@@ -412,8 +414,8 @@ project's `maintain-actions-runner` skill. Its deterministic updater verifies
 Linux x64 and Windows x64 archives, synchronizes their pins, regenerates the
 compatibility manifest, and runs template checks before maintaining the single
 `automation/actions-runner-update` PR. Identical proposals do not create new
-commits; Check evidence must match the current PR head. Human review and merge
-remain required. The manual `Actions Runner Update` workflow only validates a
+commits; both Check and Template Check must pass for the current PR head.
+Human review and merge remain required. The manual `Actions Runner Update` workflow only validates a
 proposal and cannot push, create PRs, or publish templates.
 
 Confirm Fenno's actual timezone, permissions and single-task execution before
