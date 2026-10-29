@@ -44,6 +44,7 @@ type Server struct {
 	forkSponsorshipLocks [64]sync.Mutex
 	runnerLocksMu        sync.Mutex
 	runnerLocks          map[string]*runnerRequestLock
+	windowsCreationLocks map[string]*runnerRequestLock
 	queueNotify          chan struct{}
 	deploymentNotify     chan struct{}
 	startOnce            sync.Once

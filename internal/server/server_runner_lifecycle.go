@@ -363,6 +363,15 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		return
 	}
 	defer timings.flush(s, id)
+	var releaseWindowsCreation func()
+	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+		// Keep one provisioning owner until all unadopted resources are cleaned
+		// or retained for recovery. Do not hold the lifecycle lock while waiting.
+		unlock()
+		releaseWindowsCreation = s.lockRunnerEntry(id, &s.windowsCreationLocks)
+		defer releaseWindowsCreation()
+		unlock = s.lockRunner(id)
+	}
 	initialStateReadStartedAt := time.Now()
 	st, err := s.store.ReadState(id)
 	timings.record("initial_state_read", initialStateReadStartedAt)
@@ -702,6 +711,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	metrics.RecordRunnerRegistered(req.ProfileName, "success")
 	s.refreshMetrics()
 	timings.flush(s, id)
+	if releaseWindowsCreation != nil {
+		releaseWindowsCreation()
+	}
 	<-exitCh
 }
 
@@ -2326,14 +2338,18 @@ func discoverPprofArtifacts() ([]pprofAddress, []string) {
 }
 
 func (s *Server) lockRunner(id string) func() {
+	return s.lockRunnerEntry(id, &s.runnerLocks)
+}
+
+func (s *Server) lockRunnerEntry(id string, entries *map[string]*runnerRequestLock) func() {
 	s.runnerLocksMu.Lock()
-	if s.runnerLocks == nil {
-		s.runnerLocks = make(map[string]*runnerRequestLock)
+	if *entries == nil {
+		*entries = make(map[string]*runnerRequestLock)
 	}
-	lock := s.runnerLocks[id]
+	lock := (*entries)[id]
 	if lock == nil {
 		lock = &runnerRequestLock{}
-		s.runnerLocks[id] = lock
+		(*entries)[id] = lock
 	}
 	lock.refs++
 	s.runnerLocksMu.Unlock()
@@ -2345,8 +2361,8 @@ func (s *Server) lockRunner(id string) func() {
 			lock.mu.Unlock()
 			s.runnerLocksMu.Lock()
 			lock.refs--
-			if lock.refs == 0 && s.runnerLocks[id] == lock {
-				delete(s.runnerLocks, id)
+			if lock.refs == 0 && (*entries)[id] == lock {
+				delete(*entries, id)
 			}
 			s.runnerLocksMu.Unlock()
 		})

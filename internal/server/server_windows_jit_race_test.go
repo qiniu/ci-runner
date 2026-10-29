@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,23 +53,33 @@ func (s *supersededWindowsSandbox) StopRunner(_ context.Context, sandboxID strin
 	return nil
 }
 
-// Value: protects=a superseded Windows start cannot mutate a replacement attempt;
+// Value: protects=Windows attempts finish old cleanup before a replacement provisions;
 // fails_when=late failure overwrites running state or cleanup deletes its JIT identity;
 // why_new=synchronous JIT failure tests never overlap two attempts; seam=none;
 // no_claim=GitHub and Sandbox provider acceptance (both providers are mocked).
 func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
-	for _, lateResult := range []string{"success", "error"} {
+	for _, lateResult := range []string{"success", "error", "cleanup failure"} {
 		t.Run(lateResult, func(t *testing.T) {
 			const requestID = "win-jit-race"
 			const runnerName = "e2b-" + requestID
 			var ghMu sync.Mutex
 			registered := map[int64]bool{}
 			var deletes []int64
+			var cleanupUnavailable, jobCompleted atomic.Bool
+			var jobChecks atomic.Int64
+			cleanupUnavailable.Store(lateResult == "cleanup failure")
 			nextID := int64(70)
 			ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ghMu.Lock()
 				defer ghMu.Unlock()
 				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/123":
+					jobChecks.Add(1)
+					if jobCompleted.Load() {
+						_, _ = w.Write([]byte(`{"id":123,"status":"completed","conclusion":"success"}`))
+					} else {
+						_, _ = w.Write([]byte(`{"id":123,"status":"queued"}`))
+					}
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
 					_, _ = w.Write([]byte(`[{"os":"win","architecture":"x64","filename":"actions-runner-win-x64-2.337.0.zip","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip","sha256_checksum":"1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc"}]`))
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners":
@@ -90,6 +101,10 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 						return
 					}
 					deletes = append(deletes, id)
+					if cleanupUnavailable.Load() {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
 					delete(registered, id)
 					w.WriteHeader(http.StatusNoContent)
 				default:
@@ -111,7 +126,13 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				service.oldErr = errors.New("temporary network error")
 			}
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, service)
-			createLifecycleRequest(t, store, requestID, "windows", 0)
+			if lateResult == "cleanup failure" {
+				if _, _, err := store.CreateRequest(state.RunnerRequest{ID: requestID, RepositoryFullName: "o/r", RunnerName: runnerName, ProfileName: "windows", Labels: []string{"self-hosted", "windows"}, JobID: 123}, nil); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				createLifecycleRequest(t, store, requestID, "windows", 0)
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			var releaseOnce sync.Once
@@ -136,11 +157,59 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			srv.retryOrFail(old, "sweeper_create_timeout", context.DeadlineExceeded)
+			jobCompleted.Store(true)
 			newDone := make(chan struct{})
 			go func() {
 				defer close(newDone)
 				srv.startRunner(ctx, requestID, "new-worker")
 			}()
+			// Observe the second caller waiting on the provisioning owner before
+			// releasing the old Sandbox result; scheduling cannot hide the race.
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+		waiting:
+			for {
+				srv.runnerLocksMu.Lock()
+				entry := srv.windowsCreationLocks[requestID]
+				waiting := entry != nil && entry.refs == 2
+				srv.runnerLocksMu.Unlock()
+				if waiting {
+					break waiting
+				}
+				select {
+				case <-newDone:
+					t.Fatal("replacement finished before old cleanup")
+				case <-ctx.Done():
+					t.Fatal("replacement never waited for provisioning owner")
+				case <-ticker.C:
+				}
+			}
+			release()
+			await(oldDone, "superseded start did not clean up")
+			if lateResult == "cleanup failure" {
+				await(newDone, "replacement did not observe pending cleanup")
+				pending, err := store.ReadState(requestID)
+				if err != nil || pending.Status != state.StatusStopping || pending.FailureReason != "jit_cleanup_pending" {
+					t.Fatalf("cleanup disappeared: status=%s reason=%s err=%v", pending.Status, pending.FailureReason, err)
+				}
+				select {
+				case <-service.newStarted:
+					t.Fatal("replacement provisioned before cleanup")
+				default:
+				}
+				cleanupUnavailable.Store(false)
+				if err := srv.Recover(ctx); err != nil {
+					t.Fatal(err)
+				}
+				final, _ := store.ReadState(requestID)
+				ghMu.Lock()
+				left := len(registered)
+				ghMu.Unlock()
+				if left != 0 || final.Status != state.StatusFailed || jobChecks.Load() != 1 {
+					t.Fatalf("recovery leaked registration: left=%d status=%s", left, final.Status)
+				}
+				return
+			}
 			var input sandboxrunner.StartInput
 			select {
 			case input = <-service.newStarted:
@@ -171,7 +240,7 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			}
 			newRegistered := registered[72]
 			ghMu.Unlock()
-			if oldDeletes != 2 || newDeleted || !newRegistered {
+			if oldDeletes != 1 || newDeleted || !newRegistered {
 				t.Errorf("JIT cleanup ownership lost: oldDeletes=%d newDeleted=%t newRegistered=%t", oldDeletes, newDeleted, newRegistered)
 			}
 			service.mu.Lock()
