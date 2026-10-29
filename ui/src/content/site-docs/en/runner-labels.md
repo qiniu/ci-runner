@@ -1,6 +1,6 @@
 # Runner labels
 
-Use a supported Qiniu label pair from the table below to select a Sandbox template. Standard labels are available by default; large labels are available after an operator creates and enables the corresponding custom Runner Spec.
+Use a supported Qiniu label pair from the table below to select a Sandbox template. On the Qiniu hosted service, standard Ubuntu labels and the Windows 11 preview are available through enabled platform Runner Specs; large labels are available after an operator creates and enables the corresponding custom Runner Spec. Self-hosted runnerd installations start with an empty spec catalog and require administrator setup for every label.
 
 ## Supported labels and resources
 
@@ -16,7 +16,7 @@ Use a supported Qiniu label pair from the table below to select a Sandbox templa
 | `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable mapping after setup | Requires an enabled custom Runner Spec; logical mapping to the Ubuntu 24.04 large template |
 | `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | Preview | Preview image, use deliberately |
 | `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | Preview after setup | Requires an enabled custom Runner Spec; Ubuntu 26.04 preview with a larger system disk |
-| `[qiniu, windows-11]` | 8 vCPU | 8 GiB | 50 GiB | Preview | Windows 11 25H2 x64 (minimal core) |
+| `[qiniu, windows-11]` | 8 vCPU | 8 GiB | 50 GiB | Preview | Windows 11 25H2 x64 (minimal core); available on the hosted service, requires spec setup on self-hosted installations |
 
 ## Resource contract
 
@@ -48,7 +48,11 @@ This means `[qiniu, ubuntu-24.04]` and the full advertised managed set both matc
 
 ## Windows 11 preview
 
-Use `[qiniu, windows-11]` to select the `github-runner-windows-11` template:
+On the Qiniu hosted service, the Windows 11 preview spec is enabled and displayed in the [Runner Spec catalog](/runner-specs). Use `[qiniu, windows-11]` to select its `github-runner-windows-11` template.
+
+On a self-hosted runnerd installation, an administrator must first make the Windows preview template available at the effective Sandbox endpoint with a usable default build, then create and enable a Runner Spec. Bind it to the public template name `github-runner-windows-11` when available, or to its explicit template ID. Set advertised labels to `self-hosted, windows, x64, qiniu, windows-11` and required labels to `qiniu, windows-11`. The `windows` advertised label selects the Windows launch path. Startup does not create missing specs; without a matching enabled spec, the workflow is rejected with `profile_labels_not_matched`.
+
+Once the spec is available, run this workflow:
 
 ```yaml
 name: Windows CI

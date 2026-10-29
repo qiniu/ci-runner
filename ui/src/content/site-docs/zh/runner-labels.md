@@ -1,6 +1,6 @@
 # Runner 标签
 
-使用下方表格中的受支持七牛标签组合选择 Sandbox 模板。标准标签默认可用；large 标签需要 operator 创建并启用对应的自定义 Runner Spec 后才可用。
+使用下方表格中的受支持七牛标签组合选择 Sandbox 模板。在七牛托管服务上，标准 Ubuntu 标签和 Windows 11 预览规格通过已启用的平台 Runner Spec 提供；large 标签需要 operator 创建并启用对应的自定义 Runner Spec 后才可用。自部署 runnerd 的规格目录初始为空，所有标签均须管理员先配置对应规格。
 
 ## 支持的标签与资源规格
 
@@ -16,7 +16,7 @@
 | `[qiniu, ubuntu-latest-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定映射 | 需要启用自定义 Runner Spec；映射到 Ubuntu 24.04 large 物理模板 |
 | `[qiniu, ubuntu-26.04]` | 8 vCPU | 8 GiB | 20 GiB | 预览 | 预览镜像，请明确选择 |
 | `[qiniu, ubuntu-26.04-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后预览 | 需要启用自定义 Runner Spec；使用更大系统盘的 Ubuntu 26.04 预览镜像 |
-| `[qiniu, windows-11]` | 8 vCPU | 8 GiB | 50 GiB | 预览 | Windows 11 25H2 x64（minimal core） |
+| `[qiniu, windows-11]` | 8 vCPU | 8 GiB | 50 GiB | 预览 | Windows 11 25H2 x64（minimal core）；托管服务已提供，自部署实例须先配置规格 |
 
 ## 资源规格说明
 
@@ -40,7 +40,11 @@
 
 ## Windows 11 预览
 
-使用 `[qiniu, windows-11]` 选择 `github-runner-windows-11` 模板：
+七牛托管服务已启用 Windows 11 预览规格，并在 [Runner Spec 目录](/runner-specs)中展示。使用 `[qiniu, windows-11]` 选择其 `github-runner-windows-11` 模板。
+
+自部署 runnerd 时，管理员须先确保有效 Sandbox endpoint 中的 Windows 预览模板可用且具有可用默认构建，再创建并启用 Runner Spec。模板已公开时可绑定公共名称 `github-runner-windows-11`，也可绑定显式模板 ID。声明标签设为 `self-hosted, windows, x64, qiniu, windows-11`，必需标签设为 `qiniu, windows-11`；声明标签中的 `windows` 用于选择 Windows 启动路径。启动不会自动创建缺失规格；缺少匹配且已启用的 Spec 时，工作流会因 `profile_labels_not_matched` 被拒绝。
+
+规格可用后，运行以下工作流：
 
 ```yaml
 name: Windows CI
