@@ -194,7 +194,7 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 	}, cursor)
 	w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.2f, data;dur=%.2f", float64(authenticated.Sub(started))/float64(time.Millisecond), float64(time.Since(authenticated))/float64(time.Millisecond)))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeAdminReadError(w, r, "runner_requests", err)
 		return
 	}
 	var nextCursor *string
@@ -228,10 +228,28 @@ func (s *Server) handleRunnerRequestMetrics(w http.ResponseWriter, r *http.Reque
 	metrics, err := s.getRunnerRequestMetrics(r.Context())
 	w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.2f, data;dur=%.2f", float64(authenticated.Sub(started))/float64(time.Millisecond), float64(time.Since(authenticated))/float64(time.Millisecond)))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeAdminReadError(w, r, "runner_request_metrics", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, metrics)
+}
+
+func (s *Server) writeAdminReadError(w http.ResponseWriter, r *http.Request, resource string, err error) {
+	// A disconnected waiter is not a failed shared query. Keep real query
+	// cancellation/timeouts as server failures when the HTTP request is live.
+	if errors.Is(r.Context().Err(), context.Canceled) && errors.Is(err, context.Canceled) {
+		w.WriteHeader(499) // Client Closed Request; retained by HTTP metrics and logs.
+		return
+	}
+	category := "query_failed"
+	if errors.Is(err, context.DeadlineExceeded) {
+		category = "query_timeout"
+	} else if errors.Is(err, context.Canceled) {
+		category = "query_cancelled"
+	}
+	// Retain bounded, credential-free evidence without SQL or database details.
+	s.logger.ErrorContext(r.Context(), "admin runner read failed", "resource", resource, "category", category)
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 func validRunnerRequestDisplayStatus(status string) bool {

@@ -557,6 +557,8 @@ The first list load reads one 100-row page. The overview and a collection withou
 
 Run `cd ui && bun test src/admin-resource-loader.test.js src/app-load-policy.test.js src/components/runner-requests-section.test.js` and `bunx playwright test --config playwright.production.config.ts admin-request-loading.pw.ts`. The production-bundle fixtures cover responses delayed beyond multiple poll ticks, statistics failure, filter changes, bounded refresh and continuation. Run `go test -race ./internal/state ./internal/server -run 'Test(AdminRunnerReads|RunnerRequestMetrics|ListRunnerRequestsIsPaginated)'` for cache/authentication and connection-wait cancellation. These fixtures do not establish production latency acceptance. On production, compare the two endpoints' `Server-Timing` headers: `auth` includes local account authorization and `data` includes the list read or cached/shared statistics read. These durations include connection waiting, not just SQL execution; correlate with database pool waits and `EXPLAIN QUERY PLAN` on an authorized database copy before changing indexes or connection limits.
 
+Cancelled admin list/statistics HTTP reads are recorded as `499` (Client Closed Request) rather than server failures. Genuine query failures remain `500` and emit a credential-free `admin runner read failed` log with `resource` and `category` (`query_failed`, `query_timeout`, or `query_cancelled`). A shared statistics query timeout remains a server failure even when another subscriber has disconnected. Correlate historical 500s with logs; cancellation support alone does not prove their cause.
+
 Stop a runner:
 
 ```bash
