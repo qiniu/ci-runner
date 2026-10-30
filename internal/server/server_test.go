@@ -4966,6 +4966,9 @@ func TestRunnerRequestMetricsAreIndependentFromListFilters(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s status=%d body=%s", target, rec.Code, rec.Body.String())
 		}
+		if timing := rec.Header().Get("Server-Timing"); !strings.Contains(timing, "auth;dur=") || !strings.Contains(timing, "data;dur=") {
+			t.Fatalf("missing bounded read timing: %q", timing)
+		}
 		var metrics state.RunnerRequestMetrics
 		if err := json.NewDecoder(rec.Body).Decode(&metrics); err != nil {
 			t.Fatal(err)

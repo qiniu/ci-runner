@@ -5,6 +5,8 @@ import { isSiteDocumentPath } from "@/site-doc-routes"
 export const userRunnerInitialPageSize = 100
 export const userRunnerHistoryWindow = 500
 export const adminRunnerRequestPageSize = 100
+export const adminRunnerPollPageBudget = 5
+export const adminRunnerRefreshWindow = adminRunnerRequestPageSize * adminRunnerPollPageBudget
 
 export interface AdminRunnerRequestListOptions {
   status: RunnerDisplayStatus | "all"
@@ -21,6 +23,7 @@ export interface AdminRunnerPage {
 }
 
 export interface AdminRunnerPollResult extends AdminRunnerPage {
+  windowReset?: boolean
   preservePagination: boolean
 }
 
@@ -121,7 +124,13 @@ export async function collectAdminRunnerPoll(
   const items: RunnerState[] = []
   let cursor: string | null = null
 
-  for (;;) {
+  // A missing/changed boundary must never turn polling into a full-history scan.
+  // Five pages bound both request count and the replacement window to 500 rows.
+  const pageBudget = oldestLoadedID ? adminRunnerPollPageBudget : 1
+  const visited = new Set<string | null>()
+  for (let pageNumber = 0; ; pageNumber += 1) {
+    if (visited.has(cursor)) throw new Error("Repeated Runner request cursor")
+    visited.add(cursor)
     const page = await requestPage(cursor)
     items.push(...page.items)
     const oldestIndex = oldestLoadedID ? items.findIndex((runner) => runner.id === oldestLoadedID) : -1
@@ -138,6 +147,9 @@ export async function collectAdminRunnerPoll(
     }
     if (!page.hasMore || !page.nextCursor) {
       return { items, preservePagination: false, nextCursor: null, hasMore: false }
+    }
+    if (pageNumber + 1 >= pageBudget) {
+      return { items, preservePagination: false, nextCursor: page.nextCursor, hasMore: true, windowReset: Boolean(oldestLoadedID) }
     }
     cursor = page.nextCursor
   }

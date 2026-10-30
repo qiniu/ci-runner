@@ -133,6 +133,35 @@ describe("app load policy", () => {
     expect(result.preservePagination).toBe(false)
   })
 
+  test("empty initial polling reads only the first page", async () => {
+    let calls = 0
+    const result = await collectAdminRunnerPoll(async () => {
+      calls++
+      return { items: [{ id: "new" }], nextCursor: "older", hasMore: true }
+    }, { items: [], nextCursor: null, hasMore: true })
+    expect(calls).toBe(1)
+    expect(result.items).toEqual([{ id: "new" }])
+    expect(result.nextCursor).toBe("older")
+    expect(result.hasMore).toBe(true)
+  })
+
+  test("a vanished filter boundary rebuilds a bounded window with a valid continuation", async () => {
+    const calls = []
+    const result = await collectAdminRunnerPoll(async (cursor) => {
+      calls.push(cursor)
+      return { items: [{ id: `page-${calls.length}` }], nextCursor: `cursor-${calls.length}`, hasMore: true }
+    }, { items: [{ id: "no-longer-matching" }], nextCursor: "old", hasMore: true })
+    expect(calls).toEqual([null, "cursor-1", "cursor-2", "cursor-3", "cursor-4"])
+    expect(result.items).toHaveLength(5)
+    expect(result).toMatchObject({ nextCursor: "cursor-5", hasMore: true, preservePagination: false, windowReset: true })
+  })
+
+  test("rejects a repeated cursor instead of looping or publishing duplicate pages", async () => {
+    await expect(collectAdminRunnerPoll(async () => ({ items: [], nextCursor: "same", hasMore: true }), {
+      items: [{ id: "old" }], nextCursor: "old-cursor", hasMore: true,
+    })).rejects.toThrow("Repeated Runner request cursor")
+  })
+
   test("suspends automatic page loading after a failure until a manual retry", () => {
     const gate = createAutomaticPageLoadGate()
     expect(gate.begin()).toBe(true)

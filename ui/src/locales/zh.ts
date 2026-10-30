@@ -394,6 +394,8 @@ export const zh = {
     moreRepositoriesAvailable: "还有更多匹配仓库",
     previousRunnerRequestPage: "上一页 Runner 请求",
     nextRunnerRequestPage: "下一页 Runner 请求",
+    runnerRequestPollingPaused: "浏览较早历史时已暂停列表自动刷新，点击刷新可回到最新请求。",
+    runnerRequestWindowReset: "刷新后的历史窗口最多显示 500 条请求，可加载更多以继续查看更早的记录。",
     noRequestsFound: "未找到 Runner 请求",
     loadedRequests: "已加载 {{count}} 个",
     loadingMoreRequests: "正在加载更多请求...",

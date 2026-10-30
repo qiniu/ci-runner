@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -421,7 +422,7 @@ func (s *DBStore) ListStatesPage(options RunnerRequestListOptions) ([]RunnerStat
 // ListStatesCursor returns a newest-first page after the exclusive cursor.
 // The extra row determines whether another page exists without counting the
 // entire filtered history.
-func (s *DBStore) ListStatesCursor(options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error) {
+func (s *DBStore) ListStatesCursor(ctx context.Context, options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, false, err
@@ -429,7 +430,7 @@ func (s *DBStore) ListStatesCursor(options RunnerRequestListOptions, after *Runn
 	if options.Limit <= 0 {
 		options.Limit = 100
 	}
-	query, err := filterRunnerRequestList(db.Model(&runnerRequestRecord{}), options)
+	query, err := filterRunnerRequestList(db.WithContext(ctx).Model(&runnerRequestRecord{}), options)
 	if err != nil {
 		return nil, false, err
 	}
@@ -463,13 +464,13 @@ func (s *DBStore) ListStatesCursor(options RunnerRequestListOptions, after *Runn
 	return states, hasMore, nil
 }
 
-func (s *DBStore) GetRunnerRequestMetrics() (RunnerRequestMetrics, error) {
+func (s *DBStore) GetRunnerRequestMetrics(ctx context.Context) (RunnerRequestMetrics, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return RunnerRequestMetrics{}, err
 	}
 	var metrics RunnerRequestMetrics
-	if err := db.Model(&runnerRequestRecord{}).
+	if err := db.WithContext(ctx).Model(&runnerRequestRecord{}).
 		Select(
 			`
 			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS queued,
@@ -490,7 +491,7 @@ func (s *DBStore) GetRunnerRequestMetrics() (RunnerRequestMetrics, error) {
 		Scan(&metrics).Error; err != nil {
 		return RunnerRequestMetrics{}, err
 	}
-	if err := db.Model(&runnerProfileRecord{}).Count(&metrics.RunnerSpecs).Error; err != nil {
+	if err := db.WithContext(ctx).Model(&runnerProfileRecord{}).Count(&metrics.RunnerSpecs).Error; err != nil {
 		return RunnerRequestMetrics{}, err
 	}
 	return metrics, nil

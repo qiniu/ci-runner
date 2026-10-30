@@ -57,6 +57,9 @@ function verticalScrollContainer(element: HTMLElement) {
 export function RunnerRequestsSection({
   hasAccess,
   loading,
+  error,
+  windowReset,
+  pollingPaused,
   runners,
   hasMore,
   loadingMore,
@@ -89,6 +92,9 @@ export function RunnerRequestsSection({
 }: {
   hasAccess: boolean
   loading: boolean
+  error?: string
+  windowReset?: boolean
+  pollingPaused?: boolean
   runners: RunnerState[]
   hasMore: boolean
   loadingMore: boolean
@@ -441,6 +447,13 @@ export function RunnerRequestsSection({
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {error ? <p role="alert" className="px-6 py-3 text-sm text-destructive">{t("app.controlPlaneLoadFailed")}: {error}</p> : null}
+          {windowReset || pollingPaused ? (
+            <p role="status" className="px-6 py-3 text-sm text-muted-foreground">
+              {windowReset ? t("admin.runnerRequestWindowReset") : null}{" "}
+              {pollingPaused ? t("admin.runnerRequestPollingPaused") : null}
+            </p>
+          ) : null}
           <Table className="min-w-max">
             <TableHeader ref={tableHeaderRef} className="relative z-10 bg-background will-change-transform">
               <TableRow>
@@ -460,7 +473,7 @@ export function RunnerRequestsSection({
               {runners.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
-                    {t("admin.noRequestsFound")}
+                    {loading ? t("common.loading") : error ? t("app.controlPlaneLoadFailed") : t("admin.noRequestsFound")}
                   </TableCell>
                 </TableRow>
               ) : (

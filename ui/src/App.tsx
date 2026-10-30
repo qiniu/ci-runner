@@ -11,6 +11,7 @@ import { AccessDeniedPage, NotFoundPage, SessionErrorPage, SessionLoadingPage, S
 import { LandingPage } from "@/components/landing-page"
 import { GitHubAppAccountsSection } from "@/components/github-app-accounts-section"
 import { RunnerJobDetail } from "@/components/runner-job-detail"
+import { adminRequestTimeoutMs, createAdminResourceLoader } from "@/admin-resource-loader"
 import { RunnerRequestsSection } from "@/components/runner-requests-section"
 import { RunnerSpecsSection } from "@/components/runner-specs-section"
 import { SandboxServiceDefaultSection } from "@/components/sandbox-service-default-section"
@@ -51,6 +52,7 @@ import {
   adminDataResources,
   adminPollingResources,
   adminRunnerRequestPageSize,
+  adminRunnerRefreshWindow,
   adminRunnerRequestsPath,
   appRouteAccess,
   isDeploymentRoute,
@@ -201,9 +203,14 @@ function App() {
   const [beginGitHubReauthentication] = useState(createGitHubReauthenticationGate)
   const userLoadGate = useRef(createLatestUserLoadGate()).current
   const runnerRequestLookupGeneration = useRef(0)
-  const adminLoadGeneration = useRef(0)
+  const adminResourceLoader = useRef(createAdminResourceLoader()).current
+  const [runnerRequestError, setRunnerRequestError] = useState("")
+  const [runnerWindowReset, setRunnerWindowReset] = useState(false)
+  const [runnerHistoryLoaded, setRunnerHistoryLoaded] = useState(false)
+  const runnerHistoryLoadedRef = useRef(false)
   const runnerRequestPageGeneration = useRef(0)
   const runnerRequestPageLoadingRef = useRef(false)
+  const runnerRequestPageController = useRef<AbortController | null>(null)
   const runnersRef = useRef<RunnerState[]>([])
   const runnerRequestCursorRef = useRef<string | null>(null)
   const runnerRequestHasMoreRef = useRef(true)
@@ -220,6 +227,8 @@ function App() {
   const productTourOnboarding = scopedProductTourOnboarding?.account === currentAccount ? scopedProductTourOnboarding.value : null
 
   const invalidateRunnerRequestPage = useCallback(() => {
+    runnerRequestPageController.current?.abort()
+    runnerRequestPageController.current = null
     runnerRequestPageGeneration.current += 1
     runnerRequestPageLoadingRef.current = false
     setLoadingMoreRunnerRequests(false)
@@ -485,7 +494,7 @@ function App() {
   )
 
   const requestAdminRunnerPage = useCallback(
-    async (cursor: string | null = null): Promise<AdminRunnerPage> => {
+    async (cursor: string | null = null, signal?: AbortSignal): Promise<AdminRunnerPage> => {
       const appliesFilters = section === "runner_requests"
       const response = await requestResponse(adminRunnerRequestsPath({
         status: appliesFilters ? runnerStatusFilter : "all",
@@ -493,13 +502,17 @@ function App() {
         runnerSpec: appliesFilters ? runnerSpecFilter : "all",
         limit: adminRunnerRequestPageSize,
         cursor,
-      }))
+      }), { signal })
       const data = await response.json() as {
         items?: unknown
         next_cursor?: unknown
         has_more?: unknown
       }
-      const items = Array.isArray(data.items) ? data.items as RunnerState[] : []
+      if (!Array.isArray(data.items) || typeof data.has_more !== "boolean"
+        || (data.has_more && typeof data.next_cursor !== "string")) {
+        throw new Error(appI18n.t("app.controlPlaneLoadFailed"))
+      }
+      const items = data.items as RunnerState[]
       return {
         items,
         nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
@@ -507,11 +520,17 @@ function App() {
       }
     }, [requestResponse, runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter, section])
 
-  const requestAdminRunnerPoll = useCallback(() => collectAdminRunnerPoll(requestAdminRunnerPage, {
-    items: runnersRef.current,
-    nextCursor: runnerRequestCursorRef.current,
-    hasMore: runnerRequestHasMoreRef.current,
-  }), [requestAdminRunnerPage])
+  const requestAdminRunnerPoll = useCallback(async (signal: AbortSignal) => {
+    // The overview and an unexpanded collection only need the latest page.
+    if (section !== "runner_requests" || !runnerHistoryLoadedRef.current) {
+      return { ...await requestAdminRunnerPage(null, signal), preservePagination: false }
+    }
+    return collectAdminRunnerPoll((cursor) => requestAdminRunnerPage(cursor, signal), {
+      items: runnersRef.current,
+      nextCursor: runnerRequestCursorRef.current,
+      hasMore: runnerRequestHasMoreRef.current,
+    })
+  }, [requestAdminRunnerPage, section])
 
   const searchRunnerRequestRepositories = useCallback(async (query: string): Promise<RunnerRepositorySearchResult> => {
     const search = new URLSearchParams({ limit: "50" })
@@ -542,78 +561,86 @@ function App() {
   const loadAll = useCallback(async (polling = false) => {
     if (!hasAccess || !isAdminRoute || runnerRequestIdentifier) return
     const resources = polling ? adminPollingResources(section) : adminDataResources(section)
-    if (resources.length === 0) return
-    if (polling && resources.includes("runner_requests")) invalidateRunnerRequestPage()
-    const generation = ++adminLoadGeneration.current
-    setLoading(true)
-    try {
-      const entries = await Promise.all(
-        resources.map(async (resource) => [
-          resource,
-          resource === "runner_requests"
-            ? await (polling ? requestAdminRunnerPoll() : requestAdminRunnerPage())
-            : await request(adminResourcePath(resource)),
-        ] as const)
-      )
-      if (generation !== adminLoadGeneration.current) return
-      for (const [resource, data] of entries) {
-        if (resource === "runner_requests") {
-          const page = data as AdminRunnerPage & {
-            preservePagination?: boolean
-            nextCursor?: string | null
-          }
-          if (polling) {
-            setRunners(reconcileAdminRunnerPages(page.items, runnersRef.current, page.preservePagination !== true))
-            if (page.preservePagination !== true) {
-              setRunnerRequestCursor(page.nextCursor ?? null)
-              setRunnerRequestHasMore((data as { hasMore?: boolean }).hasMore === true)
+    await Promise.all(resources.map((resource) => {
+      // Let an explicit history page finish; polling must not repeatedly discard it.
+      if (resource === "runner_requests" && (runnerRequestPageLoadingRef.current
+        || (polling && section === "runner_requests" && runnerHistoryLoadedRef.current
+          && runnersRef.current.length >= adminRunnerRefreshWindow))) return
+      return adminResourceLoader.run(resource, {
+        polling,
+        load: (signal) => resource === "runner_requests"
+          ? polling ? requestAdminRunnerPoll(signal) : requestAdminRunnerPage(null, signal)
+          : request(adminResourcePath(resource), { signal }),
+        accept: (data) => {
+          if (resource === "runner_requests") {
+            const page = data as AdminRunnerPage & { preservePagination?: boolean; windowReset?: boolean }
+            setRunnerRequestError("")
+            setRunnerWindowReset(page.windowReset === true)
+            if (!polling) {
+              runnerHistoryLoadedRef.current = false
+              setRunnerHistoryLoaded(false)
             }
-            continue
+            setRunners(polling
+              ? reconcileAdminRunnerPages(page.items, runnersRef.current, page.preservePagination !== true)
+              : page.items)
+            if (!polling || page.preservePagination !== true) {
+              setRunnerRequestCursor(page.nextCursor)
+              setRunnerRequestHasMore(page.hasMore)
+            }
+            return
           }
-          setRunners(page.items)
-          setRunnerRequestCursor(page.nextCursor)
-          setRunnerRequestHasMore(page.hasMore)
-          continue
-        }
-        updateAdminResource(resource, data, {
-          setRunners,
-          setRunnerRequestMetrics,
-          setRunnerSpecs,
-          setAuditEvents,
-        })
-      }
-    } catch (error) {
-      if (generation !== adminLoadGeneration.current) return
-      toast.error(error instanceof Error ? error.message : appI18n.t("app.controlPlaneLoadFailed"))
-    } finally {
-      if (generation === adminLoadGeneration.current) setLoading(false)
-    }
-  }, [hasAccess, invalidateRunnerRequestPage, isAdminRoute, request, requestAdminRunnerPage, requestAdminRunnerPoll, runnerRequestIdentifier, section])
+          updateAdminResource(resource, data, {
+            setRunners, setRunnerRequestMetrics, setRunnerSpecs, setAuditEvents,
+          })
+        },
+        fail: (error) => {
+          const message = error instanceof Error ? error.message : appI18n.t("app.controlPlaneLoadFailed")
+          if (resource === "runner_requests") setRunnerRequestError(message)
+          else toast.error(resource === "runner_request_metrics"
+            ? appI18n.t("admin.loadRunnerRequestMetricsFailed") : message)
+        },
+        loading: (value) => {
+          if (resource === "runner_requests" || (resource === "runner_specs" && section === "runner_specs")) setLoading(value)
+        },
+      })
+    }))
+  }, [adminResourceLoader, hasAccess, isAdminRoute, request, requestAdminRunnerPage, requestAdminRunnerPoll, runnerRequestIdentifier, section])
 
   const resetAdminRunnerRequestList = useCallback(() => {
+    adminResourceLoader.reset()
     invalidateRunnerRequestPage()
+    setRunnerRequestError("")
+    setRunnerWindowReset(false)
+    runnerHistoryLoadedRef.current = false
+    setRunnerHistoryLoaded(false)
     setRunners([])
     setRunnerRequestCursor(null)
     setRunnerRequestHasMore(true)
-  }, [invalidateRunnerRequestPage])
+  }, [adminResourceLoader, invalidateRunnerRequestPage])
 
   const reloadAdminRunnerRequests = useCallback(async () => {
-    resetAdminRunnerRequestList()
+    adminResourceLoader.reset()
+    invalidateRunnerRequestPage()
     await loadAll()
-  }, [loadAll, resetAdminRunnerRequestList])
+  }, [adminResourceLoader, invalidateRunnerRequestPage, loadAll])
 
   const refreshAdminRunnerRequests = useCallback(() => {
     void reloadAdminRunnerRequests()
   }, [reloadAdminRunnerRequests])
 
   const loadMoreAdminRunnerRequests = useCallback(async (): Promise<boolean> => {
-    if (loading || runnerRequestPageLoadingRef.current || !runnerRequestHasMore || !runnerRequestCursor) return true
+    if (adminResourceLoader.isLoading("runner_requests") || loading || runnerRequestPageLoadingRef.current || !runnerRequestHasMore || !runnerRequestCursor) return true
     const generation = runnerRequestPageGeneration.current
     runnerRequestPageLoadingRef.current = true
     setLoadingMoreRunnerRequests(true)
+    const controller = new AbortController()
+    runnerRequestPageController.current = controller
+    const timeout = window.setTimeout(() => controller.abort(), adminRequestTimeoutMs)
     try {
-      const page = await requestAdminRunnerPage(runnerRequestCursor)
+      const page = await requestAdminRunnerPage(runnerRequestCursor, controller.signal)
       if (generation !== runnerRequestPageGeneration.current) return true
+      runnerHistoryLoadedRef.current = true
+      setRunnerHistoryLoaded(true)
       setRunners((current) => {
         const seen = new Set<string>()
         return [...current, ...page.items].filter((runner) => {
@@ -631,12 +658,14 @@ function App() {
       }
       return generation !== runnerRequestPageGeneration.current
     } finally {
+      window.clearTimeout(timeout)
+      if (runnerRequestPageController.current === controller) runnerRequestPageController.current = null
       if (generation === runnerRequestPageGeneration.current) {
         runnerRequestPageLoadingRef.current = false
         setLoadingMoreRunnerRequests(false)
       }
     }
-  }, [loading, requestAdminRunnerPage, runnerRequestCursor, runnerRequestHasMore])
+  }, [adminResourceLoader, loading, requestAdminRunnerPage, runnerRequestCursor, runnerRequestHasMore])
 
   useEffect(() => {
     invalidateRunnerRequestPage()
@@ -1003,10 +1032,17 @@ function App() {
   useEffect(() => {
     if (!hasAccess || !isAdminRoute) return
     void loadAll()
-    if (runnerRequestIdentifier || !shouldPollAdminSection(section)) return
-    const timer = window.setInterval(() => void loadAll(true), 5000)
-    return () => window.clearInterval(timer)
-  }, [hasAccess, isAdminRoute, loadAll, runnerRequestIdentifier, section])
+    const timer = !runnerRequestIdentifier && shouldPollAdminSection(section)
+      ? window.setInterval(() => {
+        if (document.visibilityState !== "hidden") void loadAll(true)
+      }, 5000)
+      : null
+    return () => {
+      if (timer !== null) window.clearInterval(timer)
+      adminResourceLoader.reset()
+      invalidateRunnerRequestPage()
+    }
+  }, [adminResourceLoader, authSession.login, hasAccess, invalidateRunnerRequestPage, isAdminRoute, loadAll, runnerRequestIdentifier, section])
 
   useEffect(() => {
     if (!authSession.authenticated || (hasAccess && isAdminRoute)) return
@@ -1417,6 +1453,9 @@ function App() {
             <RunnerRequestsSection
               hasAccess={hasAccess}
               loading={loading}
+              error={runnerRequestError}
+              windowReset={runnerWindowReset}
+              pollingPaused={runnerHistoryLoaded && runners.length >= adminRunnerRefreshWindow}
               runners={runners}
               hasMore={runnerRequestHasMore}
               loadingMore={loadingMoreRunnerRequests}

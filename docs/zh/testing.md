@@ -524,6 +524,12 @@ curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_requests/manual-001 | j
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_request_metrics | jq
 ```
 
+管理员请求列表必须在响应超过五秒轮询间隔时仍可使用。列表、统计和规格独立更新；同一资源合并进行中的请求，列表完成后至少等待五秒才自动刷新，隐藏标签页暂停轮询。统计最多每 30 秒轮询一次，鉴权后的服务端接口共享进程内 30 秒成功结果缓存；并发缓存未命中合并为一次查询，查询期限为十秒。取消单个 HTTP 等待者不会中断其他订阅者，错误不进入缓存。统计可能滞后于当前状态，不得用于准入判断。
+
+首屏只加载一页 100 条请求。概览及尚未展开历史的列表只轮询最新一页，避免新请求不断扩大窗口；展开历史后，后台刷新最多读取五页，遇到已加载历史边界即可停止。如果边界不再匹配或超出预算，就用这段有界的最新窗口替换列表并显示提示，同时保留返回的游标，供用户继续查看更早的历史，禁止扫描全部历史请求。加载达到 500 条后会提示并暂停列表自动刷新，避免打断更早历史的阅读；手动刷新回到最新一页并恢复轮询。轮询不能使正在加载的历史页反复失效；切换筛选或路由会取消过期请求。手动刷新失败时保留现有行；初次加载、加载失败和成功空结果使用不同的界面状态。浏览器请求期限为 30 秒，列表数据库查询使用 HTTP 请求的取消上下文。
+
+执行 `cd ui && bun test src/admin-resource-loader.test.js src/app-load-policy.test.js src/components/runner-requests-section.test.js` 和 `bunx playwright test --config playwright.production.config.ts admin-request-loading.pw.ts`。生产构建夹具覆盖跨越多轮轮询的慢响应、统计失败、筛选切换、有界刷新及继续翻页。执行 `go test -race ./internal/state ./internal/server -run 'Test(AdminRunnerReads|RunnerRequestMetrics|ListRunnerRequestsIsPaginated)'` 验证缓存、鉴权和数据库连接等待取消。夹具不代表生产延迟验收。在线上对比两个接口的 `Server-Timing` 响应头：`auth` 包含本地账户鉴权，`data` 包含列表读取或缓存／合并后的统计读取。这些时长包含连接等待，不等同于 SQL 执行时间；调整索引或连接上限前，应结合连接池等待指标及已授权数据库副本上的 `EXPLAIN QUERY PLAN` 定位。
+
 停止 runner：
 
 ```bash

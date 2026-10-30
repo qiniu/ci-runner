@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -548,8 +549,8 @@ type RunnerRequestStore interface {
 	ListMismatchedCompletedStates(limit int) ([]RunnerState, error)
 	ListFailedWorkflowJobStates(limit int) ([]RunnerState, error)
 	ListStatesPage(options RunnerRequestListOptions) ([]RunnerState, int64, error)
-	ListStatesCursor(options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error)
-	GetRunnerRequestMetrics() (RunnerRequestMetrics, error)
+	ListStatesCursor(ctx context.Context, options RunnerRequestListOptions, after *RunnerRequestCursor) ([]RunnerState, bool, error)
+	GetRunnerRequestMetrics(ctx context.Context) (RunnerRequestMetrics, error)
 	ListRunnerRequestRepositories(options RunnerRequestRepositoryListOptions) ([]string, bool, error)
 	ListStatesForRepositories(repositories []string, limit int) ([]RunnerState, error)
 	ListStatesForGitHubInstallations(installationIDs []int64, limit int) ([]RunnerState, error)

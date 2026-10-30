@@ -23,6 +23,7 @@ import (
 )
 
 type Server struct {
+	requestMetrics   runnerRequestMetricsCache
 	cfg              config.Config
 	store            state.Store
 	gh               *github.Client

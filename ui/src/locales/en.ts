@@ -394,6 +394,8 @@ export const en = {
     moreRepositoriesAvailable: "More matching repositories are available",
     previousRunnerRequestPage: "Previous Runner request page",
     nextRunnerRequestPage: "Next Runner request page",
+    runnerRequestPollingPaused: "Automatic list refresh is paused while browsing older history. Refresh to return to the latest requests.",
+    runnerRequestWindowReset: "The refreshed history window is limited to 500 requests. Load more to continue into older history.",
     noRequestsFound: "No runner requests found",
     loadedRequests: "{{count}} loaded",
     loadingMoreRequests: "Loading more requests...",

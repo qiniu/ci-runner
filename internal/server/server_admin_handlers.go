@@ -152,9 +152,11 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
+	authenticated := time.Now()
 	limit, offset, err := parsePagination(r, defaultRunnerRequestListLimit, maxRunnerRequestListLimit)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -184,12 +186,13 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	states, hasMore, err := s.store.ListStatesCursor(state.RunnerRequestListOptions{
+	states, hasMore, err := s.store.ListStatesCursor(r.Context(), state.RunnerRequestListOptions{
 		RepositoryFullName: repositoryFullName,
 		ProfileName:        runnerSpecName,
 		DisplayStatus:      displayStatus,
 		Limit:              limit,
 	}, cursor)
+	w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.2f, data;dur=%.2f", float64(authenticated.Sub(started))/float64(time.Millisecond), float64(time.Since(authenticated))/float64(time.Millisecond)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -217,10 +220,13 @@ func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunnerRequestMetrics(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if !s.requireAdminAuth(w, r) {
 		return
 	}
-	metrics, err := s.store.GetRunnerRequestMetrics()
+	authenticated := time.Now()
+	metrics, err := s.getRunnerRequestMetrics(r.Context())
+	w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.2f, data;dur=%.2f", float64(authenticated.Sub(started))/float64(time.Millisecond), float64(time.Since(authenticated))/float64(time.Millisecond)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

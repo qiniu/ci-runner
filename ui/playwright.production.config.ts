@@ -6,7 +6,7 @@ const baseURL = externalBaseURL ?? `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "production-smoke.pw.ts",
+  testMatch: ["production-smoke.pw.ts", "admin-request-loading.pw.ts"],
   fullyParallel: false,
   workers: 1,
   reporter: process.env.CI ? "line" : "list",

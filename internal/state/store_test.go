@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2137,14 +2138,14 @@ func TestListStatesCursorUsesExclusiveQueuedAtAndIDOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, hasMore, err := store.ListStatesCursor(RunnerRequestListOptions{Limit: 2}, nil)
+	first, hasMore, err := store.ListStatesCursor(context.Background(), RunnerRequestListOptions{Limit: 2}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !hasMore || len(first) != 2 || first[0].ID != "request-a" || first[1].ID != "request-b" {
 		t.Fatalf("first cursor page = %#v, has_more=%v", first, hasMore)
 	}
-	second, hasMore, err := store.ListStatesCursor(RunnerRequestListOptions{Limit: 2}, &RunnerRequestCursor{QueuedAt: first[1].CreatedAt, ID: first[1].ID})
+	second, hasMore, err := store.ListStatesCursor(context.Background(), RunnerRequestListOptions{Limit: 2}, &RunnerRequestCursor{QueuedAt: first[1].CreatedAt, ID: first[1].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2192,7 +2193,7 @@ func TestGetRunnerRequestMetricsUsesGlobalStatusCounts(t *testing.T) {
 	if _, err := store.UpsertProfile(RunnerProfile{Name: "metric-profile", Labels: []string{"self-hosted"}, RequiredLabels: []string{"self-hosted"}, TemplateID: "template", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	metrics, err := store.GetRunnerRequestMetrics()
+	metrics, err := store.GetRunnerRequestMetrics(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
