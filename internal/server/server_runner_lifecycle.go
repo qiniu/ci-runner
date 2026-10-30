@@ -2423,11 +2423,11 @@ func (s *Server) stopSandboxWithTimeout(ctx context.Context, id, sandboxID strin
 
 // Failed JIT deletion must remain discoverable by the normal stop/recovery
 // loops. Do not allow a fresh attempt to race cleanup of the previous name.
-func (s *Server) retainWindowsJITCleanup(id string, attemptAt time.Time) {
+func (s *Server) retainWindowsJITCleanup(id string, _ time.Time) {
 	unlock := s.lockRunner(id)
 	defer unlock()
 	current, err := s.store.ReadState(id)
-	if err != nil || current.Status == state.StatusRunning || current.SandboxID != "" || !current.LastAttemptAt.Equal(attemptAt) {
+	if err != nil || current.Status == state.StatusCreating || (current.Status == state.StatusRunning && current.SandboxID != "") {
 		return
 	}
 	if err := s.writeWindowsJITCleanupPending(&current); err != nil {

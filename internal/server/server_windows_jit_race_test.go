@@ -126,6 +126,10 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				service.oldErr = errors.New("temporary network error")
 			}
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, service)
+			// Let retryOrFail make the request immediately runnable so the test
+			// can exercise the production worker claim path below.
+			srv.cfg.RetryBaseDelay = 0
+			srv.cfg.RetryMaxDelay = 0
 			if lateResult == "cleanup failure" {
 				if _, _, err := store.CreateRequest(state.RunnerRequest{ID: requestID, RepositoryFullName: "o/r", RunnerName: runnerName, ProfileName: "windows", Labels: []string{"self-hosted", "windows"}, JobID: 123}, nil); err != nil {
 					t.Fatal(err)
@@ -158,6 +162,12 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			}
 			srv.retryOrFail(old, "sweeper_create_timeout", context.DeadlineExceeded)
 			jobCompleted.Store(true)
+			// Exercise the real worker claim, which advances LastAttemptAt
+			// before the replacement enters the Windows creation lock.
+			claimedReq, _, claimed, err := store.ClaimNextRunnable("new-worker", time.Now().UTC(), time.Minute)
+			if err != nil || !claimed || claimedReq.ID != requestID {
+				t.Fatalf("worker claim failed: claimed=%t req=%+v err=%v", claimed, claimedReq, err)
+			}
 			newDone := make(chan struct{})
 			go func() {
 				defer close(newDone)
