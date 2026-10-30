@@ -1,0 +1,45 @@
+{
+  "source": [
+    ".github/workflows/template-check.yaml",
+    ".github/template-check-paths.json",
+    "templates/**",
+    "scripts/update-actions-runner-pin.mjs",
+    "scripts/test-update-actions-runner-pin.mjs",
+    "scripts/check-runner-template-matrix.sh",
+    "scripts/test-runner-template-disk.sh",
+    "scripts/test-prepare-runner-archive.sh",
+    "scripts/prepare-runner-archive.sh",
+    "scripts/run-runner-template-operation.sh",
+    "scripts/check-default-template-catalog.sh",
+    "scripts/smoke-runner-template.sh",
+    "scripts/run-runner-image-conformance.sh",
+    ".github/workflows/actions-runner-update.yaml"
+  ],
+  "compatibility": [
+    ".github/workflows/template-check.yaml",
+    ".github/template-check-paths.json",
+    "templates/common/actions-runner.env",
+    "templates/runner-images-upstream.lock.json",
+    "templates/runner-images-compatibility.json",
+    "scripts/check-runner-image-compatibility.sh",
+    "scripts/generate-runner-image-compatibility.mjs",
+    "scripts/lib/parse-runner-image-report.awk"
+  ],
+  "service": [
+    ".github/workflows/template-check.yaml",
+    ".github/template-check-paths.json",
+    "Dockerfile*",
+    ".dockerignore",
+    ".goreleaser.yml",
+    ".github/workflows/release.yaml"
+  ],
+  "dockerfiles": [
+    ".github/workflows/template-check.yaml",
+    ".github/template-check-paths.json",
+    "templates/common/**",
+    "templates/github-runner-ubuntu-*/Dockerfile",
+    "templates/github-runner-ubuntu-*/Dockerfile.dockerignore",
+    "templates/github-runner-ubuntu-*/scripts/**",
+    "templates/.dockerignore"
+  ]
+}

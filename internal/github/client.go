@@ -846,6 +846,10 @@ func cloneRunnerApplications(applications []RunnerApplication) []RunnerApplicati
 }
 
 func (c *Client) ListRunners(ctx context.Context, repositoryFullName, runnerGroup string) ([]Runner, error) {
+	return c.listRunners(ctx, repositoryFullName, runnerGroup, "")
+}
+
+func (c *Client) listRunners(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) ([]Runner, error) {
 	startedAt := time.Now()
 	result := "error"
 	defer func() { metrics.RecordGitHubAPI("list_runners", result, time.Since(startedAt)) }()
@@ -854,6 +858,9 @@ func (c *Client) ListRunners(ctx context.Context, repositoryFullName, runnerGrou
 		return nil, err
 	}
 	nextURL := fmt.Sprintf("%s/%s/actions/runners?per_page=100", c.baseURL, target.apiPath)
+	if runnerName = strings.TrimSpace(runnerName); runnerName != "" {
+		nextURL += "&name=" + url.QueryEscape(runnerName)
+	}
 	var runners []Runner
 	for nextURL != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
@@ -928,7 +935,7 @@ func (c *Client) RemoveRunnerByName(ctx context.Context, repositoryFullName, run
 	if runnerName == "" {
 		return false, nil
 	}
-	runners, err := c.ListRunners(ctx, repositoryFullName, runnerGroup)
+	runners, err := c.listRunners(ctx, repositoryFullName, runnerGroup, runnerName)
 	if err != nil {
 		return false, err
 	}

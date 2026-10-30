@@ -5,29 +5,69 @@ on:
   push:
     branches: ["main"]
     paths:
+      - ".github/workflows/template-check.yaml"
+      - ".github/template-check-paths.json"
+      - "templates/**"
+      - "scripts/update-actions-runner-pin.mjs"
+      - "scripts/test-update-actions-runner-pin.mjs"
+      - "scripts/check-runner-template-matrix.sh"
+      - "scripts/test-runner-template-disk.sh"
+      - "scripts/test-prepare-runner-archive.sh"
+      - "scripts/prepare-runner-archive.sh"
+      - "scripts/run-runner-template-operation.sh"
+      - "scripts/check-default-template-catalog.sh"
+      - "scripts/smoke-runner-template.sh"
+      - "scripts/run-runner-image-conformance.sh"
+      - ".github/workflows/actions-runner-update.yaml"
+      - "templates/common/actions-runner.env"
+      - "templates/runner-images-upstream.lock.json"
+      - "templates/runner-images-compatibility.json"
+      - "scripts/check-runner-image-compatibility.sh"
+      - "scripts/generate-runner-image-compatibility.mjs"
+      - "scripts/lib/parse-runner-image-report.awk"
       - "Dockerfile*"
       - ".dockerignore"
       - ".goreleaser.yml"
-      - "Taskfile.yaml"
-      - "templates/**"
-      - "scripts/**"
-      - ".github/workflows/check.yaml"
-      - ".github/workflows/template-check.yaml"
-      - ".github/workflows/actions-runner-update.yaml"
       - ".github/workflows/release.yaml"
+      - "templates/common/**"
+      - "templates/github-runner-ubuntu-*/Dockerfile"
+      - "templates/github-runner-ubuntu-*/Dockerfile.dockerignore"
+      - "templates/github-runner-ubuntu-*/scripts/**"
+      - "templates/.dockerignore"
+      - "scripts/test-template-check-paths.mjs"
   pull_request:
     branches: ["main"]
     paths:
+      - ".github/workflows/template-check.yaml"
+      - ".github/template-check-paths.json"
+      - "templates/**"
+      - "scripts/update-actions-runner-pin.mjs"
+      - "scripts/test-update-actions-runner-pin.mjs"
+      - "scripts/check-runner-template-matrix.sh"
+      - "scripts/test-runner-template-disk.sh"
+      - "scripts/test-prepare-runner-archive.sh"
+      - "scripts/prepare-runner-archive.sh"
+      - "scripts/run-runner-template-operation.sh"
+      - "scripts/check-default-template-catalog.sh"
+      - "scripts/smoke-runner-template.sh"
+      - "scripts/run-runner-image-conformance.sh"
+      - ".github/workflows/actions-runner-update.yaml"
+      - "templates/common/actions-runner.env"
+      - "templates/runner-images-upstream.lock.json"
+      - "templates/runner-images-compatibility.json"
+      - "scripts/check-runner-image-compatibility.sh"
+      - "scripts/generate-runner-image-compatibility.mjs"
+      - "scripts/lib/parse-runner-image-report.awk"
       - "Dockerfile*"
       - ".dockerignore"
       - ".goreleaser.yml"
-      - "Taskfile.yaml"
-      - "templates/**"
-      - "scripts/**"
-      - ".github/workflows/check.yaml"
-      - ".github/workflows/template-check.yaml"
-      - ".github/workflows/actions-runner-update.yaml"
       - ".github/workflows/release.yaml"
+      - "templates/common/**"
+      - "templates/github-runner-ubuntu-*/Dockerfile"
+      - "templates/github-runner-ubuntu-*/Dockerfile.dockerignore"
+      - "templates/github-runner-ubuntu-*/scripts/**"
+      - "templates/.dockerignore"
+      - "scripts/test-template-check-paths.mjs"
   workflow_dispatch:
 
 permissions:
@@ -38,7 +78,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      source: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.source == 'true' }}
+      compatibility: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.compatibility == 'true' }}
+      service: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.service == 'true' }}
+      dockerfiles: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dockerfiles == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Verify workflow path selection contracts
+        run: node --test scripts/test-template-check-paths.mjs
+      # PRs use the full PR file list, including deletions and renames. Pushes
+      # compare against the pre-push commit; dispatch deliberately runs all jobs.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        if: github.event_name != 'workflow_dispatch'
+        id: filter
+        with:
+          filters: .github/template-check-paths.json
+
   template-source:
+    needs: changes
+    if: needs.changes.outputs.source == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,6 +128,8 @@ jobs:
         run: bash scripts/test-prepare-runner-archive.sh
 
   template-compatibility:
+    needs: changes
+    if: needs.changes.outputs.compatibility == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -68,6 +140,8 @@ jobs:
         run: bash scripts/check-runner-image-compatibility.sh
 
   service-dockerfile:
+    needs: changes
+    if: needs.changes.outputs.service == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -84,6 +158,8 @@ jobs:
           done
 
   template-dockerfiles:
+    needs: changes
+    if: needs.changes.outputs.dockerfiles == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

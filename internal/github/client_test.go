@@ -699,6 +699,9 @@ func TestListAndRemoveRunnerByName(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners":
+			if got := r.URL.Query().Get("name"); got != "e2b-1001" {
+				t.Fatalf("expected runner name filter, got %q", got)
+			}
 			w.Write([]byte(`{"runners":[{"id":42,"name":"e2b-1001","status":"offline","busy":false}]}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/repos/o/r/actions/runners/42":
 			deleted = true

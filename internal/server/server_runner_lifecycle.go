@@ -368,6 +368,15 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			timings.flush(s, id)
 		}
 	}()
+	var releaseWindowsCreation func()
+	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+		// Keep one provisioning owner until all unadopted resources are cleaned
+		// or retained for recovery. Do not hold the lifecycle lock while waiting.
+		unlock()
+		releaseWindowsCreation = s.lockRunnerEntry(id, &s.windowsCreationLocks)
+		defer releaseWindowsCreation()
+		unlock = s.lockRunner(id)
+	}
 	initialStateReadStartedAt := time.Now()
 	st, err := s.store.ReadState(id)
 	timings.record("initial_state_read", initialStateReadStartedAt)
@@ -376,6 +385,8 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.logger.Error("read runner state", "id", id, "error", err)
 		return
 	}
+	var windowsAttempt *time.Time
+	failStart := func(stage string, err error) { s.failStartForAttempt(id, st, stage, err, windowsAttempt) }
 	if st.Status != state.StatusQueued {
 		unlock()
 		s.logger.Info("runner start skipped because request is not queued", "id", id, "status", st.Status)
@@ -394,13 +405,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	if err != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		s.failStart(id, st, "profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
+		failStart("profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
 		return
 	}
 	if err := validateRequestedProfile(profile, req.RequestedLabels); err != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		s.failStart(id, st, "profile_validation", err)
+		failStart("profile_validation", err)
 		return
 	}
 	releaseCapacity, capacityStage, err := s.reserveRunnerCapacity(req, profile, &timings)
@@ -423,6 +434,15 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		st.NextRetryAt = time.Time{}
 	}
 	st.Status = state.StatusCreating
+	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+		// Distinguish direct starts as well as worker-claimed retries.
+		attemptAt := time.Now().UTC().Truncate(time.Millisecond)
+		if !attemptAt.After(st.LastAttemptAt) {
+			attemptAt = st.LastAttemptAt.Truncate(time.Millisecond).Add(time.Millisecond)
+		}
+		st.LastAttemptAt = attemptAt
+		windowsAttempt = &attemptAt
+	}
 	st.LeaseOwner = workerID
 	st.LeaseExpiresAt = time.Now().UTC().Add(s.cfg.WorkerLeaseTTL)
 	creatingStatePersistStartedAt := time.Now()
@@ -443,7 +463,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
-		s.failStart(id, st, "github_job_status", err)
+		failStart("github_job_status", err)
 		return
 	}
 	if !shouldStart {
@@ -455,7 +475,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		err := s.gh.ValidateRunnerGroup(ctx, req.GitHubInstallationID, req.RepositoryFullName, req.RunnerGroup)
 		timings.record("github_runner_group", runnerGroupCheckStartedAt)
 		if err != nil {
-			s.failStart(id, st, "github_runner_group", newRunnerGroupValidationFailure(err))
+			failStart("github_runner_group", newRunnerGroupValidationFailure(err))
 			return
 		}
 	}
@@ -464,7 +484,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	sandboxService, sandboxConfig, err := s.sandboxServiceAndConfigForRunnerRequestContext(ctx, req)
 	timings.record("sandbox_config", sandboxConfigStartedAt)
 	if err != nil {
-		s.failStart(id, st, "sandbox_config", err)
+		failStart("sandbox_config", err)
 		return
 	}
 	snapshotStartedAt := time.Now()
@@ -475,7 +495,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			s.signalQueue()
 			return
 		}
-		s.failStart(id, st, "sandbox_config", err)
+		failStart("sandbox_config", err)
 		return
 	}
 	timings.record("sandbox_snapshot", snapshotStartedAt)
@@ -484,7 +504,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	templateID, err := resolveRunnerTemplate(ctx, sandboxService, profile)
 	timings.record("template_resolution", templateResolutionStartedAt)
 	if err != nil {
-		s.failStart(id, st, "template_resolution", err)
+		failStart("template_resolution", err)
 		return
 	}
 	platform := sandboxrunner.PlatformForLabels(req.Labels)
@@ -495,25 +515,62 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		applications, err := s.gh.ListRunnerApplications(ctx, req.RepositoryFullName, req.RunnerGroup)
 		timings.record("github_runner_applications", runnerApplicationsStartedAt)
 		if err != nil {
-			s.failStart(id, st, "github_runner_downloads", err)
+			failStart("github_runner_downloads", err)
 			return
 		}
 		if !sandboxrunner.HasRunnerApplication(platform, applications) {
-			s.failStart(id, st, "github_runner_downloads", fmt.Errorf("%w for platform %s", sandboxrunner.ErrRunnerApplicationMissing, platform))
+			failStart("github_runner_downloads", fmt.Errorf("%w for platform %s", sandboxrunner.ErrRunnerApplicationMissing, platform))
 			return
 		}
 		runnerApplications = append([]sandboxrunner.RunnerApplication(nil), applications...)
 	}
 
-	s.logger.Info("creating github registration token", "id", id)
-	s.store.AppendLog(id, "control.log", []byte("creating github registration token\n"))
 	createStartedAt := time.Now()
-	token, err := s.gh.CreateRegistrationToken(ctx, req.RepositoryFullName, req.RunnerGroup)
-	timings.record("github_registration", createStartedAt)
-	if err != nil {
-		s.failStart(id, st, "github_registration", err)
-		return
+	var registrationToken, jitConfig string
+	var jitRunnerID int64
+	jitAdopted := false
+	var cleanupJIT func()
+	if platform == sandboxrunner.PlatformWindows {
+		s.store.AppendLog(id, "control.log", []byte("creating one-time github Runner configuration\n"))
+		cleanupJIT = func() {
+			if jitAdopted {
+				return
+			}
+			cleanupErr := s.cleanupWindowsJIT(req, *windowsAttempt, jitRunnerID)
+			if cleanupErr != nil {
+				s.retainWindowsJITCleanup(id, *windowsAttempt)
+				return
+			}
+			jitAdopted = true
+		}
+		defer cleanupJIT()
+		jit, err := s.prepareWindowsJIT(ctx, req, *windowsAttempt)
+		if errors.Is(err, errRunnerCreationSuperseded) {
+			jitAdopted = true // No JIT request was sent by this stale start.
+			return
+		}
+		if !jit.CleanupRequired {
+			jitAdopted = true
+		}
+		if jit.Runner.Name == req.RunnerName {
+			jitRunnerID = jit.Runner.ID
+		}
+		if err != nil {
+			cleanupJIT()
+			failStart("github_registration", err)
+			return
+		}
+		jitConfig = jit.EncodedConfig
+	} else {
+		s.store.AppendLog(id, "control.log", []byte("creating github registration token\n"))
+		token, err := s.gh.CreateRegistrationToken(ctx, req.RepositoryFullName, req.RunnerGroup)
+		if err != nil {
+			failStart("github_registration", err)
+			return
+		}
+		registrationToken = token.Token
 	}
+	timings.record("github_registration", createStartedAt)
 	s.logger.Info("starting sandbox runner", "id", id, "runner_name", req.RunnerName)
 	s.store.AppendLog(id, "control.log", []byte("starting sandbox runner\n"))
 	exitCh := make(chan struct{})
@@ -537,7 +594,8 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 			RequestID:          req.ID,
 			RunnerName:         req.RunnerName,
 			RepositoryURL:      repositoryURL,
-			RegistrationToken:  token.Token,
+			RegistrationToken:  registrationToken,
+			JITConfig:          jitConfig,
 			Labels:             req.Labels,
 			RunnerGroup:        strings.TrimSpace(req.RunnerGroup),
 			RunnerApplications: runnerApplications,
@@ -598,7 +656,10 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	timings.record("sandbox_start", sandboxStartStartedAt)
 	if err != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
-		s.failStart(id, st, startStage, err)
+		if cleanupJIT != nil {
+			cleanupJIT()
+		}
+		failStart(startStage, err)
 		return
 	}
 
@@ -615,7 +676,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.cleanupStartedSandbox(id, result)
 		return
 	}
-	if current.Status != state.StatusCreating {
+	if current.Status != state.StatusCreating || (platform == sandboxrunner.PlatformWindows && !current.LastAttemptAt.Equal(*windowsAttempt)) {
 		exitWatchAttempt <- runnerAttemptIdentity{}
 		unlock()
 		s.logger.Info("runner status changed before running update", "id", id, "status", current.Status)
@@ -651,6 +712,7 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.cleanupStartedSandbox(id, result)
 		return
 	}
+	jitAdopted = true
 	exitWatchAttempt <- runnerAttemptIdentity{sandboxID: result.SandboxID, processPID: result.PID}
 	unlock()
 	s.logger.Info("sandbox runner started", "id", id, "sandbox_id", result.SandboxID, "pid", result.PID)
@@ -659,6 +721,9 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	metrics.RecordRunnerRegistered(req.ProfileName, "success")
 	s.refreshMetrics()
 	timings.flush(s, id)
+	if releaseWindowsCreation != nil {
+		releaseWindowsCreation()
+	}
 	<-exitCh
 }
 
@@ -821,10 +886,17 @@ func (s *Server) markRunnerJobStarted(id string) {
 }
 
 func (s *Server) failStart(id string, st state.RunnerState, stage string, err error) {
+	s.failStartForAttempt(id, st, stage, err, nil)
+}
+
+func (s *Server) failStartForAttempt(id string, st state.RunnerState, stage string, err error, attemptAt *time.Time) {
 	unlock := s.lockRunner(id)
 	defer unlock()
 
 	current, readErr := s.store.ReadState(id)
+	if attemptAt != nil && (readErr != nil || !current.LastAttemptAt.Equal(*attemptAt) || current.Status != state.StatusCreating) {
+		return
+	}
 	if readErr == nil {
 		if current.Status == state.StatusCompleted || current.Status == state.StatusStopping {
 			_ = s.store.ReleaseLease(id, s.workerID)
@@ -1280,7 +1352,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		if st.Status == state.StatusCreating {
 			switch {
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && (!hasJob || job.Status == "queued" || isWorkflowJobWaiting(job.Status)):
-				return s.requeueInterruptedCreation(st.ID, stateVersion)
+				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && strings.EqualFold(strings.TrimSpace(job.Status), "in_progress"):
 				s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "recovery", "sandbox_not_found", "runner sandbox no longer exists after interrupted creation")
 				return nil
@@ -1291,7 +1363,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 					return fmt.Errorf("stop sandbox without runner before requeue: %w", stopErr)
 				}
 				s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("stopped sandbox without runner process after restart\n"))
-				return s.requeueInterruptedCreation(st.ID, stateVersion)
+				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
 			}
 		}
 		// A running request must reconnect to its persisted PID. If that exact
@@ -1383,7 +1455,7 @@ func (s *Server) remainingSandboxTimeout(st state.RunnerState, now time.Time) ti
 	return min(remaining, s.cfg.SandboxTimeout)
 }
 
-func (s *Server) requeueInterruptedCreation(id string, stateVersion int64) error {
+func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
 	unlock := s.lockRunner(id)
 	defer unlock()
 	st, err := s.store.ReadState(id)
@@ -1392,6 +1464,20 @@ func (s *Server) requeueInterruptedCreation(id string, stateVersion int64) error
 	}
 	if st.Version != stateVersion || st.Status != state.StatusCreating {
 		return nil
+	}
+	req, err := s.store.ReadRequest(id)
+	if err != nil {
+		return fmt.Errorf("read interrupted runner request: %w", err)
+	}
+	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+		// A crash can leave a JIT identity without a Sandbox. Reconcile before
+		// requeueing: the next start may finish early for an already-completed Job.
+		if err := s.cleanupGitHubRunner(ctx, st); err != nil {
+			if persistErr := s.writeWindowsJITCleanupPending(&st); persistErr != nil {
+				return fmt.Errorf("retain interrupted JIT cleanup: %w", persistErr)
+			}
+			return fmt.Errorf("cleanup interrupted JIT Runner: %w", err)
+		}
 	}
 	st.Status = state.StatusQueued
 	st.SandboxID = ""
@@ -1597,6 +1683,52 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		metrics.RecordStop(st.ProfileName, time.Since(stopStartedAt), "success")
 		s.refreshMetrics()
 		return st, false, nil
+	}
+	if st.FailureReason == "jit_cleanup_pending" {
+		if st.WorkflowJobID == 0 {
+			st.FailureStage = "github_registration"
+			st.FailureReason = "jit_cleanup_pending"
+			st.Status = state.StatusFailed
+			st.FailedAt = time.Now().UTC()
+			st.NextRetryAt = time.Time{}
+			st.LastErrorCode = ""
+			st.LastErrorMessage = ""
+			st.LastErrorRetryable = false
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, err
+			}
+			st.Version++
+			return st, false, nil
+		}
+		queued, queueErr := s.originalWorkflowJobQueued(ctx, st)
+		if queueErr != nil {
+			s.logger.Warn("pending JIT cleanup job status check failed; requeueing request", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "error", queueErr)
+			queued = true
+		}
+		if queued {
+			st.Status = state.StatusQueued
+			st.SandboxID = ""
+			st.ProcessPID = 0
+			st.Error = ""
+			st.FailureStage = ""
+			st.FailureReason = ""
+			st.LastErrorCode = ""
+			st.LastErrorMessage = ""
+			st.LastErrorRetryable = false
+			st.LeaseOwner = ""
+			st.LeaseExpiresAt = time.Time{}
+			st.NextRetryAt = time.Time{}
+			st.StoppingAt = time.Time{}
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, err
+			}
+			st.Version++
+			s.signalQueue()
+			return st, false, nil
+		}
+		st.FailureReason = ""
+		st.FailureStage = ""
+		st.Error = ""
 	}
 	if st.FailureStage != "" && st.FailureStage != "cleanup" {
 		st.Status = state.StatusFailed
@@ -2272,14 +2404,18 @@ func discoverPprofArtifacts() ([]pprofAddress, []string) {
 }
 
 func (s *Server) lockRunner(id string) func() {
+	return s.lockRunnerEntry(id, &s.runnerLocks)
+}
+
+func (s *Server) lockRunnerEntry(id string, entries *map[string]*runnerRequestLock) func() {
 	s.runnerLocksMu.Lock()
-	if s.runnerLocks == nil {
-		s.runnerLocks = make(map[string]*runnerRequestLock)
+	if *entries == nil {
+		*entries = make(map[string]*runnerRequestLock)
 	}
-	lock := s.runnerLocks[id]
+	lock := (*entries)[id]
 	if lock == nil {
 		lock = &runnerRequestLock{}
-		s.runnerLocks[id] = lock
+		(*entries)[id] = lock
 	}
 	lock.refs++
 	s.runnerLocksMu.Unlock()
@@ -2291,8 +2427,8 @@ func (s *Server) lockRunner(id string) func() {
 			lock.mu.Unlock()
 			s.runnerLocksMu.Lock()
 			lock.refs--
-			if lock.refs == 0 && s.runnerLocks[id] == lock {
-				delete(s.runnerLocks, id)
+			if lock.refs == 0 && (*entries)[id] == lock {
+				delete(*entries, id)
 			}
 			s.runnerLocksMu.Unlock()
 		})
@@ -2349,4 +2485,79 @@ func (s *Server) stopSandboxWithTimeout(ctx context.Context, id, sandboxID strin
 	}
 	s.logger.Info("sandbox stopped", "sandbox_id", sandboxID, "pid", pid)
 	return nil
+}
+
+// Failed JIT deletion must remain discoverable by the normal stop/recovery
+// loops. Do not allow a fresh attempt to race cleanup of the previous name.
+func (s *Server) retainWindowsJITCleanup(id string, _ time.Time) {
+	unlock := s.lockRunner(id)
+	defer unlock()
+	current, err := s.store.ReadState(id)
+	if err != nil || current.Status == state.StatusCreating || (current.Status == state.StatusRunning && current.SandboxID != "") {
+		return
+	}
+	if err := s.writeWindowsJITCleanupPending(&current); err != nil {
+		s.logger.Error("retain JIT Runner cleanup", "id", id, "error", err)
+	}
+}
+
+// The caller holds the request lock through cleanup and persistence.
+func (s *Server) writeWindowsJITCleanupPending(current *state.RunnerState) error {
+	markRunnerCleanupStarted(current, time.Now().UTC())
+	setTerminationSource(current, state.TerminationSourceFailureCleanup)
+	current.FailureStage = "cleanup"
+	current.FailureReason = "jit_cleanup_pending"
+	current.Error = "JIT Runner cleanup pending"
+	current.LeaseOwner = ""
+	current.LeaseExpiresAt = time.Time{}
+	current.NextRetryAt = s.nextRetryAt(1, time.Now().UTC())
+	if err := s.store.WriteState(*current); err != nil {
+		return err
+	}
+	s.store.AppendStagedLog(current.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("JIT Runner cleanup pending; recovery will reconcile registration\n"))
+	return nil
+}
+
+var errRunnerCreationSuperseded = errors.New("runner creation attempt superseded")
+
+// Serialize bounded registration API calls with cancellation/requeue. Long
+// Sandbox provisioning remains outside the lifecycle lock.
+func (s *Server) prepareWindowsJIT(ctx context.Context, req state.RunnerRequest, attemptAt time.Time) (github.RunnerJITConfig, error) {
+	unlock := s.lockRunner(req.ID)
+	defer unlock()
+	current, err := s.store.ReadState(req.ID)
+	if err != nil {
+		return github.RunnerJITConfig{}, err
+	}
+	if current.Status != state.StatusCreating || !current.LastAttemptAt.Equal(attemptAt) {
+		return github.RunnerJITConfig{}, errRunnerCreationSuperseded
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	// Reconcile an interrupted attempt before reusing its unique name.
+	if err := s.cleanupGitHubRunner(ctx, current); err != nil {
+		return github.RunnerJITConfig{}, err
+	}
+	return s.gh.CreateRunnerJITConfig(ctx, req.RepositoryFullName, req.RunnerGroup, req.RunnerName, req.Labels)
+}
+
+func (s *Server) cleanupWindowsJIT(req state.RunnerRequest, attemptAt time.Time, runnerID int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.SandboxStopTimeout)
+	defer cancel()
+	if runnerID > 0 {
+		return s.gh.RemoveRunner(ctx, req.RepositoryFullName, req.RunnerGroup, runnerID)
+	}
+	// A lost response provides no ID. Never let a stale attempt delete a
+	// replacement by name; keep the check and API call under the same lock.
+	unlock := s.lockRunner(req.ID)
+	defer unlock()
+	current, err := s.store.ReadState(req.ID)
+	if err != nil {
+		return err
+	}
+	if !current.LastAttemptAt.Equal(attemptAt) {
+		return nil
+	}
+	_, err = s.gh.RemoveRunnerByName(ctx, req.RepositoryFullName, req.RunnerGroup, req.RunnerName)
+	return err
 }

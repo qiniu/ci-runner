@@ -18,7 +18,8 @@ import (
 //   - QINIU_SANDBOX_API_URL and QINIU_API_KEY: Sandbox service credentials.
 //   - RUNNERD_E2E_TEMPLATE_ID: a github-runner-windows-11 template ID.
 //   - RUNNERD_E2E_REPOSITORY_URL: for example https://github.com/OWNER/REPO.
-//   - RUNNERD_E2E_REGISTRATION_TOKEN: a fresh runner registration token.
+//   - RUNNERD_E2E_RUNNER_NAME: the exact name bound to the JIT config.
+//   - RUNNERD_E2E_JIT_CONFIG: a fresh JIT config for the exact runner name/labels.
 //
 // Optional environment:
 //   - RUNNERD_E2E_TRIGGER_CMD: a bash command run once the runner listens,
@@ -42,7 +43,7 @@ func TestWindowsRunnerE2E(t *testing.T) {
 	apiKey := required("QINIU_API_KEY")
 	templateID := required("RUNNERD_E2E_TEMPLATE_ID")
 	repositoryURL := required("RUNNERD_E2E_REPOSITORY_URL")
-	registrationToken := required("RUNNERD_E2E_REGISTRATION_TOKEN")
+	jitConfig := required("RUNNERD_E2E_JIT_CONFIG")
 	labels := "self-hosted,windows,x64,qiniu,windows-11"
 	// The template's preinstalled baseline is the tracked Windows pin. GitHub
 	// may officially update the Runner before the job, so the effective
@@ -68,12 +69,12 @@ func TestWindowsRunnerE2E(t *testing.T) {
 	exited := make(chan ExitResult, 1)
 	requestID := "windows-e2e-" + time.Now().UTC().Format("20060102150405")
 	input := StartInput{
-		Platform:          PlatformWindows,
-		RequestID:         requestID,
-		RunnerName:        "runnerd-" + requestID,
-		RepositoryURL:     repositoryURL,
-		RegistrationToken: registrationToken,
-		Labels:            strings.Split(labels, ","),
+		Platform:      PlatformWindows,
+		RequestID:     requestID,
+		RunnerName:    required("RUNNERD_E2E_RUNNER_NAME"),
+		RepositoryURL: repositoryURL,
+		JITConfig:     jitConfig,
+		Labels:        strings.Split(labels, ","),
 		RunnerApplications: []RunnerApplication{{
 			OS:             "win",
 			Architecture:   "x64",

@@ -56,6 +56,7 @@ type StartInput struct {
 	RunnerName          string
 	RepositoryURL       string
 	RegistrationToken   string
+	JITConfig           string
 	Labels              []string
 	RunnerGroup         string
 	RunnerApplications  []RunnerApplication
@@ -590,6 +591,9 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	// for this platform must fail before a Sandbox exists.
 	if len(input.RunnerApplications) > 0 && !HasRunnerApplication(input.Platform, input.RunnerApplications) {
 		return StartResult{}, fmt.Errorf("%w for platform %s", ErrRunnerApplicationMissing, input.Platform)
+	}
+	if input.Platform == PlatformWindows && (input.JITConfig == "" || input.RegistrationToken != "") {
+		return StartResult{}, errors.New("windows Runner requires JIT configuration and no registration token")
 	}
 	timeout := sandboxTimeoutSeconds(input.Timeout)
 	allowInternet := true
@@ -1258,6 +1262,8 @@ func startScript(input StartInput, sandboxID string) string {
 // windowsStartScript stays ASCII because Windows PowerShell 5.1 reads BOM-less
 // scripts with the system ANSI code page; arguments travel as base64.
 func windowsStartScript(input StartInput, sandboxID string) string {
+	// Slot two carries only the Runner-scoped JIT config on Windows.
+	input.RegistrationToken = input.JITConfig
 	return renderStartScript(windowsStartRunnerScriptTemplate, input, sandboxID)
 }
 

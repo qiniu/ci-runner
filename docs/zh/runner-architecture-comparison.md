@@ -55,7 +55,7 @@ flowchart LR
   Runnerd <-->|"GORM store"| DB
   Runnerd -->|"create sandbox with template_id"| QiniuSandbox
   QiniuSandbox --> Sandbox
-  Sandbox -->|"registers with token"| GitHub
+  Sandbox -->|"Linux token / Windows JIT"| GitHub
   Sandbox -->|"stdout / stderr / control events"| Runnerd
   Runnerd -->|"diagnostics summary"| Browser
   Runnerd -->|"discover /debug/vars"| Pprof
@@ -114,7 +114,7 @@ sequenceDiagram
     alt capacity reached
       Worker->>Store: keep queued with next_retry_at
     else capacity available
-      Worker->>GH: create registration token
+      Worker->>GH: Linux registration token / Windows JIT configuration
       Worker->>QiniuSandbox: start template with runner labels
       QiniuSandbox->>Runner: launch actions runner
       Runner->>GH: register and pick up job
@@ -244,7 +244,7 @@ Admission 使用 GitHub webhook payload 中的 repository 和 labels。Runner re
 - 已启用 Runner Spec 满足 `required_labels ⊆ job_labels ⊆ labels`；
 - 匹配到的 spec 已启用。
 
-通过仓库 allowlist 检查后，已解析的账户或 Organization scope 会先检查精确的 scoped custom 标签集合。已停用的精确自定义匹配会以 `profile_scope_disabled` 明确屏蔽全局目录；不存在精确自定义匹配时，matcher 回退到未变更的全局目录。无法解析 scope 时，同一全局目录仍是兼容路径。内部 Runner Group 和 Repository Policy 已不存在，也不会参与匹配。当 spec 包含 GitHub runner group 时，runnerd 会为 job repository owner 创建 organization runner，并传入该 group 作为 `--runnergroup`。
+通过仓库 allowlist 检查后，已解析的账户或 Organization scope 会先检查精确的 scoped custom 标签集合。已停用的精确自定义匹配会以 `profile_scope_disabled` 明确屏蔽全局目录；不存在精确自定义匹配时，matcher 回退到未变更的全局目录。无法解析 scope 时，同一全局目录仍是兼容路径。内部 Runner Group 和 Repository Policy 已不存在，也不会参与匹配。当 spec 包含 GitHub runner group 时，runnerd 会为 job repository owner 创建 organization runner；Linux 通过 `--runnergroup` 传入该组，Windows 则在 JIT 配置请求中指定该组的 ID。
 
 Capacity 在 worker 启动 queued request 时检查。Global spec 执行其全局上限，scoped custom spec 执行自己的 scope 上限，所有请求还受 `worker.max_concurrent_runners` 约束。超过上限的 request 保持 `queued` 并稍后重试。如果持久化 Runner 规格在等待期间被停用或不再满足 requested labels，request 会在 `profile_validation` 失败，而不是使用过期准入状态启动。Transient placement/rate-limit signals 会作为 queue deferrals，而不是 hard failures。
 
