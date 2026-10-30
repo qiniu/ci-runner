@@ -40,6 +40,9 @@ func (s *Server) getRunnerRequestMetrics(ctx context.Context) (state.RunnerReque
 		defer cancel()
 		value, err := s.store.GetRunnerRequestMetrics(queryCtx)
 		if err != nil {
+			// The shared read owns this failure even if every HTTP waiter left.
+			// Log it once here, rather than once per remaining subscriber.
+			s.logAdminReadFailure(queryCtx, "runner_request_metrics", err)
 			return nil, err
 		}
 		s.requestMetrics.mu.Lock()

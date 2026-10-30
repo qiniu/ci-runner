@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -63,7 +64,7 @@ func TestRunnerRequestMetricsCacheCoalescesAndExpires(t *testing.T) {
 
 func TestRunnerRequestMetricsCacheDoesNotRetainErrors(t *testing.T) {
 	calls := 0
-	srv := &Server{store: &metricsReadStore{read: func(context.Context) (state.RunnerRequestMetrics, error) {
+	srv := &Server{logger: slog.Default(), store: &metricsReadStore{read: func(context.Context) (state.RunnerRequestMetrics, error) {
 		calls++
 		if calls == 1 {
 			return state.RunnerRequestMetrics{}, errors.New("database unavailable")

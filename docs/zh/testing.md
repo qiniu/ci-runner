@@ -530,7 +530,7 @@ curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_request_metrics | jq
 
 执行 `cd ui && bun test src/admin-resource-loader.test.js src/app-load-policy.test.js src/components/runner-requests-section.test.js` 和 `bunx playwright test --config playwright.production.config.ts admin-request-loading.pw.ts`。生产构建夹具覆盖跨越多轮轮询的慢响应、统计失败、筛选切换、有界刷新及继续翻页。执行 `go test -race ./internal/state ./internal/server -run 'Test(AdminRunnerReads|RunnerRequestMetrics|ListRunnerRequestsIsPaginated)'` 验证缓存、鉴权和数据库连接等待取消。夹具不代表生产延迟验收。在线上对比两个接口的 `Server-Timing` 响应头：`auth` 包含本地账户鉴权，`data` 包含列表读取或缓存／合并后的统计读取。这些时长包含连接等待，不等同于 SQL 执行时间；调整索引或连接上限前，应结合连接池等待指标及已授权数据库副本上的 `EXPLAIN QUERY PLAN` 定位。
 
-管理员列表和统计读取因 HTTP 请求取消而结束时，记为 `499`（Client Closed Request），不计入服务端失败。真实查询失败仍返回 `500`，并输出不含凭据的 `admin runner read failed` 日志，字段为 `resource` 和 `category`（`query_failed`、`query_timeout` 或 `query_cancelled`）。统计共享查询自身超时仍属于服务端失败，不能因另一个订阅者断开而被掩盖。历史 500 仍须结合日志归因，不能仅凭支持取消就认定其原因。
+管理员列表和统计读取因 HTTP 请求取消而结束时，记为 `499`（Client Closed Request）；仍连接的 HTTP 等待者在真实查询失败时收到 `500`。失败日志为不含凭据的 `admin runner read failed`，字段为 `resource` 和 `category`（`query_failed`、`query_timeout` 或 `query_cancelled`）。统计共享查询在结束时只记录一次失败，即使所有 HTTP 等待者已经离开也会记录；多个等待者不会重复输出。已取消的等待者保持 `499`，共享查询随后失败时，仍连接的等待者收到 `500`。如果已无 HTTP 等待者，就只保留查询失败日志，不会额外产生 HTTP 响应。历史 500 仍须结合日志归因，不能仅凭支持取消就认定其原因。
 
 停止 runner：
 
