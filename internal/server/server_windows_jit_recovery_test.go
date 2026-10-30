@@ -81,8 +81,8 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 				}
 				srv.sweepOnce(t.Context())
 				current, _ = store.ReadState(st.ID)
-				if registered.Load() || current.Status != state.StatusFailed || deletes.Load() != 2 {
-					t.Fatalf("sweeper did not finish pending cleanup: status=%s deletes=%d", current.Status, deletes.Load())
+				if registered.Load() || current.Status != state.StatusQueued || deletes.Load() != 2 {
+					t.Fatalf("sweeper did not finish pending cleanup: registered=%t status=%s deletes=%d", registered.Load(), current.Status, deletes.Load())
 				}
 				return
 			}

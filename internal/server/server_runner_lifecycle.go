@@ -1674,6 +1674,52 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		s.refreshMetrics()
 		return st, false, nil
 	}
+	if st.FailureReason == "jit_cleanup_pending" {
+		if st.WorkflowJobID == 0 {
+			st.FailureStage = "github_registration"
+			st.FailureReason = "jit_cleanup_pending"
+			st.Status = state.StatusFailed
+			st.FailedAt = time.Now().UTC()
+			st.NextRetryAt = time.Time{}
+			st.LastErrorCode = ""
+			st.LastErrorMessage = ""
+			st.LastErrorRetryable = false
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, err
+			}
+			st.Version++
+			return st, false, nil
+		}
+		queued, queueErr := s.originalWorkflowJobQueued(ctx, st)
+		if queueErr != nil {
+			s.logger.Warn("pending JIT cleanup job status check failed; requeueing request", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "error", queueErr)
+			queued = true
+		}
+		if queued {
+			st.Status = state.StatusQueued
+			st.SandboxID = ""
+			st.ProcessPID = 0
+			st.Error = ""
+			st.FailureStage = ""
+			st.FailureReason = ""
+			st.LastErrorCode = ""
+			st.LastErrorMessage = ""
+			st.LastErrorRetryable = false
+			st.LeaseOwner = ""
+			st.LeaseExpiresAt = time.Time{}
+			st.NextRetryAt = time.Time{}
+			st.StoppingAt = time.Time{}
+			if err := s.store.WriteState(st); err != nil {
+				return state.RunnerState{}, false, err
+			}
+			st.Version++
+			s.signalQueue()
+			return st, false, nil
+		}
+		st.FailureReason = ""
+		st.FailureStage = ""
+		st.Error = ""
+	}
 	if st.FailureStage != "" && st.FailureStage != "cleanup" {
 		st.Status = state.StatusFailed
 		st.FailedAt = time.Now().UTC()
@@ -2439,7 +2485,7 @@ func (s *Server) retainWindowsJITCleanup(id string, _ time.Time) {
 func (s *Server) writeWindowsJITCleanupPending(current *state.RunnerState) error {
 	markRunnerCleanupStarted(current, time.Now().UTC())
 	setTerminationSource(current, state.TerminationSourceFailureCleanup)
-	current.FailureStage = "github_registration"
+	current.FailureStage = "cleanup"
 	current.FailureReason = "jit_cleanup_pending"
 	current.Error = "JIT Runner cleanup pending"
 	current.LeaseOwner = ""

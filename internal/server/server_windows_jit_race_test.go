@@ -215,8 +215,8 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				ghMu.Lock()
 				left := len(registered)
 				ghMu.Unlock()
-				if left != 0 || final.Status != state.StatusFailed || jobChecks.Load() != 1 {
-					t.Fatalf("recovery leaked registration: left=%d status=%s", left, final.Status)
+				if left != 0 || final.Status != state.StatusCompleted || jobChecks.Load() < 1 {
+					t.Fatalf("recovery leaked registration: left=%d status=%s job_checks=%d", left, final.Status, jobChecks.Load())
 				}
 				return
 			}

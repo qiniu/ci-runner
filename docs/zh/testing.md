@@ -233,7 +233,7 @@ github:
     password: <token or password>
 ```
 
-不需要固定全局 repo/org 模式；webhook 会使用 payload 里的 `repository.full_name`。默认创建 repository runner；如果匹配到的 runner spec 设置了 GitHub `runner_group`，runnerd 会按该仓库 owner 创建 organization runner，并把 `runner_group` 作为 GitHub runner registration 的 `--runnergroup` 传入。通过仓库 allowlist 检查后，admission 会从所有已启用 Runner Spec 中按标签选择；已移除的内部 Runner Group 和 Repository Policy 不影响匹配。
+不需要固定全局 repo/org 模式；webhook 会使用 payload 里的 `repository.full_name`。默认创建 repository runner；如果匹配到的 runner spec 设置了 GitHub `runner_group`，runnerd 会按该仓库 owner 创建 organization runner；Linux 将分组作为 `--runnergroup` 传入，Windows 则在 JIT 配置请求中选择对应的分组 ID。通过仓库 allowlist 检查后，admission 会从所有已启用 Runner Spec 中按标签选择；已移除的内部 Runner Group 和 Repository Policy 不影响匹配。
 
 ## 3. 启动服务
 

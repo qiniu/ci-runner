@@ -244,7 +244,7 @@ github:
     password: <token or password>
 ```
 
-No global repo/org mode is required. Webhooks use `repository.full_name` from the payload. runnerd creates repository runners by default. If the matched runner spec sets GitHub `runner_group`, runnerd creates an organization runner for the repository owner and passes the group as `--runnergroup` during GitHub runner registration. Admission selects from all enabled Runner Specs after the repository allowlist check; the removed internal Runner Groups and Repository Policies do not affect matching.
+No global repo/org mode is required. Webhooks use `repository.full_name` from the payload. runnerd creates repository runners by default. If the matched runner spec sets GitHub `runner_group`, runnerd creates an organization runner for the repository owner; Linux passes the group as `--runnergroup`, while Windows selects its group ID in the JIT configuration request. Admission selects from all enabled Runner Specs after the repository allowlist check; the removed internal Runner Groups and Repository Policies do not affect matching.
 
 ## 3. Start The Service
 

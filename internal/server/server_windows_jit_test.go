@@ -219,7 +219,11 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 	req, _ := store.ReadRequest(st.ID)
 	done := make(chan error, 1)
 	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st.LastAttemptAt); done <- err }()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("JIT registration request did not start")
+	}
 	// A competing lifecycle mutation must use this same lock. Release POST,
 	// then confirm it can finish without leaving a later registration in flight.
 	cancelled := make(chan struct{})
@@ -231,6 +235,11 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 		_ = store.WriteState(current)
 		close(cancelled)
 	}()
+	select {
+	case <-cancelled:
+		t.Fatal("cancellation mutation completed before JIT preparation returned")
+	case <-time.After(10 * time.Millisecond):
+	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
