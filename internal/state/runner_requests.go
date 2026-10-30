@@ -469,17 +469,22 @@ func (s *DBStore) GetRunnerRequestMetrics(ctx context.Context) (RunnerRequestMet
 	if err != nil {
 		return RunnerRequestMetrics{}, err
 	}
+	// Group before evaluating display buckets so SQLite can use the narrow
+	// covering index instead of scanning historical payload and credential rows.
+	counts := db.Model(&runnerRequestRecord{}).
+		Select("status, failure_stage, failure_reason, COUNT(*) AS request_count").
+		Group("status, failure_stage, failure_reason")
 	var metrics RunnerRequestMetrics
-	if err := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+	if err := db.WithContext(ctx).Table("(?) AS status_counts", counts).
 		Select(
 			`
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS queued,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS creating,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS running,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS stopping,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS completed,
-			COALESCE(SUM(CASE WHEN status = ? AND (failure_stage IS NULL OR failure_reason IS NULL OR failure_stage != ? OR failure_reason != ?) THEN 1 ELSE 0 END), 0) AS failed,
-			COALESCE(SUM(CASE WHEN status = ? AND failure_stage = ? AND failure_reason = ? THEN 1 ELSE 0 END), 0) AS unmatched`,
+			COALESCE(SUM(CASE WHEN status = ? THEN request_count ELSE 0 END), 0) AS queued,
+			COALESCE(SUM(CASE WHEN status = ? THEN request_count ELSE 0 END), 0) AS creating,
+			COALESCE(SUM(CASE WHEN status = ? THEN request_count ELSE 0 END), 0) AS running,
+			COALESCE(SUM(CASE WHEN status = ? THEN request_count ELSE 0 END), 0) AS stopping,
+			COALESCE(SUM(CASE WHEN status = ? THEN request_count ELSE 0 END), 0) AS completed,
+			COALESCE(SUM(CASE WHEN status = ? AND (failure_stage IS NULL OR failure_reason IS NULL OR failure_stage != ? OR failure_reason != ?) THEN request_count ELSE 0 END), 0) AS failed,
+			COALESCE(SUM(CASE WHEN status = ? AND failure_stage = ? AND failure_reason = ? THEN request_count ELSE 0 END), 0) AS unmatched`,
 			StatusQueued,
 			StatusCreating,
 			StatusRunning,

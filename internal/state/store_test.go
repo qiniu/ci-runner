@@ -3620,6 +3620,10 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			if err != nil || match.Profile == nil || match.Profile.Name != "fresh-default" {
 				t.Fatalf("fresh %s matcher = %#v, err=%v", backend.name, match, err)
 			}
+			assertRunnerRequestMetricCounts(t, migrated, 1)
+			if migratedDB.Migrator().HasIndex(&runnerRequestRecord{}, "idx_runner_requests_metrics") {
+				t.Fatalf("%s unexpectedly received the SQLite-only metrics index", backend.name)
+			}
 			if err := migrated.migrate(migratedDB); err != nil {
 				t.Fatalf("second %s migration failed: %v", backend.name, err)
 			}
@@ -5068,6 +5072,9 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 	).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Exec("CREATE INDEX legacy_metrics_fixture_repository ON runner_requests(repository_full_name)").Error; err != nil {
+		t.Fatal(err)
+	}
 	closeTestDB(t, db)
 
 	migrated := NewWithOptions(Options{
@@ -5122,10 +5129,22 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"idx_runner_requests_profile_queued_id",
 		"idx_runner_requests_repository_queued_id",
 		"idx_runner_requests_sponsor_inflight",
+		"idx_runner_requests_metrics",
+		"legacy_metrics_fixture_repository",
 	} {
 		if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
 			t.Fatalf("expected runner request list ordering index %s after additive migration", indexName)
 		}
+	}
+	if err := migrated.migrate(db); err != nil {
+		t.Fatalf("repeated SQLite migration: %v", err)
+	}
+	var after runnerRequestRecord
+	if err := db.First(&after, "id = ?", record.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, record) {
+		t.Fatal("repeated migration changed the existing request")
 	}
 }
 

@@ -196,6 +196,11 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+	if s.opts.Backend == BackendSQLite && !db.Migrator().HasIndex(&runnerRequestMetricsIndex{}, "idx_runner_requests_metrics") {
+		if err := db.Migrator().CreateIndex(&runnerRequestMetricsIndex{}, "idx_runner_requests_metrics"); err != nil {
+			return fmt.Errorf("create runner request metrics index: %w", err)
+		}
+	}
 	if err := backfillDeploymentRevisions(db); err != nil {
 		return err
 	}

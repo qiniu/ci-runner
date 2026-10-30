@@ -72,6 +72,17 @@ type runnerRequestRecord struct {
 
 func (runnerRequestRecord) TableName() string { return "runner_requests" }
 
+// This projection declares a SQLite-only covering index. Adding its tags to
+// runnerRequestRecord would also change MySQL's unbounded failure text columns
+// to indexed varchar columns. Use CreateIndex, never AutoMigrate, on this model.
+type runnerRequestMetricsIndex struct {
+	Status        string `gorm:"column:status;index:idx_runner_requests_metrics,priority:1"`
+	FailureStage  string `gorm:"column:failure_stage;index:idx_runner_requests_metrics,priority:2"`
+	FailureReason string `gorm:"column:failure_reason;index:idx_runner_requests_metrics,priority:3"`
+}
+
+func (runnerRequestMetricsIndex) TableName() string { return "runner_requests" }
+
 type deploymentRecord struct {
 	CreateRequestHash          string     `gorm:"column:create_request_hash;size:64;not null;default:''"`
 	ExecutionAccountID         int64      `gorm:"column:execution_account_id;not null;default:0"`
