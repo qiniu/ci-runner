@@ -409,17 +409,23 @@ function App() {
       const requestLocation = window.location.pathname + window.location.search
       const headers = new Headers(options.headers)
       const response = await fetch(url, { ...options, headers, credentials: "same-origin" })
+      options.signal?.throwIfAborted()
       if (response.status === 401) {
         try {
-          const sessionResponse = await fetch("/auth/session", { credentials: "same-origin" })
+          const sessionResponse = await fetch("/auth/session", { credentials: "same-origin", signal: options.signal })
+          options.signal?.throwIfAborted()
           if (sessionResponse.ok) {
-            setAuthSession((await sessionResponse.json()) as AuthSession)
+            const session = (await sessionResponse.json()) as AuthSession
+            options.signal?.throwIfAborted()
+            setAuthSession(session)
           } else {
             // Let the protected-route gate render SignInPage with the current
             // deployment or Job URL as its return destination.
             setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
           }
         } catch {
+          // A cancelled resource read is not evidence that the session expired.
+          options.signal?.throwIfAborted()
           setAuthSession((current) => ({ ...current, authenticated: false, login: undefined, role: undefined, avatar_url: undefined, expires_at: undefined }))
         }
         throw new Error("Session expired or access is not allowed")

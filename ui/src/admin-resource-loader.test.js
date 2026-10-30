@@ -1,5 +1,5 @@
 import { describe, expect, test, spyOn } from "bun:test"
-import { createAdminResourceLoader } from "./admin-resource-loader"
+import { adminRequestTimeoutMs, createAdminResourceLoader } from "./admin-resource-loader"
 
 function pending() {
   let resolve, reject
@@ -15,6 +15,40 @@ function observer(load) {
 }
 
 describe("admin resource loading", () => {
+  test("times out uncooperative work, permits retry, and ignores its late result", async () => {
+    let expire
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay) => {
+      expect(delay).toBe(adminRequestTimeoutMs)
+      expire = callback
+      return 0
+    })
+    const loader = createAdminResourceLoader()
+    try {
+      const old = pending(), current = pending()
+      const previous = observer(() => old.promise)
+      const next = observer(() => current.promise)
+      const one = loader.run("runner_requests", previous.options)
+      await Promise.resolve()
+      expire()
+      await one
+      expect(loader.isLoading("runner_requests")).toBe(false)
+      expect(previous.loading).toEqual([true, false])
+      expect(previous.errors.map((error) => error.name)).toEqual(["TimeoutError"])
+      const two = loader.run("runner_requests", next.options)
+      old.resolve(["late"])
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(previous.values).toEqual([])
+      expect(loader.isLoading("runner_requests")).toBe(true)
+      current.resolve(["recovered"])
+      await two
+      expect(next.values).toEqual([["recovered"]])
+    } finally {
+      loader.reset()
+      timer.mockRestore()
+    }
+  })
+
   test("accepts a slow response after eight poll ticks without overlapping requests", async () => {
     const loader = createAdminResourceLoader()
     const response = pending()
@@ -79,6 +113,7 @@ describe("admin resource loading", () => {
     await Promise.resolve()
     loader.reset()
     expect(signal.aborted).toBe(true)
+    await one // Reset must finish without waiting for the ignored abort.
     const two = loader.run("runner_requests", next.options)
     old.resolve(["old-scope"])
     await one

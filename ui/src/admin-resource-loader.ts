@@ -26,15 +26,26 @@ export function createAdminResourceLoader() {
         return Promise.resolve()
       }
       const controller = new AbortController()
+      let onAbort: () => void
+      const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => reject(controller.signal.reason)
+        controller.signal.addEventListener("abort", onAbort, { once: true })
+      })
       const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), adminRequestTimeoutMs)
       const entry = { controller, promise: Promise.resolve(), stop: () => { clearTimeout(timer); options.loading(false) } }
       active.set(resource, entry)
       options.loading(true)
-      entry.promise = Promise.resolve().then(() => options.load(controller.signal))
+      // Release the resource even if a nested operation ignores cancellation.
+      const result = Promise.resolve().then(() => {
+        controller.signal.throwIfAborted()
+        return options.load(controller.signal)
+      })
+      entry.promise = Promise.race([result, aborted])
         .then((value) => { if (active.get(resource) === entry) options.accept(value) })
         .catch((error: unknown) => { if (active.get(resource) === entry) options.fail(error) })
         .finally(() => {
           clearTimeout(timer)
+          controller.signal.removeEventListener("abort", onAbort)
           if (active.get(resource) !== entry) return
           active.delete(resource)
           completed.set(resource, Date.now())

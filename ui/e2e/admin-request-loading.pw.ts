@@ -146,3 +146,35 @@ test("admin initial timeout shows a recoverable error rather than an empty resul
   await expect(page.getByRole("link", { name: "recovered-0", exact: true })).toBeVisible()
   await expect(page.getByRole("alert")).toHaveCount(0)
 })
+
+test("admin session recheck times out without signing out and allows retry", async ({ page }) => {
+  await setup(page)
+  let sessionCalls = 0, listCalls = 0
+  let sessionRecheck: Route | undefined
+  await page.route("**/auth/session", (route) => {
+    sessionCalls++
+    if (sessionCalls === 1) return route.fulfill({ json: {
+      authenticated: true, role: "admin", login: "fixture-admin", oauth_enabled: true,
+    } })
+    sessionRecheck = route
+  })
+  await page.route("**/runner_request_metrics", (route) => route.fulfill({ json: {} }))
+  await page.route("**/runner_requests?*", (route) => {
+    listCalls++
+    return listCalls === 1
+      ? route.fulfill({ status: 401 })
+      : route.fulfill({ json: { items: rows("retried"), next_cursor: null, has_more: false } })
+  })
+  await page.goto("/admin/runner_requests")
+  await expect.poll(() => sessionCalls).toBe(2)
+  await page.clock.fastForward(31000)
+  await expect(page.getByRole("alert")).toContainText("Failed to load control plane data")
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByRole("link", { name: "retried-0", exact: true })).toBeVisible()
+  // A late response from the cancelled check must not sign out the recovered page.
+  await sessionRecheck!.fulfill({ json: { authenticated: false } })
+  await expect(page.getByRole("link", { name: "retried-0", exact: true })).toBeVisible()
+  await expect(page.getByRole("alert")).toHaveCount(0)
+  expect(listCalls).toBe(2)
+})
