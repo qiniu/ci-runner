@@ -72,6 +72,8 @@ jobs:
 
 The preview image provides Windows 11 25H2 x64 with a minimal core software set: Actions Runner, Git for Windows (including Bash), and PowerShell 7 (`pwsh`). Windows PowerShell 5.1 (`powershell`) and `cmd` are also available. Use Windows-compatible actions and commands; do not combine `windows-11` with `linux` or Ubuntu labels.
 
+Templates rebuilt with the GCC setup also include MSYS2 UCRT64 `gcc` and `g++` on `PATH` for Windows amd64 cgo, without LLVM. Older template builds may not include these compilers; confirm availability in your selected template. Go remains workflow-managed.
+
 Docker and Visual Studio Build Tools are not preinstalled. This image does not provide the full GitHub-hosted Windows software set; install additional runtimes or build tools in your workflow as needed. Runner Web Console and network diagnostics currently require a POSIX shell and do not support Windows. The template remains Preview; validate your workload before relying on it for production builds.
 
 ## Platform spec management

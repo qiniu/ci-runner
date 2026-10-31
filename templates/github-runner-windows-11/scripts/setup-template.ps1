@@ -117,6 +117,41 @@ Invoke-Checked "installing PowerShell $powerShellVersion" 'msiexec.exe' @('/i', 
 Add-MachinePath @($pwshRoot)
 Assert-Output 'pwsh' (Join-Path $pwshRoot 'pwsh.exe') @('-NoLogo', '-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()') ("^" + [regex]::Escape($powerShellVersion) + "$")
 
+$msysInstaller = Get-CheckedDownload 'msys2-installer.exe' (Pin 'MSYS2_INSTALLER_URL') (Pin 'MSYS2_INSTALLER_SHA256') ([long](Pin 'MSYS2_INSTALLER_SIZE'))
+Invoke-Checked 'installing MSYS2' $msysInstaller @('in', '--confirm-command', '--accept-messages', '--root', 'C:/msys64')
+$msysBash = 'C:\msys64\usr\bin\bash.exe'
+$gccBin = 'C:\msys64\ucrt64\bin'
+$env:MSYSTEM = 'UCRT64'
+Invoke-Checked 'initializing MSYS2' $msysBash @('-lc', '"exit 0"')
+# Core updates need a fresh shell before the remaining full upgrade.
+Invoke-Checked 'updating MSYS2 core' $msysBash @('-lc', '"pacman --noconfirm -Syuu"')
+Invoke-Checked 'updating MSYS2 packages' $msysBash @('-lc', '"pacman --noconfirm -Syuu"')
+Invoke-Checked 'installing UCRT64 GCC' $msysBash @('-lc', '"pacman --noconfirm --needed -S mingw-w64-ucrt-x86_64-gcc"')
+$packages = & $msysBash -lc 'pacman -Q'
+if ($LASTEXITCODE -ne 0) { throw 'cannot record MSYS2 package versions' }
+Set-Content -LiteralPath (Join-Path $metadataRoot 'msys2-packages.txt') -Encoding ASCII -Value $packages
+Invoke-Checked 'cleaning MSYS2 package cache' $msysBash @('-lc', '"pacman --noconfirm -Scc"')
+Add-MachinePath @($gccBin)
+$env:Path = "$gccBin;$env:Path"
+foreach ($compiler in @('gcc', 'g++')) {
+  Assert-Output $compiler (Join-Path $gccBin "$compiler.exe") @('-dumpfullversion') '^\d+\.\d+\.\d+$'
+}
+Assert-Output 'GCC target' (Join-Path $gccBin 'gcc.exe') @('-dumpmachine') '^x86_64-w64-mingw32$'
+$smokeRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $smokeRoot | Out-Null
+try {
+  Set-Content -LiteralPath (Join-Path $smokeRoot 'smoke.c') -Encoding ASCII -Value '#include <stdio.h>', 'int main(void) { puts("gcc-ok"); return 0; }'
+  Set-Content -LiteralPath (Join-Path $smokeRoot 'smoke.cpp') -Encoding ASCII -Value '#include <iostream>', 'int main() { std::cout << "g++-ok" << std::endl; }'
+  foreach ($entry in @(@('gcc', 'c', '^gcc-ok$'), @('g++', 'cpp', '^g\+\+-ok$'))) {
+    $source = Join-Path $smokeRoot "smoke.$($entry[1])"
+    $binary = Join-Path $smokeRoot "smoke-$($entry[1]).exe"
+    Invoke-Checked "compiling $($entry[0]) smoke" (Join-Path $gccBin "$($entry[0]).exe") @("`"$source`"", '-o', "`"$binary`"")
+    Assert-Output "$($entry[0]) smoke" $binary @() $entry[2]
+  }
+} finally {
+  Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+}
+
 # GitHub Actions Runner.
 $runnerVersion = Pin 'RUNNER_WIN_X64_VERSION'
 $runnerArchive = Get-CheckedDownload 'actions-runner.zip' "https://github.com/actions/runner/releases/download/v$runnerVersion/actions-runner-win-x64-$runnerVersion.zip" (Pin 'RUNNER_WIN_X64_ARCHIVE_SHA256') ([long](Pin 'RUNNER_WIN_X64_ARCHIVE_SIZE'))

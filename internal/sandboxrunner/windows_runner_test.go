@@ -445,6 +445,41 @@ func TestWindowsTemplateRunnerPinMatchesCommonPin(t *testing.T) {
 	}
 }
 
+func TestWindowsTemplateGCCInstallation(t *testing.T) {
+	t.Parallel()
+	const pins = "templates/github-runner-windows-11/template.env"
+	for key, want := range map[string]string{
+		"MSYS2_INSTALLER_URL":    "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-x86_64-20260927.exe",
+		"MSYS2_INSTALLER_SHA256": "416d506c839a2da4bc184eeec8cbaaf1055ee698618228c62dfc4232a6970f0e",
+		"MSYS2_INSTALLER_SIZE":   "85046168",
+	} {
+		if got := readTemplatePin(t, pins, key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	content, err := os.ReadFile(filepath.Join(repositoryRoot(t), "templates/github-runner-windows-11/scripts/setup-template.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`Get-CheckedDownload 'msys2-installer.exe' (Pin 'MSYS2_INSTALLER_URL') (Pin 'MSYS2_INSTALLER_SHA256') ([long](Pin 'MSYS2_INSTALLER_SIZE'))`,
+		`'--root', 'C:/msys64'`,
+		`$gccBin = 'C:\msys64\ucrt64\bin'`,
+		`pacman --noconfirm --needed -S mingw-w64-ucrt-x86_64-gcc`,
+		`'msys2-packages.txt'`,
+		`Add-MachinePath @($gccBin)`,
+		`@('gcc', 'g++')`,
+		`@('-dumpfullversion')`,
+		`@('-dumpmachine') '^x86_64-w64-mingw32$'`,
+		`Invoke-Checked "compiling $($entry[0]) smoke"`,
+		`Assert-Output "$($entry[0]) smoke" $binary @() $entry[2]`,
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("Windows GCC setup missing %q", want)
+		}
+	}
+}
+
 func TestWindowsTemplateDownloadUsesBoundedHTTP11Transfer(t *testing.T) {
 	t.Parallel()
 	content, err := os.ReadFile(filepath.Join(repositoryRoot(t), "templates/github-runner-windows-11/scripts/setup-template.ps1"))

@@ -850,6 +850,14 @@ apt 管理的 `packaging` 保持不变、pipx 工具目录兼容、普通用户�
 
 ### Windows Runner 端到端测试
 
+`task template-build-windows-11` 在完整升级 MSYS2 后从当前稳定仓库安装 UCRT64 GCC，
+检查 x64 目标，并编译、运行 C 和 C++ 冒烟程序。安装器固定版本及校验值；
+滚动更新的包保留 pacman 签名验证，实际安装版本保存到
+`C:\ProgramData\qiniu-runner\msys2-packages.txt`。在真实 workflow 中验证
+UCRT64 PATH 解析，并在重建后重新测量磁盘剩余空间。
+本地 `go test ./internal/sandboxrunner -run TestWindowsTemplate -count=1`
+仅检查源码契约，不代表 Windows 执行通过。
+
 Windows 要求 `RUNNERD_E2E_JIT_CONFIG`、与其绑定的 `RUNNERD_E2E_RUNNER_NAME` 和精确标签；通过 GitHub 仓库级或组织级 `generate-jitconfig` API 创建，指定 Runner group ID 和 `work_folder: ..\work`。配置必须保密，不得打印。仅提供注册令牌时启动会失败。启动文件在 listener 启动前清空；这不构成对当前 Runner 自身凭据或同用户进程内存的隔离。
 
 Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。

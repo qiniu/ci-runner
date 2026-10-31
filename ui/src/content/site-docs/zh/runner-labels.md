@@ -64,6 +64,8 @@ jobs:
 
 预览镜像采用 Windows 11 25H2 x64，提供 minimal core 软件集：Actions Runner、Git for Windows（含 Bash）和 PowerShell 7（`pwsh`）。同时可使用 Windows PowerShell 5.1（`powershell`）和 `cmd`。请使用兼容 Windows 的 Action 和命令，不要将 `windows-11` 与 `linux` 或 Ubuntu 标签组合。
 
+包含 GCC 安装步骤的重建模板还预装面向 Windows amd64 cgo 的 MSYS2 UCRT64 `gcc` 和 `g++`，已加入 `PATH`，不包含 LLVM。旧版模板可能未安装这些编译器，请确认所选模板中的实际可用性。Go 仍由工作流安装和管理。
+
 镜像未预装 Docker 和 Visual Studio Build Tools，也不包含 GitHub 托管 Windows Runner 的完整软件集；需要的其他运行时和构建工具应在工作流中安装。Runner Web Console 和网络诊断目前依赖 POSIX shell，尚不支持 Windows。此模板仍为预览状态，用于生产构建前请先验证自己的工作负载。
 
 ## 平台规格管理
