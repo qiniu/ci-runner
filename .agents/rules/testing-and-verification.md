@@ -23,6 +23,8 @@ Also inspect the diff and keep `docs/README.md` aligned when adding, removing, o
 
 ## State Schema
 
+Run `task state-migration-test` for SQLite migration guards and value checks. Set `RUNNERD_CATALOG_BACKEND_TESTS=1` and a dedicated `RUNNERD_POSTGRES_TEST_DSN` ending in `_test` for real import/rollback/sequence/schema isolation tests; server revision checks use `go test -tags development ./internal/server -run TestPlatformSpecRevisionPostgresSQLBackends -count=1`. These use isolated schemas, never the running service database. See `docs/sqlite-postgres-offline-migration.md` for maintenance and live acceptance.
+
 For runner-request payload persistence changes, extend the existing state tests: assert accepted and rejected requests leave `github_payload_json` empty, `workflow_job` and `workflow_run` context survives reopening the database, and legacy metadata/installation-ID backfills preserve historical payloads. Keep repeated-migration coverage; do not use tests that create new requests as a substitute for legacy raw-payload fixtures.
 
 When touching `internal/state/records.go`, GORM tags, indexes, or migration helpers in `internal/state/db.go`, run:

@@ -26,6 +26,7 @@ Use this guide for future Codex or agent work in this repository.
 - `/admin/accounts` lists OAuth/bootstrap-created accounts and linked identities. Its only mutation changes another account's `admin`/`user` role atomically with an audit event; self-role changes and changes that could leave no administrator are rejected.
 - `/admin/github_accounts` lists every current GitHub App installation reported through App authentication; `/admin/github_accounts/{installation_id}` loads that installation's current repository scope. Both surfaces and their APIs are admin-only and read-only, use the positive numeric installation ID for identity, and never substitute local OAuth accounts, cached installation owners, locally observed repositories, or ordinary-user OAuth intersection data.
 - Runtime state can use sqlite, Postgres, or MySQL. Do not document multi-instance support until two runnerd processes have been verified against the same database.
+- Prefer `cmd/runnerd-migrate` for SQLite-to-PostgreSQL migrations with a maintenance window; see `docs/sqlite-postgres-offline-migration.md`. Stop source and target writers, retain the private exclusive SQLite backup, require an empty PG schema and a successful verified transaction. Preserve keys and historical sequence watermarks. Active online fences require protocol finalization, not bypass. After PG accepts business writes, the old SQLite is not a lossless rollback target.
 - Startup Job checks must defer recognized waiting states and monitor `in_progress` without provisioning, finish only on `completed`, and bound retries for unknown/query errors except HTTP 429 and GitHub secondary rate limits, which remain queued with capped backoff even after the failure budget is exhausted. Preserve delayed queue recovery and lease/capacity release. Only explicit admin retry with old control-log evidence and current queued/no-Runner/spec validation may recover historical waiting false completions; never bulk reopen terminal rows.
 - Automated cleanup of a Runner that remained idle without accepting a Job records the additional `idle_cleanup` termination source; do not mislabel that successful cleanup as a failure.
 - A Runner process that ends before accepting any Job (no assigned Job and no job-start marker) must not complete or fail its request outright, whether it exited 0 because GitHub terminated the listener, exited non-zero, or lost its Sandbox output stream while GitHub reports it idle. When Sandbox and GitHub Runner cleanup both succeeded, schedule a bounded `runner_exited_without_job` retry, clearing that attempt's termination source and exit code, so the start path rechecks the original Job before another Sandbox. Exhausted retries fail visibly.
@@ -78,6 +79,7 @@ task dev
 task smee
 task lint
 task test
+task state-migration-test
 task build
 task docker-check
 task release-check

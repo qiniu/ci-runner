@@ -74,9 +74,10 @@ type fileConfig struct {
 		IdleTimeoutSec  int    `yaml:"idle_timeout_seconds"`
 	} `yaml:"server"`
 	Database struct {
-		Backend   string `yaml:"backend"`
-		DSN       Secret `yaml:"dsn"`
-		LegacyURL Secret `yaml:"url"`
+		Backend                string    `yaml:"backend"`
+		DSN                    Secret    `yaml:"dsn"`
+		LegacyURL              Secret    `yaml:"url"`
+		RetiredOnlineMigration yaml.Node `yaml:"online_migration"`
 	} `yaml:"database"`
 	Auth struct {
 		EncryptionKey   Secret `yaml:"encryption_key"`
@@ -181,6 +182,9 @@ func LoadFile(path string) (Config, error) {
 	var raw fileConfig
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if raw.Database.RetiredOnlineMigration.Kind != 0 {
+		return Config{}, fmt.Errorf("database.online_migration is no longer supported; for pre-merge PR #151 databases, fetch the online-migration binary from commit be3b7911650599e5257febcf94976caf57f9fc32 with git fetch origin pull/151/head before removing this configuration")
 	}
 	if strings.TrimSpace(raw.GitHub.Owner) != "" || strings.TrimSpace(raw.GitHub.Repo) != "" {
 		return Config{}, fmt.Errorf("invalid config github.owner/github.repo: no longer supported; pass repository_full_name on manual runner requests")

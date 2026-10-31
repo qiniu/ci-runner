@@ -1109,3 +1109,15 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 本地回归覆盖跨规格/仓库的过期计数读取与创建预留、独立作用域、落库失败释放、
 数据库重开后的计数，以及大量受限请求后仍能调度其他仓库的场景。
 真实 GitHub/Sandbox 的完成、清理、降低额度后的重启恢复及负载排队时间仍需上线验收。
+
+## SQLite 到 PostgreSQL 停服迁移
+
+参见[停服迁移手册](sqlite-postgres-offline-migration.md)。使用专用 `_test` 数据库执行：
+
+```sh
+RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
+  go test -tags development ./internal/state ./internal/server \
+  -run 'Test(OfflineMigration|PlatformSpecRevision)' -count=1
+```
+
+测试使用隔离 schema，覆盖失败事务回滚、源库迁移围栏、写锁拒绝、备份保护、历史序列、值完整性及跨时区的规格版本校验。

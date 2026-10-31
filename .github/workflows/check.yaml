@@ -172,8 +172,12 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go.sum
-      - name: Verify schema, catalog, audited mutations, and deployment queries on PostgreSQL and MySQL
-        run: go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
+      - uses: oven-sh/setup-bun@v2
+      - run: cd ui && bun install --frozen-lockfile && bun run build
+      - name: Verify schema, catalog, deployments, and migrations on SQL backends
+        run: |
+          go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|OfflineMigration(SearchPath|FailureRollsBack)?|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
+          go test ./internal/server -run 'TestPlatformSpecRevisionPostgresSQLBackends' -count=1 -v
 
   ui-production-smoke:
     runs-on: ubuntu-latest

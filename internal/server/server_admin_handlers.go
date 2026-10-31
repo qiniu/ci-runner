@@ -565,9 +565,17 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 	if input.RequiredLabels != nil {
 		current.RequiredLabels = *input.RequiredLabels
 	}
-	if input.ExpectedUpdatedAt != "" && input.ExpectedUpdatedAt != current.UpdatedAt.UTC().Format(time.RFC3339Nano) {
-		writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner Spec changed while saving; refresh and try again")
-		return
+	if input.ExpectedUpdatedAt != "" {
+		expected, ok := parseRunnerSpecRevision(w, input.ExpectedUpdatedAt, false)
+		if !ok {
+			return
+		}
+		// JSON timestamps may retain the PostgreSQL session's time zone.
+		// Compare instants, while keeping the exact database CAS below.
+		if !expected.Equal(current.UpdatedAt) {
+			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner Spec changed while saving; refresh and try again")
+			return
+		}
 	}
 	if input.TemplateSource != nil {
 		current.TemplateSource = strings.TrimSpace(*input.TemplateSource)
