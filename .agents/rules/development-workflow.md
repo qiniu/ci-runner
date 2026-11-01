@@ -30,7 +30,7 @@ task template-check-all
 
 - `task dev` is the local development entrypoint. It defaults to `RUNNERD_CONFIG=runnerd.local.yaml`, starts Vite on the first available localhost port at or after `5173`, starts smee forwarding when `.smee-url` exists, and runs runnerd with the `development` build tag.
 - `task smee` reads `.smee-url` and defaults to `SMEE_TARGET=http://127.0.0.1:25500/webhooks/github`.
-- `task build` rebuilds production UI assets into `internal/server/ui/` before compiling `bin/runnerd`.
+- `task build` rebuilds production UI assets into `internal/server/ui/`, then compiles `bin/runnerd` and the standalone `bin/runnerd-migrate`.
 - `task ui-terminal-fault-test` runs timed loopback outages against Chromium and real local PTYs; use it for terminal replay/recovery/idle-cleanup changes and retain production proxy/provider acceptance separately.
 - `task lint` runs `staticcheck` with the Go version declared in `go.mod`, matching CI and avoiding newer host Go export data unsupported by the installed analyzer.
 - `task ui-i18n-check` validates the English/Chinese resource contract, typed i18next keys, and untranslated visible literals before UI copy changes are handed off.

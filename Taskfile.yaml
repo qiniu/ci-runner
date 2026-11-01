@@ -119,12 +119,13 @@ tasks:
       - go test -race ./internal/state -run 'Test(OfflineMigration|Migration|LegacyMigration)' -count=1
 
   build:
-    desc: Build the local binary into bin/
+    desc: Build runnerd and runnerd-migrate into bin/
     deps:
       - ui-build
     cmds:
       - mkdir -p bin
       - go build -trimpath -buildvcs=true -ldflags "{{.LDFLAGS}}" -o bin/{{.BINARY}} ./cmd/{{.BINARY}}
+      - go build -trimpath -buildvcs=true -ldflags "{{.LDFLAGS}}" -o bin/runnerd-migrate ./cmd/runnerd-migrate
 
   run:
     desc: Run the service locally

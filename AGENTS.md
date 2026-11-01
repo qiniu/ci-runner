@@ -92,7 +92,7 @@ Use `task dev` for local development. It defaults to `RUNNERD_CONFIG=runnerd.loc
 
 Use `task smee` for standalone GitHub webhook forwarding. It reads `.smee-url` and defaults to `SMEE_TARGET=http://127.0.0.1:25500/webhooks/github`.
 
-Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`.
+Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`. It also builds the standalone `bin/runnerd-migrate`.
 
 `Check` validates the application. `Template Check` (`.github/workflows/template-check.yaml`) runs template source tests, upstream compatibility and Dockerfile checks for related build/template/script changes or manual dispatch. Keep registry checks independent of source tests, use the shared `templates/` build context, and require both workflows on Runner upgrade PRs. Dockerfile `--check` does not replace real image builds or regional template acceptance.
 

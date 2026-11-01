@@ -361,7 +361,7 @@ docker run --rm -p 25500:25500 \
 ```bash
 task deps          # Install Go dependencies
 task ui-deps       # Install UI dependencies
-task build         # Build runnerd with embedded production UI
+task build         # Build runnerd with embedded production UI and runnerd-migrate
 task ui-production-smoke # Execute the production UI bundle in Chromium
 task ui-terminal-fault-test # Timed SSE outages with Chromium and real local PTYs
 task dev           # Start local dev (runnerd + Vite + smee)

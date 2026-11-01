@@ -8,7 +8,7 @@ Use a maintenance window when downtime is acceptable. `runnerd-migrate` is a one
 4. Create a dedicated empty PostgreSQL schema/database, keep its service stopped, and run:
 
    ```sh
-   go build -o bin/runnerd-migrate ./cmd/runnerd-migrate
+   task build
    install -d -m 700 ./var/offline-backups
    bin/runnerd-migrate --config ./runnerd.postgres.yaml \
      --sqlite /absolute/path/runnerd.db \
