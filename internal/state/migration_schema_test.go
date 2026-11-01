@@ -92,8 +92,10 @@ func TestOfflineMigrationLegacySourceSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	stamp := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
-	want := runnerRequestRecord{ID: "legacy", Source: "github", RunnerName: "runner", LabelsJSON: "[]", Status: StatusCompleted,
-		GitHubInstallationID: 42, SandboxAPIKeyEncrypted: "opaque-secret", QueuedAt: stamp, UpdatedAt: stamp}
+	want := runnerRequestRecord{
+		ID: "legacy", Source: "github", RunnerName: "runner", LabelsJSON: "[]", Status: StatusCompleted,
+		GitHubInstallationID: 42, SandboxAPIKeyEncrypted: "opaque-secret", QueuedAt: stamp, UpdatedAt: stamp,
+	}
 	if err := db.Create(&want).Error; err != nil {
 		t.Fatal(err)
 	}
