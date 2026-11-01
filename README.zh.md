@@ -355,7 +355,7 @@ docker run --rm -p 25500:25500 \
 ```bash
 task deps          # 安装 Go 依赖
 task ui-deps       # 安装 UI 依赖
-task build         # 构建 runnerd（内嵌生产 UI）
+task build         # 构建 runnerd（内嵌生产 UI）和 runnerd-migrate
 task ui-production-smoke # 在 Chromium 中执行生产 UI bundle
 task ui-terminal-fault-test # 使用 Chromium 和本地真实 PTY 验证计时断流
 task dev           # 启动本地开发环境（runnerd + Vite + smee）

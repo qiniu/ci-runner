@@ -23,7 +23,7 @@ SQLite 锁仅覆盖导入期间，**不能证明服务已经停机，也不负�
 5. 构建并执行（路径按部署环境替换）：
 
    ```sh
-   go build -o bin/runnerd-migrate ./cmd/runnerd-migrate
+   task build
    install -d -m 700 ./var/offline-backups
    bin/runnerd-migrate --config ./runnerd.postgres.yaml \
      --sqlite /absolute/path/runnerd.db \
