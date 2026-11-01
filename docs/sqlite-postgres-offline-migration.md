@@ -16,6 +16,8 @@ Use a maintenance window when downtime is acceptable. `runnerd-migrate` is a one
      --source-stopped --timeout 30m > ./var/offline-backups/report.json
    ```
 
+Source columns and primary keys are checked using SQLite's native `table_xinfo` metadata, independently of historical CREATE TABLE formatting. Missing-column and primary-key errors identify the table and column; do not alter production keys or bypass validation to retry. A failure at `validate source schema and migration fence` occurs before this invocation creates a backup or connects to PostgreSQL.
+
 The importer holds a SQLite writer lock while creating a private, exclusive `VACUUM INTO` backup (including committed WAL data). The lock does not establish service shutdown or fence future writes after the command exits. The backup directory must be an existing `0700` directory owned by the current user, and the file is `0600`. Existing files are never overwritten; failed artifacts remain for inspection.
 
 It copies the 18 model-owned tables, preserving IDs, nulls, booleans, JSON and ciphertext. Timestamps normalize to microseconds. Legacy extra tables, extra business-table columns, and old online-migration metadata remain in the backup and are not copied. The report counts extra tables in `retained_source_extra_tables`, excluding known legacy migration metadata tables and `sqlite_sequence`; `retained_source_extra_columns` counts only extra columns in business tables. Target schema creation, copying, full row verification and sequence alignment happen in one transaction. Historical deleted-ID sequence watermarks are preserved. The report contains table row counts and SHA-256 digests. No source startup backfill or business hook runs.

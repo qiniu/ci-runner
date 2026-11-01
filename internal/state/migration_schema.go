@@ -12,9 +12,9 @@ type migrationSchemaReport struct {
 	ExtraColumns int `json:"extra_columns"`
 }
 
-// Legacy additions remain in the retained source file. Only the explicit
-// inventory is transferred; missing model fields or differing primary keys
-// reject import before writing target data.
+// Inspect the SQLite source. Legacy additions remain in the retained source
+// file. Only the explicit inventory is transferred; missing model fields or
+// differing primary keys reject import before writing target data.
 func inspectMigrationSchema(ctx context.Context, db *gorm.DB, inventory migrationInventory) (migrationSchemaReport, error) {
 	var report migrationSchemaReport
 	tables, err := db.WithContext(ctx).Migrator().GetTables()
@@ -32,28 +32,34 @@ func inspectMigrationSchema(ctx context.Context, db *gorm.DB, inventory migratio
 		if !foundTable {
 			return report, fmt.Errorf("%w: required schema table missing in %s", errMigrationInvalid, table.Name)
 		}
-		columns, err := db.WithContext(ctx).Migrator().ColumnTypes(table.Name)
-		if err != nil {
+		// Read SQLite's metadata rather than reparsing CREATE TABLE SQL through
+		// GORM. Valid legacy DDL (for example named or multiline primary-key
+		// constraints) can otherwise appear to have a missing or unknown key.
+		// table_xinfo also includes generated columns retained only in the backup.
+		var columns []struct {
+			Name string
+			PK   int
+		}
+		if err := db.WithContext(ctx).Raw("SELECT name, pk FROM pragma_table_xinfo(?, 'main')", table.Name).Scan(&columns).Error; err != nil {
 			return report, fmt.Errorf("%w: inspect migration columns failed for %s", errMigrationInvalid, table.Name)
 		}
-		actual := make(map[string]gorm.ColumnType, len(columns))
+		actual := make(map[string]bool, len(columns))
 		for _, column := range columns {
-			actual[column.Name()] = column
+			actual[column.Name] = column.PK > 0
 		}
 		for _, column := range table.Columns {
 			found, exists := actual[column.Name]
 			if !exists {
-				return report, fmt.Errorf("%w: required schema column missing in %s", errMigrationInvalid, table.Name)
+				return report, fmt.Errorf("%w: required schema column missing in %s.%s", errMigrationInvalid, table.Name, column.Name)
 			}
-			primary, known := found.PrimaryKey()
-			if !known || primary != column.PrimaryKey {
-				return report, fmt.Errorf("%w: schema primary key differs in %s", errMigrationInvalid, table.Name)
+			if found != column.PrimaryKey {
+				return report, fmt.Errorf("%w: schema primary key differs in %s.%s (expected %t, actual %t)", errMigrationInvalid, table.Name, column.Name, column.PrimaryKey, found)
 			}
 			delete(actual, column.Name)
 		}
-		for _, column := range actual {
-			if primary, known := column.PrimaryKey(); !known || primary {
-				return report, fmt.Errorf("%w: unexpected schema primary key in %s", errMigrationInvalid, table.Name)
+		for name, primary := range actual {
+			if primary {
+				return report, fmt.Errorf("%w: unexpected schema primary key in %s.%s", errMigrationInvalid, table.Name, name)
 			}
 			report.ExtraColumns++
 		}

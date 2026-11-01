@@ -6,6 +6,8 @@
 
 `runnerd-migrate` 不启动 HTTP、GitHub、Runner 或 Deployment 恢复。它要求当前版本的 SQLite 模型结构，拒绝仍处于在线迁移中的源库。缺列时先在副本上完成兼容升级和演练，不允许导入工具修改原库。
 
+源库列和主键通过 SQLite 原生 `table_xinfo` 元数据校验，不依赖历史建表 SQL 的文本格式。缺列或主键不一致的错误会标明具体表和列；不要通过修改生产主键或跳过校验来重试。若错误阶段为 `validate source schema and migration fence`，本次执行尚未创建备份或连接 PostgreSQL。
+
 工具以 `BEGIN IMMEDIATE` 持有 SQLite 写锁，通过独立连接 `VACUUM INTO` 创建一致性备份（包含 WAL 已提交内容），检查备份完整性。备份目录必须是由当前用户拥有的现有 `0700` 目录，新文件为 `0600`，绝不覆盖已有文件；失败备份也保留，重试使用新路径。
 
 目标必须是专用空 PostgreSQL schema，服务和其他写入者必须停止。导入事务将 `search_path` 固定为选中的目标 schema，避免后备 schema 的同名表被 ORM 使用。目标建表、导入、逐行校验在同一事务内提交，事务失败则回滚；命令因提交连接丢失失败时，结果可能不确定，先检查目标，不能盲目重跑或清空它。仅成功退出和 `verified: true` 表示完整导入已经提交。
