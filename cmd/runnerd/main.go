@@ -26,10 +26,22 @@ type startupStateStore interface {
 }
 
 func main() {
+	// Migration must exit before normal store initialization or service recovery.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(runMigrate(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	flag.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: runnerd [flags]\n       runnerd migrate [flags] (offline SQLite to PostgreSQL import)\n\nService flags:")
+		flag.PrintDefaults()
+	}
 	configPath := flag.String("config", "runnerd.yaml", "path to runnerd config file")
 	bootstrapAdmin := flag.String("bootstrap-admin", "", "set an admin account as provider:subject (for example github:12345678) and exit without starting the server")
 	obfuscateConfigValue := flag.Bool("obfuscate-config-value", false, "read a secret from stdin and print a RUNNERD_ENC value")
 	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "unexpected positional arguments; use runnerd migrate [flags] for offline migration")
+		os.Exit(2)
+	}
 	if *obfuscateConfigValue {
 		if !runObfuscateConfigValue(os.Stdin, os.Stdout, os.Stderr) {
 			os.Exit(1)

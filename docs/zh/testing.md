@@ -1121,3 +1121,5 @@ RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
 ```
 
 测试使用隔离 schema，覆盖失败事务回滚、源库迁移围栏、写锁拒绝、备份保护、历史序列、值完整性及跨时区的规格版本校验。
+
+迁移 CLI 入口检查：`go test -tags development ./cmd/runnerd -run TestMigrationCommandProcess -count=1`，覆盖子进程退出码，确认无效迁移命令不会进入普通服务启动或创建数据库、备份文件。
