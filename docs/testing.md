@@ -1222,6 +1222,4 @@ limits and waiting time under representative workloads.
 
 ## Offline SQLite to PostgreSQL migration
 
-CLI routing and stopped-source guards: `go test -tags development ./cmd/runnerd -run TestMigrationCommandProcess -count=1`. This checks subprocess exit codes and ensures invalid migration commands do not fall through to service startup or create database/backup files.
-
 See [the offline runbook](sqlite-postgres-offline-migration.md). Run `RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN="<dedicated _test DSN>" go test -tags development ./internal/state ./internal/server -run "Test(OfflineMigration|PlatformSpecRevision)" -count=1`. Tests allocate isolated schemas and cover atomic failure, source fences, backup preservation, sequence watermarks, value fidelity, and time-zone-safe catalog revision checks.

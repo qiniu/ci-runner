@@ -1,21 +1,20 @@
 # Offline SQLite to PostgreSQL migration
 
-Use a maintenance window when downtime is acceptable. `runnerd migrate` is a one-shot importer; it starts no business HTTP server or background business workers and requires no dual writes or replication service. See the detailed [Chinese runbook](zh/sqlite-postgres-offline-migration.md).
+Use a maintenance window when downtime is acceptable. `runnerd-migrate` is a one-shot importer; it starts no HTTP server or background business workers and requires no dual writes or replication service. See the detailed [Chinese runbook](zh/sqlite-postgres-offline-migration.md).
 
 1. Rehearse with a consistent SQLite copy and a disposable PostgreSQL `_test` database. Use the current model schema; missing columns are rejected rather than modifying the source.
 2. Pause new workflows and deployments, drain active work, and stop every runnerd writer and restart supervisor. Existing Web Terminals disconnect. Arrange durable webhook intake or record and redeliver failed GitHub deliveries; GitHub does not automatically redeliver them.
 3. Preserve the original SQLite, configuration and encryption/session keys. Prepare a protected target config with `database.backend: postgres`, the target `database.dsn`, and no `online_migration`. Preserve relative credential path resolution.
-4. Create a dedicated empty PostgreSQL schema/database, keep runnerd stopped, and run the existing release binary (or build it with `task build`):
+4. Create a dedicated empty PostgreSQL schema/database, keep its service stopped, and run:
 
    ```sh
+   go build -o bin/runnerd-migrate ./cmd/runnerd-migrate
    install -d -m 700 ./var/offline-backups
-   bin/runnerd migrate --config ./runnerd.postgres.yaml \
+   bin/runnerd-migrate --config ./runnerd.postgres.yaml \
      --sqlite /absolute/path/runnerd.db \
      --backup "$PWD/var/offline-backups/before-postgres.db" \
      --source-stopped --timeout 30m > ./var/offline-backups/report.json
    ```
-
-The `migrate` subcommand uses the same `runnerd` release binary and container entrypoint; no extra executable or release artifact is needed. Put `migrate` before its flags. It exits before normal Store initialization, startup schema migration, GitHub clients, recovery, or workers. The existing process-initialized loopback pprof listener and diagnostic files still apply, including `PPROF_PORT`. Success writes only the JSON report to stdout; errors go to stderr and return a nonzero exit code. `runnerd --config ...` continues to start the ordinary service.
 
 The importer holds a SQLite writer lock while creating a private, exclusive `VACUUM INTO` backup (including committed WAL data). The lock does not establish service shutdown or fence future writes after the command exits. The backup directory must be an existing `0700` directory owned by the current user, and the file is `0600`. Existing files are never overwritten; failed artifacts remain for inspection.
 

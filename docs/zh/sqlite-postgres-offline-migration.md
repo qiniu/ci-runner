@@ -4,9 +4,7 @@
 
 ## 工具行为与限制
 
-迁移使用同一个 `runnerd` 二进制和容器入口，无需额外发布产物。`migrate` 必须放在参数之前；它在普通 Store 初始化、启动建表和业务恢复之前执行并退出。现有进程初始化阶段的本机 pprof 监听及诊断文件行为仍适用，包括 `PPROF_PORT`。成功时 stdout 只输出 JSON 报告，失败信息输出到 stderr 并返回非零退出码。普通服务仍使用 `runnerd --config ...` 启动。
-
-`runnerd migrate` 不启动业务 HTTP、GitHub、Runner 或 Deployment 恢复。它要求当前版本的 SQLite 模型结构，拒绝仍处于在线迁移中的源库。缺列时先在副本上完成兼容升级和演练，不允许导入工具修改原库。
+`runnerd-migrate` 不启动 HTTP、GitHub、Runner 或 Deployment 恢复。它要求当前版本的 SQLite 模型结构，拒绝仍处于在线迁移中的源库。缺列时先在副本上完成兼容升级和演练，不允许导入工具修改原库。
 
 工具以 `BEGIN IMMEDIATE` 持有 SQLite 写锁，通过独立连接 `VACUUM INTO` 创建一致性备份（包含 WAL 已提交内容），检查备份完整性。备份目录必须是由当前用户拥有的现有 `0700` 目录，新文件为 `0600`，绝不覆盖已有文件；失败备份也保留，重试使用新路径。
 
@@ -22,11 +20,12 @@ SQLite 锁仅覆盖导入期间，**不能证明服务已经停机，也不负�
 2. 选择维护时间，暂停新 Workflow 和部署请求，等现有 Runner、Deployment 完成或按已批准方案停止。Web Terminal 会因停服断开。记录维护起止时间及 GitHub webhook 投递范围；GitHub 不会自动重投失败投递，提前准备持久化入口或维护后人工/脚本重投和对账。此工具不提供请求排空或 webhook 缓冲。
 3. 停止 runnerd 及其自动重启器，确认所有源库写入者已退出。备份配置、`auth.encryption_key` 和 `auth.session_secret`，保留原值，否则迁移的密文或登录会话可能不可用。
 4. 创建专用空 PG 数据库。复制现有配置为受保护的目标配置，只修改 `database.backend: postgres`、`database.dsn`，移除 `online_migration`。目标 DSN 支持现有 `RUNNERD_ENC` 格式，不放在命令参数或日志里。目标配置在最终位置准备，以免相对密钥路径变化。
-5. 使用现有发布的 `runnerd` 执行（本地构建使用 `task build`，路径按部署环境替换）：
+5. 构建并执行（路径按部署环境替换）：
 
    ```sh
+   go build -o bin/runnerd-migrate ./cmd/runnerd-migrate
    install -d -m 700 ./var/offline-backups
-   bin/runnerd migrate --config ./runnerd.postgres.yaml \
+   bin/runnerd-migrate --config ./runnerd.postgres.yaml \
      --sqlite /absolute/path/runnerd.db \
      --backup "$PWD/var/offline-backups/before-postgres-20261029.db" \
      --source-stopped --timeout 30m > ./var/offline-backups/report.json
