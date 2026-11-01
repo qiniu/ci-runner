@@ -112,6 +112,7 @@ Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.
 - Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported but multi-instance operation on a shared database has not been verified.
+- For a maintenance window, prefer the [offline SQLite-to-PostgreSQL importer](docs/sqlite-postgres-offline-migration.md): one backup and verified import, then ordinary PostgreSQL startup.
 - CI creates fresh PostgreSQL and MySQL schemas and reruns migration against an existing catalog before exercising policy-free matching. See [docs/testing.md](docs/testing.md) for the opt-in local real-dialect command.
 - Existing SQLite `runner_requests` and `runner_profiles` tables add missing model columns and indexes on startup without table recreation. This preserves historical runner values plus legacy profile rows and indexes. Creating missing indexes does not rewrite rows, but it can add brief startup I/O and lock contention on a large database; see [docs/testing.md](docs/testing.md) for migration and query-plan checks.
 - GitHub Enterprise Server is **not** supported; use a GitHub.com App.
@@ -366,6 +367,7 @@ task ui-terminal-fault-test # Timed SSE outages with Chromium and real local PTY
 task dev           # Start local dev (runnerd + Vite + smee)
 task lint          # Run linters
 task test          # Rebuild UI + run all tests (Go with race detection + Bun UI tests)
+task state-migration-test # Verify stopped-source migration and legacy fences
 task docker-check  # Verify the service Dockerfile
 task release-check # Verify release build
 ```

@@ -6,6 +6,7 @@
 
 面向最终用户的中英文公开指南位于 [runner.qiniuinc.com/docs](https://runner.qiniuinc.com/docs)，覆盖托管版上手、runnerd 部署、managed workflow、组织 Fork 赞助、自定义模板从构建到使用的完整流程和故障排查。中英文 Markdown 源文件成对放在 `ui/src/content/site-docs/{en,zh}/`，确保部署的 UI、指南内容和导航一同交付。
 
+- [SQLite 到 PostgreSQL 停服迁移](sqlite-postgres-offline-migration.md)：停服备份、完整导入校验、维护窗口验收和回退边界。
 - [平台 Runner 规格管理](platform-runner-specs.md)：数据库权威来源、公共／私有绑定、目录发布、运行策略、迁移和兼容边界。
 - [本地测试与 GitHub 配置](testing.md)：本地配置、GitHub App/OAuth 设置、webhook forwarding、admin API 示例、终端计时故障注入和排障流程。
 - [部署 Smoke Checklist](deployment-smoke.md)：面向真实 GitHub App、webhook、Qiniu sandbox template、runner pickup、cleanup 和 diagnostics 的生产风格 smoke checklist。

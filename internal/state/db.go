@@ -55,6 +55,22 @@ func (s *DBStore) Ensure() error {
 	if err != nil {
 		return err
 	}
+	// Reject a legacy migration database before schema migrations or backfills.
+	legacyTable, err := hasMigrationControlTable(db)
+	if err != nil {
+		if pool, poolErr := db.DB(); poolErr == nil {
+			_ = pool.Close()
+		}
+		return err
+	}
+	if legacyTable {
+		if err := validateStandaloneMigrationDB(db); err != nil {
+			if pool, poolErr := db.DB(); poolErr == nil {
+				_ = pool.Close()
+			}
+			return err
+		}
+	}
 	if s.opts.MigrateOnStart && !s.migrated {
 		if err := s.migrate(db); err != nil {
 			return err
@@ -68,6 +84,26 @@ func (s *DBStore) Ensure() error {
 	}
 	s.db = db
 	return nil
+}
+
+func hasMigrationControlTable(db *gorm.DB) (bool, error) {
+	var exists bool
+	switch db.Dialector.Name() {
+	case BackendSQLite:
+		if err := db.Raw("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)", (migrationControlRecord{}).TableName()).Scan(&exists).Error; err != nil {
+			return false, err
+		}
+	case BackendPostgres:
+		if err := db.Raw("SELECT to_regclass(?) IS NOT NULL", (migrationControlRecord{}).TableName()).Scan(&exists).Error; err != nil {
+			return false, err
+		}
+	default:
+		// The legacy online migration protocol only used SQLite as its source
+		// and PostgreSQL as its target. Other supported state backends (currently
+		// MySQL) cannot contain its control table, so there is nothing to fence.
+		return false, nil
+	}
+	return exists, nil
 }
 
 func (s *DBStore) dbOrEnsure() (*gorm.DB, error) {
@@ -201,6 +237,12 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 			return fmt.Errorf("create runner request metrics index: %w", err)
 		}
 	}
+	return initializeStateBackfills(db)
+}
+
+// Runs after schema migration. Legacy migration databases are rejected earlier
+// in Ensure before this backfill path is reached.
+func initializeStateBackfills(db *gorm.DB) error {
 	if err := backfillDeploymentRevisions(db); err != nil {
 		return err
 	}

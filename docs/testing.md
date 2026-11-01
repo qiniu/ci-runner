@@ -1219,3 +1219,7 @@ Specs/repositories, independent scopes, failed persistence, durable counts on re
 and a backlog of restricted requests followed by an eligible repository. Real
 GitHub/Sandbox acceptance must still verify completion, cleanup, restart with reduced
 limits and waiting time under representative workloads.
+
+## Offline SQLite to PostgreSQL migration
+
+See [the offline runbook](sqlite-postgres-offline-migration.md). Run `RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN="<dedicated _test DSN>" go test -tags development ./internal/state ./internal/server -run "Test(OfflineMigration|PlatformSpecRevision)" -count=1`. Tests allocate isolated schemas and cover atomic failure, source fences, backup preservation, sequence watermarks, value fidelity, and time-zone-safe catalog revision checks.
