@@ -1,6 +1,6 @@
 # SQLite 到 PostgreSQL 停服迁移
 
-允许维护窗口时，优先使用一次性离线迁移。业务服务只使用一个数据库，不需要双写、复制线程、在线 authority 或回退协议。本版本已移除在线迁移运行机制；旧配置会明确报错，旧库状态保护仍保留。
+需要在线预复制和缩短最终停机窗口时，使用[分阶段迁移](sqlite-postgres-phased-migration.md)。本页介绍默认的 `--mode offline`，适用于可以安排完整维护窗口的一次性离线迁移。业务服务只使用一个数据库，不需要双写、复制线程、在线 authority 或回退协议。本版本已移除在线迁移运行机制；旧配置会明确报错，旧库状态保护仍保留。
 
 ## 工具行为与限制
 
@@ -8,7 +8,7 @@
 
 源库列和主键通过 SQLite 原生 `table_xinfo` 元数据校验，不依赖历史建表 SQL 的文本格式。缺列或主键不一致的错误会标明具体表和列；不要通过修改生产主键或跳过校验来重试。若错误阶段为 `validate source schema and migration fence`，本次执行尚未创建备份或连接 PostgreSQL。
 
-工具以 `BEGIN IMMEDIATE` 持有 SQLite 写锁，通过独立连接 `VACUUM INTO` 创建一致性备份（包含 WAL 已提交内容），检查备份完整性。备份目录必须是由当前用户拥有的现有 `0700` 目录，新文件为 `0600`，绝不覆盖已有文件；失败备份也保留，重试使用新路径。
+工具以 `BEGIN IMMEDIATE` 持有 SQLite 写锁，校验源库后先实际连接 PostgreSQL；连接成功才通过独立连接 `VACUUM INTO` 创建一致性备份（包含 WAL 已提交内容），检查备份完整性。连接失败会报告不含凭据的错误类别，本次执行不会创建备份。目标空 schema 的检查仍在备份完成后的导入事务内进行。备份目录必须是由当前用户拥有的现有 `0700` 目录，新文件为 `0600`，绝不覆盖已有文件；失败备份也保留，重试使用新路径。
 
 目标必须是专用空 PostgreSQL schema，服务和其他写入者必须停止。导入事务将 `search_path` 固定为选中的目标 schema，避免后备 schema 的同名表被 ORM 使用。目标建表、导入、逐行校验在同一事务内提交，事务失败则回滚；命令因提交连接丢失失败时，结果可能不确定，先检查目标，不能盲目重跑或清空它。仅成功退出和 `verified: true` 表示完整导入已经提交。
 
@@ -21,7 +21,7 @@ SQLite 锁仅覆盖导入期间，**不能证明服务已经停机，也不负�
 1. 使用 SQLite 一致性副本、专用 `_test` PG 库演练并记录时间。不要直接复制运行中的 `.db`，也不要启动两个携带相同 GitHub/Sandbox 凭据的完整服务。
 2. 选择维护时间，暂停新 Workflow 和部署请求，等现有 Runner、Deployment 完成或按已批准方案停止。Web Terminal 会因停服断开。记录维护起止时间及 GitHub webhook 投递范围；GitHub 不会自动重投失败投递，提前准备持久化入口或维护后人工/脚本重投和对账。此工具不提供请求排空或 webhook 缓冲。
 3. 停止 runnerd 及其自动重启器，确认所有源库写入者已退出。备份配置、`auth.encryption_key` 和 `auth.session_secret`，保留原值，否则迁移的密文或登录会话可能不可用。
-4. 创建专用空 PG 数据库。复制现有配置为受保护的目标配置，只修改 `database.backend: postgres`、`database.dsn`，移除 `online_migration`。目标 DSN 支持现有 `RUNNERD_ENC` 格式，不放在命令参数或日志里。目标配置在最终位置准备，以免相对密钥路径变化。
+4. 创建专用空 PG 数据库。复制现有配置为受保护的目标配置，只修改 `database.backend: postgres`、`database.dsn`，移除 `online_migration`。目标 DSN 支持完整 DSN 的 `RUNNERD_ENC` 格式，也支持仅对密码原文生成密文并配置为 `password=RUNNERD_ENC(...)`，保留可读的 host、user 和 dbname。工具解析 DSN 后解码密码，不重新拼接连接字符串；明文密码仍然兼容。不把 DSN 放在迁移命令参数或日志里。目标配置在最终位置准备，以免相对密钥路径变化。
 5. 构建并执行（路径按部署环境替换）：
 
    ```sh
@@ -35,6 +35,20 @@ SQLite 锁仅覆盖导入期间，**不能证明服务已经停机，也不负�
 
 6. 检查退出码、`verified: true`、每表行数、额外结构数量，保留报告和备份。启动使用目标配置的单个 runnerd，入口仍处于维护状态，验证健康检查、登录、既有记录、规格原值保存与审计、数据库新增 ID；再验证真实 Runner、Deployment 创建/结束和新 Web Terminal。不要把测试框架/模拟 Sandbox 的结果当成生产业务验收。
 7. 验收通过后恢复入口和 Workflow，补投维护期间遗漏事件，并核对请求是否重复、漏建或卡住。保留 SQLite 和配置备份至回退窗口结束。
+
+## 进度输出与超时
+
+阶段开始、结束及每 10 秒的心跳写入 **stderr**；成功后的 JSON 报告仍只写入 **stdout**。上面的 `> report.json` 不会隐藏进度，也不会把进度混入 JSON。需要留存日志时，在命令末尾增加 `2> ./var/offline-backups/progress.log`，并在另一个终端使用 `tail -f ./var/offline-backups/progress.log` 查看；不要用 `2>&1` 合并到 JSON 报告。
+
+```text
+2026-11-02T01:00:00+08:00 status=running stage="verify table runner_events" rows=256000 rows_per_sec=4266.7 stage_elapsed=1m0s total_elapsed=18m0s remaining=12m0s since_progress=1s
+```
+
+`rows` 是当前表当前阶段已完成的行数，复制和校验分别计数；`rows_per_sec` 是该阶段平均速度。`since_progress` 表示距上次完成一个批次或切换阶段的时间。备份、完整性检查、提交等阶段没有行进度，只显示耗时和心跳。心跳仅证明报告线程仍在运行；行数持续不变时，需要结合当前阶段和数据库状态判断，不能据此认定导入正在推进。取消或超时后等待退出期间，心跳显示 `status=cancelling`。
+
+行数和阶段完成消息不表示事务已经提交。必须等命令退出码为 `0` 且报告为 `verified: true`，才可安排切换。总时限包含连接、备份、导入、校验和提交；对数 GB 源库应先演练，根据实测为维护窗口留出余量，可将示例改为 `--timeout 2h`，但这不保证两小时内完成。工具不提供断点续传，也不跳过逐行校验。
+
+若在校验阶段超时，目标导入事务会回滚。确认迁移进程已经退出后，可以使用原 SQLite 配置恢复 runnerd。恢复业务写入后，旧备份不再包含最新数据；下次停服迁移必须以当前 SQLite 为源、使用新备份路径和独立报告，并确认目标 schema 为空。提交结果不确定时仍须先核对目标。
 
 ## 回退边界
 

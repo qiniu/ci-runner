@@ -106,33 +106,47 @@ func TestOfflineMigrationLegacySourceSchema(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	backupPath := filepath.Join(offlinePrivateDir(t), "backup.db")
-	// No live target is needed to exercise source locking, native metadata,
-	// backup creation and integrity verification through the public entrypoint.
+	// Source validation remains covered even without a PostgreSQL test service.
 	_, err = MigrateSQLiteToPostgres(ctx, OfflineMigrationOptions{
 		SQLitePath: source.opts.DatabaseDSN, BackupPath: backupPath, PostgresDSN: "invalid",
 	})
-	if err == nil || !strings.Contains(err.Error(), "connect PostgreSQL target") {
-		t.Fatalf("expected to pass source validation and reach target connection: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "connect PostgreSQL target: invalid DSN") {
+		t.Fatalf("expected legacy schema to pass validation: %v", err)
 	}
-	backup, err := gorm.Open(sqlite.Open(backupPath+"?mode=ro"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeTestDB(t, backup)
-	for _, reader := range []*gorm.DB{db, backup} {
-		var got runnerRequestRecord
-		if err := reader.First(&got, "id = ?", want.ID).Error; err != nil {
+	t.Run("backupSQLBackends", func(t *testing.T) {
+		dsn := offlinePostgresDSN(t)
+		// Cancel after the backup is verified, before the import transaction opens.
+		_, err = MigrateSQLiteToPostgres(ctx, OfflineMigrationOptions{
+			SQLitePath: source.opts.DatabaseDSN, BackupPath: backupPath, PostgresDSN: dsn,
+			Progress: func(p OfflineMigrationProgress) {
+				if p.Stage == "begin PostgreSQL import transaction" {
+					cancel()
+				}
+			},
+		})
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "begin PostgreSQL import transaction") {
+			t.Fatalf("expected cancellation after backup verification: %v", err)
+		}
+		backup, err := gorm.Open(sqlite.Open(backupPath+"?mode=ro"), &gorm.Config{})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if got.GitHubInstallationID != want.GitHubInstallationID || got.SandboxAPIKeyEncrypted != want.SandboxAPIKeyEncrypted || !got.UpdatedAt.Equal(stamp) {
-			t.Fatal("legacy record changed")
+		defer closeTestDB(t, backup)
+		for _, reader := range []*gorm.DB{db, backup} {
+			var got runnerRequestRecord
+			if err := reader.First(&got, "id = ?", want.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got.GitHubInstallationID != want.GitHubInstallationID || got.SandboxAPIKeyEncrypted != want.SandboxAPIKeyEncrypted || !got.UpdatedAt.Equal(stamp) {
+				t.Fatal("legacy record changed")
+			}
+			var schemaAfter string
+			if err := reader.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runner_requests'").Scan(&schemaAfter).Error; err != nil {
+				t.Fatal(err)
+			}
+			if schemaAfter != schemaBefore {
+				t.Fatal("source schema changed")
+			}
 		}
-		var schemaAfter string
-		if err := reader.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runner_requests'").Scan(&schemaAfter).Error; err != nil {
-			t.Fatal(err)
-		}
-		if schemaAfter != schemaBefore {
-			t.Fatal("source schema changed")
-		}
-	}
+	})
 }

@@ -83,7 +83,11 @@ func TestOfflineMigrationSQLBackends(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	opts := OfflineMigrationOptions{SQLitePath: filepath.Join(directory, "runnerd.db"), BackupPath: filepath.Join(directory, "backup.db"), PostgresDSN: dsn}
+	var events []OfflineMigrationProgress
+	opts := OfflineMigrationOptions{
+		SQLitePath: filepath.Join(directory, "runnerd.db"), BackupPath: filepath.Join(directory, "backup.db"), PostgresDSN: dsn,
+		Progress: func(p OfflineMigrationProgress) { events = append(events, p) },
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	report, err := MigrateSQLiteToPostgres(ctx, opts)
@@ -92,6 +96,23 @@ func TestOfflineMigrationSQLBackends(t *testing.T) {
 	}
 	if !report.Verified || len(report.Tables) != 18 || report.ExtraTables != 1 || report.ExtraColumns != 1 {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+	counts := make(map[string]int64)
+	for _, event := range events {
+		if event.Rows < counts[event.Stage] {
+			t.Fatalf("progress moved backwards: %+v", event)
+		}
+		counts[event.Stage] = event.Rows
+	}
+	for _, table := range report.Tables {
+		for _, prefix := range []string{"copy table ", "verify table "} {
+			if count, ok := counts[prefix+table.Table]; !ok || count != table.Rows {
+				t.Fatalf("progress disagrees with verified report for %s%s: %d", prefix, table.Table, count)
+			}
+		}
+	}
+	if events[len(events)-1].Stage != "migration complete" || counts["verify table runner_profiles"] != 260 {
+		t.Fatalf("missing completed multi-page verification: %+v", events)
 	}
 	info, err := os.Stat(opts.BackupPath)
 	if err != nil || info.Mode().Perm() != 0o600 {

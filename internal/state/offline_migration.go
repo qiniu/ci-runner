@@ -25,10 +25,18 @@ type OfflineMigrationOptions struct {
 	SQLitePath  string
 	BackupPath  string
 	PostgresDSN string `json:"-"`
+	// Progress runs synchronously; callbacks must return promptly and must not
+	// access either database. Events contain no row values, keys or credentials.
+	Progress func(OfflineMigrationProgress) `json:"-"`
 }
 
 func (OfflineMigrationOptions) String() string     { return "offline migration options [redacted]" }
 func (o OfflineMigrationOptions) GoString() string { return o.String() }
+
+type OfflineMigrationProgress struct {
+	Stage string
+	Rows  int64
+}
 
 type OfflineMigrationTable struct {
 	Table  string `json:"table"`
@@ -49,6 +57,16 @@ type OfflineMigrationReport struct {
 // during commit is reported as failure: inspect the target, never auto-retry.
 func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOptions) (report OfflineMigrationReport, resultErr error) {
 	stage := "validate options"
+	progress := func(rows int64) {
+		if options.Progress != nil {
+			options.Progress(OfflineMigrationProgress{Stage: stage, Rows: rows})
+		}
+	}
+	setStage := func(next string) {
+		stage = next
+		progress(0)
+	}
+	progress(0)
 	defer func() {
 		// Driver messages can contain credentials or row values. Report only stage.
 		if resultErr != nil {
@@ -59,6 +77,8 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 				resultErr = fmt.Errorf("offline migration failed at %s: %w", stage, context.DeadlineExceeded)
 			case errors.Is(resultErr, errMigrationInvalid), errors.Is(resultErr, errMigrationPrecondition), errors.Is(resultErr, errLegacyMigration):
 				resultErr = fmt.Errorf("offline migration failed at %s: %w", stage, resultErr)
+			case stage == "connect PostgreSQL target":
+				resultErr = fmt.Errorf("offline migration failed at %s: %s", stage, offlinePostgresConnectionFailure(resultErr))
 			default:
 				resultErr = fmt.Errorf("offline migration failed at %s", stage)
 			}
@@ -78,7 +98,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 	if err != nil || !info.Mode().IsRegular() {
 		return report, fmt.Errorf("%w: existing SQLite file required", errMigrationPrecondition)
 	}
-	stage = "open and lock SQLite source (stop all writers first)"
+	setStage("open and lock SQLite source (stop all writers first)")
 	uri := (&url.URL{Scheme: "file", Path: sourcePath, RawQuery: "mode=rw"}).String()
 	source, err := sql.Open("sqlite", uri)
 	if err != nil {
@@ -97,12 +117,17 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 		return report, err
 	}
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
-	cfg := &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), DisableForeignKeyConstraintWhenMigrating: true, DisableAutomaticPing: true}
-	locked, err := gorm.Open(sqlite.Dialector{Conn: conn}, cfg)
+	newConfig := func() *gorm.Config {
+		return &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), DisableForeignKeyConstraintWhenMigrating: true, DisableAutomaticPing: true}
+	}
+	locked, err := gorm.Open(sqlite.Dialector{Conn: conn}, newConfig())
 	if err != nil {
 		return report, err
 	}
-	stage = "validate source schema and migration fence"
+	setStage("validate source schema and migration fence")
+	if locked.Migrator().HasTable(&phasedSourceRecord{}) {
+		return report, fmt.Errorf("%w: source belongs to phased migration; use its phase commands", errMigrationPrecondition)
+	}
 	if locked.Migrator().HasTable(&migrationControlRecord{}) {
 		if err = validateStandaloneMigrationDB(locked.WithContext(ctx)); err != nil {
 			return report, err
@@ -117,7 +142,20 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 		return report, err
 	}
 	report.ExtraTables, report.ExtraColumns = schemaReport.ExtraTables, schemaReport.ExtraColumns
-	stage = "create exclusive private SQLite backup"
+	setStage("connect PostgreSQL target")
+	targetPool, err := openPostgresPool(options.PostgresDSN)
+	if err != nil {
+		return report, err
+	}
+	defer targetPool.Close()
+	if err = targetPool.PingContext(ctx); err != nil {
+		return report, err
+	}
+	target, err := gorm.Open(postgres.New(postgres.Config{Conn: targetPool}), newConfig())
+	if err != nil {
+		return report, err
+	}
+	setStage("create exclusive private SQLite backup")
 	backupPath, err := filepath.Abs(options.BackupPath)
 	if err != nil {
 		return report, err
@@ -151,9 +189,9 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 	if current, statErr := os.Stat(backupPath); statErr != nil || !os.SameFile(backupInfo, current) {
 		return report, fmt.Errorf("%w: backup file was replaced during snapshot", errMigrationPrecondition)
 	}
-	stage = "check SQLite backup integrity"
+	setStage("check SQLite backup integrity")
 	backupURI := (&url.URL{Scheme: "file", Path: backupPath, RawQuery: "mode=ro&immutable=1"}).String()
-	reader, err := gorm.Open(sqlite.Open(backupURI), cfg)
+	reader, err := gorm.Open(sqlite.Open(backupURI), newConfig())
 	if err != nil {
 		return report, err
 	}
@@ -170,18 +208,10 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 	if err = reader.Raw("PRAGMA integrity_check").Scan(&integrity).Error; err != nil || integrity != "ok" {
 		return report, fmt.Errorf("%w: backup integrity failed", errMigrationPrecondition)
 	}
-	stage = "connect PostgreSQL target"
-	targetPool, err := sql.Open("pgx", options.PostgresDSN)
-	if err != nil {
-		return report, err
-	}
-	defer targetPool.Close()
-	target, err := gorm.Open(postgres.New(postgres.Config{Conn: targetPool}), cfg)
-	if err != nil {
-		return report, err
-	}
+
+	setStage("begin PostgreSQL import transaction")
 	err = target.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		stage = "check empty PostgreSQL schema (do not start target service)"
+		setStage("check empty PostgreSQL schema (do not start target service)")
 		// Serialize cooperating importers. Non-cooperating writers must be stopped.
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(724901832)").Error; err != nil {
 			return err
@@ -206,12 +236,13 @@ SELECT oid FROM pg_namespace WHERE nspname = current_schema())`).Scan(&count).Er
 		if count != 0 {
 			return fmt.Errorf("%w: target schema not empty", errMigrationPrecondition)
 		}
-		stage = "create target schema"
+		setStage("create target schema")
 		if err := tx.AutoMigrate(migrationModels()...); err != nil {
 			return err
 		}
 		for _, table := range inventory.Tables {
-			stage = "copy table " + table.Name
+			setStage("copy table " + table.Name)
+			var copied int64
 			after := ""
 			for {
 				rows, more, err := readMigrationRows(reader, table, after, 256)
@@ -227,6 +258,8 @@ SELECT oid FROM pg_namespace WHERE nspname = current_schema())`).Scan(&count).Er
 						return err
 					}
 				}
+				copied += int64(len(rows))
+				progress(copied)
 				if !more {
 					break
 				}
@@ -235,13 +268,13 @@ SELECT oid FROM pg_namespace WHERE nspname = current_schema())`).Scan(&count).Er
 					return err
 				}
 			}
-			stage = "verify table " + table.Name
-			result, err := verifyOfflineTable(reader, tx, table)
+			setStage("verify table " + table.Name)
+			result, err := verifyOfflineTableProgress(reader, tx, table, progress)
 			if err != nil {
 				return err
 			}
 			report.Tables = append(report.Tables, result)
-			stage = "align sequences for " + table.Name
+			setStage("align sequences for " + table.Name)
 			for _, column := range table.Columns {
 				if !column.AutoIncrement {
 					continue
@@ -267,17 +300,22 @@ SELECT oid FROM pg_namespace WHERE nspname = current_schema())`).Scan(&count).Er
 				}
 			}
 		}
-		stage = "commit verified PostgreSQL data"
+		setStage("commit verified PostgreSQL data")
 		return nil
 	})
 	if err != nil {
 		return report, err
 	}
 	report.Verified = true
+	setStage("migration complete")
 	return report, nil
 }
 
 func verifyOfflineTable(source, target *gorm.DB, table migrationTable) (OfflineMigrationTable, error) {
+	return verifyOfflineTableProgress(source, target, table, nil)
+}
+
+func verifyOfflineTableProgress(source, target *gorm.DB, table migrationTable, progress func(int64)) (OfflineMigrationTable, error) {
 	result := OfflineMigrationTable{Table: table.Name}
 	digest := sha256.New()
 	after := ""
@@ -316,6 +354,9 @@ func verifyOfflineTable(source, target *gorm.DB, table migrationTable) (OfflineM
 			digest.Write(encoded)
 			digest.Write([]byte{'\n'})
 			result.Rows++
+		}
+		if progress != nil {
+			progress(result.Rows)
 		}
 		if !more {
 			break

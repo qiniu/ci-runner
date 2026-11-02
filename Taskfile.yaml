@@ -114,9 +114,9 @@ tasks:
       - GORACE=atexit_sleep_ms=0 go test -v -trimpath -failfast -race -cover -coverprofile=coverage.txt {{.GO_PACKAGES}}
 
   state-migration-test:
-    desc: Verify stopped-source migration, data fidelity, and legacy fences
+    desc: Verify phased/offline migration, data fidelity, and legacy fences
     cmds:
-      - go test -race ./internal/state -run 'Test(OfflineMigration|Migration|LegacyMigration)' -count=1
+      - go test -race ./internal/state -run 'Test(OfflineMigration|PhasedMigration|Migration|LegacyMigration)' -count=1
 
   build:
     desc: Build runnerd and runnerd-migrate into bin/

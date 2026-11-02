@@ -196,17 +196,28 @@ func readMigrationRowsByKeys(db *gorm.DB, table migrationTable, rows []migration
 		return result, nil
 	}
 	keys := migrationKeyColumns(table)
-	var alternatives []string
-	var args []any
-	for _, row := range rows {
-		var parts []string
-		for _, column := range keys {
-			parts = append(parts, migrationQuoted(column.Name)+" = ?")
-			args = append(args, row[column.Name])
+	query := db.Table(table.Name).Select(columnNames(table))
+	if len(keys) == 1 {
+		// Large event tables use one integer key. IN keeps the same exact-key
+		// lookup while avoiding hundreds of separately planned OR branches.
+		values := make([]any, len(rows))
+		for i, row := range rows {
+			values[i] = row[keys[0].Name]
 		}
-		alternatives = append(alternatives, "("+strings.Join(parts, " AND ")+")")
+		query = query.Where(migrationQuoted(keys[0].Name)+" IN ?", values)
+	} else {
+		var alternatives []string
+		var args []any
+		for _, row := range rows {
+			var parts []string
+			for _, column := range keys {
+				parts = append(parts, migrationQuoted(column.Name)+" = ?")
+				args = append(args, row[column.Name])
+			}
+			alternatives = append(alternatives, "("+strings.Join(parts, " AND ")+")")
+		}
+		query = query.Where(strings.Join(alternatives, " OR "), args...)
 	}
-	query := db.Table(table.Name).Select(columnNames(table)).Where(strings.Join(alternatives, " OR "), args...)
 	fetched, _, err := readMigrationRowsFromQuery(query.Limit(len(rows)+1), table, len(rows))
 	if err != nil {
 		return nil, err

@@ -71,6 +71,12 @@ func (s *DBStore) Ensure() error {
 			return err
 		}
 	}
+	if err := validatePhasedMigrationStartup(db); err != nil {
+		if pool, poolErr := db.DB(); poolErr == nil {
+			_ = pool.Close()
+		}
+		return err
+	}
 	if s.opts.MigrateOnStart && !s.migrated {
 		if err := s.migrate(db); err != nil {
 			return err
@@ -137,7 +143,15 @@ func (s *DBStore) open() (*gorm.DB, error) {
 		}
 		return db, nil
 	case BackendPostgres:
-		return gorm.Open(postgres.Open(s.opts.DatabaseDSN), cfg)
+		pool, err := openPostgresPool(s.opts.DatabaseDSN)
+		if err != nil {
+			return nil, err
+		}
+		db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), cfg)
+		if err != nil {
+			pool.Close()
+		}
+		return db, err
 	case BackendMySQL:
 		dsn, err := mysqlDSNWithParseTime(s.opts.DatabaseDSN)
 		if err != nil {
