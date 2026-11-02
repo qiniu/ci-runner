@@ -43,7 +43,8 @@ const commandByName = {
   "AWS CLI Session Manager Plugin":
     "command -v session-manager-plugin >/dev/null",
   "AWS SAM CLI": "command -v sam >/dev/null",
-  "Azure CLI": "command -v az >/dev/null",
+  "Azure CLI":
+    "test \"$(az version --query '\"azure-cli\"' --output tsv)\" = 2.88.0",
   "Azure CLI (azure-devops)":
     "az extension show --name azure-devops >/dev/null",
   AzCopy: "command -v azcopy >/dev/null && command -v azcopy10 >/dev/null",
