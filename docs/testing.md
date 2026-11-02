@@ -891,6 +891,15 @@ still stop the build. This does not replace regional Sandbox build/smoke gates.
 
 ### Windows runner end-to-end test
 
+`task template-build-windows-11` installs MSYS2 UCRT64 GCC from the current stable
+repository after a full upgrade, checks the x64 target, and compiles/runs C and
+C++ smoke programs. The installer is pinned; rolling packages use pacman's signature
+verification and their installed versions are saved in
+`C:\ProgramData\qiniu-runner\msys2-packages.txt`. Verify UCRT64 PATH resolution
+in a real workflow and remeasure free disk space after rebuilding.
+Local `go test ./internal/sandboxrunner -run TestWindowsTemplate -count=1`
+checks source contracts only, not Windows execution.
+
 `TestWindowsRunnerE2E` in `internal/sandboxrunner` drives `StartRunner`,
 `RecoverRunner`, one real GitHub Actions job, and `StopRunner` against a real
 Windows Sandbox. It is skipped unless `RUNNERD_WINDOWS_E2E=1`, and needs
