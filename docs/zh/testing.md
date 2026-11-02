@@ -1118,16 +1118,16 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 数据库重开后的计数，以及大量受限请求后仍能调度其他仓库的场景。
 真实 GitHub/Sandbox 的完成、清理、降低额度后的重启恢复及负载排队时间仍需上线验收。
 
-## SQLite 到 PostgreSQL 迁移
+## 迁移退役后的启动兼容检查
 
-参见[停服迁移手册](sqlite-postgres-offline-migration.md)。使用专用 `_test` 数据库执行：
+一次性迁移测试已随工具退役；正常 schema 升级和多数据库方言检查继续保留。运行 `go test ./internal/state -run 'Test(MigrationStartup|LegacyMigration)' -count=1`，验证封锁库在 schema 变更前被拒绝、有效标记仍可启动且标记不被修改。
+
+使用专用 `_test` 数据库执行真实 PostgreSQL 检查：
 
 ```sh
-RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
+RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(OfflineMigration|PhasedMigration|PlatformSpecRevision)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
 ```
 
-测试使用隔离 schema，覆盖失败事务回滚、源库迁移围栏、写锁拒绝、备份保护、历史序列、值完整性及跨时区的规格版本校验。
-
-分阶段测试还覆盖源库并发写入、不更新时间戳的终态补写、删除、准备中断、批次续跑、切换失败恢复、源/目标保护、工作量预算、历史 ID 预留，以及补历史时保留 PG 新业务写入。参见[分阶段迁移手册](sqlite-postgres-phased-migration.md)。这些测试不替代生产负载与真实 Runner/Deployment 切换验收。
+这些测试使用隔离 schema，保留 PG 启动、密码混淆、时区与规格版本校验覆盖；不执行生产数据库清理。历史流程和后续运维边界见[迁移退役记录](database-transfer-retirement.md)。

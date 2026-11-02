@@ -15,8 +15,8 @@ database:
   # Standalone Postgres example (does not migrate existing SQLite data):
   # backend: postgres
   # dsn: postgres://runner:secret@postgres.example:5432/runnerd?sslmode=require
-  # Maintenance-window migration: use cmd/runnerd-migrate with a separate
-  # protected Postgres config; see docs/sqlite-postgres-offline-migration.md.
+  # One-time database transfer tooling is retired. Historical procedures and
+  # retained startup guards: docs/database-transfer-retirement.md.
   # Stop all writers first. Changing the DSN alone does not transfer existing data.
   # MySQL example:
   # backend: mysql

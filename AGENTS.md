@@ -26,7 +26,7 @@ Use this guide for future Codex or agent work in this repository.
 - `/admin/accounts` lists OAuth/bootstrap-created accounts and linked identities. Its only mutation changes another account's `admin`/`user` role atomically with an audit event; self-role changes and changes that could leave no administrator are rejected.
 - `/admin/github_accounts` lists every current GitHub App installation reported through App authentication; `/admin/github_accounts/{installation_id}` loads that installation's current repository scope. Both surfaces and their APIs are admin-only and read-only, use the positive numeric installation ID for identity, and never substitute local OAuth accounts, cached installation owners, locally observed repositories, or ordinary-user OAuth intersection data.
 - Runtime state can use sqlite, Postgres, or MySQL. Do not document multi-instance support until two runnerd processes have been verified against the same database.
-- Use `cmd/runnerd-migrate` for SQLite-to-PostgreSQL transfers. Phased `prepare/sync/status/cutover/resume-source/backfill` supports online WAL pre-copy and verified batch checkpoints; see `docs/sqlite-postgres-phased-migration.md`. Capture all request mutations (including terminal evidence, deletes and timestamp-independent backfills), refresh other tables including deletions, and finish request synchronization before PG release. Seal every SQLite business table at cutover, reserve all source sequence watermarks before PG starts, and allow only append-and-verify historical events afterward. Never overwrite PG request state or reset sequences during backfill. Resume SQLite only while PG remains unreleased. Check identity, model fingerprint, source triggers and target guards; preserve fences/checkpoints across retries and reject legacy unfinished online protocols. The default `offline` mode retains its private exclusive backup and whole-import transaction contract. Neither mode supplies multi-instance runnerd or lossless rollback after PG release.
+- The one-time SQLite-to-PostgreSQL transfer tool is retired; see `docs/database-transfer-retirement.md` for fixed historical procedures and operational follow-up. Preserve startup-only legacy/phased migration guards before schema changes or backfills. Never automatically remove database transfer objects or unseal old sources. Normal schema upgrades and SQLite/PostgreSQL/MySQL support remain independent.
 - Startup Job checks must defer recognized waiting states and monitor `in_progress` without provisioning, finish only on `completed`, and bound retries for unknown/query errors except HTTP 429 and GitHub secondary rate limits, which remain queued with capped backoff even after the failure budget is exhausted. Preserve delayed queue recovery and lease/capacity release. Only explicit admin retry with old control-log evidence and current queued/no-Runner/spec validation may recover historical waiting false completions; never bulk reopen terminal rows.
 - Automated cleanup of a Runner that remained idle without accepting a Job records the additional `idle_cleanup` termination source; do not mislabel that successful cleanup as a failure.
 - A Runner process that ends before accepting any Job (no assigned Job and no job-start marker) must not complete or fail its request outright, whether it exited 0 because GitHub terminated the listener, exited non-zero, or lost its Sandbox output stream while GitHub reports it idle. When Sandbox and GitHub Runner cleanup both succeeded, schedule a bounded `runner_exited_without_job` retry, clearing that attempt's termination source and exit code, so the start path rechecks the original Job before another Sandbox. Exhausted retries fail visibly.
@@ -79,7 +79,6 @@ task dev
 task smee
 task lint
 task test
-task state-migration-test
 task build
 task docker-check
 task release-check
@@ -92,7 +91,7 @@ Use `task dev` for local development. It defaults to `RUNNERD_CONFIG=runnerd.loc
 
 Use `task smee` for standalone GitHub webhook forwarding. It reads `.smee-url` and defaults to `SMEE_TARGET=http://127.0.0.1:25500/webhooks/github`.
 
-Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`. It also builds the standalone `bin/runnerd-migrate`.
+Use `task build` when verifying production embedded UI behavior because it rebuilds `internal/server/ui/` before compiling `bin/runnerd`.
 
 `Check` validates the application. `Template Check` (`.github/workflows/template-check.yaml`) runs template source tests, upstream compatibility and Dockerfile checks for related build/template/script changes or manual dispatch. Keep registry checks independent of source tests, use the shared `templates/` build context, and require both workflows on Runner upgrade PRs. Dockerfile `--check` does not replace real image builds or regional template acceptance.
 

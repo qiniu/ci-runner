@@ -1,15 +1,11 @@
 package state
 
 import (
-	"context"
 	"errors"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
 
-func TestLegacyMigrationFenceBeforeStartupAndImport(t *testing.T) {
+func TestLegacyMigrationFenceBeforeStartup(t *testing.T) {
 	for _, tc := range []struct {
 		name, role string
 		version    int
@@ -26,7 +22,7 @@ func TestLegacyMigrationFenceBeforeStartupAndImport(t *testing.T) {
 		{name: "finalized", role: "standalone", version: 1, accepted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := offlinePrivateDir(t)
+			dir := t.TempDir()
 			store := New(dir).(*DBStore)
 			db, err := store.dbOrEnsure()
 			if err != nil {
@@ -72,16 +68,6 @@ func TestLegacyMigrationFenceBeforeStartupAndImport(t *testing.T) {
 				if db.Migrator().HasTable(&runnerEventRecord{}) {
 					t.Fatal("schema changed before fence validation")
 				}
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			_, err = MigrateSQLiteToPostgres(ctx, OfflineMigrationOptions{SQLitePath: store.opts.DatabaseDSN, BackupPath: filepath.Join(dir, "backup.db"), PostgresDSN: "invalid"})
-			if tc.accepted {
-				if err == nil || !strings.Contains(err.Error(), "connect PostgreSQL") {
-					t.Fatalf("finalized source rejected before target connection: %v", err)
-				}
-			} else if err == nil || (tc.role == "replica" && !errors.Is(err, errMigrationPrecondition)) || (tc.role != "replica" && !errors.Is(err, errLegacyMigration)) {
-				t.Fatalf("legacy import fence bypassed: %v", err)
 			}
 		})
 	}

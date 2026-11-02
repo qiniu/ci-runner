@@ -112,7 +112,7 @@ Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.
 - Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported but multi-instance operation on a shared database has not been verified.
-- To shorten downtime, use [phased SQLite-to-PostgreSQL migration](docs/sqlite-postgres-phased-migration.md): online resumable pre-copy, a stopped-source cutover, then optional historical-event backfill. The [offline importer](docs/sqlite-postgres-offline-migration.md) remains available for a full maintenance window.
+- The one-time SQLite-to-PostgreSQL transfer tool is retired; see [the retirement record](docs/database-transfer-retirement.md) for archived procedures and remaining operational work.
 - CI creates fresh PostgreSQL and MySQL schemas and reruns migration against an existing catalog before exercising policy-free matching. See [docs/testing.md](docs/testing.md) for the opt-in local real-dialect command.
 - Existing SQLite `runner_requests` and `runner_profiles` tables add missing model columns and indexes on startup without table recreation. This preserves historical runner values plus legacy profile rows and indexes. Creating missing indexes does not rewrite rows, but it can add brief startup I/O and lock contention on a large database; see [docs/testing.md](docs/testing.md) for migration and query-plan checks.
 - GitHub Enterprise Server is **not** supported; use a GitHub.com App.
@@ -134,7 +134,7 @@ unset secret_value
 
 Supported fields: `database.dsn`, `auth.session_secret`, `auth.encryption_key`, `github.webhook_secret`, `github.token`, `github.basic_auth.password`, `github.oauth.client_secret`. These values are also masked as `******` in logs and serialized output.
 
-For PostgreSQL, you may obfuscate only the password to keep connection details readable. Both `runnerd` and `runnerd-migrate` decode the parsed password before connecting; plaintext passwords and whole-DSN obfuscation remain supported:
+For PostgreSQL, you may obfuscate only the password to keep connection details readable. `runnerd` decodes the parsed password before connecting; plaintext passwords and whole-DSN obfuscation remain supported:
 
 ```yaml
 database:
@@ -373,13 +373,12 @@ docker run --rm -p 25500:25500 \
 ```bash
 task deps          # Install Go dependencies
 task ui-deps       # Install UI dependencies
-task build         # Build runnerd with embedded production UI and runnerd-migrate
+task build         # Build runnerd with embedded production UI
 task ui-production-smoke # Execute the production UI bundle in Chromium
 task ui-terminal-fault-test # Timed SSE outages with Chromium and real local PTYs
 task dev           # Start local dev (runnerd + Vite + smee)
 task lint          # Run linters
 task test          # Rebuild UI + run all tests (Go with race detection + Bun UI tests)
-task state-migration-test # Verify stopped-source migration and legacy fences
 task docker-check  # Verify the service Dockerfile
 task release-check # Verify release build
 ```

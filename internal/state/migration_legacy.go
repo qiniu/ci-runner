@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var errMigrationPrecondition = errors.New("migration precondition failed")
+
 var errLegacyMigration = errors.New("unfinished legacy online migration")
 
 // Legacy online migration metadata is read only. Never clear a replica fence.

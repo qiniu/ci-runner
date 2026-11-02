@@ -112,7 +112,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
 - 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL，但多实例共享数据库尚未验证。
-- 希望缩短停机时间时，使用[分阶段迁移](docs/zh/sqlite-postgres-phased-migration.md)：在线预复制并续跑、停服完成最终切换、随后补齐历史事件。[完整停服迁移](docs/zh/sqlite-postgres-offline-migration.md)仍保留。
+- 一次性 SQLite 到 PostgreSQL 迁移工具已退役，完成记录、历史手册及后续运维边界见[迁移退役记录](docs/zh/database-transfer-retirement.md)。
 - CI 会创建全新的 PostgreSQL 与 MySQL schema，并在已有 catalog 上重复执行迁移，再验证 policy-free matching。本地 opt-in 的真实方言命令见 [docs/zh/testing.md](docs/zh/testing.md)。
 - 已有 SQLite `runner_requests` 和 `runner_profiles` 表会在启动时补建缺失的 model columns 和 indexes，不会重建整张表，从而保留历史 runner 字段以及旧 profile rows 和 indexes。创建缺失索引不会重写 rows，但大数据库可能出现短暂的启动 I/O 和锁等待；迁移与查询计划检查见 [docs/zh/testing.md](docs/zh/testing.md)。
 - **不支持** GitHub Enterprise Server，请使用 GitHub.com App。
@@ -134,7 +134,7 @@ unset secret_value
 
 支持的字段：`database.dsn`、`auth.session_secret`、`auth.encryption_key`、`github.webhook_secret`、`github.token`、`github.basic_auth.password`、`github.oauth.client_secret`。这些值在日志和序列化输出中也会显示为 `******`。
 
-PostgreSQL 可以只混淆密码，保留可读的连接信息。`runnerd` 和 `runnerd-migrate` 都会在解析 DSN 后解码 password；明文密码和完整 DSN 混淆仍然兼容：
+PostgreSQL 可以只混淆密码，保留可读的连接信息。`runnerd` 会在解析 DSN 后解码 password；明文密码和完整 DSN 混淆仍然兼容：
 
 ```yaml
 database:
@@ -367,13 +367,12 @@ docker run --rm -p 25500:25500 \
 ```bash
 task deps          # 安装 Go 依赖
 task ui-deps       # 安装 UI 依赖
-task build         # 构建 runnerd（内嵌生产 UI）和 runnerd-migrate
+task build         # 构建 runnerd（内嵌生产 UI）
 task ui-production-smoke # 在 Chromium 中执行生产 UI bundle
 task ui-terminal-fault-test # 使用 Chromium 和本地真实 PTY 验证计时断流
 task dev           # 启动本地开发环境（runnerd + Vite + smee）
 task lint          # 运行代码检查
 task test          # 重建 UI + 运行全部测试（Go race detection + Bun UI tests）
-task state-migration-test # 验证分阶段/停服迁移和旧库保护
 task docker-check  # 验证服务 Dockerfile
 task release-check # 验证发布构建
 ```

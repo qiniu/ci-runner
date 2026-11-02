@@ -30,7 +30,7 @@ test("filters use only the supported glob subset", () => {
 });
 
 const cases = [
-  ["PR 151 migration and development tasks", ["Taskfile.yaml", ".github/workflows/check.yaml", "internal/state/offline_migration.go", "docs/testing.md", "runnerd.yaml.example"], []],
+  ["database startup guards and development tasks", ["Taskfile.yaml", ".github/workflows/check.yaml", "internal/state/migration_startup.go", "docs/testing.md", "runnerd.yaml.example"], []],
   ["application and UI", ["cmd/runnerd/main.go", "ui/src/app.tsx", "go.mod"], []],
   ["ordinary documentation", ["README.md", "docs/zh/testing.md", "ui/src/site-docs.test.js"], []],
   ["unrelated script", ["scripts/smee.sh"], []],
