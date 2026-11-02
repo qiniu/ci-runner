@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
-	for _, timing := range []string{"resume", "between_pages", "rollback"} {
+	for _, timing := range []string{"resume", "between_pages", "rollback", "recreated_empty", "recreated_job", "recreated_rollback"} {
 		t.Run(timing, func(t *testing.T) {
 			f := newPhasedTestFixture(t)
 			const oldID = "r-0000"
@@ -34,6 +35,17 @@ func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
 				row.WorkflowJobID = &jobID
 				if err := f.source.Create(&row).Error; err != nil {
 					t.Fatal(err)
+				}
+
+				if strings.HasPrefix(timing, "recreated_") {
+					recreated := phasedTestRequest(oldID)
+					if timing == "recreated_job" {
+						otherJob := int64(9002)
+						recreated.WorkflowJobID = &otherJob
+					}
+					if err := f.source.Create(&recreated).Error; err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -61,7 +73,7 @@ func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
 					t.Fatalf("interrupt: %v", err)
 				}
 				replace()
-				if timing == "rollback" {
+				if strings.HasSuffix(timing, "rollback") {
 					if err := f.target.Exec(`CREATE FUNCTION reject_request_batch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected insert failure'; END $$`).Error; err != nil {
 						t.Fatal(err)
 					}
@@ -72,6 +84,10 @@ func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
 					var old runnerRequestRecord
 					if err := f.target.First(&old, "id = ?", oldID).Error; err != nil {
 						t.Fatal("failed batch lost old target row:", err)
+					}
+
+					if old.WorkflowJobID == nil || *old.WorkflowJobID != jobID {
+						t.Fatal("failed batch changed old target Job owner")
 					}
 					var checkpoint phasedCheckpoint
 					if err := f.target.First(&checkpoint, "table_name = ?", "runner_requests").Error; err != nil {
@@ -105,9 +121,15 @@ func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
 				t.Fatalf("job owner=%q", got.ID)
 			}
 			// The early conflict cleanup must not suppress subsequent source recreation.
-			recreated := phasedTestRequest(oldID)
-			if err := f.source.Create(&recreated).Error; err != nil {
-				t.Fatal(err)
+			if strings.HasPrefix(timing, "recreated_") {
+				if err := f.source.Model(&runnerRequestRecord{}).Where("id = ?", oldID).Update("retry_count", 99).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				recreated := phasedTestRequest(oldID)
+				if err := f.source.Create(&recreated).Error; err != nil {
+					t.Fatal(err)
+				}
 			}
 			f.run(t, "sync")
 			if _, err := verifyOfflineTable(f.source, f.target, table); err != nil {
@@ -122,41 +144,54 @@ func TestPhasedMigrationDeletedRequestBaselineSQLBackends(t *testing.T) {
 }
 
 func TestPhasedMigrationDeletedRequestReplaySQLBackends(t *testing.T) {
-	f := newPhasedTestFixture(t)
-	oldJob, newJob := int64(9001), int64(9002)
-	old, replacement := phasedTestRequest("old"), phasedTestRequest("replacement")
-	old.WorkflowJobID, replacement.WorkflowJobID = &oldJob, &newJob
-	for _, row := range []runnerRequestRecord{old, replacement} {
-		if err := f.source.Create(&row).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.run(t, "prepare")
-	f.run(t, "sync")
-	// The first replay page reads the replacement's latest state, while the
-	// deletion freeing its Job ID is more than one journal page ahead.
-	for i := 0; i < 150; i++ {
-		if err := f.source.Model(&runnerRequestRecord{}).Where("id = ?", replacement.ID).Update("retry_count", i).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, id := range []string{old.ID, replacement.ID} {
-		if err := f.source.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	replacement.WorkflowJobID = &oldJob
-	if err := f.source.Create(&replacement).Error; err != nil {
-		t.Fatal(err)
-	}
-	f.run(t, "sync")
-	f.run(t, "sync")
-	inventory, _ := newMigrationInventory()
-	table, _ := migrationTableByName(inventory, "runner_requests")
-	if _, err := verifyOfflineTable(f.source, f.target, table); err != nil {
-		t.Fatal(err)
-	}
-	if report := f.run(t, "cutover"); !report.ReadyForPG {
-		t.Fatalf("cutover incomplete: %+v", report)
+	for _, recreation := range []string{"absent", "empty_job", "different_job"} {
+		t.Run(recreation, func(t *testing.T) {
+			f := newPhasedTestFixture(t)
+			oldJob, newJob := int64(9001), int64(9002)
+			old, replacement := phasedTestRequest("old"), phasedTestRequest("replacement")
+			old.WorkflowJobID, replacement.WorkflowJobID = &oldJob, &newJob
+			for _, row := range []runnerRequestRecord{old, replacement} {
+				if err := f.source.Create(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.run(t, "prepare")
+			f.run(t, "sync")
+			// The first replay page reads the replacement's latest state, while the
+			// deletion freeing its Job ID is more than one journal page ahead.
+			for i := 0; i < 150; i++ {
+				if err := f.source.Model(&runnerRequestRecord{}).Where("id = ?", replacement.ID).Update("retry_count", i).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, id := range []string{old.ID, replacement.ID} {
+				if err := f.source.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			replacement.WorkflowJobID = &oldJob
+			if err := f.source.Create(&replacement).Error; err != nil {
+				t.Fatal(err)
+			}
+			if recreation != "absent" {
+				recreated := phasedTestRequest(old.ID)
+				if recreation == "different_job" {
+					recreated.WorkflowJobID = &newJob
+				}
+				if err := f.source.Create(&recreated).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.run(t, "sync")
+			f.run(t, "sync")
+			inventory, _ := newMigrationInventory()
+			table, _ := migrationTableByName(inventory, "runner_requests")
+			if _, err := verifyOfflineTable(f.source, f.target, table); err != nil {
+				t.Fatal(err)
+			}
+			if report := f.run(t, "cutover"); !report.ReadyForPG {
+				t.Fatalf("cutover incomplete: %+v", report)
+			}
+		})
 	}
 }
