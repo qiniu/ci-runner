@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -39,13 +40,21 @@ func main() {
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, *timeout)
 	defer cancel()
-	report, err := state.MigrateSQLiteToPostgres(ctx, state.OfflineMigrationOptions{SQLitePath: *source, BackupPath: *backup, PostgresDSN: cfg.StateDatabaseDSN.Value()})
+	os.Exit(runMigration(ctx, state.OfflineMigrationOptions{SQLitePath: *source, BackupPath: *backup, PostgresDSN: cfg.StateDatabaseDSN.Value()}, os.Stdout, os.Stderr))
+}
+
+func runMigration(ctx context.Context, options state.OfflineMigrationOptions, output, errorOutput io.Writer) int {
+	progress := newMigrationProgressReporter(ctx, errorOutput, 10*time.Second)
+	options.Progress = progress.update
+	report, err := state.MigrateSQLiteToPostgres(ctx, options)
+	progress.finish(err == nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(errorOutput, err)
+		return 1
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
-		fmt.Fprintln(os.Stderr, "migration committed but report could not be written; inspect target before retrying")
-		os.Exit(1)
+	if err := json.NewEncoder(output).Encode(report); err != nil {
+		fmt.Fprintln(errorOutput, "migration committed but report could not be written; inspect target before retrying")
+		return 1
 	}
+	return 0
 }
