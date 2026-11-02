@@ -132,28 +132,34 @@ func (m *phasedMigration) copyRequests() error {
 		return err
 	}
 	for !checkpoint.Done {
-		reader := m.source.Where("id COLLATE BINARY <= ?", m.sourceState.RequestUpper)
-		rows, more, err := readMigrationRows(reader, table, checkpoint.Cursor, phasedBatchSize)
-		if err != nil {
-			return err
-		}
 		next := checkpoint
-		next.Rows += int64(len(rows))
-		next.Done = !more
-		if len(rows) != 0 {
-			next.Cursor, err = encodeMigrationKey(table, rows[len(rows)-1])
+		// Read the page and check stale target job owners in the same source
+		// snapshot. A delete/recreate between those reads must not be mistaken
+		// for an already-replayed deletion.
+		err := m.source.Transaction(func(reader *gorm.DB) error {
+			rows, more, err := readMigrationRows(reader.Where("id COLLATE BINARY <= ?", m.sourceState.RequestUpper), table, checkpoint.Cursor, phasedBatchSize)
 			if err != nil {
 				return err
 			}
-		}
-		if err := m.copyTransaction(func(tx *gorm.DB) error {
-			if err := phasedWriteAndVerify(tx, table, rows, true); err != nil {
-				return err
+			next.Rows += int64(len(rows))
+			next.Done = !more
+			if len(rows) != 0 {
+				next.Cursor, err = encodeMigrationKey(table, rows[len(rows)-1])
+				if err != nil {
+					return err
+				}
 			}
-			return tx.Save(&next).Error
-		}); err != nil {
+			return m.copyTransaction(func(tx *gorm.DB) error {
+				if err := phasedWriteRequests(reader, tx, table, rows); err != nil {
+					return err
+				}
+				return tx.Save(&next).Error
+			})
+		})
+		if err != nil {
 			return err
 		}
+
 		checkpoint = next
 		m.progress(stage, checkpoint.Rows)
 		if err := m.pauseBatch(); err != nil {
@@ -226,7 +232,7 @@ func (m *phasedMigration) replayRequests() error {
 						return fmt.Errorf("%w: deleted requests remain in target", errMigrationPrecondition)
 					}
 				}
-				if err := phasedWriteAndVerify(tx, table, rows, true); err != nil {
+				if err := phasedWriteRequests(reader, tx, table, rows); err != nil {
 					return err
 				}
 				return tx.Model(&phasedTargetRecord{}).Where("id = 1").Update("journal_cursor", last).Error
