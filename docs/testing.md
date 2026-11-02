@@ -1220,6 +1220,8 @@ and a backlog of restricted requests followed by an eligible repository. Real
 GitHub/Sandbox acceptance must still verify completion, cleanup, restart with reduced
 limits and waiting time under representative workloads.
 
-## Offline SQLite to PostgreSQL migration
+## SQLite to PostgreSQL migration
 
-See [the offline runbook](sqlite-postgres-offline-migration.md). Run `RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN="<dedicated _test DSN>" go test -tags development ./internal/state ./internal/server -run "Test(OfflineMigration|PlatformSpecRevision)" -count=1`. Tests allocate isolated schemas and cover atomic failure, source fences, backup preservation, sequence watermarks, value fidelity, and time-zone-safe catalog revision checks.
+See [the offline runbook](sqlite-postgres-offline-migration.md). Run `RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN="<dedicated _test DSN>" go test -tags development ./internal/state ./internal/server -run "Test(OfflineMigration|PhasedMigration|PlatformSpecRevision)" -count=1`. Tests allocate isolated schemas and cover atomic failure, source fences, backup preservation, sequence watermarks, value fidelity, and time-zone-safe catalog revision checks.
+
+Phased migration tests also cover concurrent source writes, timestamp-independent terminal updates, deletes, interrupted preparation, batch resumption, failed-cutover recovery, source/target guards, work budgets, historical ID reservations and PG business writes during event backfill. See [the phased runbook](sqlite-postgres-phased-migration.md). These tests do not establish production-load or real Runner/Deployment cutover acceptance.

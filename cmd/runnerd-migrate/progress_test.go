@@ -79,3 +79,16 @@ func TestRunMigrationKeepsFailedStdoutEmptyAndRedacts(t *testing.T) {
 		t.Fatal("configuration or paths leaked to stderr")
 	}
 }
+
+func TestRunPhasedMigrationKeepsFailedStdoutEmptyAndRedacts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var output, errorOutput bytes.Buffer
+	code := runPhasedMigration(ctx, state.PhasedMigrationOptions{Mode: "status", OfflineMigrationOptions: state.OfflineMigrationOptions{SQLitePath: "/missing/private-source", PostgresDSN: "password=private-password"}}, &output, &errorOutput)
+	if code != 1 || output.Len() != 0 || !strings.Contains(errorOutput.String(), "status=failed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	if strings.Contains(errorOutput.String(), "private-") {
+		t.Fatal("phased migration leaked private configuration")
+	}
+}

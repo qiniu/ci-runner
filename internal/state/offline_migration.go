@@ -125,6 +125,9 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 		return report, err
 	}
 	setStage("validate source schema and migration fence")
+	if locked.Migrator().HasTable(&phasedSourceRecord{}) {
+		return report, fmt.Errorf("%w: source belongs to phased migration; use its phase commands", errMigrationPrecondition)
+	}
 	if locked.Migrator().HasTable(&migrationControlRecord{}) {
 		if err = validateStandaloneMigrationDB(locked.WithContext(ctx)); err != nil {
 			return report, err
@@ -140,7 +143,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, options OfflineMigrationOption
 	}
 	report.ExtraTables, report.ExtraColumns = schemaReport.ExtraTables, schemaReport.ExtraColumns
 	setStage("connect PostgreSQL target")
-	targetPool, err := sql.Open("pgx", options.PostgresDSN)
+	targetPool, err := openPostgresPool(options.PostgresDSN)
 	if err != nil {
 		return report, err
 	}

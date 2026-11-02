@@ -2,7 +2,7 @@
 
 ## Runtime Shape
 
-- SQLite-to-PostgreSQL migration uses the standalone `cmd/runnerd-migrate` under a maintenance window. No online replication or runtime switching remains. Never bypass legacy replica fences; see `docs/sqlite-postgres-offline-migration.md`.
+- SQLite-to-PostgreSQL migration uses standalone `cmd/runnerd-migrate`: phased online pre-copy, stopped-source cutover and append-only event backfill, or default full offline import. Phased migration owns persistent capture/checkpoints and source/target write guards; it does not add runtime dual-write, automatic switching or reverse replication. Never bypass legacy replica fences; see `docs/sqlite-postgres-phased-migration.md` and `docs/sqlite-postgres-offline-migration.md`.
 
 - `runnerd` is a single Go service that receives GitHub `workflow_job` webhooks, admits jobs by repository and labels, creates Qiniu sandboxes, registers ephemeral GitHub Actions self-hosted runners, and cleans them up.
 - Runtime config is file-first. `runnerd` reads `./runnerd.yaml` by default, or another path passed with `--config`.

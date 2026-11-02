@@ -1,6 +1,6 @@
 # SQLite 到 PostgreSQL 停服迁移
 
-允许维护窗口时，优先使用一次性离线迁移。业务服务只使用一个数据库，不需要双写、复制线程、在线 authority 或回退协议。本版本已移除在线迁移运行机制；旧配置会明确报错，旧库状态保护仍保留。
+需要在线预复制和缩短最终停机窗口时，使用[分阶段迁移](sqlite-postgres-phased-migration.md)。本页介绍默认的 `--mode offline`，适用于可以安排完整维护窗口的一次性离线迁移。业务服务只使用一个数据库，不需要双写、复制线程、在线 authority 或回退协议。本版本已移除在线迁移运行机制；旧配置会明确报错，旧库状态保护仍保留。
 
 ## 工具行为与限制
 
@@ -21,7 +21,7 @@ SQLite 锁仅覆盖导入期间，**不能证明服务已经停机，也不负�
 1. 使用 SQLite 一致性副本、专用 `_test` PG 库演练并记录时间。不要直接复制运行中的 `.db`，也不要启动两个携带相同 GitHub/Sandbox 凭据的完整服务。
 2. 选择维护时间，暂停新 Workflow 和部署请求，等现有 Runner、Deployment 完成或按已批准方案停止。Web Terminal 会因停服断开。记录维护起止时间及 GitHub webhook 投递范围；GitHub 不会自动重投失败投递，提前准备持久化入口或维护后人工/脚本重投和对账。此工具不提供请求排空或 webhook 缓冲。
 3. 停止 runnerd 及其自动重启器，确认所有源库写入者已退出。备份配置、`auth.encryption_key` 和 `auth.session_secret`，保留原值，否则迁移的密文或登录会话可能不可用。
-4. 创建专用空 PG 数据库。复制现有配置为受保护的目标配置，只修改 `database.backend: postgres`、`database.dsn`，移除 `online_migration`。目标 DSN 支持现有 `RUNNERD_ENC` 格式，必须对完整 DSN 加密；不支持在明文 DSN 的 `password=` 后嵌入密文。不把 DSN 放在迁移命令参数或日志里。目标配置在最终位置准备，以免相对密钥路径变化。
+4. 创建专用空 PG 数据库。复制现有配置为受保护的目标配置，只修改 `database.backend: postgres`、`database.dsn`，移除 `online_migration`。目标 DSN 支持完整 DSN 的 `RUNNERD_ENC` 格式，也支持仅对密码原文生成密文并配置为 `password=RUNNERD_ENC(...)`，保留可读的 host、user 和 dbname。工具解析 DSN 后解码密码，不重新拼接连接字符串；明文密码仍然兼容。不把 DSN 放在迁移命令参数或日志里。目标配置在最终位置准备，以免相对密钥路径变化。
 5. 构建并执行（路径按部署环境替换）：
 
    ```sh
