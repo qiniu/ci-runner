@@ -1229,8 +1229,16 @@ and a backlog of restricted requests followed by an eligible repository. Real
 GitHub/Sandbox acceptance must still verify completion, cleanup, restart with reduced
 limits and waiting time under representative workloads.
 
-## SQLite to PostgreSQL migration
+## Startup compatibility after transfer retirement
 
-See [the offline runbook](sqlite-postgres-offline-migration.md). Run `RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN="<dedicated _test DSN>" go test -tags development ./internal/state ./internal/server -run "Test(OfflineMigration|PhasedMigration|PlatformSpecRevision)" -count=1`. Tests allocate isolated schemas and cover atomic failure, source fences, backup preservation, sequence watermarks, value fidelity, and time-zone-safe catalog revision checks.
+One-time transfer tests are retired with the tool; normal schema upgrades and SQL backend checks remain. Run `go test ./internal/state -run 'Test(MigrationStartup|LegacyMigration)' -count=1` to verify fenced databases reject startup before schema changes, accepted markers still allow startup, and markers remain unchanged.
 
-Phased migration tests also cover concurrent source writes, timestamp-independent terminal updates, deletes, interrupted preparation, batch resumption, failed-cutover recovery, source/target guards, work budgets, historical ID reservations and PG business writes during event backfill. See [the phased runbook](sqlite-postgres-phased-migration.md). These tests do not establish production-load or real Runner/Deployment cutover acceptance.
+Run the PostgreSQL checks against a dedicated `_test` database:
+
+```sh
+RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
+  go test -tags development ./internal/state ./internal/server \
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+```
+
+These checks use isolated schemas and retain PostgreSQL startup, password obfuscation, time-zone and catalog revision coverage. They do not clean production databases. See [the retirement record](database-transfer-retirement.md) for historical procedures and operational boundaries.

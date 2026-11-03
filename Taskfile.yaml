@@ -113,19 +113,13 @@ tasks:
       - cd ui && bun run test
       - GORACE=atexit_sleep_ms=0 go test -v -trimpath -failfast -race -cover -coverprofile=coverage.txt {{.GO_PACKAGES}}
 
-  state-migration-test:
-    desc: Verify phased/offline migration, data fidelity, and legacy fences
-    cmds:
-      - go test -race ./internal/state -run 'Test(OfflineMigration|PhasedMigration|Migration|LegacyMigration)' -count=1
-
   build:
-    desc: Build runnerd and runnerd-migrate into bin/
+    desc: Build runnerd into bin/
     deps:
       - ui-build
     cmds:
       - mkdir -p bin
       - go build -trimpath -buildvcs=true -ldflags "{{.LDFLAGS}}" -o bin/{{.BINARY}} ./cmd/{{.BINARY}}
-      - go build -trimpath -buildvcs=true -ldflags "{{.LDFLAGS}}" -o bin/runnerd-migrate ./cmd/runnerd-migrate
 
   run:
     desc: Run the service locally

@@ -1,9 +1,9 @@
 package state
 
 import (
-	"context"
+	"fmt"
 	"net/url"
-	"path/filepath"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +14,7 @@ import (
 func TestPostgresObfuscatedPasswordSQLBackends(t *testing.T) {
 	for _, mode := range []string{"password", "whole DSN"} {
 		t.Run(mode, func(t *testing.T) {
-			dsn := offlinePostgresDSN(t)
+			dsn := isolatedPostgresDSN(t)
 			parsed, err := config.ParsePostgresDSN(config.Secret(dsn))
 			if err != nil {
 				t.Fatal(err)
@@ -45,29 +45,15 @@ func TestPostgresObfuscatedPasswordSQLBackends(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			source := New(t.TempDir()).(*DBStore)
-			db, err := source.dbOrEnsure()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer closeTestDB(t, db)
-			if _, err := source.UpsertProfile(RunnerProfile{Name: "password-test", Labels: []string{"qiniu"}}); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			report, err := MigrateSQLiteToPostgres(ctx, OfflineMigrationOptions{
-				SQLitePath: source.opts.DatabaseDSN, BackupPath: filepath.Join(offlinePrivateDir(t), "backup.db"), PostgresDSN: dsn,
-			})
-			if err != nil || !report.Verified {
-				t.Fatalf("migration failed: %v", err)
-			}
-			target := NewWithOptions(Options{Backend: BackendPostgres, DatabaseDSN: dsn}).(*DBStore)
-			pg, err := target.open()
+			target := NewWithOptions(Options{Backend: BackendPostgres, DatabaseDSN: dsn, MigrateOnStart: true}).(*DBStore)
+			pg, err := target.dbOrEnsure()
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer closeTestDB(t, pg)
+			if _, err := target.UpsertProfile(RunnerProfile{Name: "password-test", Labels: []string{"qiniu"}}); err != nil {
+				t.Fatal(err)
+			}
 			var profile runnerProfileRecord
 			if err := pg.Where("name = ?", "password-test").First(&profile).Error; err != nil {
 				t.Fatal(err)
@@ -81,4 +67,37 @@ func TestPostgresObfuscatedPasswordSQLBackends(t *testing.T) {
 			}
 		})
 	}
+}
+
+func isolatedPostgresDSN(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires dedicated PostgreSQL test database")
+	}
+	dsn := os.Getenv("RUNNERD_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Fatal("missing PostgreSQL test DSN")
+	}
+	store := NewWithOptions(Options{Backend: BackendPostgres, DatabaseDSN: dsn}).(*DBStore)
+	db, err := store.open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireCatalogMatcherTestDatabase(t, db, BackendPostgres)
+	schema := fmt.Sprintf("state_%d", time.Now().UnixNano())
+	if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Exec("DROP SCHEMA " + schema + " CASCADE"); closeTestDB(t, db) })
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+	return dsn + " search_path=" + schema
 }
