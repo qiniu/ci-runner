@@ -848,6 +848,7 @@ export const en = {
     loadingOlderJobs: "Loading older jobs...",
     loadOlderJobs: "Load {{count}} older jobs",
     noJobsYet: "No jobs yet. Trigger a workflow in an installed repository, then refresh.",
+    noMatchingJobs: "No matching jobs in the latest page. Load older jobs to continue.",
     syncToTrackJobs: "Sync existing GitHub App accounts to start tracking jobs.",
     branch: "Branch",
     commit: "Commit",

@@ -1011,6 +1011,29 @@ func TestListUserInstallationRepositoriesUsesOAuthToken(t *testing.T) {
 	}
 }
 
+func TestListUserInstallationRepositoriesForActiveInstallationSkipsMetadataLookup(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user/installations" {
+			t.Fatal("active installation helper must not repeat metadata lookup")
+		}
+		if r.URL.Path != "/user/installations/987/repositories" || r.Header.Get("Authorization") != "Bearer user-token" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repositories":[{"full_name":"o/visible"}]}`))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	repositories, err := client.ListUserInstallationRepositoriesForActiveInstallation(t.Context(), "user-token", 987)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0] != "o/visible" {
+		t.Fatalf("unexpected repositories: %#v", repositories)
+	}
+}
+
 func TestListUserInstallationRepositoryDetailsPreservesSourceMetadata(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {

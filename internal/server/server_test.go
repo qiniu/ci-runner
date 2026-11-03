@@ -878,6 +878,49 @@ func TestUserRunnerAuthorizationUsesRepositoryIntersection(t *testing.T) {
 	}
 }
 
+func TestUserRunnerAuthorizationListsInstallationMetadataOnce(t *testing.T) {
+	var metadataCalls atomic.Int32
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user/installations" {
+			metadataCalls.Add(1)
+			writeJSON(w, http.StatusOK, map[string]any{"installations": []map[string]any{
+				{"id": 987, "suspended_at": nil},
+				{"id": 654, "suspended_at": nil},
+			}})
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/user/installations/") || !strings.HasSuffix(r.URL.Path, "/repositories") {
+			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repositories":[{"full_name":"o/visible"}]}`))
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installationID := range []int64{987, 654} {
+		if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{
+			AccountID: account.ID, InstallationID: installationID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+
+	access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(access) != 2 || metadataCalls.Load() != 1 {
+		t.Fatalf("expected one metadata request for two installations, access=%#v metadata_calls=%d", access, metadataCalls.Load())
+	}
+}
+
 func TestUserRunnerListPagination(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {

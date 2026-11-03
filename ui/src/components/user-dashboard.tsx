@@ -1358,7 +1358,7 @@ function PullRequestsPage({
                 <>
                   <div className="p-4 text-sm text-muted-foreground">
                     {hasInstallations || accountsLoadFailed ? (
-                      t("user.noJobsYet")
+                      olderRunnerCount > 0 ? t("user.noMatchingJobs") : t("user.noJobsYet")
                     ) : (
                       t("user.syncToTrackJobs")
                     )}

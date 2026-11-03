@@ -239,7 +239,9 @@ export async function loadOptionalUserResource<T>(resource: Promise<T>): Promise
 export function userRunnerRequestLimit(path: string, polling: boolean): number {
   // Source-specific routes filter account-wide results in the UI. Keep their
   // polling window complete so unrelated recent jobs cannot hide a matching
-  // job behind the initial page.
+  // job behind the initial page. This also refreshes already-loaded history;
+  // the bounded 500-row payload is the deliberate cost of keeping those
+  // filtered rows current while the page is open.
   if (path === "/jobs") return polling ? userRunnerPollingPageSize : userRunnerInitialPageSize
   return isUserJobsRoute(path) ? userRunnerHistoryWindow : userRunnerInitialPageSize
 }

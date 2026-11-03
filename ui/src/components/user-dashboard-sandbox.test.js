@@ -111,7 +111,8 @@ describe("Sandbox service Settings", () => {
       runnerTotal: 26,
     })
 
-    expect(html).toContain("No runner jobs are available yet")
+    expect(html).toContain("No matching jobs in the latest page")
+    expect(html).not.toContain("No jobs yet")
     expect(html).toContain("Load 25 older jobs")
   })
 

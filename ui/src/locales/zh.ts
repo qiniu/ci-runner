@@ -848,6 +848,7 @@ export const zh = {
     loadingOlderJobs: "正在加载更早的任务...",
     loadOlderJobs: "加载更早的 {{count}} 个任务",
     noJobsYet: "尚无任务。请在已安装的仓库中触发工作流，然后刷新。",
+    noMatchingJobs: "最近一页没有匹配的任务。请加载更早的任务继续查看。",
     syncToTrackJobs: "同步现有 GitHub App 账号以开始跟踪任务。",
     branch: "分支",
     commit: "提交",

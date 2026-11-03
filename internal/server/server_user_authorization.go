@@ -111,6 +111,23 @@ func (s *Server) loadUserRepositoryAccess(ctx context.Context, accountID int64) 
 	if err != nil {
 		return nil, err
 	}
+	// Validate the OAuth token and all stored installations once. The repository
+	// endpoint is independent per installation, but its metadata endpoint is
+	// account-wide and must not be repeated by every concurrent worker.
+	currentInstallations, err := s.gh.ListUserInstallations(ctx, token)
+	if err != nil {
+		if status, ok := github.ErrorStatus(err); ok &&
+			(status == http.StatusNotFound || (status == http.StatusForbidden && !github.IsRateLimitError(err))) {
+			return []state.GitHubInstallationRepositoryAccess{}, nil
+		}
+		return nil, err
+	}
+	activeInstallations := make(map[int64]struct{}, len(currentInstallations))
+	for _, installation := range currentInstallations {
+		if installation.ID > 0 && installation.SuspendedAt == nil {
+			activeInstallations[installation.ID] = struct{}{}
+		}
+	}
 	access := make([]state.GitHubInstallationRepositoryAccess, 0, len(installations))
 	results := make([]state.GitHubInstallationRepositoryAccess, len(installations))
 	resultOK := make([]bool, len(installations))
@@ -121,8 +138,11 @@ func (s *Server) loadUserRepositoryAccess(ctx context.Context, accountID int64) 
 	group.SetLimit(userRepositoryAccessConcurrency)
 	for index, installation := range installations {
 		index, installation := index, installation
+		if _, ok := activeInstallations[installation.InstallationID]; !ok {
+			continue
+		}
 		group.Go(func() error {
-			items, err := s.gh.ListUserInstallationRepositories(groupCtx, token, installation.InstallationID)
+			items, err := s.gh.ListUserInstallationRepositoriesForActiveInstallation(groupCtx, token, installation.InstallationID)
 			if err != nil {
 				if status, ok := github.ErrorStatus(err); ok &&
 					(status == http.StatusNotFound || (status == http.StatusForbidden && !github.IsRateLimitError(err))) {
