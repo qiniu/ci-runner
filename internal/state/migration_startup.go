@@ -38,7 +38,7 @@ func validatePhasedMigrationStartup(db *gorm.DB) error {
 	}
 	allowed := control.Protocol == 1 && ((db.Dialector.Name() == BackendSQLite && control.Phase == "copying") || (db.Dialector.Name() == BackendPostgres && (control.Phase == "ready" || control.Phase == "complete")))
 	if !allowed {
-		return fmt.Errorf("%w: database is fenced by phased migration; use the matching archived migration release to inspect status; see docs/database-transfer-retirement.md", errMigrationPrecondition)
+		return fmt.Errorf("%w: database is fenced by phased migration; inspect status with the matching tool/model version (archived source: def63260e4ba16f903f8d750c61915ceb68733ad, build ./cmd/runnerd-migrate and run --mode status); see docs/database-transfer-retirement.md", errMigrationPrecondition)
 	}
 	return nil
 }

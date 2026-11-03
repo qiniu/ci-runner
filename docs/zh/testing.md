@@ -1125,7 +1125,7 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 使用专用 `_test` 数据库执行真实 PostgreSQL 检查：
 
 ```sh
-RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
+RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   go test -tags development ./internal/state ./internal/server \
   -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
 ```

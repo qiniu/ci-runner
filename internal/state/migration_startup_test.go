@@ -3,7 +3,10 @@ package state
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 func TestMigrationStartupFenceSQLite(t *testing.T) {
@@ -17,10 +20,10 @@ func TestMigrationStartupFenceSQLBackends(t *testing.T) {
 func testMigrationStartupFence(t *testing.T, backend string) {
 	t.Helper()
 	for _, tc := range []struct {
-		name, phase              string
-		protocol                 int
-		absent, empty, malformed bool
-		sqliteOK, postgresOK     bool
+		name, phase                     string
+		protocol                        int
+		absent, empty, malformed, unset bool
+		sqliteOK, postgresOK            bool
 	}{
 		{name: "ordinary database", absent: true, sqliteOK: true, postgresOK: true},
 		{name: "copying source or target", phase: "copying", protocol: 1, sqliteOK: true},
@@ -28,9 +31,11 @@ func testMigrationStartupFence(t *testing.T, backend string) {
 		{name: "released target", phase: "ready", protocol: 1, postgresOK: true},
 		{name: "completed target", phase: "complete", protocol: 1, postgresOK: true},
 		{name: "unknown phase", phase: "unknown", protocol: 1},
-		{name: "unknown protocol", phase: "complete", protocol: 2},
+		{name: "unknown target protocol", phase: "complete", protocol: 2},
+		{name: "unknown source protocol", phase: "copying", protocol: 2},
 		{name: "missing marker", empty: true},
 		{name: "malformed marker", malformed: true},
+		{name: "unset marker fields", unset: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dsn := filepath.Join(t.TempDir(), "state.db")
@@ -54,7 +59,11 @@ func testMigrationStartupFence(t *testing.T, backend string) {
 				if err := db.Exec("CREATE TABLE " + table + " (" + columns + ")").Error; err != nil {
 					t.Fatal(err)
 				}
-				if !tc.empty && !tc.malformed {
+				if tc.malformed || tc.unset {
+					if err := db.Exec("INSERT INTO " + table + " (id) VALUES (1)").Error; err != nil {
+						t.Fatal(err)
+					}
+				} else if !tc.empty {
 					if err := db.Exec("INSERT INTO "+table+" (id, protocol, phase) VALUES (1, ?, ?)", tc.protocol, tc.phase).Error; err != nil {
 						t.Fatal(err)
 					}
@@ -79,8 +88,19 @@ func testMigrationStartupFence(t *testing.T, backend string) {
 					defer closeTestDB(t, reopened.db)
 					t.Fatal("fenced database accepted")
 				}
-				if !tc.empty && !tc.malformed && !errors.Is(err, errMigrationPrecondition) {
-					t.Fatalf("unexpected fence error: %v", err)
+				expectedError := errMigrationPrecondition
+				if tc.empty {
+					expectedError = gorm.ErrRecordNotFound
+				}
+				if tc.malformed {
+					// With only the id column present, database/sql cannot scan
+					// the scalar row into the marker struct. Do not accept an
+					// unrelated error or confuse this with an empty table.
+					if !strings.HasPrefix(err.Error(), `sql: Scan error on column index 0, name "id": unsupported Scan`) {
+						t.Fatalf("startup error = %v, want malformed marker scan error", err)
+					}
+				} else if !errors.Is(err, expectedError) {
+					t.Fatalf("startup error = %v, want %v", err, expectedError)
 				}
 				if db.Migrator().HasTable(&runnerEventRecord{}) {
 					t.Fatal("startup changed schema before checking fence")
