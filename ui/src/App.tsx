@@ -60,6 +60,7 @@ import {
   collectAdminRunnerPoll,
   createLatestUserLoadGate,
   createScopedRequestGate,
+  createUserRunnerPageGate,
   loadOptionalUserResource,
   reconcileAdminRunnerPages,
   mergeUserRunnerPages,
@@ -191,6 +192,7 @@ function App() {
   const [userJobsLoad, setUserJobsLoad] = useState<{ account: string; status: "ready" | "error" } | null>(null)
   const [githubAppLoad, setGithubAppLoad] = useState<{ account: string; status: "ready" | "error" } | null>(null)
   const userRunnerRequestGate = useRef(createScopedRequestGate()).current
+  const userRunnerPageGate = useRef(createUserRunnerPageGate()).current
   const [loadingUserRunnerHistory, setLoadingUserRunnerHistory] = useState(false)
   const [githubApp, setGitHubApp] = useState<GitHubAppConfig | null>(null)
   const [scopedUserPreferences, setScopedUserPreferences] = useState<{ account: string; scope: string; value: UserPreferences } | null>(null)
@@ -706,9 +708,14 @@ function App() {
       ? userRunnerRequestGate.begin(`${account}:${locationPath}`)
       : null
     if (runnerRequest) {
+      const pageLoadID = userRunnerPageGate.begin(polling)
+      if (pageLoadID === null) {
+        userRunnerRequestGate.finish(runnerRequest)
+        return
+      }
       tasks.push(requestUserRunnerPage(userRunnerRequestLimit(locationPath, polling), 0)
         .then((runnerPage) => {
-          if (!userLoadGate.isCurrent(loadID)) return
+          if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
           setUserRunnerTotal(runnerPage.total)
           setUserRunners((current) => polling ? mergeUserRunnerPages(runnerPage.items, current) : runnerPage.items)
           setUserJobsLoad({ account, status: "ready" })
@@ -723,6 +730,7 @@ function App() {
           reportError(error)
         })
         .finally(() => {
+          userRunnerPageGate.finish()
           userRunnerRequestGate.finish(runnerRequest)
         }))
     }
@@ -780,7 +788,7 @@ function App() {
         }))
     }
     await Promise.all(tasks)
-  }, [authSession.authenticated, authSession.login, beginGitHubReauthentication, hasAccess, isAdminRoute, locationPath, refreshGitHubOAuthLogin, request, requestUserRunnerPage, userLoadGate, userRunnerRequestGate])
+  }, [authSession.authenticated, authSession.login, beginGitHubReauthentication, hasAccess, isAdminRoute, locationPath, refreshGitHubOAuthLogin, request, requestUserRunnerPage, userLoadGate, userRunnerPageGate, userRunnerRequestGate])
 
   const saveProductTourOnboarding = useCallback(async (state: ProductTourOnboarding) => {
     const account = authSession.login ?? ""
@@ -794,9 +802,13 @@ function App() {
 
   const loadUserRunnerHistory = useCallback(async () => {
     if (!authSession.authenticated || loadingUserRunnerHistory) return
+    const pageLoadID = userRunnerPageGate.begin()
+    if (pageLoadID === null) return
+    const loadID = userLoadGate.begin(`${authSession.login ?? ""}:${locationPath}`)
     setLoadingUserRunnerHistory(true)
     try {
       const page = await requestUserRunnerPage(userRunnerHistoryWindow, 0)
+      if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
       setUserRunnerTotal(page.total)
       setUserRunners(page.items)
     } catch (error) {
@@ -809,9 +821,10 @@ function App() {
       }
       toast.error(error instanceof Error ? error.message : appI18n.t("app.olderJobsLoadFailed"))
     } finally {
+      userRunnerPageGate.finish(true)
       setLoadingUserRunnerHistory(false)
     }
-  }, [authSession.authenticated, beginGitHubReauthentication, loadingUserRunnerHistory, refreshGitHubOAuthLogin, requestUserRunnerPage])
+  }, [authSession.authenticated, authSession.login, beginGitHubReauthentication, loadingUserRunnerHistory, locationPath, refreshGitHubOAuthLogin, requestUserRunnerPage, userLoadGate, userRunnerPageGate])
 
   const syncGitHubAppSetupFromURL = useCallback(async () => {
     if (
@@ -1059,8 +1072,9 @@ function App() {
     return () => {
       if (timer !== null) window.clearInterval(timer)
       userRunnerRequestGate.reset()
+      userRunnerPageGate.reset()
     }
-  }, [authSession.authenticated, hasAccess, isAdminRoute, loadUserAll, locationPath, userRunnerRequestGate])
+  }, [authSession.authenticated, hasAccess, isAdminRoute, loadUserAll, locationPath, userRunnerPageGate, userRunnerRequestGate])
 
   useEffect(() => {
     const showsRepositoryReadiness = Boolean(
@@ -1145,6 +1159,7 @@ function App() {
     setScopedProductTourOnboarding(null)
     userLoadGate.begin("")
     userRunnerRequestGate.reset()
+    userRunnerPageGate.reset()
     setGitHubApp(null)
     setAuthorizedRepositories({})
     setRepositoryErrors({})

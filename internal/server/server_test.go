@@ -921,6 +921,47 @@ func TestUserRunnerAuthorizationListsInstallationMetadataOnce(t *testing.T) {
 	}
 }
 
+func TestUserRunnerAuthorizationSkipsSuspendedInstallationFromMetadata(t *testing.T) {
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user/installations":
+			writeJSON(w, http.StatusOK, map[string]any{"installations": []map[string]any{
+				{"id": 987, "suspended_at": "2026-10-16T07:10:00Z"},
+				{"id": 654, "suspended_at": nil},
+			}})
+		case "/user/installations/654/repositories":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"repositories":[{"full_name":"other/visible"}]}`))
+		case "/user/installations/987/repositories":
+			t.Fatal("suspended installation must not be queried")
+		default:
+			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer ghServer.Close()
+
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installationID := range []int64{987, 654} {
+		if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: installationID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "user-token")
+
+	access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(access) != 1 || access[0].InstallationID != 654 || !hasRepositoryAccess(access, 654, "other/visible") {
+		t.Fatalf("unexpected repository access: %#v", access)
+	}
+}
+
 func TestUserRunnerListPagination(t *testing.T) {
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {

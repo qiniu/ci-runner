@@ -8,6 +8,7 @@ import {
   adminRunnerRequestsPath,
   collectAdminRunnerPoll,
   createAutomaticPageLoadGate,
+  createUserRunnerPageGate,
   mergeAdminRunnerPages,
   reconcileAdminRunnerPages,
   shouldPollAdminSection,
@@ -244,6 +245,18 @@ describe("app load policy", () => {
     expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", true)).toBe(500)
     expect(userRunnerRequestLimit("/jobs/manual/octo/repo/manual-1", true)).toBe(500)
     expect(userRunnerRequestsPath(500, 0)).toBe("/user/runner_requests?limit=500&offset=0")
+  })
+
+  test("keeps an older poll from overwriting manual history", () => {
+    const gate = createUserRunnerPageGate()
+    const poll = gate.begin(true)
+    const history = gate.begin()
+    expect(history).not.toBeNull()
+    expect(gate.isCurrent(poll)).toBe(false)
+    expect(gate.isCurrent(history)).toBe(true)
+    gate.finish(true)
+    const nextPoll = gate.begin(true)
+    expect(gate.isCurrent(nextPoll)).toBe(true)
   })
 
   test("classifies public, protected, admin, and unknown routes explicitly", () => {

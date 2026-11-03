@@ -88,6 +88,32 @@ export function createScopedRequestGate() {
   }
 }
 
+// Keep manual history replacement ahead of an in-flight poll. A poll that
+// started before the replacement may finish later with an older snapshot.
+export function createUserRunnerPageGate() {
+  let generation = 0
+  let historyLoading = false
+  return {
+    begin(polling = false) {
+      if (polling && historyLoading) return null
+      if (!polling && historyLoading) return null
+      generation += 1
+      if (!polling) historyLoading = true
+      return generation
+    },
+    isCurrent(candidate: number | null | undefined) {
+      return candidate === generation
+    },
+    finish(history = false) {
+      if (history) historyLoading = false
+    },
+    reset() {
+      generation += 1
+      historyLoading = false
+    },
+  }
+}
+
 export function mergeUserRunnerPages(primary: RunnerState[], existing: RunnerState[]): RunnerState[] {
   const merged: RunnerState[] = []
   const seen = new Set<string>()
