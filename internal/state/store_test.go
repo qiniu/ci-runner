@@ -1750,6 +1750,19 @@ func TestRunnerRequestAuthorizedListIndexSupportsNewestPageOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerRequestAuthorizedListHasInstallationRepositoryIndex(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const indexName = "idx_runner_requests_github_installation_repository_queued"
+	if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
+		t.Fatalf("expected authorized runner request filtering index %s", indexName)
+	}
+}
+
 func TestMigrateAddsGitHubInstallationLookupIndex(t *testing.T) {
 	databaseURL := t.TempDir() + "/runnerd.db"
 	store := NewWithOptions(Options{

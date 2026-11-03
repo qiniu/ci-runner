@@ -1433,7 +1433,7 @@ function PullRequestsPage({
             <div className="p-4 lg:p-6"><div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
               {t("user.jobsLoadFailed")}
             </div></div>
-          ) : loadingJobs || loadingGitHubApp ? (
+          ) : loadingJobs || (!groups.length && loadingGitHubApp) ? (
             <div className="space-y-5 p-4 lg:p-6" aria-hidden="true">
               <div className="h-8 w-2/5 rounded-md bg-muted/60 motion-safe:animate-pulse" />
               <div className="h-5 w-3/5 rounded-md bg-muted/50 motion-safe:animate-pulse" />

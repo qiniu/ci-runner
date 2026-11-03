@@ -10,6 +10,7 @@ import (
 
 	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/state"
+	"golang.org/x/sync/errgroup"
 )
 
 var errGitHubUserAccessTokenRequired = errors.New("github user access token is required")
@@ -20,6 +21,7 @@ const (
 	userRepositoryAccessCacheTTL       = 30 * time.Second
 	userRepositoryAccessRefreshRetry   = 5 * time.Second
 	userRepositoryAccessRefreshTimeout = 15 * time.Second
+	userRepositoryAccessConcurrency    = 4
 )
 
 func (s *Server) githubUserAccessToken(accountID int64) (string, error) {
@@ -110,31 +112,51 @@ func (s *Server) loadUserRepositoryAccess(ctx context.Context, accountID int64) 
 		return nil, err
 	}
 	access := make([]state.GitHubInstallationRepositoryAccess, 0, len(installations))
-	for _, installation := range installations {
-		items, err := s.gh.ListUserInstallationRepositories(ctx, token, installation.InstallationID)
-		if err != nil {
-			if status, ok := github.ErrorStatus(err); ok &&
-				(status == http.StatusNotFound || (status == http.StatusForbidden && !github.IsRateLimitError(err))) {
-				continue
+	results := make([]state.GitHubInstallationRepositoryAccess, len(installations))
+	resultOK := make([]bool, len(installations))
+	group, groupCtx := errgroup.WithContext(ctx)
+	// Installation repository listings are independent remote calls. Keep a
+	// small bound so a cold Jobs request does not serialize every installation
+	// or burst unboundedly against GitHub.
+	group.SetLimit(userRepositoryAccessConcurrency)
+	for index, installation := range installations {
+		index, installation := index, installation
+		group.Go(func() error {
+			items, err := s.gh.ListUserInstallationRepositories(groupCtx, token, installation.InstallationID)
+			if err != nil {
+				if status, ok := github.ErrorStatus(err); ok &&
+					(status == http.StatusNotFound || (status == http.StatusForbidden && !github.IsRateLimitError(err))) {
+					return nil
+				}
+				return err
 			}
-			return nil, err
-		}
-		seen := map[string]bool{}
-		repositories := make([]string, 0, len(items))
-		for _, repository := range items {
-			repository = strings.TrimSpace(repository)
-			key := strings.ToLower(repository)
-			if repository == "" || seen[key] {
-				continue
+			seen := map[string]bool{}
+			repositories := make([]string, 0, len(items))
+			for _, repository := range items {
+				repository = strings.TrimSpace(repository)
+				key := strings.ToLower(repository)
+				if repository == "" || seen[key] {
+					continue
+				}
+				seen[key] = true
+				repositories = append(repositories, repository)
 			}
-			seen[key] = true
-			repositories = append(repositories, repository)
-		}
-		if len(repositories) > 0 {
-			access = append(access, state.GitHubInstallationRepositoryAccess{
-				InstallationID: installation.InstallationID,
-				Repositories:   repositories,
-			})
+			if len(repositories) > 0 {
+				results[index] = state.GitHubInstallationRepositoryAccess{
+					InstallationID: installation.InstallationID,
+					Repositories:   repositories,
+				}
+				resultOK[index] = true
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	for index := range results {
+		if resultOK[index] {
+			access = append(access, results[index])
 		}
 	}
 	return access, nil
