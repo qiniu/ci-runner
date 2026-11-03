@@ -94,6 +94,27 @@ describe("Sandbox service Settings", () => {
     expect(accountsFailed).not.toContain("Sync existing GitHub App accounts")
   })
 
+  test("keeps older history reachable when the initial page contains only hidden jobs", () => {
+    const html = renderDashboard({
+      page: "home",
+      locationPath: "/jobs",
+      loadingJobs: false,
+      runners: [{
+        id: "unmatched-job",
+        status: "failed",
+        failure_stage: "admission",
+        failure_reason: "profile_labels_not_matched",
+        repository_full_name: "miclle/hidden-repository",
+        created_at: "2026-08-10T00:00:00Z",
+        updated_at: "2026-08-10T00:01:00Z",
+      }],
+      runnerTotal: 26,
+    })
+
+    expect(html).toContain("No runner jobs are available yet")
+    expect(html).toContain("Load 25 older jobs")
+  })
+
   test("keeps loaded Jobs visible when GitHub account metadata fails", () => {
     const html = renderDashboard({
       page: "home",

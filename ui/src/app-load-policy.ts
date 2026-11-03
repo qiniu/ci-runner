@@ -6,6 +6,7 @@ import { isSiteDocumentPath } from "@/site-doc-routes"
 // history is loaded on demand, which keeps the initial response small while
 // preserving the bounded history window for stable source routes.
 export const userRunnerInitialPageSize = 25
+export const userRunnerPollingPageSize = 100
 export const userRunnerHistoryWindow = 500
 export const adminRunnerRequestPageSize = 100
 export const adminRunnerPollPageBudget = 5
@@ -235,11 +236,11 @@ export async function loadOptionalUserResource<T>(resource: Promise<T>): Promise
   }
 }
 
-export function userRunnerRequestLimit(path: string): number {
+export function userRunnerRequestLimit(path: string, polling: boolean): number {
   // Source-specific routes filter account-wide results in the UI. Keep their
   // polling window complete so unrelated recent jobs cannot hide a matching
   // job behind the initial page.
-  if (path === "/jobs") return userRunnerInitialPageSize
+  if (path === "/jobs") return polling ? userRunnerPollingPageSize : userRunnerInitialPageSize
   return isUserJobsRoute(path) ? userRunnerHistoryWindow : userRunnerInitialPageSize
 }
 

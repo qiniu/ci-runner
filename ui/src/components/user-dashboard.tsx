@@ -1280,6 +1280,19 @@ function PullRequestsPage({
   const selectedStatus = selected ? buildGroupStatus(selected) : null
   const visibleHistoryTotal = Math.min(runnerTotal, userRunnerHistoryWindow)
   const olderRunnerCount = Math.max(0, visibleHistoryTotal - runnerCount)
+  const loadOlderJobsControl = olderRunnerCount > 0 ? (
+    <div className="border-b p-3">
+      <Button
+        className="w-full"
+        disabled={loadingRunnerHistory}
+        onClick={onLoadRunnerHistory}
+        type="button"
+        variant="outline"
+      >
+        {loadingRunnerHistory ? t("user.loadingOlderJobs") : t("user.loadOlderJobs", { count: olderRunnerCount })}
+      </Button>
+    </div>
+  ) : null
 
   return (
     <>
@@ -1326,19 +1339,7 @@ function PullRequestsPage({
                     </div>
                   )
                   })}
-                  {olderRunnerCount > 0 ? (
-                    <div className="border-b p-3">
-                      <Button
-                        className="w-full"
-                        disabled={loadingRunnerHistory}
-                        onClick={onLoadRunnerHistory}
-                        type="button"
-                        variant="outline"
-                      >
-                        {loadingRunnerHistory ? t("user.loadingOlderJobs") : t("user.loadOlderJobs", { count: olderRunnerCount })}
-                      </Button>
-                    </div>
-                  ) : null}
+                  {loadOlderJobsControl}
                 </>
               ) : jobsLoadFailed ? (
                 <div className="space-y-3 p-4 text-sm text-muted-foreground">
@@ -1354,13 +1355,16 @@ function PullRequestsPage({
                   {[0, 1, 2].map((item) => <div key={item} className="h-14 rounded-md bg-muted/60 motion-safe:animate-pulse" aria-hidden="true" />)}
                 </div>
               ) : (
-                <div className="p-4 text-sm text-muted-foreground">
-                  {hasInstallations || accountsLoadFailed ? (
-                    t("user.noJobsYet")
-                  ) : (
-                    t("user.syncToTrackJobs")
-                  )}
-                </div>
+                <>
+                  <div className="p-4 text-sm text-muted-foreground">
+                    {hasInstallations || accountsLoadFailed ? (
+                      t("user.noJobsYet")
+                    ) : (
+                      t("user.syncToTrackJobs")
+                    )}
+                  </div>
+                  {loadOlderJobsControl}
+                </>
               )}
             </div>
           </div>
