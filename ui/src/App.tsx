@@ -706,7 +706,7 @@ function App() {
       ? userRunnerRequestGate.begin(`${account}:${locationPath}`)
       : null
     if (runnerRequest) {
-      tasks.push(requestUserRunnerPage(userRunnerRequestLimit(locationPath, polling), 0)
+      tasks.push(requestUserRunnerPage(userRunnerRequestLimit(locationPath), 0)
         .then((runnerPage) => {
           if (!userLoadGate.isCurrent(loadID)) return
           setUserRunnerTotal(runnerPage.total)

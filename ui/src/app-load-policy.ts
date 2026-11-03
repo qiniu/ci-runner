@@ -235,7 +235,7 @@ export async function loadOptionalUserResource<T>(resource: Promise<T>): Promise
   }
 }
 
-export function userRunnerRequestLimit(path: string, polling: boolean): number {
+export function userRunnerRequestLimit(path: string): number {
   // Source-specific routes filter account-wide results in the UI. Keep their
   // polling window complete so unrelated recent jobs cannot hide a matching
   // job behind the initial page.

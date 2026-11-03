@@ -238,11 +238,9 @@ describe("app load policy", () => {
   })
 
   test("keeps the jobs home light while making stable job routes resolve the bounded history", () => {
-    expect(userRunnerRequestLimit("/jobs", false)).toBe(25)
-    expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", false)).toBe(500)
-    expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", true)).toBe(500)
-    expect(userRunnerRequestLimit("/jobs/manual/octo/repo/manual-1", true)).toBe(500)
-    expect(userRunnerRequestLimit("/jobs", true)).toBe(25)
+    expect(userRunnerRequestLimit("/jobs")).toBe(25)
+    expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs")).toBe(500)
+    expect(userRunnerRequestLimit("/jobs/manual/octo/repo/manual-1")).toBe(500)
     expect(userRunnerRequestsPath(500, 0)).toBe("/user/runner_requests?limit=500&offset=0")
   })
 
