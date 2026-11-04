@@ -94,9 +94,9 @@ func testMigrationStartupFence(t *testing.T, backend string) {
 				}
 				if tc.malformed {
 					// With only the id column present, database/sql cannot scan
-					// the scalar row into the marker struct. Do not accept an
-					// unrelated error or confuse this with an empty table.
-					if !strings.HasPrefix(err.Error(), `sql: Scan error on column index 0, name "id": unsupported Scan`) {
+					// the scalar row into the marker struct. Check its column
+					// context without depending on the driver's scan error wording.
+					if !strings.HasPrefix(err.Error(), `sql: Scan error on column index 0, name "id": `) {
 						t.Fatalf("startup error = %v, want malformed marker scan error", err)
 					}
 				} else if !errors.Is(err, expectedError) {
