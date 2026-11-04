@@ -2,7 +2,11 @@ import { githubContextFromPath } from "@/github-context-routes"
 import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
-export const userRunnerInitialPageSize = 100
+// The Jobs home only needs enough rows to paint the first viewport. Older
+// history is loaded on demand, which keeps the initial response small while
+// preserving the bounded history window for stable source routes.
+export const userRunnerInitialPageSize = 25
+export const userRunnerPollingPageSize = 100
 export const userRunnerHistoryWindow = 500
 export const adminRunnerRequestPageSize = 100
 export const adminRunnerPollPageBudget = 5
@@ -80,6 +84,31 @@ export function createScopedRequestGate() {
     },
     reset() {
       active = null
+    },
+  }
+}
+
+// Keep manual history replacement ahead of an in-flight poll. A poll that
+// started before the replacement may finish later with an older snapshot.
+export function createUserRunnerPageGate() {
+  let generation = 0
+  let historyOwner: number | null = null
+  return {
+    begin(kind: "page" | "history" = "page") {
+      if (historyOwner !== null) return null
+      generation += 1
+      if (kind === "history") historyOwner = generation
+      return generation
+    },
+    isCurrent(candidate: number | null | undefined) {
+      return candidate === generation
+    },
+    finish(candidate: number) {
+      if (historyOwner === candidate) historyOwner = null
+    },
+    reset() {
+      generation += 1
+      historyOwner = null
     },
   }
 }
@@ -233,7 +262,12 @@ export async function loadOptionalUserResource<T>(resource: Promise<T>): Promise
 }
 
 export function userRunnerRequestLimit(path: string, polling: boolean): number {
-  if (polling || path === "/jobs") return userRunnerInitialPageSize
+  // Source-specific routes filter account-wide results in the UI. Keep their
+  // polling window complete so unrelated recent jobs cannot hide a matching
+  // job behind the initial page. This also refreshes already-loaded history;
+  // the bounded 500-row payload is the deliberate cost of keeping those
+  // filtered rows current while the page is open.
+  if (path === "/jobs") return polling ? userRunnerPollingPageSize : userRunnerInitialPageSize
   return isUserJobsRoute(path) ? userRunnerHistoryWindow : userRunnerInitialPageSize
 }
 

@@ -1011,6 +1011,65 @@ func TestListUserInstallationRepositoriesUsesOAuthToken(t *testing.T) {
 	}
 }
 
+func TestListUserInstallationRepositoriesForInstallationsSkipsMetadataLookup(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user/installations" {
+			t.Fatal("active installation helper must not repeat metadata lookup")
+		}
+		if r.URL.Path != "/user/installations/987/repositories" || r.Header.Get("Authorization") != "Bearer user-token" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repositories":[{"full_name":"o/visible"}]}`))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, ts.Client())
+	repositories, err := client.ListUserInstallationRepositoriesForInstallations(t.Context(), "user-token", 987, []Installation{{ID: 987}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0] != "o/visible" {
+		t.Fatalf("unexpected repositories: %#v", repositories)
+	}
+}
+
+func TestListUserInstallationRepositoriesForInstallationsRejectsInvalidAccess(t *testing.T) {
+	suspendedAt := time.Now()
+	for _, tc := range []struct {
+		name          string
+		token         string
+		id            int64
+		installations []Installation
+		wantStatus    int
+	}{
+		{"empty token", "  ", 987, []Installation{{ID: 987}}, 0},
+		{"invalid id", "user-token", 0, []Installation{{ID: 987}}, 0},
+		{"missing installation", "user-token", 987, nil, http.StatusNotFound},
+		{"other installation", "user-token", 987, []Installation{{ID: 654}}, http.StatusNotFound},
+		{"suspended installation", "user-token", 987, []Installation{{ID: 987, SuspendedAt: &suspendedAt}}, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				http.Error(w, "must not contact GitHub", http.StatusInternalServerError)
+			}))
+			defer ts.Close()
+			client := NewClient(ts.URL, ts.Client())
+			repositories, err := client.ListUserInstallationRepositoriesForInstallations(t.Context(), tc.token, tc.id, tc.installations)
+			if err == nil || len(repositories) != 0 || calls.Load() != 0 {
+				t.Fatalf("expected local denial, repositories=%v err=%v calls=%d", repositories, err, calls.Load())
+			}
+			if tc.wantStatus != 0 {
+				if status, ok := ErrorStatus(err); !ok || status != tc.wantStatus {
+					t.Fatalf("expected status %d, got %v", tc.wantStatus, err)
+				}
+			}
+		})
+	}
+}
+
 func TestListUserInstallationRepositoryDetailsPreservesSourceMetadata(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {

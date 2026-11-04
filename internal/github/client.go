@@ -385,13 +385,18 @@ func (c *Client) ListUserInstallationRepositories(ctx context.Context, token str
 	if err != nil {
 		return nil, err
 	}
-	fullNames := make([]string, 0, len(repositories))
-	for _, repository := range repositories {
-		if fullName := strings.TrimSpace(repository.FullName); fullName != "" {
-			fullNames = append(fullNames, fullName)
-		}
+	return repositoryFullNames(repositories), nil
+}
+
+// ListUserInstallationRepositoriesForInstallations lists repositories using
+// current metadata previously fetched with the same user token. Missing or
+// suspended installations are rejected without repeating the metadata request.
+func (c *Client) ListUserInstallationRepositoriesForInstallations(ctx context.Context, token string, installationID int64, installations []Installation) ([]string, error) {
+	repositories, err := c.listUserInstallationRepositoryDetails(ctx, token, installationID, installations)
+	if err != nil {
+		return nil, err
 	}
-	return fullNames, nil
+	return repositoryFullNames(repositories), nil
 }
 
 // ListUserInstallationRepositoryDetails lists repository metadata accessible to both the user token and installation.
@@ -408,6 +413,17 @@ func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, toke
 	installations, err := c.ListUserInstallations(ctx, token)
 	if err != nil {
 		return nil, err
+	}
+	return c.listUserInstallationRepositoryDetails(ctx, token, installationID, installations)
+}
+
+func (c *Client) listUserInstallationRepositoryDetails(ctx context.Context, token string, installationID int64, installations []Installation) ([]Repository, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("github oauth token is required")
+	}
+	if installationID <= 0 {
+		return nil, fmt.Errorf("installation id is required")
 	}
 	active := false
 	for _, installation := range installations {
@@ -456,6 +472,16 @@ func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, toke
 		nextURL = nextLink(resp.Header.Get("Link"))
 	}
 	return repositories, nil
+}
+
+func repositoryFullNames(repositories []Repository) []string {
+	fullNames := make([]string, 0, len(repositories))
+	for _, repository := range repositories {
+		if fullName := strings.TrimSpace(repository.FullName); fullName != "" {
+			fullNames = append(fullNames, fullName)
+		}
+	}
+	return fullNames
 }
 
 func (c *Client) ListUserInstallations(ctx context.Context, token string) ([]Installation, error) {

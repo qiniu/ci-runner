@@ -8,6 +8,7 @@ import {
   adminRunnerRequestsPath,
   collectAdminRunnerPoll,
   createAutomaticPageLoadGate,
+  createUserRunnerPageGate,
   mergeAdminRunnerPages,
   reconcileAdminRunnerPages,
   shouldPollAdminSection,
@@ -238,10 +239,54 @@ describe("app load policy", () => {
   })
 
   test("keeps the jobs home light while making stable job routes resolve the bounded history", () => {
-    expect(userRunnerRequestLimit("/jobs", false)).toBe(100)
+    expect(userRunnerRequestLimit("/jobs", false)).toBe(25)
+    expect(userRunnerRequestLimit("/jobs", true)).toBe(100)
     expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", false)).toBe(500)
-    expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", true)).toBe(100)
+    expect(userRunnerRequestLimit("/github/pulls/octo/repo/12/jobs", true)).toBe(500)
+    expect(userRunnerRequestLimit("/jobs/manual/octo/repo/manual-1", true)).toBe(500)
     expect(userRunnerRequestsPath(500, 0)).toBe("/user/runner_requests?limit=500&offset=0")
+  })
+
+  test("allows polling and history after initial page completion or failure", () => {
+    const gate = createUserRunnerPageGate()
+    const initial = gate.begin()
+    gate.finish(initial)
+    const poll = gate.begin()
+    expect(poll).not.toBeNull()
+    gate.finish(poll)
+    const history = gate.begin("history")
+    expect(history).not.toBeNull()
+    expect(gate.begin()).toBeNull()
+    expect(gate.begin("history")).toBeNull()
+    gate.finish(history)
+    const retry = gate.begin()
+    expect(retry).not.toBeNull()
+    gate.finish(retry)
+    expect(gate.begin()).not.toBeNull()
+  })
+
+  test("a stale completion cannot release another route's history request", () => {
+    const gate = createUserRunnerPageGate()
+    const stale = gate.begin("history")
+    gate.reset()
+    const current = gate.begin("history")
+    gate.finish(stale)
+    expect(gate.isCurrent(stale)).toBe(false)
+    expect(gate.begin()).toBeNull()
+    gate.finish(current)
+    expect(gate.begin()).not.toBeNull()
+  })
+
+  test("keeps an older poll from overwriting manual history", () => {
+    const gate = createUserRunnerPageGate()
+    const poll = gate.begin()
+    const history = gate.begin("history")
+    expect(history).not.toBeNull()
+    expect(gate.isCurrent(poll)).toBe(false)
+    expect(gate.isCurrent(history)).toBe(true)
+    gate.finish(history)
+    const nextPoll = gate.begin()
+    expect(gate.isCurrent(nextPoll)).toBe(true)
   })
 
   test("classifies public, protected, admin, and unknown routes explicitly", () => {

@@ -1280,6 +1280,19 @@ function PullRequestsPage({
   const selectedStatus = selected ? buildGroupStatus(selected) : null
   const visibleHistoryTotal = Math.min(runnerTotal, userRunnerHistoryWindow)
   const olderRunnerCount = Math.max(0, visibleHistoryTotal - runnerCount)
+  const loadOlderJobsControl = olderRunnerCount > 0 ? (
+    <div className="border-b p-3">
+      <Button
+        className="w-full"
+        disabled={loadingRunnerHistory}
+        onClick={onLoadRunnerHistory}
+        type="button"
+        variant="outline"
+      >
+        {loadingRunnerHistory ? t("user.loadingOlderJobs") : t("user.loadOlderJobs", { count: olderRunnerCount })}
+      </Button>
+    </div>
+  ) : null
 
   return (
     <>
@@ -1326,19 +1339,7 @@ function PullRequestsPage({
                     </div>
                   )
                   })}
-                  {olderRunnerCount > 0 ? (
-                    <div className="border-b p-3">
-                      <Button
-                        className="w-full"
-                        disabled={loadingRunnerHistory}
-                        onClick={onLoadRunnerHistory}
-                        type="button"
-                        variant="outline"
-                      >
-                        {loadingRunnerHistory ? t("user.loadingOlderJobs") : t("user.loadOlderJobs", { count: olderRunnerCount })}
-                      </Button>
-                    </div>
-                  ) : null}
+                  {loadOlderJobsControl}
                 </>
               ) : jobsLoadFailed ? (
                 <div className="space-y-3 p-4 text-sm text-muted-foreground">
@@ -1354,13 +1355,16 @@ function PullRequestsPage({
                   {[0, 1, 2].map((item) => <div key={item} className="h-14 rounded-md bg-muted/60 motion-safe:animate-pulse" aria-hidden="true" />)}
                 </div>
               ) : (
-                <div className="p-4 text-sm text-muted-foreground">
-                  {hasInstallations || accountsLoadFailed ? (
-                    t("user.noJobsYet")
-                  ) : (
-                    t("user.syncToTrackJobs")
-                  )}
-                </div>
+                <>
+                  <div className="p-4 text-sm text-muted-foreground">
+                    {hasInstallations || accountsLoadFailed ? (
+                      olderRunnerCount > 0 ? t("user.noMatchingJobs") : t("user.noJobsYet")
+                    ) : (
+                      t("user.syncToTrackJobs")
+                    )}
+                  </div>
+                  {loadOlderJobsControl}
+                </>
               )}
             </div>
           </div>
@@ -1433,7 +1437,7 @@ function PullRequestsPage({
             <div className="p-4 lg:p-6"><div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
               {t("user.jobsLoadFailed")}
             </div></div>
-          ) : loadingJobs || loadingGitHubApp ? (
+          ) : loadingJobs || (!groups.length && loadingGitHubApp) ? (
             <div className="space-y-5 p-4 lg:p-6" aria-hidden="true">
               <div className="h-8 w-2/5 rounded-md bg-muted/60 motion-safe:animate-pulse" />
               <div className="h-5 w-3/5 rounded-md bg-muted/50 motion-safe:animate-pulse" />
