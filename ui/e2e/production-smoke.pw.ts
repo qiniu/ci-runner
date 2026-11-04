@@ -87,6 +87,62 @@ test("serves the custom template guide from the production bundle", async ({ pag
   diagnostics.expectClean()
 })
 
+test("keeps Jobs polling and independent retries working around manual history loading", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  const runners = fixtureRunners(140).map((runner) => ({
+    ...runner,
+    status: "failed",
+    failure_stage: "admission",
+    failure_reason: "profile_labels_not_matched",
+  }))
+  const limits: number[] = []
+  let metadataCalls = 0
+  let onboardingCalls = 0
+  let releaseHistory!: () => void
+  const historyBlocked = new Promise<void>((resolve) => { releaseHistory = resolve })
+  await page.route("**/auth/session", (route) => route.fulfill({
+    json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" },
+  }))
+  await page.route("**/user/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/user/runner_requests") {
+      const limit = Number(url.searchParams.get("limit"))
+      limits.push(limit)
+      if (limit === 500) await historyBlocked
+      await route.fulfill({ headers: { "X-Total-Count": String(runners.length) }, json: runners.slice(0, limit) })
+    } else if (url.pathname === "/user/github-app") {
+      metadataCalls += 1
+      await route.fulfill(metadataCalls === 1
+        ? { status: 500, json: { error: "fixture metadata failure" } }
+        : { json: { installations: [] } })
+    } else if (url.pathname === "/user/onboarding/product-tour") {
+      onboardingCalls += 1
+      await route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } })
+    } else {
+      await route.fulfill({ status: 404, body: "fixture route not found" })
+    }
+  })
+  try {
+    await page.goto("/jobs")
+    const older = page.getByRole("button", { name: /Load \d+ older jobs/ })
+    await expect(older).toBeVisible()
+    // Exercise the actual App initial-load finally before the first timer tick.
+    await expect.poll(() => limits.includes(100), { timeout: 10_000 }).toBe(true)
+    await older.click()
+    await expect.poll(() => limits.includes(500)).toBe(true)
+    await page.getByRole("button", { name: "Try again", exact: true }).click()
+    // A blocked runner page must not skip metadata or onboarding resources.
+    await expect.poll(() => metadataCalls).toBe(2)
+    await expect.poll(() => onboardingCalls).toBe(2)
+    releaseHistory()
+    await expect(page.getByRole("button", { name: /Loading older jobs/ })).toHaveCount(0)
+    const polls = limits.filter((limit) => limit === 100).length
+    await expect.poll(() => limits.filter((limit) => limit === 100).length, { timeout: 10_000 }).toBeGreaterThan(polls)
+  } finally {
+    releaseHistory()
+  }
+})
+
 test("keeps the Jobs list independently scrollable beside the Web Console", async ({ page }, testInfo) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
 

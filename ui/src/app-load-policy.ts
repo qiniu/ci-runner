@@ -92,24 +92,23 @@ export function createScopedRequestGate() {
 // started before the replacement may finish later with an older snapshot.
 export function createUserRunnerPageGate() {
   let generation = 0
-  let historyLoading = false
+  let historyOwner: number | null = null
   return {
-    begin(polling = false) {
-      if (polling && historyLoading) return null
-      if (!polling && historyLoading) return null
+    begin(kind: "page" | "history" = "page") {
+      if (historyOwner !== null) return null
       generation += 1
-      if (!polling) historyLoading = true
+      if (kind === "history") historyOwner = generation
       return generation
     },
     isCurrent(candidate: number | null | undefined) {
       return candidate === generation
     },
-    finish(history = false) {
-      if (history) historyLoading = false
+    finish(candidate: number) {
+      if (historyOwner === candidate) historyOwner = null
     },
     reset() {
       generation += 1
-      historyLoading = false
+      historyOwner = null
     },
   }
 }

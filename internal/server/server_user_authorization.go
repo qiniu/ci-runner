@@ -142,7 +142,7 @@ func (s *Server) loadUserRepositoryAccess(ctx context.Context, accountID int64) 
 			continue
 		}
 		group.Go(func() error {
-			items, err := s.gh.ListUserInstallationRepositoriesForActiveInstallation(groupCtx, token, installation.InstallationID)
+			items, err := s.gh.ListUserInstallationRepositoriesForInstallations(groupCtx, token, installation.InstallationID, currentInstallations)
 			if err != nil {
 				if status, ok := github.ErrorStatus(err); ok &&
 					(status == http.StatusNotFound || (status == http.StatusForbidden && !github.IsRateLimitError(err))) {

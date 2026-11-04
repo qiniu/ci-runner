@@ -388,12 +388,11 @@ func (c *Client) ListUserInstallationRepositories(ctx context.Context, token str
 	return repositoryFullNames(repositories), nil
 }
 
-// ListUserInstallationRepositoriesForActiveInstallation lists repositories for
-// an installation whose current active metadata was already verified by the
-// caller. This avoids repeating the account-wide /user/installations request
-// when several installations are loaded together.
-func (c *Client) ListUserInstallationRepositoriesForActiveInstallation(ctx context.Context, token string, installationID int64) ([]string, error) {
-	repositories, err := c.listUserInstallationRepositoryDetails(ctx, token, installationID)
+// ListUserInstallationRepositoriesForInstallations lists repositories using
+// current metadata previously fetched with the same user token. Missing or
+// suspended installations are rejected without repeating the metadata request.
+func (c *Client) ListUserInstallationRepositoriesForInstallations(ctx context.Context, token string, installationID int64, installations []Installation) ([]string, error) {
+	repositories, err := c.listUserInstallationRepositoryDetails(ctx, token, installationID, installations)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +414,17 @@ func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, toke
 	if err != nil {
 		return nil, err
 	}
+	return c.listUserInstallationRepositoryDetails(ctx, token, installationID, installations)
+}
+
+func (c *Client) listUserInstallationRepositoryDetails(ctx context.Context, token string, installationID int64, installations []Installation) ([]Repository, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("github oauth token is required")
+	}
+	if installationID <= 0 {
+		return nil, fmt.Errorf("installation id is required")
+	}
 	active := false
 	for _, installation := range installations {
 		if installation.ID == installationID && installation.SuspendedAt == nil {
@@ -425,10 +435,6 @@ func (c *Client) ListUserInstallationRepositoryDetails(ctx context.Context, toke
 	if !active {
 		return nil, &apiError{Operation: "github user installation", StatusCode: http.StatusNotFound, Body: "installation is unavailable"}
 	}
-	return c.listUserInstallationRepositoryDetails(ctx, token, installationID)
-}
-
-func (c *Client) listUserInstallationRepositoryDetails(ctx context.Context, token string, installationID int64) ([]Repository, error) {
 	nextURL := fmt.Sprintf("%s/user/installations/%d/repositories?per_page=100", c.baseURL, installationID)
 	var repositories []Repository
 	for nextURL != "" {

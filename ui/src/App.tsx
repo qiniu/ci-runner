@@ -708,31 +708,32 @@ function App() {
       ? userRunnerRequestGate.begin(`${account}:${locationPath}`)
       : null
     if (runnerRequest) {
-      const pageLoadID = userRunnerPageGate.begin(polling)
+      const pageLoadID = userRunnerPageGate.begin()
       if (pageLoadID === null) {
         userRunnerRequestGate.finish(runnerRequest)
-        return
+      } else {
+        tasks.push(requestUserRunnerPage(userRunnerRequestLimit(locationPath, polling), 0)
+          .then((runnerPage) => {
+            if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
+            setUserRunnerTotal(runnerPage.total)
+            setUserRunners((current) => polling ? mergeUserRunnerPages(runnerPage.items, current) : runnerPage.items)
+            setUserJobsLoad({ account, status: "ready" })
+            if (runnerPage.total === 0) setUserSelectedKey("")
+          })
+          .catch((error) => {
+            if (!userRunnerPageGate.isCurrent(pageLoadID)) return
+            if (userLoadGate.isCurrent(loadID) && !polling) {
+              setUserJobsLoad((current) => current?.account === account && current.status === "ready"
+                ? current
+                : { account, status: "error" })
+            }
+            reportError(error)
+          })
+          .finally(() => {
+            userRunnerPageGate.finish(pageLoadID)
+            userRunnerRequestGate.finish(runnerRequest)
+          }))
       }
-      tasks.push(requestUserRunnerPage(userRunnerRequestLimit(locationPath, polling), 0)
-        .then((runnerPage) => {
-          if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
-          setUserRunnerTotal(runnerPage.total)
-          setUserRunners((current) => polling ? mergeUserRunnerPages(runnerPage.items, current) : runnerPage.items)
-          setUserJobsLoad({ account, status: "ready" })
-          if (runnerPage.total === 0) setUserSelectedKey("")
-        })
-        .catch((error) => {
-          if (userLoadGate.isCurrent(loadID) && !polling) {
-            setUserJobsLoad((current) => current?.account === account && current.status === "ready"
-              ? current
-              : { account, status: "error" })
-          }
-          reportError(error)
-        })
-        .finally(() => {
-          userRunnerPageGate.finish()
-          userRunnerRequestGate.finish(runnerRequest)
-        }))
     }
 
     if (resources.includes("github_app")) {
@@ -802,7 +803,7 @@ function App() {
 
   const loadUserRunnerHistory = useCallback(async () => {
     if (!authSession.authenticated || loadingUserRunnerHistory) return
-    const pageLoadID = userRunnerPageGate.begin()
+    const pageLoadID = userRunnerPageGate.begin("history")
     if (pageLoadID === null) return
     const loadID = userLoadGate.begin(`${authSession.login ?? ""}:${locationPath}`)
     setLoadingUserRunnerHistory(true)
@@ -811,7 +812,9 @@ function App() {
       if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
       setUserRunnerTotal(page.total)
       setUserRunners(page.items)
+      setUserJobsLoad({ account: authSession.login ?? "", status: "ready" })
     } catch (error) {
+      if (!userLoadGate.isCurrent(loadID) || !userRunnerPageGate.isCurrent(pageLoadID)) return
       if (requiresGitHubReauthentication(error)) {
         if (beginGitHubReauthentication()) {
           toast.message(appI18n.t("app.refreshingGitHubSignIn"))
@@ -821,8 +824,8 @@ function App() {
       }
       toast.error(error instanceof Error ? error.message : appI18n.t("app.olderJobsLoadFailed"))
     } finally {
-      userRunnerPageGate.finish(true)
-      setLoadingUserRunnerHistory(false)
+      if (userRunnerPageGate.isCurrent(pageLoadID)) setLoadingUserRunnerHistory(false)
+      userRunnerPageGate.finish(pageLoadID)
     }
   }, [authSession.authenticated, authSession.login, beginGitHubReauthentication, loadingUserRunnerHistory, locationPath, refreshGitHubOAuthLogin, requestUserRunnerPage, userLoadGate, userRunnerPageGate])
 
@@ -1073,6 +1076,7 @@ function App() {
       if (timer !== null) window.clearInterval(timer)
       userRunnerRequestGate.reset()
       userRunnerPageGate.reset()
+      setLoadingUserRunnerHistory(false)
     }
   }, [authSession.authenticated, hasAccess, isAdminRoute, loadUserAll, locationPath, userRunnerPageGate, userRunnerRequestGate])
 
@@ -1160,6 +1164,7 @@ function App() {
     userLoadGate.begin("")
     userRunnerRequestGate.reset()
     userRunnerPageGate.reset()
+    setLoadingUserRunnerHistory(false)
     setGitHubApp(null)
     setAuthorizedRepositories({})
     setRepositoryErrors({})
