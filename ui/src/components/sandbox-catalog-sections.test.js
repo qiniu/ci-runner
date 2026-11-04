@@ -15,6 +15,7 @@ const domGlobals = {
   document: window.document,
   navigator: window.navigator,
   HTMLElement: window.HTMLElement,
+  HTMLFormElement: window.HTMLFormElement,
   SVGElement: window.SVGElement,
   Node: window.Node,
   DocumentFragment: window.DocumentFragment,

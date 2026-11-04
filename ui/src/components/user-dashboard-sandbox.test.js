@@ -4,10 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server"
 
 import i18n from "../i18n"
 
-mock.module("xterm", () => ({
+mock.module("@xterm/xterm", () => ({
   Terminal: class Terminal {},
 }))
-mock.module("xterm-addon-fit", () => ({
+mock.module("@xterm/addon-fit", () => ({
   FitAddon: class FitAddon {},
 }))
 

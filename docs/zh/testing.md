@@ -6,6 +6,10 @@
 
 本地质量检查使用 `task lint`；其中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
 
+UI 依赖维护暂时保留 TypeScript 5、Vite 7 和 ESLint 9，主版本迁移需单独验证。`eslint-plugin-react-hooks` 固定为 7.0.1：7.1.1 会将现有 ref 和 effect 用法报告为错误，升级前需单独评估，不通过关闭规则绕过。终端使用 `@xterm/xterm` 和 `@xterm/addon-fit`；终端依赖变更后运行 `task ui-production-smoke` 和 `task ui-terminal-fault-test`。包含 Bun 依赖安装的任务应串行执行，避免链接冲突。
+
+2026-11-04 更新 UI 依赖后的 `bun audit` 仍报告一项中危 [minimatch 公告](https://github.com/advisories/GHSA-g3hv-75wg-m249)。ESLint 9 和 TypeScript ESLint 分别依赖 minimatch 3 和 10，而公告覆盖低于 11.0.1 的版本。这些依赖用于开发工具，但审计尚未清零；下次升级应重新检查上游修复，不通过 override 强行替换为不兼容的主版本。
+
 ## CI 检查范围
 
 `Check` 在 PR 和 main 推送时运行应用测试、构建及发布归档验证。

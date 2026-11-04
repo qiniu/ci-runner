@@ -6,6 +6,10 @@ This guide explains how to test the service with a local Qiniu sandbox environme
 
 Run `task lint` for local quality checks. Its `staticcheck` step uses the Go version declared in `go.mod`, matching CI.
 
+UI dependency maintenance keeps TypeScript 5, Vite 7 and ESLint 9 until their major-version migrations are verified. `eslint-plugin-react-hooks` is pinned to 7.0.1: 7.1.1 reports existing ref and effect patterns as errors, so upgrading it needs a separate assessment without disabling those rules. The terminal uses `@xterm/xterm` and `@xterm/addon-fit`; run `task ui-production-smoke` and `task ui-terminal-fault-test` after terminal dependency changes. Run tasks that install Bun dependencies sequentially to avoid link collisions.
+
+The 2026-11-04 `bun audit` check after the UI updates reports one remaining moderate [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249). ESLint 9 and TypeScript ESLint still require minimatch 3 and 10 respectively, while the advisory identifies versions below 11.0.1. These are development-tool dependencies; this is not a clean audit. Recheck upstream fixes before the next upgrade rather than forcing an incompatible major through an override.
+
 ## CI scope
 
 `Check` runs application tests, builds and release archive validation on PRs and
