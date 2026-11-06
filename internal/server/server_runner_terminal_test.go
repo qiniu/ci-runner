@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -46,7 +47,8 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 			}))
 			defer api.Close()
 			store := state.New(t.TempDir())
-			srv := newTestServer(t, store, api.URL, &fakeSandbox{})
+			fake := &fakeSandbox{}
+			srv := newTestServer(t, store, api.URL, fake)
 			srv.Close()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -126,7 +128,7 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 			for {
 				select {
 				case <-timeout.C:
-					if change == "authorized" && accessChecks.Load() >= 2 && !session.terminal.(*fakeTerminalSession).isClosed() {
+					if change == "authorized" && accessChecks.Load() >= 2 && !fake.terminal.isClosed() {
 						return
 					}
 					t.Fatal("attached runner terminal survived lifecycle/access change")
@@ -141,10 +143,10 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 					}
 					// CloseSession removes the hub entry before closing the PTY.
 					deadline := time.Now().Add(time.Second)
-					for !session.terminal.(*fakeTerminalSession).isClosed() && time.Now().Before(deadline) {
+					for !fake.terminal.isClosed() && time.Now().Before(deadline) {
 						time.Sleep(time.Millisecond)
 					}
-					if !session.terminal.(*fakeTerminalSession).isClosed() {
+					if !fake.terminal.isClosed() {
 						t.Fatal("revocation did not close the remote shell")
 					}
 					if _, ok := srv.terminals.Get(result.SessionID); ok {
@@ -206,12 +208,27 @@ func TestRunnerTerminalBelongsToOpeningAccountAndAttempt(t *testing.T) {
 		return rec
 	}
 	path := "/user/runner_requests/" + st.ID + "/terminal"
+	// Output can arrive before the provider returns a PTY. Keep its original
+	// byte offset even if the handshake alone fills the replay tail.
+	burst := strings.Repeat("x", 160<<10)
+	fake.onTerminalOpen = func(_ context.Context, output func([]byte)) { output([]byte(burst)) }
 	created := call("hubot-id", http.MethodPost, path, `{}`)
 	var response struct {
 		ID string `json:"session_id"`
 	}
 	if err := json.Unmarshal(created.Body.Bytes(), &response); err != nil || created.Code != 201 || response.ID == "" {
 		t.Fatal("create terminal", created.Code, err)
+	}
+	active, ok := srv.terminals.Get(response.ID)
+	if !ok {
+		t.Fatal("published terminal is missing")
+	}
+	start := uint64(0)
+	if _, next, ok := active.outputAfter(&start); ok || next != uint64(len("terminal ready\n")+len(burst)) {
+		t.Fatalf("lost truncated handshake offset: next=%d replayable=%t", next, ok)
+	}
+	if tail, _, ok := active.outputAfter(nil); !ok || len(tail) != 64<<10 {
+		t.Fatalf("handshake tail: bytes=%d retained=%t", len(tail), ok)
 	}
 	session := path + "/" + response.ID
 	// Both accounts can see this Job. Possessing its session ID must not
@@ -242,7 +259,10 @@ func TestRunnerTerminalBelongsToOpeningAccountAndAttempt(t *testing.T) {
 	}
 
 	// The provider may finish opening a PTY after the request has moved on.
-	fake.onTerminalOpen = func() {
+	var openingCtx context.Context
+	fake.onTerminalOpen = func(ctx context.Context, _ func([]byte)) {
+		openingCtx = ctx
+		fake.terminal.closeError = errors.New("remote Kill unavailable")
 		current, err := store.ReadState(st.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -254,5 +274,8 @@ func TestRunnerTerminalBelongsToOpeningAccountAndAttempt(t *testing.T) {
 	}
 	if rec := call("hubot-id", http.MethodPost, path, `{}`); rec.Code != http.StatusConflict || !fake.terminal.isClosed() {
 		t.Fatal("stale PTY escaped open", rec.Code)
+	}
+	if openingCtx.Err() == nil {
+		t.Fatal("rejected PTY output stream stayed open after Kill failed")
 	}
 }
