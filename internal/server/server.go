@@ -69,9 +69,6 @@ type Server struct {
 	diagnosticJobCache map[string]cachedDiagnosticJob
 	diagnosticJobGroup singleflight.Group
 
-	networkDiagnosticMu       sync.Mutex
-	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
-
 	userRepositoryAccessMu    sync.Mutex
 	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
 	userRepositoryAccessEpoch map[int64]uint64
@@ -205,7 +202,6 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		pullTitleCache:            map[string]cachedPullTitle{},
 		workflowRunCache:          map[string]cachedWorkflowRun{},
 		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
-		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
 		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
 		userRepositoryAccessEpoch: map[int64]uint64{},
 	}

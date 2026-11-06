@@ -571,6 +571,8 @@ type SandboxServiceDefaultAudience struct {
 
 type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	ClaimNetworkDiagnostic(ctx context.Context, st RunnerState, token string, timeout, cooldown time.Duration) (time.Duration, error)
+	FinishNetworkDiagnostic(ctx context.Context, st RunnerState, token, message string, cooldown time.Duration) error
 	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
 	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
 	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error)

@@ -176,8 +176,8 @@ jobs:
       - run: cd ui && bun install --frozen-lockfile && bun run build
       - name: Verify running watch renewal and takeover between two PostgreSQL-backed Runner processes
         run: go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1
-      - name: Verify creation and cleanup takeover on PostgreSQL
-        run: go test -race ./internal/server -run '^Test(SweeperDiscardsSupersededIdleObservation|LateStartFailureAfterPeerAdoption|RunnerCleanupProcess|ReconciledBootstrapFailureRespectsRetryBudget|WindowsJITRegistrationProcess)$' -count=1
+      - name: Verify creation, cleanup, and network diagnostic ownership on PostgreSQL
+        run: go test -race ./internal/server -run '^Test(SweeperDiscardsSupersededIdleObservation|LateStartFailureAfterPeerAdoption|RunnerCleanupProcess|NetworkDiagnosticPeerPostgresSQLBackends|ReconciledBootstrapFailureRespectsRetryBudget|WindowsJITRegistrationProcess)$' -count=1
       - name: Verify Deploy work ownership across PostgreSQL processes
         run: go test -race ./internal/deployment/worker -run '^Test(DeploymentWorkProcess|LateDeploymentCreateReceiptSurvivesStop)$' -count=1
       - name: Verify schema, catalog, deployments, and migrations on SQL backends
