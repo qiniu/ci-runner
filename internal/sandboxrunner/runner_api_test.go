@@ -167,6 +167,17 @@ func TestFindRunnerSandboxByProvisionAttempt(t *testing.T) {
 	}
 }
 
+func TestFindRunnerSandboxListFailureIsNotAbsence(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer api.Close()
+	id, err := newTestService(t, api).FindRunnerSandbox(t.Context(), "job", "attempt")
+	if id != "" || err == nil || errors.Is(err, ErrSandboxNotFound) {
+		t.Fatalf("failed provider list was treated as discovery: id=%q err=%v", id, err)
+	}
+}
+
 func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
