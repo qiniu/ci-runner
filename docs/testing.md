@@ -901,6 +901,8 @@ If bootstrap fails after the provider creates the Sandbox, recovery first attemp
 
 `TestLateStartFailureAfterPeerAdoption` uses independent service processes and a simulated provider on SQLite and PostgreSQL. It runs startup recovery and the timeout sweep against a healthy creator, then exercises a delayed response and a process killed after provider acceptance. The first lookup misses and the next finds the Sandbox. Both cases verify the original attempt, Sandbox ID, PID and retry count. The PostgreSQL CI job runs the fixture under the race detector.
 
+A metadata match checkpoints the exact Sandbox ID before reconnect. `TestReconciledBootstrapFailureRespectsRetryBudget` covers a subsequent Connect 404 and verifies the missing-listener retry budget. `TestWindowsJITRecoveryCleansRegistrationBeforeRequeue` verifies that a temporary GitHub cleanup failure preserves a deterministic bootstrap failure until the JIT identity is gone.
+
 `TestRunnerCleanupProcess` blocks a child service in Sandbox stop while a peer runs startup recovery. It then pauses or kills the child during GitHub DELETE and recovers the same numeric registration. The peer skips the confirmed Sandbox stop and retains the first termination source and a concurrent exit observation. The fixture returns 404 on replay and would return a different registration for a second name lookup. Run against a dedicated PostgreSQL database with the same environment as the creation test.
 
 The kill case accepts a manual stop during an unassigned process exit. After takeover the request retains that exit and stays terminal; an explicit fresh retry clears the manual stop intent.

@@ -366,6 +366,10 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
+	if lease.currentToken != "" && st.Status == StatusCreating && st.CleanupSandboxDone {
+		// The active creator confirmed its exact Sandbox is already gone.
+		updates["cleanup_sandbox_done"] = true
+	}
 	if st.ManualStopRequested {
 		updates["manual_stop_requested"] = true
 	}

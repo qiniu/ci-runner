@@ -28,14 +28,19 @@ func (p *lostCreateResponse) StartRunner(_ context.Context, input sandboxrunner.
 
 type failingBootstrapSandbox struct {
 	*fakeSandbox
-	failure   error
-	operation string
-	starts    int
+	failure      error
+	operation    string
+	starts       int
+	lostResponse bool
 }
 
 func (p *failingBootstrapSandbox) StartRunner(ctx context.Context, input sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
 	p.starts++
 	id := fmt.Sprintf("bootstrap-%d", p.starts)
+	if p.lostResponse {
+		p.recoverResult.SandboxID = id // Only the subsequent metadata match identifies the allocation.
+		return sandboxrunner.StartResult{}, sandboxrunner.ErrCreateOutcomeUnknown
+	}
 	if err := input.RecordSandbox(ctx, id); err != nil {
 		return sandboxrunner.StartResult{}, err
 	}
@@ -51,6 +56,7 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 		{"transient", "connection reset: sensitive provider detail", "temporary_network_error", "write runner script", 1},
 		{"rate limited after creation", "status 429", "http_rate_limited", "write runner script", 1},
 		{"creator lost before retaining cause", "EOF", "runner_missing_after_create", "", 1},
+		{"located Sandbox disappeared before reconnect", "", "runner_missing_after_create", "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const id = "bootstrap"
@@ -63,6 +69,16 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 			api := httptest.NewServer(githubRunnerAPI(t))
 			defer api.Close()
 			provider := &failingBootstrapSandbox{fakeSandbox: &fakeSandbox{recoverErr: sandboxrunner.ErrRunnerNotFound}, failure: errors.New(tc.message), operation: tc.operation}
+			if tc.name == "located Sandbox disappeared before reconnect" {
+				provider.lostResponse = true
+				provider.recoverErr = sandboxrunner.ErrSandboxNotFound
+				provider.recoverHook = func(input sandboxrunner.RecoverInput) {
+					saved, err := store.ReadState(id)
+					if err != nil || input.SandboxID != provider.recoverResult.SandboxID || saved.SandboxID != input.SandboxID {
+						t.Errorf("reconnecting without persisted exact ID: input=%q saved=%q error=%v", input.SandboxID, saved.SandboxID, err)
+					}
+				}
+			}
 			srv := newRunnerLifecycleTestServer(t, store, api.URL, provider)
 			srv.cfg.WorkerLeaseTTL = 150 * time.Millisecond
 			srv.cfg.RetryBaseDelay, srv.cfg.RetryMaxDelay, srv.cfg.RetryMaxAttempts = 20*time.Millisecond, 20*time.Millisecond, 1
@@ -81,7 +97,7 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 				st, err := store.ReadState(id)
-				if err != nil || st.Status != state.StatusCreating || st.SandboxID == "" || st.RetryCount != index {
+				if err != nil || st.Status != state.StatusCreating || (st.SandboxID == "") != provider.lostResponse || st.RetryCount != index {
 					t.Fatalf("attempt not retained for cleanup: %#v, %v", st, err)
 				}
 				for st.Status == state.StatusCreating {
@@ -107,8 +123,14 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 					if st.Status != state.StatusQueued || st.RetryCount != index+1 || st.NextRetryAt.IsZero() {
 						t.Fatalf("expected bounded delayed retry: %#v", st)
 					}
-				} else if st.Status != state.StatusFailed || st.RetryCount != tc.retries || provider.starts != index+1 || provider.stoppedCount() != provider.starts {
-					t.Fatalf("expected terminal failure after %d cleanups: %#v", provider.starts, st)
+				} else {
+					expectedStops := provider.starts
+					if provider.lostResponse {
+						expectedStops = 0 // Connect proved the located Sandbox already disappeared.
+					}
+					if st.Status != state.StatusFailed || st.RetryCount != tc.retries || provider.starts != index+1 || provider.stoppedCount() != expectedStops {
+						t.Fatalf("expected terminal failure after %d attempts and %d stops: %#v", provider.starts, expectedStops, st)
+					}
 				}
 			}
 		})
@@ -139,6 +161,7 @@ func TestLateStartFailureAfterPeerAdoption(t *testing.T) {
 		}
 		fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{SandboxID: "adopted", PID: 49}}
 		if phase == "invisible" {
+			fake.recoverResult = sandboxrunner.StartResult{}
 			fake.recoverErr = sandboxrunner.ErrSandboxNotFound
 		}
 		fake.recoverHook = func(input sandboxrunner.RecoverInput) {
@@ -168,21 +191,23 @@ func TestLateStartFailureAfterPeerAdoption(t *testing.T) {
 			return
 		}
 		end := time.Now().Add(8 * time.Second)
-		for fake.recoveredCount() == 0 && time.Now().Before(end) {
+		for time.Now().Before(end) {
 			srv.recoverExpiredRunnerWatches(t.Context())
-			if fake.recoveredCount() == 0 {
-				time.Sleep(30 * time.Millisecond)
+			if phase == "invisible" {
+				got := assertAdmissionState(t, store, id, state.StatusCreating)
+				if got.LastErrorCode == "sandbox_create_outcome_unknown" {
+					if !got.SandboxCreateDispatched || got.ProvisionAttemptID == "" || got.RetryCount != 0 || fake.stoppedCount() != 0 || fake.recoveredCount() != 0 {
+						t.Fatal("unknown create result was abandoned or reconnected without an ID")
+					}
+					return
+				}
+			} else if fake.recoveredCount() == 1 {
+				break
 			}
+			time.Sleep(30 * time.Millisecond)
 		}
 		if fake.recoveredCount() != 1 {
 			t.Fatal("expected a single recovery")
-		}
-		if phase == "invisible" {
-			got := assertAdmissionState(t, store, id, state.StatusCreating)
-			if got.LastErrorCode != "sandbox_create_outcome_unknown" || !got.SandboxCreateDispatched || got.ProvisionAttemptID == "" || got.RetryCount != 0 || fake.stoppedCount() != 0 {
-				t.Fatal("unknown create result was abandoned")
-			}
-			return
 		}
 		assertAdmissionState(t, store, id, state.StatusRunning)
 		return
