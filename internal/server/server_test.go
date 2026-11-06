@@ -60,6 +60,7 @@ type fakeSandbox struct {
 	commandContext     context.Context
 	repositoryURL      string
 	runnerGroup        string
+	onTerminalOpen     func(context.Context, func([]byte))
 	terminal           *fakeTerminalSession
 	diagnosticResult   sandboxrunner.NetworkDiagnosticResult
 	diagnosticErr      error
@@ -255,6 +256,9 @@ func (f *fakeSandbox) StartTerminal(ctx context.Context, sandboxID string, size 
 	if onData != nil {
 		onData([]byte("terminal ready\n"))
 	}
+	if f.onTerminalOpen != nil {
+		f.onTerminalOpen(ctx, onData)
+	}
 	return terminal, nil
 }
 
@@ -286,11 +290,12 @@ func (f *fakeSandbox) RunNetworkDiagnostic(ctx context.Context, sandboxID string
 }
 
 type fakeTerminalSession struct {
-	mu      sync.Mutex
-	pid     uint32
-	input   string
-	closed  bool
-	resized sandboxrunner.PtySize
+	mu         sync.Mutex
+	pid        uint32
+	input      string
+	closed     bool
+	resized    sandboxrunner.PtySize
+	closeError error
 }
 
 func (f *fakeTerminalSession) PID() uint32 {
@@ -314,8 +319,8 @@ func (f *fakeTerminalSession) Resize(ctx context.Context, size sandboxrunner.Pty
 func (f *fakeTerminalSession) Close(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.closed = true
-	return nil
+	f.closed = true // Record the attempted remote close, including errors.
+	return f.closeError
 }
 
 func (f *fakeTerminalSession) isClosed() bool {

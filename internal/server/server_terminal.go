@@ -95,19 +95,41 @@ func newTerminalHub(logger *slog.Logger) *terminalHub {
 }
 
 func (h *terminalHub) Add(requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
-	session := &terminalSession{
-		id:        newID(),
+	return h.add(newID(), requestID, sandboxID, terminal)
+}
+
+func (h *terminalHub) add(id, requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
+	session := newTerminalSession(id, requestID, sandboxID)
+	h.attach(session, terminal)
+	return session
+}
+
+func newTerminalSession(id, requestID, sandboxID string) *terminalSession {
+	return &terminalSession{
+		id:        id,
 		requestID: requestID,
 		sandboxID: sandboxID,
-		terminal:  terminal,
 		createdAt: time.Now().UTC(),
 		idleSince: time.Now(),
 		watchers:  map[chan []byte]struct{}{},
 	}
+}
+
+func (h *terminalHub) attach(session *terminalSession, terminal sandboxrunner.TerminalSession) {
+	session.terminal = terminal
 	h.mu.Lock()
 	h.sessions[session.id] = session
 	h.mu.Unlock()
-	return session
+}
+
+type terminalProcess struct {
+	sandboxrunner.TerminalSession
+	cancel context.CancelFunc
+}
+
+func (p *terminalProcess) Close(ctx context.Context) error {
+	defer p.cancel()
+	return p.TerminalSession.Close(ctx)
 }
 
 func (h *terminalHub) Get(sessionID string) (*terminalSession, bool) {
@@ -285,25 +307,30 @@ func (s *terminalSession) closeWatchers() {
 }
 
 func (s *Server) userRunnerState(w http.ResponseWriter, r *http.Request) (state.RunnerState, bool) {
+	st, _, ok := s.userRunnerStateAndAccount(w, r)
+	return st, ok
+}
+
+func (s *Server) userRunnerStateAndAccount(w http.ResponseWriter, r *http.Request) (state.RunnerState, int64, bool) {
 	_, account, ok := s.requireUserSession(w, r)
 	if !ok {
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "runner not found")
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	access, err := s.userAuthorizedRepositoryAccess(r.Context(), account.ID)
 	if err != nil {
 		s.writeUserRepositoryAuthorizationError(w, err)
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	if hasRepositoryAccess(access, st.GitHubInstallationID, st.RepositoryFullName) {
-		return userVisibleRunnerState(st), true
+		return userVisibleRunnerState(st), account.ID, true
 	}
 	writeError(w, http.StatusNotFound, "runner not found")
-	return state.RunnerState{}, false
+	return state.RunnerState{}, 0, false
 }
 
 func (s *Server) handleUserGetRunner(w http.ResponseWriter, r *http.Request) {
@@ -531,16 +558,17 @@ func (s *Server) handleUserGetRunnerLog(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	_, account, ok := s.requireUserSession(w, r)
+	st, accountID, ok := s.userRunnerStateAndAccount(w, r)
 	if !ok {
 		return
 	}
 	if !runnerTerminalAvailable(st) {
 		writeError(w, http.StatusConflict, "terminal is only available while a sandbox job is active")
+		return
+	}
+	sessionID, err := s.newTerminalSessionID(accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot create terminal session")
 		return
 	}
 	var input terminalCreateRequest
@@ -561,35 +589,38 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	var session *terminalSession
-	var sessionMu sync.Mutex
-	var pending [][]byte
-	terminalCtx := s.loopCtx
-	if terminalCtx == nil {
-		terminalCtx = context.Background()
+	parent := s.loopCtx
+	if parent == nil {
+		parent = context.Background()
 	}
-	terminal, err := svc.StartTerminal(terminalCtx, st.SandboxID, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}, func(data []byte) {
-		sessionMu.Lock()
-		defer sessionMu.Unlock()
-		if session != nil {
-			session.append(data)
-			return
-		}
-		pending = append(pending, append([]byte(nil), data...))
-	})
+	terminalCtx, cancelStream := context.WithCancel(parent)
+	stopRequestCancel := context.AfterFunc(r.Context(), cancelStream)
+	// Buffer handshake output in the same bounded tail as an attached PTY.
+	// Only publish the session once both the provider and authorization agree.
+	session := newTerminalSession(sessionID, runnerTerminalKey(st, accountID), st.SandboxID)
+	terminal, err := svc.StartTerminal(terminalCtx, st.SandboxID, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}, session.append)
 	if err != nil {
+		stopRequestCancel()
+		cancelStream()
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	sessionMu.Lock()
-	session = s.terminals.Add(st.ID, st.SandboxID, terminal)
-	s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
-	for _, data := range pending {
-		session.append(data)
+	current, currentAccount, authorized := s.userRunnerStateAndAccount(w, r)
+	stopRequestCancel()
+	if !authorized || currentAccount != accountID || r.Context().Err() != nil || terminalCtx.Err() != nil || !sameRunnerTerminal(st, current, accountID) {
+		cancelStream()
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = terminal.Close(closeCtx)
+		if authorized {
+			writeError(w, http.StatusConflict, "runner changed while connecting terminal")
+		}
+		return
 	}
-	pending = nil
-	sessionMu.Unlock()
-	go s.watchRunnerTerminal(terminalCtx, st, account.ID, session.id)
+	s.terminals.attach(session, &terminalProcess{TerminalSession: terminal, cancel: cancelStream})
+	s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
+	go s.watchRunnerTerminal(terminalCtx, st, accountID, session.id)
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session_id": session.id,
 		"pid":        terminal.PID(),
@@ -615,8 +646,7 @@ func (s *Server) watchRunnerTerminal(ctx context.Context, expected state.RunnerS
 				return
 			}
 			current, err := s.store.ReadState(expected.ID)
-			if err != nil || !runnerTerminalAvailable(current) || current.SandboxID != expected.SandboxID ||
-				current.GitHubInstallationID != expected.GitHubInstallationID || current.RepositoryFullName != expected.RepositoryFullName {
+			if err != nil || !sameRunnerTerminal(expected, current, accountID) {
 				return
 			}
 			if time.Now().Before(nextAccessCheck) {
@@ -634,26 +664,23 @@ func (s *Server) watchRunnerTerminal(ctx context.Context, expected state.RunnerS
 }
 
 func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
 	s.streamTerminalSession(w, r, session)
 }
 
+// HTTP Server.WriteTimeout is absolute, including for an idle SSE connection.
+// Renew it before headers and each write, while still bounding blocked writes.
+func prepareTerminalStreamWrite(controller *http.ResponseController) bool {
+	err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	return err == nil || errors.Is(err, http.ErrNotSupported)
+}
+
 func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	controller := http.NewResponseController(w)
-	// HTTP Server.WriteTimeout is absolute, even while a stream is active.
-	// Renew it for each write, while still bounding a blocked browser connection.
-	prepareWrite := func() bool {
-		err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		return err == nil || errors.Is(err, http.ErrNotSupported)
-	}
-	if !prepareWrite() {
+	if !prepareTerminalStreamWrite(controller) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -690,7 +717,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		if len(data) == 0 {
 			return true
 		}
-		if !prepareWrite() {
+		if !prepareTerminalStreamWrite(controller) {
 			return false
 		}
 		if err := writeTerminalEvent(w, data, offset); err != nil {
@@ -712,7 +739,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if !prepareWrite() {
+			if !prepareTerminalStreamWrite(controller) {
 				return
 			}
 			if _, err := fmt.Fprintf(w, ": keepalive\n\nid: %d\nevent: terminal-heartbeat\ndata: {}\n\n", *cursor); err != nil {
@@ -723,7 +750,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 			}
 		case _, ok := <-ch:
 			if !ok {
-				if prepareWrite() {
+				if prepareTerminalStreamWrite(controller) {
 					_, _ = io.WriteString(w, "event: terminal-closed\ndata: {}\n\n")
 					_ = controller.Flush()
 				}
@@ -739,11 +766,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 }
 
 func (s *Server) handleUserRunnerTerminalInput(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -766,11 +789,7 @@ func (s *Server) sendTerminalInput(w http.ResponseWriter, r *http.Request, sessi
 }
 
 func (s *Server) handleUserRunnerTerminalResize(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -793,11 +812,7 @@ func (s *Server) resizeTerminalSession(w http.ResponseWriter, r *http.Request, s
 }
 
 func (s *Server) handleUserCloseRunnerTerminal(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	if _, ok := s.authorizedTerminalSession(w, r, st, false); !ok {
+	if _, ok := s.authorizedTerminalSession(w, r, false); !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -809,10 +824,25 @@ func (s *Server) handleUserCloseRunnerTerminal(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) authorizedTerminalSession(w http.ResponseWriter, r *http.Request, st state.RunnerState, requireAvailable bool) (*terminalSession, bool) {
+func sameRunnerTerminal(expected, current state.RunnerState, accountID int64) bool {
+	return runnerTerminalAvailable(current) && current.SandboxID == expected.SandboxID &&
+		runnerTerminalKey(current, accountID) == runnerTerminalKey(expected, accountID)
+}
+
+// Bind to the persisted attempt timestamp, also available on older requests.
+func runnerTerminalKey(st state.RunnerState, accountID int64) string {
+	return fmt.Sprintf("account:%d:runner:%q:attempt:%s:installation:%d:repository:%q",
+		accountID, st.ID, st.LastAttemptAt.UTC().Format(time.RFC3339Nano), st.GitHubInstallationID, st.RepositoryFullName)
+}
+
+func (s *Server) authorizedTerminalSession(w http.ResponseWriter, r *http.Request, requireAvailable bool) (*terminalSession, bool) {
+	st, accountID, ok := s.userRunnerStateAndAccount(w, r)
+	if !ok {
+		return nil, false
+	}
 	sessionID := r.PathValue("sessionID")
 	session, ok := s.terminals.Get(sessionID)
-	if !ok || session.requestID != st.ID || session.sandboxID != st.SandboxID {
+	if !ok || session.requestID != runnerTerminalKey(st, accountID) || session.sandboxID != st.SandboxID {
 		writeError(w, http.StatusNotFound, "terminal session not found")
 		return nil, false
 	}

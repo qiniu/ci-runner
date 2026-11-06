@@ -46,6 +46,11 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
+	sessionID, err := s.newTerminalSessionID(accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot create terminal session")
+		return
+	}
 	var input terminalCreateRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
@@ -106,7 +111,7 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadGateway, "failed to connect deployment terminal")
 		return
 	}
-	wrapped := &deploymentTerminalProcess{TerminalSession: term, cancel: cancel}
+	wrapped := &terminalProcess{TerminalSession: term, cancel: cancel}
 	// Provisioning races with stop/redeploy must never expose a stale shell.
 	current, loadErr := s.store.GetDeployment(d.ID)
 	if ctx.Err() != nil || r.Context().Err() != nil || loadErr != nil || !sameDeploymentTerminal(d, current) {
@@ -117,7 +122,7 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		return
 	}
 	mu.Lock()
-	session = s.terminals.Add(deploymentAccountTerminalKey(d, accountID), d.SandboxID, wrapped)
+	session = s.terminals.add(sessionID, deploymentAccountTerminalKey(d, accountID), d.SandboxID, wrapped)
 	session.append(pending)
 	pending = nil
 	mu.Unlock()
@@ -125,16 +130,6 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 	go s.watchDeploymentTerminal(ctx, d, accountID, session.id)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{"session_id": session.id, "pid": term.PID(), "sandbox_id": d.SandboxID})
-}
-
-type deploymentTerminalProcess struct {
-	sandboxrunner.TerminalSession
-	cancel context.CancelFunc
-}
-
-func (p *deploymentTerminalProcess) Close(ctx context.Context) error {
-	defer p.cancel()
-	return p.TerminalSession.Close(ctx)
 }
 
 func sameDeploymentTerminal(expected, current state.Deployment) bool {
