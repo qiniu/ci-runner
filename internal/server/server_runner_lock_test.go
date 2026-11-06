@@ -399,11 +399,20 @@ func TestChangedQueueClaimRecordsStartSkip(t *testing.T) {
 }
 
 func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
+	api := httptest.NewServer(githubRunnerAPI(t))
+	defer api.Close()
 	for _, changed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("advanced=%t", changed), func(t *testing.T) {
 			store := state.New(t.TempDir())
-			_, _, err := store.CreateRequest(state.RunnerRequest{ID: "sponsored"}, nil)
+			req := state.RunnerRequest{ID: "sponsored", RepositoryFullName: "o/r", JobID: 123}
+			_, waiting, err := store.CreateRequest(req, nil)
 			if err != nil {
+				t.Fatal(err)
+			}
+			waiting.LastErrorCode = workflowJobWaitCode
+			waiting.LastErrorMessage = "workflow job is waiting"
+			waiting.LastErrorRetryable = true
+			if err := store.WriteState(waiting); err != nil {
 				t.Fatal(err)
 			}
 			_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
@@ -415,6 +424,15 @@ func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
 				t.Fatal(err)
 			}
 			attempt.Version++
+			srv := &Server{store: store, gh: github.NewClient(api.URL, api.Client()), logger: slog.Default()}
+			admittedVersion := attempt.Version
+			start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+			if err != nil || !start {
+				t.Fatalf("queued workflow could not start: %v", err)
+			}
+			if attempt.Version != admittedVersion+1 || attempt.LastErrorCode != "" || attempt.LastErrorRetryable {
+				t.Fatalf("precheck lost the cleared waiting state: version=%d code=%q", attempt.Version, attempt.LastErrorCode)
+			}
 			if changed {
 				latest := attempt
 				latest.SandboxID = "newer-sandbox"
@@ -422,7 +440,7 @@ func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			srv := &Server{store: &readStateErrorStore{Store: store, err: fmt.Errorf("transient read failure")}, logger: slog.Default()}
+			srv.store = &readStateErrorStore{Store: store, err: fmt.Errorf("transient read failure")}
 			srv.deferCreatingRequest(attempt, 5*time.Second)
 			got, err := store.ReadState(attempt.ID)
 			if err != nil {
@@ -432,7 +450,7 @@ func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
 				if got.Status != state.StatusCreating || got.SandboxID != "newer-sandbox" || got.LeaseOwner != attempt.LeaseOwner || got.Version != attempt.Version+1 {
 					t.Fatalf("stale deferral cleared a newer version: %+v", got)
 				}
-			} else if got.Status != state.StatusQueued || got.LeaseOwner != "" || got.NextRetryAt.IsZero() || got.Version != attempt.Version+1 {
+			} else if got.Status != state.StatusQueued || got.LeaseOwner != "" || got.NextRetryAt.IsZero() || got.LastErrorCode != "" || got.Version != attempt.Version+1 {
 				t.Fatalf("unchanged attempt lost its delayed requeue: %+v", got)
 			}
 		})

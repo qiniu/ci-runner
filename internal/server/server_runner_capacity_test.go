@@ -331,8 +331,8 @@ func TestReadmittedRunnerGetsNewProvisionAttempt(t *testing.T) {
 			t.Fatalf("admit: stage=%q err=%v", stage, err)
 		}
 		saved, err := store.ReadState(req.ID)
-		if err != nil || saved.ProvisionAttemptID == "" {
-			t.Fatalf("missing durable attempt: %v", err)
+		if err != nil || saved.ProvisionAttemptID == "" || saved.ProvisionAttemptID != claim.ProvisionAttemptID || saved.Version != claim.Version {
+			t.Fatalf("admission state does not match committed attempt: claim=%d saved=%d err=%v", claim.Version, saved.Version, err)
 		}
 		return saved
 	}

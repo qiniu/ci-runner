@@ -62,8 +62,12 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 	if err != nil && stage == "admission_lock_wait" {
 		timings.record(stage, started)
 	}
-	if err != nil && stage == "" {
-		stage = "admission_commit"
+	if stage == "" {
+		if err != nil {
+			stage = "admission_commit"
+		} else {
+			st.Version++ // WriteQueuedClaim committed the creating row.
+		}
 	}
 	return profile, stage, err
 }

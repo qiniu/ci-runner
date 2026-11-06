@@ -443,7 +443,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	}
 
 	jobCheckStartedAt := time.Now()
-	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
+	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, &st)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
 		failStart("github_job_status", err)
@@ -481,8 +481,6 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			if !errors.Is(err, errForkSponsorshipAtCapacity) && !errors.Is(err, errForkSponsorshipPolicyChanged) {
 				s.logger.Error("defer sponsored runner after database admission error", "id", id, "error", err)
 			}
-			// The admission transaction committed creating at the next claim version.
-			st.Version++
 			s.deferCreatingRequest(st, 5*time.Second)
 			s.signalQueue()
 			return
