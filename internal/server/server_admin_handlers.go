@@ -248,14 +248,18 @@ func writeAdminReadError(w http.ResponseWriter, r *http.Request, err error) int 
 }
 
 func (s *Server) logAdminReadFailure(ctx context.Context, resource string, err error) {
-	category := "query_failed"
-	if errors.Is(err, context.DeadlineExceeded) {
-		category = "query_timeout"
-	} else if errors.Is(err, context.Canceled) {
-		category = "query_cancelled"
-	}
 	// Retain bounded, credential-free evidence without SQL or database details.
-	s.logger.ErrorContext(ctx, "admin runner read failed", "resource", resource, "category", category)
+	s.logger.ErrorContext(ctx, "admin runner read failed", "resource", resource, "category", readFailureCategory(err))
+}
+
+func readFailureCategory(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "query_timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "query_cancelled"
+	}
+	return "query_failed"
 }
 
 func validRunnerRequestDisplayStatus(status string) bool {

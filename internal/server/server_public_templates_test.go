@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,17 +18,17 @@ import (
 
 type publicTemplatesCountingStore struct {
 	state.Store
-	calls  int
+	calls  atomic.Int32
 	before func(context.Context)
-	fail   bool
+	fail   atomic.Bool
 }
 
 func (s *publicTemplatesCountingStore) ListProfilesContext(ctx context.Context) ([]state.RunnerProfile, error) {
-	s.calls++
+	s.calls.Add(1)
 	if s.before != nil {
 		s.before(ctx)
 	}
-	if s.fail {
+	if s.fail.Load() {
 		return nil, errors.New("database unavailable")
 	}
 	return s.Store.ListProfilesContext(ctx)
@@ -39,9 +42,9 @@ func publicTemplatesResponse(srv *Server) *httptest.ResponseRecorder {
 
 func TestPublicRunnerTemplatesReadsEachRequest(t *testing.T) {
 	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
-	srv := &Server{store: store}
+	srv := &Server{store: store, logger: slog.Default()}
 	for _, fail := range []bool{false, true, false} {
-		store.fail = fail
+		store.fail.Store(fail)
 		rec := publicTemplatesResponse(srv)
 		if fail {
 			if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "" {
@@ -51,8 +54,20 @@ func TestPublicRunnerTemplatesReadsEachRequest(t *testing.T) {
 			t.Fatalf("catalog response: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 		}
 	}
-	if store.calls != 3 {
-		t.Fatalf("profile reads = %d, want one per request", store.calls)
+	if store.calls.Load() != 3 {
+		t.Fatalf("profile reads = %d, want one per request", store.calls.Load())
+	}
+}
+
+func TestPublicRunnerTemplatesSanitizesSharedQueryPanic(t *testing.T) {
+	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
+	store.before = func(ctx context.Context) { panic("private driver evidence") }
+	var logs bytes.Buffer
+	srv := &Server{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	rec := publicTemplatesResponse(srv)
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "private driver evidence") ||
+		strings.Count(logs.String(), "category=query_failed") != 1 || strings.Contains(logs.String(), "private driver evidence") {
+		t.Fatalf("unexpected sanitized error: status=%d body=%q log=%q", rec.Code, rec.Body, &logs)
 	}
 }
 
@@ -60,7 +75,7 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
 	store.before = func(ctx context.Context) {
-		if store.calls != 1 {
+		if store.calls.Load() != 1 {
 			return
 		}
 		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
@@ -72,16 +87,21 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 		case <-ctx.Done():
 		}
 	}
-	srv := &Server{store: store}
+	srv := &Server{store: store, logger: slog.Default()}
 	leaderCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	leaderDone := make(chan struct{})
+	leaderResponse := httptest.NewRecorder()
 	go func() {
 		defer close(leaderDone)
 		r := httptest.NewRequestWithContext(leaderCtx, http.MethodGet, "/api/public/runner-templates", nil)
-		srv.handlePublicRunnerTemplates(httptest.NewRecorder(), r)
+		srv.handlePublicRunnerTemplates(leaderResponse, r)
 	}()
-	<-started
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("catalog read did not start")
+	}
 	var readers []<-chan singleflight.Result
 	for range 32 {
 		readers = append(readers, srv.publicTemplatesRead())
@@ -89,24 +109,37 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 	cancel()
 	select {
 	case <-leaderDone:
+		if leaderResponse.Code != 499 {
+			t.Errorf("disconnected caller status = %d", leaderResponse.Code)
+		}
 	case <-time.After(time.Second):
 		t.Error("disconnected leader kept waiting for the shared read")
 	}
 	close(release)
+	await := func(ch <-chan singleflight.Result) singleflight.Result {
+		t.Helper()
+		select {
+		case result := <-ch:
+			return result
+		case <-time.After(5 * time.Second):
+			t.Fatal("catalog read did not complete")
+			return singleflight.Result{}
+		}
+	}
 	for _, result := range readers {
-		if r := <-result; r.Err != nil || !r.Shared {
+		if r := await(result); r.Err != nil || !r.Shared {
 			t.Fatalf("shared read: %+v", r)
 		}
 	}
-	if result := <-srv.publicTemplatesRead(); result.Err != nil || result.Shared || store.calls != 2 {
-		t.Fatalf("subsequent read: calls=%d result=%+v", store.calls, result)
+	if result := await(srv.publicTemplatesRead()); result.Err != nil || result.Shared || store.calls.Load() != 2 {
+		t.Fatalf("subsequent read: calls=%d result=%+v", store.calls.Load(), result)
 	}
 }
 
 func TestPublicRunnerTemplatesReflectOtherServerMutations(t *testing.T) {
 	dbDir := t.TempDir()
 	srv := newTestServer(t, state.New(dbDir), "", &fakeSandbox{})
-	reader := &Server{store: state.New(dbDir)}
+	reader := &Server{store: state.New(dbDir), logger: slog.Default()}
 	configureAdminProfileTemplateService(t, srv, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`))
