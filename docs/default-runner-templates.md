@@ -147,7 +147,7 @@ source PR and regional template/production Job evidence are both available.
 ## Public catalog API
 
 `GET /api/public/runner-templates` is available to signed-out and signed-in
-clients and returns the same database-backed catalog with a 60-second cache lifetime. The response groups enabled, published public-name specs in stable order and contains only these fields:
+clients. Each origin request reads the database catalog. HTTP clients and proxies may cache a successful response for 60 seconds. The response groups enabled, published public-name specs in stable order and contains only these fields:
 
 ```json
 [

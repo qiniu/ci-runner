@@ -111,8 +111,8 @@ smoke 和 standard／large 生产 Job 验证。Windows pin 同步不扩大 Linux
 
 ## 公共 Catalog API
 
-未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`，并取得相同的、
-数据库目录，缓存时间为 60 秒。响应按稳定顺序将已启用、已发布的公共名称规格分组，只包含以下字段：
+未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`。
+每次源站请求直接读取数据库目录，客户端和代理可缓存成功响应 60 秒。响应按稳定顺序将已启用、已发布的公共名称规格分组，只包含以下字段：
 
 ```json
 [

@@ -338,7 +338,7 @@ still under observation:
 - Lower a managed spec's concurrency and trigger two jobs.
 - Run the `deployment-custom` spec, confirm its explicit template ID is used,
   then delete it after cleanup. Execution edits and deletion of any active global spec must return `409 runner_spec_in_use`; an idle former managed spec can be edited and deleted. Restart must preserve edits and must not recreate deleted specs.
-- Publish a validated public-name spec and verify `/runner-specs` and the public template API. Unpublish it and confirm both hide it (the public API cache may last 60 seconds). Private IDs must remain absent. Invalid public names must reject without an audit event.
+- Publish a validated public-name spec and verify `/runner-specs` and the public template API. Unpublish it and confirm both hide it (query the origin directly to bypass the 60-second HTTP cache). Private IDs must remain absent. Invalid public names must reject without an audit event.
 
 Expected result depends on the scenario:
 
