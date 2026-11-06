@@ -247,6 +247,7 @@ type RunnerState struct {
 	CreatedAt                       time.Time `json:"created_at"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
+	queueRetryDelay                 *time.Duration
 	CreatingAt                      time.Time `json:"creating_at,omitempty"`
 	RunningAt                       time.Time `json:"running_at,omitempty"`
 	StoppingAt                      time.Time `json:"stopping_at,omitempty"`
@@ -255,6 +256,14 @@ type RunnerState struct {
 	LeaseOwner                      string    `json:"lease_owner,omitempty"`
 	LeaseExpiresAt                  time.Time `json:"lease_expires_at,omitempty"`
 	Version                         int64     `json:"version"`
+}
+
+// ScheduleQueuedRetry makes the next queued-state write derive the deadline from
+// the database clock. A state read from storage retains its absolute deadline
+// across unrelated writes, including writes after a process restart.
+func (st *RunnerState) ScheduleQueuedRetry(delay time.Duration) {
+	st.NextRetryAt = time.Time{}
+	st.queueRetryDelay = &delay
 }
 
 // RunnerRequestListOptions controls admin Runner request filtering and pagination.
