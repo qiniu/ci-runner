@@ -938,13 +938,15 @@ func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
 	case BackendMySQL:
 		// MySQL time zone tables are optional. Use the database for elapsed
 		// time and the driver's location only to encode its DATETIME value.
+		// Match the DATETIME(3) columns so a zero-delay retry cannot round
+		// forward to the next millisecond when the deadline is stored.
 		// UTC is also the driver default when no DSN location is available.
 		location := time.UTC
 		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil && dialector.DSNConfig != nil && dialector.DSNConfig.Loc != nil {
 			location = dialector.DSNConfig.Loc
 		}
 		_, offset := time.Now().Add(after).In(location).Zone()
-		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(6))", after.Microseconds()+int64(offset)*1_000_000)
+		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
 	default:
 		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
 	}
