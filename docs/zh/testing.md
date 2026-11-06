@@ -114,7 +114,7 @@ Runner Spec 不是 `runnerd.yaml` 字段。内部 Runner Group 和 Repository Po
 
 PATCH 比较去除首尾空白后的绑定，以及发布／启用转换。验证拒绝或过期保存不修改规格和审计，活动执行配置修改／删除返回 `409 runner_spec_in_use`，而启用、容量和取消发布仍可修改。迁移测试须保留时间戳、策略和索引，审计失败时回滚，并证明重启不会覆盖新策略或恢复已删除行。后台校验不证明镜像内容或其他 scope 的访问权，仍需区域和真实 workflow smoke。
 
-`database.backend` 支持 `sqlite`、`postgres` 和 `mysql`。本地开发优先使用 sqlite；共享数据库的多实例部署需要先用两个 runnerd 进程验证 lease 行为，再作为正式运行方式记录。
+`database.backend` 支持 `sqlite`、`postgres` 和 `mysql`。本地开发优先使用 SQLite。两个 runnerd 进程共享 PostgreSQL 的排队租约接管已有验证。多实例部署还需分别验收共享容量、运行中任务和 Deploy 的恢复以及生产故障切换，见[跟踪清单](../../TODO.md)。
 
 新建的已接受和已拒绝 runner request 在内存中从 webhook 解析 workflow 上下文、分支、SHA、Job URL 和 PR 编号，并将 `github_payload_json` 留空。Installation ID 和 Job ID 来自 `RunnerRequest` 字段；这些字段、仓库、标签及解析后的 webhook 上下文仍保存到结构化字段，供运行和展示使用。另一组结构化快照字段只保留原始 Workflow Job 的终态名称、状态、结论、Runner 名称和本地观察时间；它不会恢复 raw webhook 留存，也不会回填历史记录。State 测试覆盖重新打开数据库后的 `workflow_job`、`workflow_run` 元信息、终态结果 round trip、拒绝请求的持久化，以及重复迁移和 installation ID 修复时保留历史原文。保留历史兼容列、已有值和回填逻辑；清理历史原文与回收磁盘空间需要单独安排维护操作。请求与日志的保留行为不变。
 
@@ -175,7 +175,14 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求会清理旧 lease，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
+catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。本地验证需先构建 runnerd，将 `psql` 加入 `PATH`，并将 DSN 指向库名以 `_test` 结尾的专用数据库。以下命令使用默认 300 秒租期测量接管耗时，省略 `--full-ttl` 可运行缩短租期的用例。
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
+
+启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
 
 ## 2. 配置 GitHub 鉴权
 
@@ -739,7 +746,7 @@ Runner 名称，不重复创建 Runner。后续 queued 投递只可清除已知�
 终态失败仍立即刷新。GitHub Job 已完成但本地终态读写失败时，
 错误进入正常启动失败处理，释放 lease 和创建容量；临时存储错误可重试，
 不会启动 Runner。控制事件记录决策、原因和
-下次复查时间；服务日志关联 webhook action 与 Delivery ID，不持久化原始 payload。
+排队时的重试延迟，数据库计算的下次复查时间保存在 `next_retry_at` 中。服务日志关联 webhook action 与 Delivery ID，不持久化原始 payload。
 
 对于 Issue #134 的历史误标记录，管理员可使用现有管理 API 会话，显式调用
 `POST /runner_requests/<request_id>/retry` 定向恢复。这是 API 恢复入口，

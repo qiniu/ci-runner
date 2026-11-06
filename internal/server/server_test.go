@@ -6746,7 +6746,7 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedAfterJobStartedMarker(t 
 	}
 }
 
-func TestRecoverRequeuesQueuedRunner(t *testing.T) {
+func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	store := state.New(t.TempDir())
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:         "recover-queued",
@@ -6757,6 +6757,7 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st.NextRetryAt = time.Now().UTC().Add(30 * time.Second)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
@@ -6772,8 +6773,8 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected queued request with cleared lease, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) || !got.NextRetryAt.Equal(st.NextRetryAt) {
+		t.Fatalf("expected queued request with original lease and retry deadline, got %#v", got)
 	}
 	if fake.recoveredCount() != 0 || fake.stoppedCount() != 0 {
 		t.Fatalf("queued recovery touched sandbox: recovered=%d stopped=%d", fake.recoveredCount(), fake.stoppedCount())
@@ -7105,18 +7106,18 @@ func TestRecoverMissingRunningSandboxDoesNotOverwriteConcurrentStateChange(t *te
 
 func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	store := state.New(t.TempDir())
-	_, queued, err := store.CreateRequest(state.RunnerRequest{
-		ID:         "recover-queued-after-error",
+	_, healthy, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "recover-healthy-neighbor",
 		Source:     "test",
 		Labels:     []string{"self-hosted"},
-		RunnerName: "e2b-recover-queued-after-error",
+		RunnerName: "e2b-recover-healthy-neighbor",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	queued.LeaseOwner = "old-worker"
-	queued.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
-	if err := store.WriteState(queued); err != nil {
+	healthy.Status, healthy.SandboxID, healthy.ProcessPID = state.StatusRunning, "sb-healthy", 41
+	healthy.LastErrorCode = "temporary_network_error"
+	if err := store.WriteState(healthy); err != nil {
 		t.Fatal(err)
 	}
 	_, running, err := store.CreateRequest(state.RunnerRequest{
@@ -7142,12 +7143,12 @@ func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected aggregated recovery error")
 	}
-	got, err := store.ReadState(queued.ID)
+	got, err := store.ReadState(healthy.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected later queued request to be recovered, got %#v", got)
+	if got.Status != state.StatusRunning || got.ProcessPID != healthy.ProcessPID || got.LastErrorCode != "" || fake.recoveredCount() != 2 {
+		t.Fatalf("healthy runner was not reconnected alongside failing runner: pid=%d calls=%d", got.ProcessPID, fake.recoveredCount())
 	}
 }
 

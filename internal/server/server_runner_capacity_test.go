@@ -103,7 +103,7 @@ func (s *admissionBlockingStore) InFlightCountForRepository(repository string) (
 	return count, err
 }
 
-func (s *admissionBlockingStore) WriteState(st state.RunnerState) error {
+func (s *admissionBlockingStore) WriteQueuedClaim(st state.RunnerState, owner string) error {
 	if st.Status == state.StatusCreating && s.block("creating_state_persist") {
 		if s.writeFailure != nil {
 			return s.writeFailure
@@ -119,7 +119,7 @@ func (s *admissionBlockingStore) WriteState(st state.RunnerState) error {
 			}
 		}
 	}
-	return s.Store.WriteState(st)
+	return s.Store.WriteQueuedClaim(st, owner)
 }
 
 func (s *admissionBlockingStore) CreateRequest(req state.RunnerRequest, payload []byte) (bool, state.RunnerState, error) {
@@ -208,7 +208,7 @@ func startAdmissionTestRunner(t *testing.T, srv *Server, id string) <-chan struc
 	go func() {
 		defer store.workers.Done()
 		defer notify()
-		srv.startRunner(t.Context(), id, "worker")
+		srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, id, "worker"))
 	}()
 	// startRunner intentionally lives until process exit. Timings flush after
 	// durable admission and lock release, which is the progress under test.
@@ -378,7 +378,7 @@ func TestRunnerAdmissionDuplicateStartKeepsOneReservation(t *testing.T) {
 	go func() {
 		defer store.workers.Done()
 		defer close(duplicate)
-		srv.startRunner(t.Context(), "a", "worker")
+		srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, "a", "worker"))
 	}()
 	release()
 	awaitAdmissionTest(t, a, "first start did not finish")
@@ -613,7 +613,7 @@ func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
 			if err := store.Store.WriteState(active); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.Store.ReleaseLease("b", "worker"); err != nil {
+			if err := store.Store.ReleaseQueuedClaim(assertAdmissionState(t, store.Store, "b", state.StatusQueued)); err != nil {
 				t.Fatal(err)
 			}
 			for i := range 20 {
@@ -629,9 +629,8 @@ func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := range 22 {
-				// Model a backlog taking longer than the deferral window: every
-				// previously blocked row is eligible again on the next claim.
-				req, _, claimed, err := store.Store.ClaimNextRunnable("worker", time.Now().Add(time.Minute), time.Minute)
+				// Previously deferred rows remain eligible during this backlog.
+				req, _, claimed, err := store.Store.ClaimNextRunnable("worker", time.Minute)
 				if err != nil || !claimed {
 					t.Fatalf("queue exhausted before independent request: %v", err)
 				}
@@ -647,6 +646,12 @@ func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
 				queued := assertAdmissionState(t, store.Store, req.ID, state.StatusQueued)
 				if queued.LeaseOwner != "" || queued.NextRetryAt.IsZero() {
 					t.Fatal("blocked request retained queue lease")
+				}
+				// Simulate the deferral expiring before the next poll. Its new
+				// eligibility time must still place it behind the waiting request.
+				queued.NextRetryAt = time.Now().UTC()
+				if err := store.Store.WriteState(queued); err != nil {
+					t.Fatal(err)
 				}
 			}
 			t.Fatal("busy scope blocked independent request")

@@ -124,7 +124,7 @@ Rejected saves leave both profile and audit records unchanged. If another save o
 
 PATCH compares trimmed bindings and the publication/enablement transition. Verify that invalid or stale saves leave both the profile and audit unchanged, active execution-setting edits/deletes return `409 runner_spec_in_use`, and enabled/capacity/unpublish changes remain possible. Migration tests must preserve timestamps, controls and indexes, rollback when audit fails, and prove restart neither overwrites explicit policies nor recreates deleted rows. Admin validation does not prove image contents or another scope's access; retain real regional/workflow smoke.
 
-`database.backend` supports `sqlite`, `postgres`, and `mysql`. Prefer sqlite for local development. Before documenting shared-database multi-instance deployment as supported, verify lease behavior with two runnerd processes sharing the same database.
+`database.backend` supports `sqlite`, `postgres`, and `mysql`. Prefer sqlite for local development. Two runnerd processes on PostgreSQL verify queued lease takeover. The broader deployment gates cover shared capacity, recovery of running attempts and Deploy, and production failover acceptance. See [the tracking list](../TODO.md).
 
 New accepted and rejected runner requests extract workflow context, branch, SHA, Job URL, and PR number from the webhook in memory, then leave `github_payload_json` empty. Installation and Job IDs come from the `RunnerRequest` fields; those fields, repository, labels, and the parsed webhook context remain in structured columns for runtime use and display. A separately structured snapshot retains only an original Workflow Job's terminal name, status, conclusion, runner name, and local observation time; it does not restore raw webhook retention or backfill historical rows. The state tests cover `workflow_job` and `workflow_run` metadata after reopening the database, terminal-result round trips, rejected-request persistence, and preservation of historical payloads during repeated migration and installation-ID repair. Keep the legacy column, existing values, and backfill logic; historical payload cleanup and disk-space reclamation require a separate maintenance operation. Request and log retention are unchanged.
 
@@ -188,7 +188,14 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-The startup-gate test must verify that only `/healthz` remains available before recovery finishes. The `TestRecover*` cases must verify that at most four requests recover concurrently, each worker derives its per-request timeout from the remaining whole-startup budget and remaining worker waves, an exhausted parent budget prevents dispatch, cancellation reports every skipped request, queued requests have stale leases cleared, creating/running requests reconnect without stopping their sandbox, a concurrent state version change wins over both successful and failed reconnect results, timed-out sandboxes stop without reconnecting, missing interrupted creations are requeued while a missing creation whose GitHub job is already in progress fails explicitly, completed workflow jobs continue through cleanup, and one reconnect failure does not prevent other requests from being recovered.
+The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. For local verification, put `psql` on `PATH` and point the DSN at a dedicated database whose name ends in `_test`. With a built runnerd binary, the following measures takeover with the default 300-second lease. Omit `--full-ttl` for the shorter run.
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
+
+The startup-gate test must verify that only `/healthz` remains available before recovery finishes. The `TestRecover*` cases must verify that at most four requests recover concurrently, each worker derives its per-request timeout from the remaining whole-startup budget and remaining worker waves, an exhausted parent budget prevents dispatch, cancellation reports every skipped request, queued requests keep their existing leases and retry deadlines, creating/running requests reconnect without stopping their sandbox, a concurrent state version change wins over both successful and failed reconnect results, timed-out sandboxes stop without reconnecting, missing interrupted creations are requeued while a missing creation whose GitHub job is already in progress fails explicitly, completed workflow jobs continue through cleanup, and one reconnect failure does not prevent other requests from being recovered.
 
 ## 2. Configure GitHub Auth
 
@@ -774,7 +781,7 @@ every poll; failed metric reads remain pending, and terminal failures refresh
 gauges immediately. If persisting a completed Job fails, propagate the error
 through normal startup failure handling to release the lease and creation
 capacity; a temporary store failure retries without starting a Runner.
-Control events show the decision/reason/next check, and service logs correlate
+Control events show the decision and reason. Queued decisions include the retry delay. The saved `next_retry_at` is the database-derived deadline. Service logs correlate
 webhook action with Delivery ID. Raw webhook bodies are not persisted.
 
 For a historical false completion from Issue #134, an authenticated admin may

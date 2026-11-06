@@ -27,13 +27,18 @@ func isWorkflowJobWaiting(status string) bool {
 	return false
 }
 
-func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, workerID string) (bool, error) {
+// Keep the caller's fallback snapshot current after this worker clears waiting
+// evidence on the exact creating version it admitted.
+func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, attempt *state.RunnerState) (bool, error) {
 	if req.JobID == 0 {
 		return true, nil
 	}
 	before, err := s.store.ReadState(req.ID)
 	if err != nil {
 		return false, err
+	}
+	if before.Status != state.StatusCreating || before.LeaseOwner != attempt.LeaseOwner || !before.LastAttemptAt.Equal(attempt.LastAttemptAt) {
+		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
 	lookupCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
@@ -47,7 +52,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return false, err
 	}
 	// A webhook, retry or stop may have advanced the request during the lookup.
-	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" || st.ProcessPID != 0 || !st.LastAttemptAt.Equal(before.LastAttemptAt) || !st.CreatingAt.Equal(before.CreatingAt) {
+	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || st.SandboxID != "" || st.ProcessPID != 0 || !st.LastAttemptAt.Equal(before.LastAttemptAt) || !st.CreatingAt.Equal(before.CreatingAt) {
 		return false, nil
 	}
 	stale := st.Version != before.Version
@@ -62,6 +67,13 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			if err := s.store.WriteState(st); err != nil {
 				return false, err
 			}
+			st.Version++
+		}
+		// A webhook may already have written assignment evidence before the
+		// lookup. Process its Job normally, but don't borrow an externally
+		// advanced version for a later deferral when the row cannot be read.
+		if before.Version == attempt.Version {
+			*attempt = st
 		}
 		s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "decision", "start")
 		s.store.AppendLog(req.ID, "control.log", []byte("workflow job observed_status=queued decision=start\n"))
@@ -97,6 +109,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	st.CreatingAt = time.Time{}
 	st.Error, st.FailureStage, st.FailureReason = "", "", ""
 	st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = code, message, true
+	var retryDelay time.Duration
 	if !known && !rateLimited && st.RetryCount >= s.cfg.RetryMaxAttempts {
 		st.Status = state.StatusFailed
 		st.Error, st.FailureStage, st.FailureReason = message, "github_job_status", code
@@ -110,14 +123,17 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		for delay > 0 && delay < s.cfg.RetryMaxDelay && now.Sub(st.CreatedAt) >= delay {
 			delay *= 2
 		}
-		st.NextRetryAt = now.Add(min(delay, s.cfg.RetryMaxDelay))
+		retryDelay = min(delay, s.cfg.RetryMaxDelay)
 	} else {
 		// Rate limits defer the queue even after the failure budget is spent,
 		// matching applyFailure; saturate the counter while retaining backoff.
 		if st.RetryCount < s.cfg.RetryMaxAttempts {
 			st.RetryCount++
 		}
-		st.NextRetryAt = s.nextRetryAt(max(st.RetryCount, 1), time.Now().UTC())
+		retryDelay = s.retryDelay(max(st.RetryCount, 1))
+	}
+	if st.Status == state.StatusQueued {
+		st.ScheduleQueuedRetry(retryDelay)
 	}
 	if err := s.store.WriteState(st); err != nil {
 		return false, err
@@ -126,8 +142,14 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		metrics.RecordCreate(st.ProfileName, 0, "failed")
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
-	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "next_retry_at", st.NextRetryAt)
-	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s next_check=%s\n", job.Status, job.RunnerName, st.Status, code, st.NextRetryAt.Format(time.RFC3339))))
+	logger := s.logger
+	detail := fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s", job.Status, job.RunnerName, st.Status, code)
+	if st.Status == state.StatusQueued {
+		logger = logger.With("retry_delay", retryDelay)
+		detail += " retry_delay=" + retryDelay.String()
+	}
+	logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code)
+	s.store.AppendLog(req.ID, "control.log", []byte(detail+"\n"))
 	s.signalQueue()
 	if st.Status == state.StatusFailed {
 		s.refreshMetrics()

@@ -184,7 +184,8 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if err := store.WriteState(st); err != nil {
 					t.Fatal(err)
 				}
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+				st.Version++
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -202,11 +203,12 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if n, _ := store.InFlightCount(); n != 0 {
 					t.Fatalf("waiting consumes capacity: %d", n)
 				}
-				if _, _, claimed, err := store.ClaimNextRunnable("other", before, time.Second); err != nil || claimed {
+				if _, _, claimed, err := store.ClaimNextRunnable("other", time.Second); err != nil || claimed {
 					t.Fatalf("claimed before delay: %v %v", claimed, err)
 				}
 			}
-			capStart := time.Now()
+			// SQLite stores database-clock retry deadlines at millisecond precision.
+			capStart := time.Now().Truncate(time.Millisecond)
 			check()
 			if st := queueTestState(t, store); st.NextRetryAt.Before(capStart.Add(srv.cfg.RetryMaxDelay)) {
 				t.Fatalf("long waits must reach the capped delay: %#v", st)
@@ -240,10 +242,29 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				for i := 0; i < srv.cfg.RetryMaxAttempts && queueTestState(t, store).Status != state.StatusFailed; i++ {
 					check()
 				}
+				log, err := store.ReadLog("1001", "control.log", 65536)
+				if err != nil {
+					t.Fatal(err)
+				}
+				seenFailure, seenDelay := false, false
+				for _, line := range strings.Split(string(log), "\n") {
+					if strings.Contains(line, "decision=queued") && strings.Contains(line, "retry_delay=") {
+						seenDelay = true
+					}
+					if strings.Contains(line, "decision=failed") {
+						seenFailure = true
+						if strings.Contains(line, "retry_delay=") {
+							t.Fatalf("terminal decision scheduled a retry: %s", line)
+						}
+					}
+				}
+				if !seenFailure || !seenDelay {
+					t.Fatalf("missing queue decisions: %s", log)
+				}
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}
-				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); err != nil || start {
+				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); err != nil || start {
 					t.Fatalf("terminal request must ignore a repeated lookup: start=%v err=%v", start, err)
 				}
 			}
@@ -301,7 +322,8 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 					if err := store.WriteState(st); err != nil {
 						t.Fatal(err)
 					}
-					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+					st.Version++
+					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -398,7 +420,8 @@ func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
 		if err := base.WriteState(st); err != nil {
 			t.Fatal(err)
 		}
-		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); start || err != nil {
+		st.Version++
+		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); start || err != nil {
 			t.Fatalf("unexpected start=%v err=%v", start, err)
 		}
 	}
@@ -453,7 +476,7 @@ type completionFailureStore struct {
 
 func (s *completionFailureStore) ReadState(id string) (state.RunnerState, error) {
 	s.readCount++
-	// startRunner reads once, then the startup check reads before and after
+	// startClaimedRunner reads once, then the startup check reads before and after
 	// GitHub. Fail the final read inside completeWithoutSandbox only once.
 	if s.failRead && s.readCount == 4 {
 		return state.RunnerState{}, errors.New("temporary completion state read failure")
@@ -481,15 +504,14 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 			srv := newTestServer(t, base, gh.URL, fake)
 			srv.Close()
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
-			st := queueTestState(t, base)
-			st.LeaseOwner = "test-worker"
-			st.LeaseExpiresAt = time.Now().Add(time.Minute)
-			if err := base.WriteState(st); err != nil {
-				t.Fatal(err)
-			}
+			claim := queuedRunnerForTest(t, base, "1001", "test-worker")
 			srv.store = &completionFailureStore{Store: base, failRead: operation == "read", failWrite: operation == "write"}
-			srv.startRunner(context.Background(), "1001", "test-worker")
-			st = queueTestState(t, base)
+			srv.startClaimedRunner(context.Background(), claim)
+			st := queueTestState(t, base)
+			wantFailure := map[string]string{"read": "read runner state for skip", "write": "write skipped runner state"}[operation]
+			if !strings.Contains(st.LastErrorMessage, wantFailure) {
+				t.Fatalf("failure missed completion %s: %s", operation, st.LastErrorMessage)
+			}
 			if st.Status != state.StatusQueued || st.RetryCount != 1 || st.NextRetryAt.IsZero() || st.LeaseOwner != "" || !st.LeaseExpiresAt.IsZero() || !st.CreatingAt.IsZero() {
 				t.Fatalf("completion persistence failure must release creation capacity and schedule retry: %#v", st)
 			}
@@ -504,12 +526,48 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 				t.Fatalf("completion failure logged success: err=%v log=%s", err, control)
 			}
 			// A subsequent normal attempt can retain GitHub's terminal result.
-			srv.startRunner(context.Background(), "1001", "test-worker")
+			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, base, "1001", "test-worker"))
 			st = queueTestState(t, base)
 			if st.Status != state.StatusCompleted || st.GitHubJobConclusion != "cancelled" || st.GitHubJobObservedAt.IsZero() || st.LeaseOwner != "" || !st.NextRetryAt.IsZero() || fake.startedCount() != 0 {
 				t.Fatalf("completion did not recover after the store failure: %#v", st)
 			}
 		})
+	}
+}
+
+func TestWorkflowJobPrecheckAfterAssignmentWrite(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":1001,"status":"in_progress"}`)
+	}))
+	defer api.Close()
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, api.URL, &fakeSandbox{})
+	srv.Close()
+	sendQueueTestWebhook(t, srv, "workflow_job", "queued")
+	req, err := store.ReadRequest("1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("claim", ok, err)
+	}
+	attempt.Status = state.StatusCreating
+	if err := store.WriteQueuedClaim(attempt, attempt.LeaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	attempt.Version++
+	// An in_progress webhook may write assignment evidence before the first
+	// precheck read. The existing Job must still enter the monitored queue.
+	assigned := queueTestState(t, store)
+	assigned.AssignedJobID = req.JobID
+	if err := store.WriteState(assigned); err != nil {
+		t.Fatal(err)
+	}
+	start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+	current := queueTestState(t, store)
+	if err != nil || start || current.Status != state.StatusQueued || current.LastErrorCode != workflowJobWaitCode || current.AssignedJobID != req.JobID || current.NextRetryAt.IsZero() {
+		t.Fatalf("precheck stranded an already running workflow: status=%s code=%s start=%t err=%v", current.Status, current.LastErrorCode, start, err)
 	}
 }
 
@@ -542,8 +600,10 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 			}
 			req, _ := store.ReadRequest("1001")
 			done := make(chan bool, 1)
+			attempt := st
+			attempt.Version++
 			go func() {
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "worker")
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &attempt)
 				done <- start || err != nil
 			}()
 			<-lookup

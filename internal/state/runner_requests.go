@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -218,6 +219,18 @@ func (s *DBStore) ReadState(id string) (RunnerState, error) {
 }
 
 func (s *DBStore) WriteState(st RunnerState) error {
+	return s.writeState(st, "")
+}
+
+// WriteQueuedClaim consumes the exact version obtained by ClaimNextRunnable.
+func (s *DBStore) WriteQueuedClaim(st RunnerState, owner string) error {
+	if owner == "" {
+		return ErrConflict
+	}
+	return s.writeState(st, owner)
+}
+
+func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
@@ -281,9 +294,14 @@ func (s *DBStore) WriteState(st RunnerState) error {
 		"lease_owner":                         st.LeaseOwner,
 		"lease_expires_at":                    zeroTimeToPointer(st.LeaseExpiresAt),
 	}
-	result := db.Model(&runnerRequestRecord{}).
-		Where("id = ? AND version = ?", st.ID, st.Version).
-		Updates(updates)
+	if st.Status == StatusQueued && st.queueRetry != nil && st.queueRetry.version == st.Version {
+		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
+	}
+	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
+	if claimOwner != "" {
+		query = liveQueuedClaim(query, claimOwner)
+	}
+	result := query.Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -822,7 +840,7 @@ func (s *DBStore) InFlightCountForProfile(name string) (int, error) {
 	return s.countStatesForProfileSource(name, []string{"", "global"}, []string{StatusCreating, StatusRunning, StatusStopping})
 }
 
-func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error) {
+func (s *DBStore) ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return RunnerRequest{}, RunnerState{}, false, err
@@ -831,14 +849,17 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 	if workerID == "" {
 		return RunnerRequest{}, RunnerState{}, false, fmt.Errorf("worker id is required")
 	}
-	leaseExpiresAt := now.UTC().Add(leaseTTL)
+	if leaseTTL <= 0 {
+		return RunnerRequest{}, RunnerState{}, false, fmt.Errorf("positive lease TTL is required")
+	}
+	now, expires := queueTime(db, 0), queueTime(db, leaseTTL)
 	var claimed runnerRequestRecord
 	err = db.Transaction(func(tx *gorm.DB) error {
 		var candidate runnerRequestRecord
 		if err := tx.
 			Where("status = ?", StatusQueued).
-			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now.UTC()).
-			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now.UTC()).
+			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
+			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now).
 			// A deferred request rejoins at its next eligibility time instead of
 			// repeatedly jumping ahead of newer requests by its original age.
 			Order("COALESCE(next_retry_at, queued_at) ASC").
@@ -847,14 +868,15 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 			return err
 		}
 		result := tx.Model(&runnerRequestRecord{}).
-			Where("id = ?", candidate.ID).
+			Where("id = ? AND version = ?", candidate.ID, candidate.Version).
+			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
 			Where("status = ?", StatusQueued).
-			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now.UTC()).
+			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now).
 			Updates(map[string]any{
 				"lease_owner":      workerID,
-				"lease_expires_at": leaseExpiresAt,
-				"last_attempt_at":  now.UTC(),
-				"updated_at":       now.UTC(),
+				"lease_expires_at": expires,
+				"last_attempt_at":  now,
+				"updated_at":       now,
 				"version":          candidate.Version + 1,
 			})
 		if result.Error != nil {
@@ -884,14 +906,48 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 	return req, recordToState(claimed), true, nil
 }
 
-func (s *DBStore) ReleaseLease(id, workerID string) error {
+// Evaluate ownership against database time at the conditional write. SQLite
+// stores UTC timestamps as text; MySQL DATETIME uses the driver's DSN location.
+func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
+	switch db.Dialector.Name() {
+	case BackendPostgres:
+		return gorm.Expr("clock_timestamp() + ? * interval '1 microsecond'", after.Microseconds())
+	case BackendMySQL:
+		// MySQL time zone tables are optional. Use the database for elapsed
+		// time and the driver's location only to encode its DATETIME value.
+		// Match the DATETIME(3) columns so a zero-delay retry cannot round
+		// forward to the next millisecond when the deadline is stored.
+		// UTC is also the driver default when no DSN location is available.
+		location := time.UTC
+		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil && dialector.DSNConfig != nil && dialector.DSNConfig.Loc != nil {
+			location = dialector.DSNConfig.Loc
+		}
+		_, offset := time.Now().Add(after).In(location).Zone()
+		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
+	case BackendSQLite:
+		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
+	default:
+		// DBStore.open validates the backend before a queue query can run.
+		panic(fmt.Sprintf("unsupported queue clock dialect: %s", db.Dialector.Name()))
+	}
+}
+
+func liveQueuedClaim(query *gorm.DB, owner string) *gorm.DB {
+	return query.Where("status = ? AND lease_owner = ? AND lease_expires_at > ?", StatusQueued, owner, queueTime(query, 0))
+}
+
+func (s *DBStore) ReleaseQueuedClaim(claim RunnerState) error {
+	if strings.TrimSpace(claim.LeaseOwner) == "" {
+		return ErrConflict
+	}
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
 	}
-	return db.Model(&runnerRequestRecord{}).
-		Where("id = ? AND lease_owner = ?", sanitizeID(id), strings.TrimSpace(workerID)).
+	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", sanitizeID(claim.ID), claim.Version)
+	return liveQueuedClaim(query, claim.LeaseOwner).
 		Updates(map[string]any{
+			"version":          gorm.Expr("version + 1"),
 			"lease_owner":      "",
 			"lease_expires_at": nil,
 		}).Error

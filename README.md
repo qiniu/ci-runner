@@ -111,7 +111,7 @@ Operators can set `worker.account_concurrency_limits` by GitHub repository owner
 Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.
-- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported but multi-instance operation on a shared database has not been verified.
+- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported. On restart, queued requests keep their leases. The database clock determines expiry. Each worker must present its original claim version and owner to change or release a queued request. If a worker dies after claiming a request, the queue can reclaim it on a poll after both the lease (default 300 seconds) and any retry delay have expired. Run one active runnerd until lifecycle recovery and capacity are coordinated across nodes.
 - The one-time SQLite-to-PostgreSQL transfer tool is retired; see [the retirement record](docs/database-transfer-retirement.md) for archived procedures and remaining operational work.
 - CI creates fresh PostgreSQL and MySQL schemas and reruns migration against an existing catalog before exercising policy-free matching. See [docs/testing.md](docs/testing.md) for the opt-in local real-dialect command.
 - Existing SQLite `runner_requests` and `runner_profiles` tables add missing model columns and indexes on startup without table recreation. This preserves historical runner values plus legacy profile rows and indexes. Creating missing indexes does not rewrite rows, but it can add brief startup I/O and lock contention on a large database; see [docs/testing.md](docs/testing.md) for migration and query-plan checks.

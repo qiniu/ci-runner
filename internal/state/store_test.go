@@ -530,7 +530,7 @@ func TestCreateRejectedRequestIsNeverRunnable(t *testing.T) {
 		t.Fatalf("rejected request must retain parsed github context: %#v", record)
 	}
 
-	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Now().UTC().Add(time.Minute), time.Minute)
+	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3609,6 +3609,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 					t.Fatalf("fresh %s migration did not create %s", backend.name, index.name)
 				}
 			}
+			testQueuedClaimOwnership(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -4378,7 +4379,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		}
 	}
 
-	req, st, claimed, err := store.ClaimNextRunnable("worker-1", now, 30*time.Second)
+	req, st, claimed, err := store.ClaimNextRunnable("worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4386,7 +4387,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		t.Fatalf("unexpected claim result: req=%#v state=%#v claimed=%v", req, st, claimed)
 	}
 
-	_, _, claimed, err = store.ClaimNextRunnable("worker-2", now, 30*time.Second)
+	_, _, claimed, err = store.ClaimNextRunnable("worker-2", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
