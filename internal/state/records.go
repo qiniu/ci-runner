@@ -93,6 +93,8 @@ type runnerRequestMetricsIndex struct {
 func (runnerRequestMetricsIndex) TableName() string { return "runner_requests" }
 
 type deploymentRecord struct {
+	WorkToken                  string     `gorm:"column:work_token;size:64"`
+	WorkExpiresAt              *time.Time `gorm:"column:work_expires_at"`
 	CreateRequestHash          string     `gorm:"column:create_request_hash;size:64;not null;default:''"`
 	ExecutionAccountID         int64      `gorm:"column:execution_account_id;not null;default:0"`
 	RevisionNumber             int64      `gorm:"column:revision_number;not null;default:1"`

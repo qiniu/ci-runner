@@ -1170,3 +1170,5 @@ RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
 ```
 
 这些测试使用隔离 schema，保留 PG 启动、密码混淆、时区与规格版本校验覆盖；不执行生产数据库清理。历史流程和后续运维边界见[迁移退役记录](database-transfer-retirement.md)。
+
+运行 `go test -race ./internal/deployment/worker -run "^TestDeploymentWorkProcess$" -count=1` 验证 Deploy 工作租约。默认使用 SQLite。SQL CI 设置 `RUNNERD_CATALOG_BACKEND_TESTS=1` 和 `RUNNERD_POSTGRES_TEST_DSN`，为每个场景在专用测试库建立独立 schema。两个进程模拟慢 checkout，暂停或杀死创建节点后核对原 Sandbox 的清理次数。

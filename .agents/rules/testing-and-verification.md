@@ -241,6 +241,7 @@ Real deployment readiness still requires `docs/deployment-smoke.md` with a GitHu
 
 - The live public API gate may use a designated public fork or PR. Bind admission to the selected repository owner installation and account/Organization quota scope; when pinning an older PR Commit, check the full SHA, saved fork identity and actual HTML marker after the branch head advances. Keep live revocation/private/second-user gates separate.
 
+- Run `TestDeploymentWorkProcess` on real PostgreSQL for Deploy ownership changes. Exercise two live processes, renewal, owner kill and pause/resume, independent work, and exact-resource cleanup. Cover stale revision stops and lease-bound events in the store and worker suites.
 - Deployment scheduler changes must cover occupied provisioning slots alongside independent monitoring and expiry cleanup, capacity bounds, fair keyset continuation, no duplicate in-flight identity, one probe per monitoring cycle, and cancellation/join of blocked work. Event-counter changes require old SQLite column upgrade with history/timestamp preservation, rollback on counter persistence failure, per-revision isolation, concurrent appends and byte-budget coverage on PostgreSQL/MySQL as well as SQLite.
 
 - For creating-lease changes, run `TestLateStartFailureAfterPeerAdoption` on a dedicated PostgreSQL database with the race detector. Verify startup and timeout sweeps while the original creator is healthy, kill it after provider acceptance, simulate an empty first lookup, and verify adoption or a pending manual stop against the same attempt.
