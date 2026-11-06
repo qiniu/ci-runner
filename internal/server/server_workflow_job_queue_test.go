@@ -206,7 +206,8 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 					t.Fatalf("claimed before delay: %v %v", claimed, err)
 				}
 			}
-			capStart := time.Now()
+			// SQLite stores database-clock retry deadlines at millisecond precision.
+			capStart := time.Now().Truncate(time.Millisecond)
 			check()
 			if st := queueTestState(t, store); st.NextRetryAt.Before(capStart.Add(srv.cfg.RetryMaxDelay)) {
 				t.Fatalf("long waits must reach the capped delay: %#v", st)
