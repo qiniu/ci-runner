@@ -3,8 +3,11 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -40,7 +43,8 @@ func (s *DBStore) WithRunnerEnqueue(ctx context.Context, mutation func(Store) er
 }
 
 func (s *DBStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(Store) error) error {
-	return s.withRunnerGuards(ctx, []int{runnerCapacityGuard, runnerCatalogGuard}, "UPDATE", mutation)
+	// A catalog writer waiting on enqueues must leave capacity free for workers.
+	return s.withRunnerGuards(ctx, []int{runnerCatalogGuard, runnerCapacityGuard}, "UPDATE", mutation)
 }
 
 func (s *DBStore) withRunnerGuards(ctx context.Context, ids []int, strength string, mutation func(Store) error) error {
@@ -62,7 +66,7 @@ func (s *DBStore) withRunnerGuards(ctx context.Context, ids []int, strength stri
 		// Statement-based binlogs also require this isolation for writes.
 		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
 	}
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == BackendPostgres {
 			// A stopped client cannot cancel an idle transaction itself.
 			if err := tx.Exec(`SELECT set_config(name, LEAST(NULLIF(setting::bigint, 0), 5000)::text, true)
@@ -85,4 +89,12 @@ func (s *DBStore) withRunnerGuards(ctx context.Context, ids []int, strength stri
 		}
 		return mutation(&DBStore{opts: s.opts, db: tx, migrated: true})
 	}, opts)
+	// Server-side query and lock deadlines can fire before the Go context.
+	var pgErr *pgconn.PgError
+	var mysqlErr *mysql.MySQLError
+	if (errors.As(err, &pgErr) && (pgErr.Code == "57014" || pgErr.Code == "55P03")) ||
+		(errors.As(err, &mysqlErr) && mysqlErr.Number == 1205) {
+		return errors.Join(context.DeadlineExceeded, err)
+	}
+	return err
 }
