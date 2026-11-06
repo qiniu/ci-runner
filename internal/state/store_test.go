@@ -3771,8 +3771,11 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 	if ok, err := store.ClaimRunningWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
 		t.Fatalf("claimed healthy watch: %v, %v", ok, err)
 	}
-	if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
-		t.Fatalf("renew: %v, %v", ok, err)
+	// Exercise same-millisecond renewals on MySQL with changed-row semantics.
+	for range 8 {
+		if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
+			t.Fatalf("renew: %v, %v", ok, err)
+		}
 	}
 	again, err := store.ReadState(st.ID)
 	if err != nil || again.Version != observed.Version || !again.UpdatedAt.Equal(observed.UpdatedAt) {
