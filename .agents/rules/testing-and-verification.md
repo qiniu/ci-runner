@@ -209,9 +209,9 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   existing setting. Check the rebuilt ID before promotion. Publish and
   catalog checks use `runnerd.min_free_disk_mb` as a total-size lower bound.
   Regional Ubuntu smoke verifies both the root disk size and available space.
-- `task template-build-all` runs all eight remote build targets sequentially
-  and stops at the first failure. Use individual build targets for scoped
-  rebuilds.
+- `task template-build-all` builds eight Ubuntu templates with default concurrency 4.
+  Test batch recovery with a local qshell fixture, including optional Windows,
+  changed inputs, exact-build lookup failures and interrupted submissions.
 
 ## Deployment Smoke
 

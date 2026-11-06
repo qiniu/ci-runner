@@ -178,8 +178,9 @@ reports the status-only inspection command when the build remains active, and
 preserves the last qshell error when exact status queries remain unavailable.
 Release evidence then still requires `task template-smoke` in both supported
 regions.
-`task template-build-all` invokes all eight build targets sequentially and stops
-at the first failure; use it only when the whole regional catalog must be rebuilt.
+`task template-build-all` defaults to eight Ubuntu templates and concurrency 4. Windows is opt-in.
+Keep batch receipts endpoint-scoped, verify exact build IDs before skipping,
+and resolve pending attempts before issuing a fresh build.
 
 Use `cd ui && bun run test` for focused UI tests. `task test` rebuilds the UI, runs the Bun UI tests, and then runs Go tests with race detection and coverage.
 

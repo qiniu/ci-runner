@@ -244,8 +244,8 @@ task template-conformance-local
 task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<template-id-from-ready-build>
 ```
 
-`template-build-all` runs the eight build targets sequentially and stops at the
-first failure. Use an individual target when rebuilding only one template.
+`template-build-all` runs the eight Ubuntu builds with default concurrency 4.
+Add `INCLUDE_WINDOWS=1` for Windows. See the [batch and resume procedure](../docs/default-runner-templates.md) for release batches and recovery.
 
 The formal template gate is a qshell build reaching terminal `Status: ready`,
 or the exact Template ID and Build ID reaching `ready` or `uploaded` during the

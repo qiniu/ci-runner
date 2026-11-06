@@ -250,8 +250,24 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-`template-build-all` 会串行执行这 8 个远程构建，并在首个失败处停止。只需重建
-一个模板时，使用对应的单模板 target。
+批次默认构建 8 个 Ubuntu 模板，最多同时运行 4 个构建。加上 `INCLUDE_WINDOWS=1` 可选入 Windows 11 预览模板，
+也可以通过 `BUILD_CONCURRENCY` 设置 1–9 个并发，例如设为 1 即串行。批量命令需要 Unix 构建机和 Python 3.11 或更高版本。
+
+```sh
+task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
+```
+
+在同一 shell 中导出区域的 `QINIU_SANDBOX_API_URL` 和匹配的 `QINIU_API_KEY` 后执行上述命令。
+所有并发构建和状态查询都会继承这两个变量。
+
+重复同一命令即可续跑。脚本用 qshell 查询保存的 Template ID 和 Build ID，等待在途构建，核对当前模板目录后跳过同一批次内输入相同的成功项。
+失败项在下次执行时重试。构建输入变更会触发重新构建。需要定期刷新系统包时，即使输入未变也可指定新的 `BUILD_BATCH`。
+默认批次标签为 `default`。每个区域端点和模板名保留最近一次尝试，记录位于该 clone 的 Git 公共目录，多个 worktree 共享。
+同一端点同时只运行一个批处理进程。单模板命令及其他 clone 的构建需由操作人员协调。
+
+状态查询失败或等待超时，可重跑相同批次。单次等待默认 3600 秒，支持通过环境变量 `BUILD_WAIT_SECONDS` 调整。
+如果中断时 qshell 尚未返回 ID，续跑会停止并显示记录路径。先核对区域构建历史，确认没有在途构建后再移走对应记录并重跑。
+批次成功后仍须单独运行区域 smoke 并按流程发布。
 
 如果已有模板的可用空间不足，先与 provider 确认可分配容量，再按原名称和 ID 重建。
 qshell 报告 `Status: ready` 后，核对总容量，并在该 ID 上运行 release smoke 确认可用空间，再发布。

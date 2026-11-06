@@ -303,8 +303,34 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-`template-build-all` runs these eight remote builds sequentially and stops at
-the first failure. Use an individual target when rebuilding only one template.
+The regional batch builds the eight Ubuntu templates with up to four builds
+in flight. Add `INCLUDE_WINDOWS=1` to include the Windows 11 preview, or
+set `BUILD_CONCURRENCY=1` to run one at a time (valid range 1–9).
+The batch controller requires Python 3.11+ on a Unix build host.
+
+```sh
+task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
+```
+
+Run the command in the shell where you exported the regional
+`QINIU_SANDBOX_API_URL` and `QINIU_API_KEY`. Every build and status query inherits them.
+
+Repeat the same command to resume. The batch checks the saved Template ID and
+Build ID with qshell, waits for outstanding attempts and skips successful
+matching builds after checking the current catalog. A failed build is retried
+on the next run. Changes to a template's build inputs trigger a fresh build.
+Use a **new** `BUILD_BATCH` label for a periodic refresh with unchanged inputs.
+The default label is `default`. Receipts track the most recent attempt for
+each name and endpoint in this clone's Git common directory, shared across
+its worktrees. Each endpoint allows one batch controller at a time. Coordinate
+single-template commands and builds from other clones separately.
+
+If a status query fails or the wait expires (default 3600 seconds per build,
+configurable via the `BUILD_WAIT_SECONDS` environment variable), rerun the same
+batch. If interrupted before qshell returns IDs, the next run reports the
+receipt path and stops. Inspect the regional build history. Only after ruling
+out an active build, move that receipt aside and rerun. A successful batch
+still requires the separate regional smoke and publication steps.
 
 If an existing template falls short of the free-space target, arrange sufficient
 capacity with the provider before rebuilding the same name and ID. Once

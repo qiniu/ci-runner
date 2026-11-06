@@ -402,8 +402,8 @@ task release-check # 验证发布构建
 
 修改 Python/pipx 安装方式时，运行 `task template-python-test`，通过 Docker 和网络验证
 pipx 与 apt 管理的 Python 包相互隔离。
-先运行 `task template-check-all`，再通过 `task template-build-all` 串行构建全部
-8 个模板，或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
+先运行 `task template-check-all`，再通过 `task template-build-all` 默认以 4 并发构建
+8 个 Ubuntu 模板（加 `INCLUDE_WINDOWS=1` 包含 Windows），或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
 Sandbox 构建。发布与
 远程构建超时后的缓存续跑、发布与 smoke 命令见
 [公共 Runner 模板](docs/zh/default-runner-templates.md)。公共安装代码和

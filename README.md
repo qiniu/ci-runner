@@ -412,7 +412,7 @@ source directory or build target.
 Run `task template-python-test` when changing Python/pipx installation; it uses
 Docker and network access to verify isolation from apt-owned Python packages.
 Run `task template-check-all`, then use `task template-build-all` to build all
-eight templates sequentially, or use an individual `task template-build-ubuntu-*`
+eight Ubuntu templates with default concurrency 4 (add `INCLUDE_WINDOWS=1` for Windows), or use an individual `task template-build-ubuntu-*`
 target for one real qshell Sandbox build. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and

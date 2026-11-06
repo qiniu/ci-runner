@@ -195,12 +195,19 @@ case "$operation" in
       tmp_config="$(mktemp .qshell-sandbox.XXXXXX)"
       trap 'rm -f "$tmp_config"' EXIT
       cp "$template_config" "$tmp_config"
+      if [ -n "${TEMPLATE_BATCH_RECEIPT:-}" ]; then
+        python3 "$script_root/scripts/build-template-batch.py" --submit "$tmp_config"
+        exit $?
+      fi
       build_args=(sandbox template build --wait --config "$tmp_config")
       if [ -n "$build_name" ]; then
         build_args+=(--name "$build_name")
       fi
       "$qshell_bin" "${build_args[@]}" 2>&1 | tee "$output_file"
     ) || build_command_status=$?
+    if [ -n "${TEMPLATE_BATCH_RECEIPT:-}" ]; then
+      exit "$build_command_status"
+    fi
     if ! grep -Eq '^Status:[[:space:]]+ready[[:space:]]*$' "$output_file"; then
       template_id="$(sed -nE 's/^Template ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
       build_id="$(sed -nE 's/^Build ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
