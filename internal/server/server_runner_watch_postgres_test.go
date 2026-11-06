@@ -129,6 +129,24 @@ func TestRunnerWatchPostgresProcess(t *testing.T) {
 		}
 		return counts
 	}
+	// The provider registers a callback before recovery commits its state CAS.
+	// Only the audit after that commit makes a stable version baseline.
+	waitForReconnections := func(want int) {
+		t.Helper()
+		wait("committed watcher reconnections", func() bool {
+			events, err := store.ListAuditEvents(100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, event := range events {
+				if event.Action == "runner.reconnected" && event.ResourceID == "watch" {
+					count++
+				}
+			}
+			return count >= want
+		})
+	}
 	a, first := start()
 	b, second := start()
 	// Several lease periods, including the second node's initial scan.
@@ -141,6 +159,7 @@ func TestRunnerWatchPostgresProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait("B to take over the paused watcher", func() bool { return call(second, http.MethodGet)[0] == 1 })
+	waitForReconnections(2)
 	pausedTakeover := time.Since(pausedAt)
 	before, err := store.ReadState("watch")
 	if err != nil {
@@ -170,6 +189,7 @@ func TestRunnerWatchPostgresProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait("A to take over the crashed watcher", func() bool { return call(first, http.MethodGet)[0] == 2 })
+	waitForReconnections(3)
 	crashTakeover := time.Since(killedAt)
 	if got := call(first, http.MethodPost); got != [2]int{2, 1} {
 		t.Fatalf("current watcher: %v", got)
