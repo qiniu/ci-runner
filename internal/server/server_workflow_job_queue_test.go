@@ -538,6 +538,42 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestWorkflowJobPrecheckAfterAssignmentWrite(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":1001,"status":"in_progress"}`)
+	}))
+	defer api.Close()
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, api.URL, &fakeSandbox{})
+	srv.Close()
+	sendQueueTestWebhook(t, srv, "workflow_job", "queued")
+	req, err := store.ReadRequest("1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("claim", ok, err)
+	}
+	attempt.Status = state.StatusCreating
+	if err := store.WriteQueuedClaim(attempt, attempt.LeaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	attempt.Version++
+	// An in_progress webhook may write assignment evidence before the first
+	// precheck read. The existing Job must still enter the monitored queue.
+	assigned := queueTestState(t, store)
+	assigned.AssignedJobID = req.JobID
+	if err := store.WriteState(assigned); err != nil {
+		t.Fatal(err)
+	}
+	start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+	current := queueTestState(t, store)
+	if err != nil || start || current.Status != state.StatusQueued || current.LastErrorCode != workflowJobWaitCode || current.AssignedJobID != req.JobID || current.NextRetryAt.IsZero() {
+		t.Fatalf("precheck stranded an already running workflow: status=%s code=%s start=%t err=%v", current.Status, current.LastErrorCode, start, err)
+	}
+}
+
 func TestWorkflowJobPrecheckDefersChangedAdmission(t *testing.T) {
 	api := httptest.NewServer(githubRunnerAPI(t))
 	defer api.Close()

@@ -40,9 +40,8 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if before.Status != state.StatusCreating || before.LeaseOwner != attempt.LeaseOwner || before.ProvisionAttemptID != attempt.ProvisionAttemptID {
 		return false, nil
 	}
-	// For legacy rows without a durable attempt ID, the version is the only
-	// guard against borrowing a different attempt by the same worker.
-	if attempt.ProvisionAttemptID == "" && before.Version != attempt.Version {
+	// Historical rows only carry the attempt timestamp and owner.
+	if attempt.ProvisionAttemptID == "" && !before.LastAttemptAt.Equal(attempt.LastAttemptAt) {
 		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
@@ -60,7 +59,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || st.ProvisionAttemptID != attempt.ProvisionAttemptID || st.SandboxID != "" || st.ProcessPID != 0 || !st.LastAttemptAt.Equal(before.LastAttemptAt) || !st.CreatingAt.Equal(before.CreatingAt) {
 		return false, nil
 	}
-	stale := st.Version != attempt.Version
+	stale := st.Version != before.Version || (attempt.ProvisionAttemptID != "" && before.Version != attempt.Version)
 	if lookupErr == nil && job.ID != req.JobID {
 		lookupErr = fmt.Errorf("workflow job lookup returned a different job")
 	}
@@ -74,7 +73,9 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			}
 			st.Version++
 		}
-		*attempt = st
+		if before.Version == attempt.Version {
+			*attempt = st
+		}
 		s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "decision", "start")
 		s.store.AppendLog(req.ID, "control.log", []byte("workflow job observed_status=queued decision=start\n"))
 		return true, nil
