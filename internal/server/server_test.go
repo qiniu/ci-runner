@@ -6776,6 +6776,7 @@ func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st.NextRetryAt = time.Now().UTC().Add(30 * time.Second)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
@@ -6791,8 +6792,8 @@ func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) {
-		t.Fatalf("expected queued request with original lease, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) || !got.NextRetryAt.Equal(st.NextRetryAt) {
+		t.Fatalf("expected queued request with original lease and retry deadline, got %#v", got)
 	}
 	if fake.recoveredCount() != 0 || fake.stoppedCount() != 0 {
 		t.Fatalf("queued recovery touched sandbox: recovered=%d stopped=%d", fake.recoveredCount(), fake.stoppedCount())

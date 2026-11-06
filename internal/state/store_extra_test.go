@@ -405,9 +405,31 @@ func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
 	if err := store.ReleaseQueuedClaim(old); err != nil {
 		t.Fatal(err)
 	}
+	owner := current.LeaseOwner
+	current.LeaseOwner, current.LeaseExpiresAt = "", time.Time{}
+	current.ScheduleQueuedRetry(time.Minute)
+	if err := store.WriteQueuedClaim(current, owner); err != nil {
+		t.Fatalf("current claim could not defer after stale release: %v", err)
+	}
+	delayed, err := store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// LastAttemptAt was assigned by the database when it granted the claim.
+	if delta := delayed.NextRetryAt.Sub(current.LastAttemptAt); delta < time.Minute || delta > 2*time.Minute {
+		t.Fatalf("queued retry is out of step with the database claim clock: %v", delta)
+	}
+	if _, _, ok, err := store.ClaimNextRunnable("early", time.Minute); err != nil || ok {
+		t.Fatalf("deferred request was immediately eligible: ok=%v err=%v", ok, err)
+	}
+	delayed.ScheduleQueuedRetry(0)
+	if err := store.WriteState(delayed); err != nil {
+		t.Fatal(err)
+	}
+	current = claim()
 	current.Status = StatusCreating
 	if err := store.WriteQueuedClaim(current, current.LeaseOwner); err != nil {
-		t.Fatalf("current claim could not start after stale release: %v", err)
+		t.Fatalf("current claim could not start after deferral: %v", err)
 	}
 }
 
