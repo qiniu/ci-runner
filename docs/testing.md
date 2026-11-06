@@ -190,9 +190,9 @@ go test ./internal/sandboxrunner -count=1
 
 The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. Run the script with the runnerd binary path and `--full-ttl` to measure crash takeover with the default 300-second lease.
 
-New Runner attempts persist a random `provision_attempt_id` in the creating transaction before Sandbox creation. The same ID supplies the Sandbox API idempotency key and the metadata used for discovery. After an interrupted start, a saved Sandbox ID takes precedence. With no saved ID, recovery searches by request and attempt metadata. Legacy rows use the untagged resource for the same request. Multiple candidates or an unverified response to an exact attempt query require reconciliation. A fresh retry receives a new ID.
+New Runner attempts persist a random `provision_attempt_id` in the creating transaction before Sandbox creation. The same ID supplies the Sandbox API idempotency key and the metadata used for discovery. After an interrupted start, a saved Sandbox ID takes precedence. With no saved ID, recovery searches by request and attempt metadata. Legacy rows use the untagged resource for the same request. On multiple candidates, an unverifiable exact-match response or a failed list, discovery returns an error and startup leaves the request in creating. Once dispatch is recorded, an ambiguous lookup, an empty list or the local create timeout retains the attempt and its capacity until the provider confirms the outcome. Recovery checkpoints an exact metadata match before reconnecting to that Sandbox. A fresh retry receives a new ID.
 
-The startup-gate test must verify that only `/healthz` remains available before recovery finishes. The `TestRecover*` cases must verify that at most four requests recover concurrently, each worker derives its per-request timeout from the remaining whole-startup budget and remaining worker waves, an exhausted parent budget prevents dispatch, cancellation reports every skipped request, queued requests keep their existing leases and retry deadlines, creating/running requests reconnect without stopping their sandbox, a concurrent state version change wins over both successful and failed reconnect results, timed-out sandboxes stop without reconnecting, missing interrupted creations are requeued while a missing creation whose GitHub job is already in progress fails explicitly, completed workflow jobs continue through cleanup, and one reconnect failure does not prevent other requests from being recovered.
+The startup-gate test must verify that only `/healthz` remains available before recovery finishes. The `TestRecover*` cases must verify that at most four requests recover concurrently, each worker derives its per-request timeout from the remaining whole-startup budget and remaining worker waves, an exhausted parent budget prevents dispatch, cancellation reports every skipped request, queued requests keep their existing leases and retry deadlines, creating/running requests reconnect without stopping their sandbox, a concurrent state version change wins over both successful and failed reconnect results, timed-out sandboxes stop without reconnecting, legacy interrupted creations can be requeued when absent, dispatched attempts with no confirmed allocation retain capacity, and a missing legacy creation whose GitHub job is already in progress fails explicitly, completed workflow jobs continue through cleanup, and one reconnect failure does not prevent other requests from being recovered.
 
 ## 2. Configure GitHub Auth
 
@@ -732,7 +732,7 @@ curl -fsS -b "$COOKIE_JAR" \
 Common issues:
 
 - `invalid signature`: GitHub webhook secret and `github.webhook_secret` do not match.
-- `runner start deferred because global concurrency is at capacity` or `runner start deferred because profile is at capacity`: the request remains queued until global or per-spec capacity is available.
+- A `runner_capacity` event identifies a queued request waiting for a global, spec, account or repository slot. Read the dimension from its `last_error_code`.
 - GitHub job stays queued: a managed default requires both `qiniu` and the
   exact OS label. `[ubuntu-24.04]`, `[qiniu]`, and unsupported extra labels do
   not match. For a custom spec, use its advertised and required labels.
@@ -1241,7 +1241,7 @@ historical requests retain their saved ownership names until they finish.
 Missing entries and `0` add no limit. Negative limits, invalid names and duplicate
 keys after normalization reject startup. Global, Runner Spec, account and repository
 limits must all allow admission. `creating`, `running` and `stopping` consume
-capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A failed
+capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL and MySQL guard transactions use read committed isolation to see the previous holder’s commit. A failed
 transaction rolls back the creating write and releases the guard.
 
 At capacity, requests stay queued, release their worker lease and become eligible
@@ -1252,7 +1252,7 @@ This does not consume the failure retry budget or promise equal scheduling share
 `last_error_code` identifies `runner_capacity_global`, `runner_capacity_profile`,
 `runner_capacity_account` or `runner_capacity_repository`; Job details show the
 waiting message and the event timeline records changes under `runner_capacity`.
-The reason clears on successful admission. Repeated checks of the same restriction
+A transient database admission failure instead records `runner_admission_unavailable` under the `runner_admission` event stage. It releases the claim and retries after five seconds without consuming the failure budget. The reason clears on successful admission. Repeated checks of the same restriction
 do not append duplicate capacity events. Capacity-only deferrals also skip timing
 events to keep repeated polling from growing the timeline.
 

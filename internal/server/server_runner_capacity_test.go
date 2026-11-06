@@ -141,6 +141,33 @@ func assertAdmissionState(t *testing.T, store state.Store, id, status string) st
 }
 
 // The admission checks and creating write now share a database transaction.
+type unavailableEnqueueStore struct{ state.Store }
+
+func (s unavailableEnqueueStore) WithRunnerEnqueue(context.Context, func(state.Store) error) error {
+	return errors.New("catalog guard unavailable")
+}
+
+func TestDuplicateWorkflowJobDoesNotAcquireCatalogGuard(t *testing.T) {
+	srv, store, _ := admissionTestFixture(t, 1, 1)
+	job := github.WorkflowJob{ID: 123, Labels: []string{"self-hosted", "custom"}}
+	want, created, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil)
+	if err != nil || !created {
+		t.Fatalf("first delivery: created=%v err=%v", created, err)
+	}
+	srv.store = unavailableEnqueueStore{store}
+	got, created, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil)
+	if err != nil || created || got.ID != want.ID {
+		t.Fatalf("duplicate: id=%q created=%v err=%v", got.ID, created, err)
+	}
+	got.LastErrorCode = workflowJobWaitCode
+	if err := store.WriteState(got); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil); err == nil {
+		t.Fatal("waiting job skipped current admission checks")
+	}
+}
+
 type failedRunnerAdmissionStore struct {
 	state.Store
 	stage string
@@ -156,11 +183,14 @@ func (s *failedRunnerAdmissionStore) WithRunnerAdmission(ctx context.Context, fn
 }
 
 func (s *failedRunnerAdmissionStore) GetProfile(name string) (state.RunnerProfile, error) {
-	return state.RunnerProfile{}, errors.New("invalid profile labels")
+	if s.stage == "profile_lookup" {
+		return state.RunnerProfile{}, state.ErrNotFound
+	}
+	return state.RunnerProfile{}, context.Canceled
 }
 
 func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
-	for _, stage := range []string{"admission_lock_wait", "profile_lookup"} {
+	for _, stage := range []string{"admission_lock_wait", "profile_lookup", "canceled_lookup"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, base, _ := admissionTestFixture(t, 1, 1)
 			claim := queuedRunnerForTest(t, base, "a", "worker")
@@ -173,12 +203,14 @@ func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stage == "admission_lock_wait" {
-				log, err := base.ReadLog("a", "control.log", 65536)
-				if err != nil || strings.Count(string(log), "stage=admission_lock_wait ") != 1 {
-					t.Fatalf("missing or repeated guard failure timing: %s, %v", log, err)
+			if stage != "profile_lookup" {
+				if stage == "admission_lock_wait" {
+					log, err := base.ReadLog("a", "control.log", 65536)
+					if err != nil || strings.Count(string(log), "stage=admission_lock_wait ") != 1 {
+						t.Fatalf("missing or repeated guard failure timing: %s, %v", log, err)
+					}
 				}
-				if st.Status != state.StatusQueued || st.LeaseOwner != "" || st.NextRetryAt.IsZero() || st.LastErrorCode != "runner_admission_unavailable" {
+				if st.Status != state.StatusQueued || st.RetryCount != 0 || st.LeaseOwner != "" || st.NextRetryAt.IsZero() || st.LastErrorCode != "runner_admission_unavailable" {
 					t.Fatalf("guard timeout did not defer the claim: %+v", st)
 				}
 			} else if st.Status != state.StatusFailed || st.FailureStage != stage {
@@ -276,6 +308,43 @@ func TestRunnerAdmissionSharedLimits(t *testing.T) {
 				t.Fatal("stale deferral after admission")
 			}
 		})
+	}
+}
+
+func TestReadmittedRunnerGetsNewProvisionAttempt(t *testing.T) {
+	srv, store, _ := admissionTestFixture(t, 1, 1)
+	req, err := store.ReadRequest("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit := func(claim state.RunnerState) state.RunnerState {
+		t.Helper()
+		_, stage, err := srv.admitQueuedRunner(t.Context(), req, &claim, &runnerTimings{}, time.Now())
+		if err != nil || stage != "" {
+			t.Fatalf("admit: stage=%q err=%v", stage, err)
+		}
+		saved, err := store.ReadState(req.ID)
+		if err != nil || saved.ProvisionAttemptID == "" {
+			t.Fatalf("missing durable attempt: %v", err)
+		}
+		return saved
+	}
+	first := admit(queuedRunnerForTest(t, store, req.ID, "worker"))
+	failed := first
+	failed.Status = state.StatusFailed
+	if err := store.WriteState(failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RetryRequest(req.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, claim, ok, err := store.ClaimNextRunnable("other-worker", time.Minute)
+	if err != nil || !ok || claim.ID != req.ID {
+		t.Fatalf("reclaim: id=%q ok=%v err=%v", claim.ID, ok, err)
+	}
+	second := admit(claim)
+	if first.ProvisionAttemptID == second.ProvisionAttemptID {
+		t.Fatal("fresh retry reused the previous provision attempt")
 	}
 }
 

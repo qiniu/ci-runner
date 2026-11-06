@@ -265,6 +265,20 @@ func (s *Server) createAndStart(w http.ResponseWriter, r *http.Request, req stat
 
 func (s *Server) enqueueWorkflowJob(ctx context.Context, repositoryFullName string, githubInstallationID int64, workflowRunName string, job github.WorkflowJob, payload []byte) (state.RunnerState, bool, error) {
 	id := strconv.FormatInt(job.ID, 10)
+	// Duplicate workflow_run and workflow_job deliveries normally need only
+	// the saved row. An actual waiting job still checks the current policy
+	// and exact scope before a delivery can shorten its retry deadline.
+	existing, err := s.store.ReadState(id)
+	if err != nil && !errors.Is(err, state.ErrNotFound) {
+		return state.RunnerState{}, false, err
+	}
+	if err == nil && existing.WorkflowJobID == job.ID && existing.RepositoryFullName == repositoryFullName &&
+		existing.GitHubInstallationID == githubInstallationID && (existing.Status != state.StatusQueued || existing.LastErrorCode != workflowJobWaitCode) {
+		if existing.ProfileName != "" && s.cfg.RepositoryAllowed(repositoryFullName) {
+			metrics.RecordWorkflowQueued(repositoryFullName, workflowRunName, job.Name, existing.ProfileName)
+		}
+		return existing, false, nil
+	}
 	req := state.RunnerRequest{
 		ID:                   id,
 		Source:               "github_webhook",
@@ -398,7 +412,10 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		if errors.Is(err, state.ErrConflict) {
 			return
 		}
-		if stage == "profile_lookup" || stage == "profile_validation" {
+		var syntax *json.SyntaxError
+		var shape *json.UnmarshalTypeError
+		invalidProfile := errors.Is(err, state.ErrNotFound) || errors.As(err, &syntax) || errors.As(err, &shape)
+		if stage == "profile_validation" || (stage == "profile_lookup" && invalidProfile) {
 			s.failQueuedClaim(claim, stage, err)
 		} else {
 			s.logger.Error("admit queued runner", "id", id, "stage", stage, "error", err)
@@ -453,7 +470,10 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			s.logger.Info("runner Sandbox snapshot skipped for superseded attempt", "id", id, "error", err)
 			return
 		}
-		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
+		if sandboxConfig.Source == sandboxConfigSourceForkSponsorship {
+			if !errors.Is(err, errForkSponsorshipAtCapacity) && !errors.Is(err, errForkSponsorshipPolicyChanged) {
+				s.logger.Error("defer sponsored runner after database admission error", "id", id, "error", err)
+			}
 			s.deferCreatingRequest(st, 5*time.Second)
 			s.signalQueue()
 			return
@@ -2635,9 +2655,21 @@ func (s *Server) recordAudit(actor, action, resourceType, resourceID string, pay
 }
 
 func (s *Server) applyRunnerMutationWithAudit(ctx context.Context, actor, action, resourceType, resourceID string, payload any, mutation func(state.Store) error) error {
-	return s.applyMutationWithAudit(actor, action, resourceType, resourceID, payload, func(tx state.Store) error {
-		return tx.WithRunnerCatalogMutation(ctx, mutation)
+	event, err := auditEventFor(actor, action, resourceType, resourceID, payload)
+	if err != nil {
+		return fmt.Errorf("%w: %w", state.ErrAuditEventPersistence, err)
+	}
+	// The guard owns the outer transaction, including its isolation level and
+	// deadline. Commit the mutation and audit before releasing its locks.
+	err = s.store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error {
+		var err error
+		event, err = tx.ApplyMutationWithAudit(event, mutation)
+		return err
 	})
+	if err == nil {
+		s.logRequiredAuditEvent(event)
+	}
+	return err
 }
 
 func (s *Server) applyMutationWithAudit(actor, action, resourceType, resourceID string, payload any, mutation func(state.Store) error) error {
@@ -2649,8 +2681,12 @@ func (s *Server) applyMutationWithAudit(actor, action, resourceType, resourceID 
 	if err != nil {
 		return err
 	}
-	s.logger.Info("required mutation audit event recorded", "id", event.ID, "actor", actor, "action", action, "resource_type", resourceType, "resource_id", resourceID)
+	s.logRequiredAuditEvent(event)
 	return nil
+}
+
+func (s *Server) logRequiredAuditEvent(event state.AuditEvent) {
+	s.logger.Info("required mutation audit event recorded", "id", event.ID, "actor", event.Actor, "action", event.Action, "resource_type", event.ResourceType, "resource_id", event.ResourceID)
 }
 
 func auditEventFor(actor, action, resourceType, resourceID string, payload any) (state.AuditEvent, error) {

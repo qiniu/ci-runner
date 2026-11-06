@@ -18,10 +18,11 @@ import (
 const runnerRequestGitHubContextBackfillBatchSize = 200
 
 type DBStore struct {
-	opts     Options
-	mu       sync.Mutex
-	db       *gorm.DB
-	migrated bool
+	opts         Options
+	mu           sync.Mutex
+	db           *gorm.DB
+	migrated     bool
+	capacityGate chan struct{}
 }
 
 func New(dir string) Store {
@@ -41,7 +42,7 @@ func NewWithOptions(opts Options) Store {
 		opts.DatabaseDSN = filepath.Join(".", "var", "runnerd.db")
 	}
 	opts.Backend = backend
-	return &DBStore{opts: opts}
+	return &DBStore{opts: opts, capacityGate: make(chan struct{}, 1)}
 }
 
 func (s *DBStore) Ensure() error {

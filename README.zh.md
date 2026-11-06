@@ -349,7 +349,7 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | Job 一直卡在 **queued**，runnerd 日志无 webhook 记录 | GitHub App 未订阅事件                    | 进入 GitHub App 设置 → 勾选 **Workflow jobs** 事件                                 |
 | `runner_group_permission_denied`（旧版：`github registration token: status 404`） | 无法访问 owner 组织的组，包括个人 owner 或 App 缺少权限 | 个人仓库清空 `runner_group`；组织仓库检查 App 安装及 Self-hosted runners 权限 |
 | 日志中出现 `invalid signature`                       | Webhook secret 不匹配                    | 确保 `github.webhook_secret` 与 GitHub App/仓库 webhook 设置中的 secret 一致       |
-| `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
+| `runner_capacity` 事件 | 全局、规格、账户或仓库并发达到上限 | 根据 `last_error_code` 判断受限维度，等待容量释放或调整该维度的限额 |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
 | GitHub 报告 self-hosted runner 失联                  | Runner、Sandbox 或其网络链路停止上报心跳 | 打开 **Admin → Runner 请求**，用 GitHub 显示的 Runner Name（如 `e2b-101445685709`）精确查找请求，再检查诊断结论和生命周期时间线 |
 

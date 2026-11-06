@@ -195,11 +195,17 @@ func (s *Server) persistSandboxServiceSnapshot(ctx context.Context, attempt stat
 	if snapshot.Source == sandboxConfigSourceForkSponsorship {
 		return s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
 			policy, err := tx.GetForkSponsorshipPolicy(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
+			if err != nil && !errors.Is(err, state.ErrNotFound) {
+				return err
+			}
 			if err != nil || !policy.Enabled || policy.Mode != snapshot.SponsorAuthorizationReason || !strings.EqualFold(policy.SourceRepositoryFullName, snapshot.SponsorSourceRepositoryFullName) {
 				return errForkSponsorshipPolicyChanged
 			}
 			if policy.Mode == state.ForkSponsorshipModeApprovalRequired {
 				approval, approvalErr := tx.GetForkSponsorshipApproval(policy.SourceRepositoryID, snapshot.ForkRepositoryID)
+				if approvalErr != nil && !errors.Is(approvalErr, state.ErrNotFound) {
+					return approvalErr
+				}
 				if approvalErr != nil || approval.SponsorInstallationID != policy.SponsorInstallationID || approval.ForkOwnerID != snapshot.ForkOwnerID || !strings.EqualFold(approval.ForkRepositoryFullName, snapshot.ForkRepositoryFullName) || !strings.EqualFold(approval.ForkOwnerLogin, snapshot.ForkOwnerLogin) {
 					return errForkSponsorshipPolicyChanged
 				}
