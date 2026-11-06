@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -591,6 +592,82 @@ func TestAppClientResolvesDynamicRepositoryInstallation(t *testing.T) {
 	if installationLookups != 1 || tokenRequests != 1 {
 		t.Fatalf("expected cached dynamic installation, lookups=%d tokenRequests=%d", installationLookups, tokenRequests)
 	}
+}
+
+// The two clients model a warm node and a newly started node after a reinstall.
+func TestAppRepositoryInstallationRefreshesAcrossNodes(t *testing.T) {
+	key := testPrivateKeyFile(t)
+	synctest.Test(t, func(t *testing.T) {
+		var sourceID int64 = 456
+		lookups := 0
+		started, release := make(chan struct{}), make(chan struct{})
+		transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/repos/o/r/installation" {
+				t.Fatalf("unexpected lookup %s", r.URL.Path)
+			}
+			lookups++
+			id := sourceID
+			if id == 901 {
+				close(started)
+				<-release
+			}
+			code := http.StatusOK
+			if id == 0 {
+				code = http.StatusNotFound
+			}
+			return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"id":%d}`, id))), Header: make(http.Header)}, nil
+		})
+		node := func() *appAuthenticator {
+			c, err := NewAppClient("https://github.test", AppAuth{AppID: 123, PrivateKeyFile: key}, &http.Client{Transport: transport})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return c.appAuth
+		}
+		resolve := func(a *appAuthenticator, want int64) {
+			t.Helper()
+			got, err := a.installationID(t.Context(), "o/r")
+			if (want == 0) != (err != nil) || got != want {
+				t.Fatalf("installation = %d, %v; want %d", got, err, want)
+			}
+		}
+		warm := node()
+		resolve(warm, 456)
+		sourceID = 789
+		resolve(warm, 456)
+		if lookups != 1 {
+			t.Fatalf("warm route unnecessarily refetched: %d lookups", lookups)
+		}
+		resolve(node(), 789)
+		time.Sleep(30 * time.Second)
+		resolve(warm, 789)
+		sourceID = 0
+		time.Sleep(30 * time.Second)
+		resolve(warm, 0)
+		sourceID = 890
+		resolve(warm, 890)
+
+		// A slower lookup cannot restore an older route after a newer lookup finishes.
+		sourceID = 901
+		time.Sleep(30 * time.Second)
+		late := make(chan int64, 1)
+		go func() {
+			id, err := warm.installationID(t.Context(), "o/r")
+			if err != nil {
+				t.Error(err)
+			}
+			late <- id
+		}()
+		<-started
+		sourceID = 902
+		time.Sleep(time.Second)
+		resolve(warm, 902)
+		close(release)
+		if got := <-late; got != 902 {
+			t.Fatalf("late lookup returned superseded installation %d", got)
+		}
+		resolve(warm, 902)
+	})
 }
 
 func TestAppClientUsesRepositoryInstallationForOrgRunnerTarget(t *testing.T) {
