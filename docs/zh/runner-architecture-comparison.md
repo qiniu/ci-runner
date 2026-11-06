@@ -271,7 +271,7 @@ Runner-request 列表使用有界 pagination 和 list-only database projections�
 
 ## Diagnostics
 
-服务导入 `github.com/jimmicro/pprof`，它会启动 local-only pprof/expvar service，并在 binary 附近写入 discovery files。Admin runtime diagnostics surface 提供：
+服务导入 `github.com/jimmicro/pprof` v1.2.0，启动仅绑定 `127.0.0.1` 的 pprof/expvar service，并通过 Prometheus `/metrics` 端点暴露默认 Go runtime/process collectors。Runnerd 业务指标仍保存在 expvar 中，尚未接入 `/metrics`。启动时会在 binary 附近写入 discovery files 和 dump scripts，并清理同一 binary 名称的过期文件，保留仍可连接的地址及其脚本。Dump 脚本默认省略完整 goroutine 文本栈，需要时传入 `--full-goroutine`；采集方法见[测试指南](testing.md#10-diagnostics--pprof)。Admin runtime diagnostics surface 提供：
 
 - discovered pprof address files 和 dump scripts；
 - DB backend/path，secret 会 redacted；

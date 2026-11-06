@@ -31,7 +31,7 @@ jobs:
           cache-dependency-path: go.sum
       - uses: oven-sh/setup-bun@v2
       - run: cd ui && bun install --frozen-lockfile && bun run build
-      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
       - run: staticcheck ./cmd/... ./internal/...
 
   gofmt:

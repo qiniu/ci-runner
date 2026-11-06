@@ -269,7 +269,7 @@ Successful repository authorization is cached for at most 30 seconds. A request 
 
 ## Diagnostics
 
-The service imports `github.com/jimmicro/pprof`, which starts a local-only pprof/expvar service and writes discovery files near the binary. The admin runtime diagnostics surface exposes:
+The service imports `github.com/jimmicro/pprof` v1.2.0, which starts a `127.0.0.1`-only pprof/expvar service with a Prometheus `/metrics` endpoint for default Go runtime/process collectors. Runnerd application metrics remain in expvar and are not bridged to `/metrics`. Startup writes discovery files and dump scripts beside the binary and removes stale ones for the same binary name, retaining reachable addresses and their scripts. Dump scripts omit full goroutine text stacks by default; pass `--full-goroutine` when needed. See [Testing](testing.md#10-diagnostics--pprof) for collection details. The admin runtime diagnostics surface exposes:
 
 - discovered pprof address files and dump scripts;
 - DB backend/path, with secrets redacted;
