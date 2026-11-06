@@ -559,6 +559,8 @@ type RunnerRequestStore interface {
 	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
 	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error
 	WriteWatchedState(st RunnerState, token string) error
+	WithRunnerEnqueue(ctx context.Context, mutation func(Store) error) error
+	WithRunnerCatalogMutation(ctx context.Context, mutation func(Store) error) error
 	Ensure() error
 	CreateRequest(req RunnerRequest, payload []byte) (bool, RunnerState, error)
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)
@@ -586,6 +588,7 @@ type RunnerRequestStore interface {
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
 	WriteQueuedClaim(st RunnerState, owner string) error
+	// ReleaseQueuedClaim is best-effort: an expired or superseded claim is already released for its caller.
 	ReleaseQueuedClaim(claim RunnerState) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)

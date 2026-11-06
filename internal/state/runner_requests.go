@@ -181,25 +181,43 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if req.JobID != 0 {
 		record.WorkflowJobID = &req.JobID
 	}
-	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
-	if result.Error != nil {
+	// MySQL CLIENT_FOUND_ROWS reports a no-op duplicate upsert as one
+	// affected row. A plain insert distinguishes an actual creation.
+	insert, lookup := db, db
+	if db.Dialector.Name() == BackendMySQL {
+		// A normal consistent read after a duplicate can see an older
+		// REPEATABLE READ snapshot. Read the winning row under a shared lock.
+		lookup = db.Clauses(clause.Locking{Strength: "SHARE"})
+	} else {
+		insert = db.Clauses(clause.OnConflict{DoNothing: true})
+	}
+	result := insert.Create(&record)
+	if result.Error == nil && result.RowsAffected > 0 {
+		return true, recordToState(record), nil
+	}
+	if result.Error != nil && !isDuplicatedKeyError(db, result.Error) {
 		return false, RunnerState{}, result.Error
 	}
-	if result.RowsAffected == 0 {
-		st, err := s.ReadState(req.ID)
-		if errors.Is(err, ErrNotFound) && req.JobID != 0 {
-			var conflicting runnerRequestRecord
-			conflictErr := db.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
-			if conflictErr == nil {
-				return false, recordToState(conflicting), ErrConflict
-			}
-			if !errors.Is(conflictErr, gorm.ErrRecordNotFound) {
-				return false, RunnerState{}, conflictErr
-			}
-		}
-		return false, st, err
+
+	var existing runnerRequestRecord
+	err = lookup.First(&existing, "id = ?", req.ID).Error
+	if err == nil {
+		return false, recordToState(existing), nil
 	}
-	return true, recordToState(record), nil
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, RunnerState{}, err
+	}
+	if req.JobID != 0 {
+		var conflicting runnerRequestRecord
+		err = lookup.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
+		if err == nil {
+			return false, recordToState(conflicting), ErrConflict
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, RunnerState{}, err
+		}
+	}
+	return false, RunnerState{}, ErrNotFound
 }
 
 func (s *DBStore) ReadRequest(id string) (RunnerRequest, error) {
@@ -932,11 +950,17 @@ func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
 	case BackendPostgres:
 		return gorm.Expr("clock_timestamp() + ? * interval '1 microsecond'", after.Microseconds())
 	case BackendMySQL:
-		// MySQL time zone tables are optional. Use the driver's offset for the
-		// target instant, keeping both the clock and the deadline database-based.
-		location := db.Dialector.(*gormmysql.Dialector).DSNConfig.Loc
+		// MySQL time zone tables are optional. Use the database for elapsed
+		// time and the driver's location only to encode its DATETIME value.
+		// Match the DATETIME(3) columns so a zero-delay retry cannot round
+		// forward to the next millisecond when the deadline is stored.
+		// UTC is also the driver default when no DSN location is available.
+		location := time.UTC
+		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil && dialector.DSNConfig != nil && dialector.DSNConfig.Loc != nil {
+			location = dialector.DSNConfig.Loc
+		}
 		_, offset := time.Now().Add(after).In(location).Zone()
-		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(6))", after.Microseconds()+int64(offset)*1_000_000)
+		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
 	default:
 		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
 	}

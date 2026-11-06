@@ -9442,8 +9442,8 @@ type blockedAdmissionStore struct {
 	block func()
 }
 
-func (s *blockedAdmissionStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
-	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error { s.block(); return mutation(tx) })
+func (s *blockedAdmissionStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error { s.block(); return mutation(tx) })
 }
 
 func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
