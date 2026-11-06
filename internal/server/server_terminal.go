@@ -671,15 +671,16 @@ func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.R
 	s.streamTerminalSession(w, r, session)
 }
 
+// HTTP Server.WriteTimeout is absolute, including for an idle SSE connection.
+// Renew it before headers and each write, while still bounding blocked writes.
+func prepareTerminalStreamWrite(controller *http.ResponseController) bool {
+	err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	return err == nil || errors.Is(err, http.ErrNotSupported)
+}
+
 func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	controller := http.NewResponseController(w)
-	// HTTP Server.WriteTimeout is absolute, even while a stream is active.
-	// Renew it for each write, while still bounding a blocked browser connection.
-	prepareWrite := func() bool {
-		err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		return err == nil || errors.Is(err, http.ErrNotSupported)
-	}
-	if !prepareWrite() {
+	if !prepareTerminalStreamWrite(controller) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -716,7 +717,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		if len(data) == 0 {
 			return true
 		}
-		if !prepareWrite() {
+		if !prepareTerminalStreamWrite(controller) {
 			return false
 		}
 		if err := writeTerminalEvent(w, data, offset); err != nil {
@@ -738,7 +739,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if !prepareWrite() {
+			if !prepareTerminalStreamWrite(controller) {
 				return
 			}
 			if _, err := fmt.Fprintf(w, ": keepalive\n\nid: %d\nevent: terminal-heartbeat\ndata: {}\n\n", *cursor); err != nil {
@@ -749,7 +750,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 			}
 		case _, ok := <-ch:
 			if !ok {
-				if prepareWrite() {
+				if prepareTerminalStreamWrite(controller) {
 					_, _ = io.WriteString(w, "event: terminal-closed\ndata: {}\n\n")
 					_ = controller.Flush()
 				}

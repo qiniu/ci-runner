@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,5 +293,100 @@ func TestTerminalPeerRejectsChangedOperation(t *testing.T) {
 				t.Fatalf("got %d want %d", rec.Code, want)
 			}
 		})
+	}
+}
+
+func TestTerminalPeerIdleReplaySurvivesHTTPWriteTimeout(t *testing.T) {
+	owner := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Last-Event-ID") != "42" {
+			t.Error("owner lost replay cursor")
+		}
+		// Waiting for owner headers can exceed the browser-side write deadline.
+		time.Sleep(250 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		// An idle resumed PTY has no initial body. Its first heartbeat can
+		// arrive after the forwarding node's configured HTTP WriteTimeout.
+		time.Sleep(250 * time.Millisecond)
+		_, _ = io.WriteString(w, "id: 42\nevent: terminal-heartbeat\ndata: {}\n\n")
+	}))
+	defer owner.Close()
+	srv := &Server{cfg: config.Config{AuthEncryptionKey: "shared-key"}, terminalPeerHTTP: owner.Client()}
+	for _, http2 := range []bool{false, true} {
+		t.Run(fmt.Sprint("http2=", http2), func(t *testing.T) {
+			peer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv.forwardTerminal(w, r, owner.URL)
+			}))
+			peer.EnableHTTP2 = http2
+			peer.Config.WriteTimeout = 100 * time.Millisecond
+			peer.StartTLS()
+			defer peer.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, peer.URL+"/events", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: "fixture"})
+			req.Header.Set("Last-Event-ID", "42")
+			resp, err := peer.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "id: 42\nevent: terminal-heartbeat") {
+				t.Fatalf("idle forwarded stream lost heartbeat: status=%d body=%q err=%v", resp.StatusCode, body, err)
+			}
+		})
+	}
+}
+
+func TestTerminalPeerOutageAllowsResumingEvents(t *testing.T) {
+	var ownerStatus atomic.Int64
+	ownerStatus.Store(http.StatusServiceUnavailable)
+	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status := int(ownerStatus.Load()); status != http.StatusOK {
+			writeError(w, status, "owner terminal unavailable")
+			return
+		}
+		if r.Header.Get("Last-Event-ID") != "42" {
+			t.Error("owner lost last confirmed cursor")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "id: 45\ndata: \"abc\"\n\n")
+	}))
+	defer owner.Close()
+	srv := &Server{cfg: config.Config{AuthEncryptionKey: "shared-key"}, terminalPeerHTTP: owner.Client()}
+	fwd := func(origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/events", nil)
+		req.Header.Set("Last-Event-ID", "42")
+		req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: "fixture"})
+		rec := httptest.NewRecorder()
+		srv.forwardTerminal(rec, req, origin)
+		return rec
+	}
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close() // Real peer transport error before headers.
+	for _, origin := range []string{down.URL, owner.URL} {
+		got := fwd(origin)
+		// An ended SSE response will reconnect. An HTTP error makes native
+		// EventSource permanently CLOSED. A comment cannot confirm recovery
+		// or advance the last event ID in the Jobs/Deploy frontend.
+		if got.Code != http.StatusOK || got.Header().Get("Content-Type") != "text/event-stream" || !strings.HasPrefix(got.Body.String(), ":") || strings.Contains(got.Body.String(), "\nid:") || strings.Contains(got.Body.String(), "\ndata:") {
+			t.Fatalf("transient owner failure ended or falsely recovered the stream: %d %q", got.Code, got.Body.String())
+		}
+	}
+	ownerStatus.Store(http.StatusOK)
+	got := fwd(owner.URL)
+	if got.Code != http.StatusOK || got.Body.String() != "id: 45\ndata: \"abc\"\n\n" {
+		t.Fatalf("lost replay after owner returned: %d %q", got.Code, got.Body.String())
+	}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		ownerStatus.Store(int64(status))
+		if got := fwd(owner.URL); got.Code != status {
+			t.Fatalf("changed definitive owner response %d to %d", status, got.Code)
+		}
 	}
 }

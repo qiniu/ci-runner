@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -178,14 +177,28 @@ func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, origin 
 	}
 	// The owner sends a heartbeat every five seconds. Bound a silent peer
 	// even after it returned headers so EventSource can reconnect.
+	controller := http.NewResponseController(w)
+	// An idle owner may flush headers and emit no replay bytes until its
+	// next heartbeat. Protect the downstream stream while awaiting both.
+	if r.Method == http.MethodGet && !prepareTerminalStreamWrite(controller) {
+		return
+	}
 	idle := time.AfterFunc(20*time.Second, cancel)
 	defer idle.Stop()
 	resp, err := s.terminalPeerHTTP.Do(out)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "terminal owner is unavailable")
+		if r.Method == http.MethodGet {
+			writeTerminalPeerReconnect(w)
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "terminal owner is unavailable")
+		}
 		return
 	}
 	defer resp.Body.Close()
+	if r.Method == http.MethodGet && (resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout) {
+		writeTerminalPeerReconnect(w)
+		return
+	}
 	contentType := resp.Header.Get("Content-Type")
 	if resp.StatusCode/100 == 3 || (contentType != "text/event-stream" && !strings.HasPrefix(contentType, "application/json")) {
 		writeError(w, http.StatusBadGateway, "invalid terminal owner response")
@@ -193,8 +206,10 @@ func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, origin 
 	}
 	w.Header().Set("Content-Type", contentType)
 	stream := contentType == "text/event-stream"
-	controller := http.NewResponseController(w)
 	if stream {
+		if !prepareTerminalStreamWrite(controller) {
+			return
+		}
 		w.Header().Set("X-Accel-Buffering", "no")
 	}
 	w.WriteHeader(resp.StatusCode)
@@ -206,10 +221,8 @@ func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, origin 
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			idle.Reset(20 * time.Second)
-			if stream {
-				if err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
-					return
-				}
+			if stream && !prepareTerminalStreamWrite(controller) {
+				return
 			}
 			if _, err := w.Write(buf[:n]); err != nil || (stream && controller.Flush() != nil) {
 				return
@@ -219,4 +232,13 @@ func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, origin 
 			return
 		}
 	}
+}
+
+// A native EventSource closes permanently on an HTTP error. A completed SSE
+// response containing only a comment lets it reconnect with its last cursor
+// without resetting the UI's bounded recovery timer.
+func writeTerminalPeerReconnect(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
+	_, _ = io.WriteString(w, ": terminal owner unavailable\n\n")
 }
