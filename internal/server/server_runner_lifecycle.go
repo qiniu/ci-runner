@@ -1551,6 +1551,7 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 			if err := s.store.WriteState(st); err != nil {
 				return state.RunnerState{}, false, fmt.Errorf("write completed github job result: %w", err)
 			}
+			st.Version++
 		}
 		s.logger.Warn(
 			"runner stop deferred because runner ownership is unresolved or different",
