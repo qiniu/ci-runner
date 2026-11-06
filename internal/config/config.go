@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"maps"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,7 @@ import (
 
 type Config struct {
 	HTTPAddr                  string
+	TerminalPeerOrigin        string
 	HTTPReadTimeout           time.Duration
 	HTTPWriteTimeout          time.Duration
 	HTTPIdleTimeout           time.Duration
@@ -68,10 +71,11 @@ type SandboxRegionConfig struct {
 
 type fileConfig struct {
 	Server struct {
-		HTTPAddr        string `yaml:"http_addr"`
-		ReadTimeoutSec  int    `yaml:"read_timeout_seconds"`
-		WriteTimeoutSec int    `yaml:"write_timeout_seconds"`
-		IdleTimeoutSec  int    `yaml:"idle_timeout_seconds"`
+		HTTPAddr           string `yaml:"http_addr"`
+		TerminalPeerOrigin string `yaml:"terminal_peer_origin"`
+		ReadTimeoutSec     int    `yaml:"read_timeout_seconds"`
+		WriteTimeoutSec    int    `yaml:"write_timeout_seconds"`
+		IdleTimeoutSec     int    `yaml:"idle_timeout_seconds"`
 	} `yaml:"server"`
 	Database struct {
 		Backend                string    `yaml:"backend"`
@@ -200,6 +204,7 @@ func LoadFile(path string) (Config, error) {
 	configDir := filepath.Dir(path)
 	cfg := Config{
 		HTTPAddr:                  defaultString(raw.Server.HTTPAddr, ":25500"),
+		TerminalPeerOrigin:        strings.TrimSuffix(strings.TrimSpace(raw.Server.TerminalPeerOrigin), "/"),
 		HTTPReadTimeout:           durationSeconds(raw.Server.ReadTimeoutSec, 15),
 		HTTPWriteTimeout:          durationSeconds(raw.Server.WriteTimeoutSec, 60),
 		HTTPIdleTimeout:           durationSeconds(raw.Server.IdleTimeoutSec, 120),
@@ -330,6 +335,13 @@ func (c Config) GitHubAuthMode() string {
 }
 
 func (c Config) validate() error {
+	if c.TerminalPeerOrigin != "" {
+		u, err := url.Parse(c.TerminalPeerOrigin)
+		if err != nil || len(c.TerminalPeerOrigin) > 512 || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
+			(u.Scheme != "https" && !(u.Scheme == "http" && net.ParseIP(u.Hostname()).IsLoopback())) {
+			return fmt.Errorf("server.terminal_peer_origin requires an HTTPS origin or a loopback HTTP origin")
+		}
+	}
 	var missing []string
 	for path, value := range map[string]string{
 		"github.webhook_secret": c.GitHubWebhookSecret.Value(),

@@ -95,8 +95,12 @@ func newTerminalHub(logger *slog.Logger) *terminalHub {
 }
 
 func (h *terminalHub) Add(requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
+	return h.add(newID(), requestID, sandboxID, terminal)
+}
+
+func (h *terminalHub) add(id, requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
 	session := &terminalSession{
-		id:        newID(),
+		id:        id,
 		requestID: requestID,
 		sandboxID: sandboxID,
 		terminal:  terminal,
@@ -544,6 +548,11 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, "terminal is only available while a sandbox job is active")
 		return
 	}
+	sessionID, err := s.newTerminalSessionID(accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot create terminal session")
+		return
+	}
 	var input terminalCreateRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
@@ -593,7 +602,7 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		return
 	}
 	sessionMu.Lock()
-	session = s.terminals.Add(runnerTerminalKey(st, accountID), st.SandboxID, terminal)
+	session = s.terminals.add(sessionID, runnerTerminalKey(st, accountID), st.SandboxID, terminal)
 	s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
 	for _, data := range pending {
 		session.append(data)

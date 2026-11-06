@@ -36,6 +36,7 @@ type Server struct {
 	diagnostics      *http.Client
 	cacheSTS         *http.Client
 	terminals        *terminalHub
+	terminalPeerHTTP *http.Client
 	deploymentWorker *deploymentworker.Worker
 	startedAt        time.Time
 
@@ -206,6 +207,7 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		diagnostics:               &http.Client{Timeout: 5 * time.Second},
 		cacheSTS:                  &http.Client{Timeout: 30 * time.Second},
 		terminals:                 newTerminalHub(logger),
+		terminalPeerHTTP:          newTerminalPeerClient(),
 		startedAt:                 time.Now().UTC(),
 		pullTitleCache:            map[string]cachedPullTitle{},
 		workflowRunCache:          map[string]cachedWorkflowRun{},
@@ -292,6 +294,9 @@ func (s *Server) Close() {
 		s.loopCancel()
 	}
 	s.loopWG.Wait()
+	if s.terminalPeerHTTP != nil {
+		s.terminalPeerHTTP.CloseIdleConnections()
+	}
 	s.logger.Info("background loops stopped")
 }
 
@@ -481,10 +486,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /user/deployments/{id}", s.handleUserStopDeployment)
 	s.mux.HandleFunc("POST /user/deployments/{id}/retry", s.handleUserRetryDeployment)
 	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal", s.handleUserCreateDeploymentTerminal)
-	s.mux.HandleFunc("GET /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/events", s.handleUserDeploymentTerminalEvents)
-	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/input", s.handleUserDeploymentTerminalInput)
-	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/resize", s.handleUserDeploymentTerminalResize)
-	s.mux.HandleFunc("DELETE /user/deployments/{id}/revisions/{number}/terminal/{sessionID}", s.handleUserCloseDeploymentTerminal)
+	s.mux.HandleFunc("GET /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/events", s.routeTerminal(s.handleUserDeploymentTerminalEvents))
+	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/input", s.routeTerminal(s.handleUserDeploymentTerminalInput))
+	s.mux.HandleFunc("POST /user/deployments/{id}/revisions/{number}/terminal/{sessionID}/resize", s.routeTerminal(s.handleUserDeploymentTerminalResize))
+	s.mux.HandleFunc("DELETE /user/deployments/{id}/revisions/{number}/terminal/{sessionID}", s.routeTerminal(s.handleUserCloseDeploymentTerminal))
 	s.mux.HandleFunc("GET /user/runner_requests", s.handleUserListRunners)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}", s.handleUserGetRunner)
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/group", s.handleUserGetRunnerJobGroup)
@@ -498,10 +503,10 @@ func (s *Server) routes() {
 	// Keep the retired log endpoint out of the SPA fallback.
 	s.mux.HandleFunc("GET /user/runner_requests/{id}/github-log", http.NotFound)
 	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal", s.handleUserCreateRunnerTerminal)
-	s.mux.HandleFunc("GET /user/runner_requests/{id}/terminal/{sessionID}/events", s.handleUserRunnerTerminalEvents)
-	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal/{sessionID}/input", s.handleUserRunnerTerminalInput)
-	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal/{sessionID}/resize", s.handleUserRunnerTerminalResize)
-	s.mux.HandleFunc("DELETE /user/runner_requests/{id}/terminal/{sessionID}", s.handleUserCloseRunnerTerminal)
+	s.mux.HandleFunc("GET /user/runner_requests/{id}/terminal/{sessionID}/events", s.routeTerminal(s.handleUserRunnerTerminalEvents))
+	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal/{sessionID}/input", s.routeTerminal(s.handleUserRunnerTerminalInput))
+	s.mux.HandleFunc("POST /user/runner_requests/{id}/terminal/{sessionID}/resize", s.routeTerminal(s.handleUserRunnerTerminalResize))
+	s.mux.HandleFunc("DELETE /user/runner_requests/{id}/terminal/{sessionID}", s.routeTerminal(s.handleUserCloseRunnerTerminal))
 	s.mux.HandleFunc("GET /user/preferences", s.handleUserPreferences)
 	s.mux.HandleFunc("PUT /user/preferences/sandbox", s.handleUserSaveSandboxConfig)
 	s.mux.HandleFunc("DELETE /user/preferences/sandbox-api-key", s.handleUserDeleteSandboxAPIKey)
