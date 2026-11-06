@@ -453,7 +453,7 @@ type completionFailureStore struct {
 
 func (s *completionFailureStore) ReadState(id string) (state.RunnerState, error) {
 	s.readCount++
-	// startRunner reads once, then the startup check reads before and after
+	// startClaimedRunner reads once, then the startup check reads before and after
 	// GitHub. Fail the final read inside completeWithoutSandbox only once.
 	if s.failRead && s.readCount == 4 {
 		return state.RunnerState{}, errors.New("temporary completion state read failure")
@@ -481,15 +481,14 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 			srv := newTestServer(t, base, gh.URL, fake)
 			srv.Close()
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
-			st := queueTestState(t, base)
-			st.LeaseOwner = "test-worker"
-			st.LeaseExpiresAt = time.Now().Add(time.Minute)
-			if err := base.WriteState(st); err != nil {
-				t.Fatal(err)
-			}
+			claim := queuedRunnerForTest(t, base, "1001", "test-worker")
 			srv.store = &completionFailureStore{Store: base, failRead: operation == "read", failWrite: operation == "write"}
-			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "1001", "test-worker"))
-			st = queueTestState(t, base)
+			srv.startClaimedRunner(context.Background(), claim)
+			st := queueTestState(t, base)
+			wantFailure := map[string]string{"read": "read runner state for skip", "write": "write skipped runner state"}[operation]
+			if !strings.Contains(st.LastErrorMessage, wantFailure) {
+				t.Fatalf("failure missed completion %s: %s", operation, st.LastErrorMessage)
+			}
 			if st.Status != state.StatusQueued || st.RetryCount != 1 || st.NextRetryAt.IsZero() || st.LeaseOwner != "" || !st.LeaseExpiresAt.IsZero() || !st.CreatingAt.IsZero() {
 				t.Fatalf("completion persistence failure must release creation capacity and schedule retry: %#v", st)
 			}
@@ -504,7 +503,7 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 				t.Fatalf("completion failure logged success: err=%v log=%s", err, control)
 			}
 			// A subsequent normal attempt can retain GitHub's terminal result.
-			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "1001", "test-worker"))
+			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, base, "1001", "test-worker"))
 			st = queueTestState(t, base)
 			if st.Status != state.StatusCompleted || st.GitHubJobConclusion != "cancelled" || st.GitHubJobObservedAt.IsZero() || st.LeaseOwner != "" || !st.NextRetryAt.IsZero() || fake.startedCount() != 0 {
 				t.Fatalf("completion did not recover after the store failure: %#v", st)
