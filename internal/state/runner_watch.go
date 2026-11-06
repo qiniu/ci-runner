@@ -39,12 +39,14 @@ func (s *DBStore) RenewRunnerWatch(ctx context.Context, id, token string, ttl ti
 	return result.RowsAffected == 1, result.Error
 }
 
-func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerState, error) {
+type RunnerWatchCandidate struct{ ID, Status string }
+
+func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, err
 	}
-	var rows []RunnerState
+	var rows []RunnerWatchCandidate
 	err = db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("status IN ?", []string{StatusCreating, StatusRunning}).
 		Where("watch_expires_at IS NULL OR watch_expires_at <= ?", queueTime(db, 0)).
 		Order("watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error

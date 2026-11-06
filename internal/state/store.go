@@ -553,7 +553,7 @@ type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
 	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
 	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
-	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerState, error)
+	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error)
 	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
 	DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error
 	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
