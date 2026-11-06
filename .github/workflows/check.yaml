@@ -177,7 +177,7 @@ jobs:
       - name: Verify running watch renewal and takeover between two PostgreSQL-backed Runner processes
         run: go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1
       - name: Verify creation and cleanup takeover on PostgreSQL
-        run: go test -race ./internal/server -run '^Test(SweeperDiscardsSupersededIdleObservation|LateStartFailureAfterPeerAdoption|RunnerCleanupProcess)$' -count=1
+        run: go test -race ./internal/server -run '^Test(SweeperDiscardsSupersededIdleObservation|LateStartFailureAfterPeerAdoption|RunnerCleanupProcess|ReconciledBootstrapFailureRespectsRetryBudget)$' -count=1
       - name: Verify schema, catalog, deployments, and migrations on SQL backends
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v

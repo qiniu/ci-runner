@@ -48,6 +48,57 @@ func TestCreateRunnerSandboxTagsProvisionAttempt(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotRetryAmbiguousCreate(t *testing.T) {
+	t.Setenv("SANDBOX_RETRY_MAX", "1")
+	var posts atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if posts.Add(1) == 1 {
+			// A proxy lost the response after forwarding the create.
+			http.Error(w, "upstream response lost", http.StatusBadGateway)
+			return
+		}
+		http.Error(w, "quota exceeded", http.StatusForbidden)
+	}))
+	defer api.Close()
+	_, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt", TemplateID: "template"})
+	if posts.Load() != 1 || !errors.Is(err, ErrCreateOutcomeUnknown) {
+		t.Fatalf("ambiguous create: posts=%d err=%v", posts.Load(), err)
+	}
+}
+
+func TestRunnerCreateRejectionAfterConnectionLossIsUnknown(t *testing.T) {
+	var posts atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if posts.Add(1) == 1 {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close() // Lost reply to a POST on the primed connection.
+			return
+		}
+		http.Error(w, "quota exceeded", http.StatusForbidden)
+	}))
+	defer api.Close()
+	res, err := api.Client().Get(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	_, err = newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt", TemplateID: "template"})
+	if !errors.Is(err, ErrCreateOutcomeUnknown) {
+		t.Fatalf("lost POST response: requests=%d err=%v", posts.Load(), err)
+	}
+}
+
 func TestRunnerCreateOutcomeEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

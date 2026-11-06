@@ -155,14 +155,25 @@ func (c *runnerCleanup) requeueInterrupted(st state.RunnerState) (state.RunnerSt
 		if errors.Is(err, errCleanupUnconfirmed) {
 			return st, false, err
 		}
-		st.LastErrorCode = interruptedCreateCleanup
-		st.LastErrorMessage = err.Error()
-		st.LastErrorRetryable = true
+		if st.FailureStage != pendingBootstrapFailure {
+			st.LastErrorCode = interruptedCreateCleanup
+			st.LastErrorMessage = err.Error()
+			st.LastErrorRetryable = true
+		}
 		st.NextRetryAt = time.Now().UTC().Add(c.server.retryDelay(1))
 		if writeErr := c.write(st); writeErr != nil {
 			return st, false, writeErr
 		}
 		return st, false, fmt.Errorf("cleanup interrupted creation: %w", err)
+	}
+	if st.SandboxCreateDispatched && st.SandboxID != "" {
+		result := c.server.applyReconciledBootstrapFailure(&st)
+		if err := c.write(st); err != nil {
+			return st, false, err
+		}
+		c.server.recordStartFailure(st, st.FailureStage, errors.New(st.LastErrorMessage), result)
+		st.Version++
+		return st, false, nil
 	}
 	resetInterruptedCreation(&st)
 	if err := c.write(st); err != nil {

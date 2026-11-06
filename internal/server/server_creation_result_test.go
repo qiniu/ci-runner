@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -23,6 +24,95 @@ type lostCreateResponse struct {
 func (p *lostCreateResponse) StartRunner(_ context.Context, input sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
 	p.recoverInPeer(input)
 	return sandboxrunner.StartResult{}, errors.New("connection reset after Sandbox creation")
+}
+
+type failingBootstrapSandbox struct {
+	*fakeSandbox
+	failure   error
+	operation string
+	starts    int
+}
+
+func (p *failingBootstrapSandbox) StartRunner(ctx context.Context, input sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
+	p.starts++
+	id := fmt.Sprintf("bootstrap-%d", p.starts)
+	if err := input.RecordSandbox(ctx, id); err != nil {
+		return sandboxrunner.StartResult{}, err
+	}
+	return sandboxrunner.StartResult{SandboxID: id, BootstrapOperation: p.operation}, fmt.Errorf("%w: %w", sandboxrunner.ErrCreateOutcomeUnknown, p.failure)
+}
+
+func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, code, operation string
+		retries                        int
+	}{
+		{"deterministic", "status 403: sensitive provider detail", "auth_error", "write runner script", 0},
+		{"transient", "connection reset: sensitive provider detail", "temporary_network_error", "write runner script", 1},
+		{"rate limited after creation", "status 429", "http_rate_limited", "write runner script", 1},
+		{"creator lost before retaining cause", "EOF", "runner_missing_after_create", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "bootstrap"
+			store := state.New(t.TempDir())
+			if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				store = state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true})
+			}
+			upsertLifecycleProfile(t, store, state.RunnerProfile{Name: "linux", Labels: []string{"self-hosted", "linux"}, TemplateID: "test-template", Enabled: true})
+			createLifecycleRequest(t, store, id, "linux", 0)
+			api := httptest.NewServer(githubRunnerAPI(t))
+			defer api.Close()
+			provider := &failingBootstrapSandbox{fakeSandbox: &fakeSandbox{recoverErr: sandboxrunner.ErrRunnerNotFound}, failure: errors.New(tc.message), operation: tc.operation}
+			srv := newRunnerLifecycleTestServer(t, store, api.URL, provider)
+			srv.cfg.WorkerLeaseTTL = 150 * time.Millisecond
+			srv.cfg.RetryBaseDelay, srv.cfg.RetryMaxDelay, srv.cfg.RetryMaxAttempts = 20*time.Millisecond, 20*time.Millisecond, 1
+
+			for index := 0; index <= tc.retries; index++ {
+				deadline := time.Now().Add(4 * time.Second)
+				for {
+					_, claim, ok, err := store.ClaimNextRunnable("creator", time.Minute)
+					if err != nil || time.Now().After(deadline) {
+						t.Fatalf("cannot claim attempt %d: %v", index, err)
+					}
+					if ok {
+						srv.startClaimedRunner(t.Context(), claim)
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				st, err := store.ReadState(id)
+				if err != nil || st.Status != state.StatusCreating || st.SandboxID == "" || st.RetryCount != index {
+					t.Fatalf("attempt not retained for cleanup: %#v, %v", st, err)
+				}
+				for st.Status == state.StatusCreating {
+					if err := srv.recoverRunner(t.Context(), id); err != nil {
+						t.Fatal(err)
+					}
+					st, err = store.ReadState(id)
+					if err != nil || time.Now().After(deadline) {
+						t.Fatalf("cleanup did not settle: %#v, %v", st, err)
+					}
+					if st.Status == state.StatusCreating {
+						time.Sleep(10 * time.Millisecond)
+					}
+				}
+				wantMessage := "Sandbox creation ended without a Runner"
+				if tc.operation != "" {
+					wantMessage = "Sandbox bootstrap failed: " + tc.operation
+				}
+				if st.LastErrorCode != tc.code || st.LastErrorMessage != wantMessage || st.SandboxID != "" || st.SandboxCreateDispatched {
+					t.Fatalf("incorrect failure evidence: %#v", st)
+				}
+				if index < tc.retries {
+					if st.Status != state.StatusQueued || st.RetryCount != index+1 || st.NextRetryAt.IsZero() {
+						t.Fatalf("expected bounded delayed retry: %#v", st)
+					}
+				} else if st.Status != state.StatusFailed || st.RetryCount != tc.retries || provider.starts != index+1 || provider.stoppedCount() != provider.starts {
+					t.Fatalf("expected terminal failure after %d cleanups: %#v", provider.starts, st)
+				}
+			}
+		})
+	}
 }
 
 // Simulate a lost provider response. A separate service process finds the

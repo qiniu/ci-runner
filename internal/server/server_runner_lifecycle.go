@@ -654,6 +654,11 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 					s.logger.Warn("record Sandbox ID after interrupted creation", "id", id, "error", recordErr)
 				}
 			}
+			if result.BootstrapOperation != "" {
+				if noteErr := s.retainBootstrapFailure(st, result, err); noteErr != nil && !errors.Is(noteErr, state.ErrConflict) {
+					s.logger.Warn("record Sandbox bootstrap failure", "id", id, "error", noteErr)
+				}
+			}
 			jitAdopted = true // The exact registration may be in use by the Sandbox.
 			s.store.AppendLog(id, "control.log", []byte("Sandbox creation outcome unknown; waiting to reconcile this attempt\n"))
 			return
@@ -967,6 +972,24 @@ func (s *Server) recordLateCreateResult(ctx context.Context, attempt state.Runne
 	checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	return s.store.RecordSandboxCreateResult(checkpointCtx, attempt, sandboxID)
+}
+
+const pendingBootstrapFailure = "sandbox_bootstrap_pending"
+
+func (s *Server) retainBootstrapFailure(attempt state.RunnerState, result sandboxrunner.StartResult, failure error) error {
+	unlock := s.lockRunner(attempt.ID)
+	defer unlock()
+	current, err := s.store.ReadState(attempt.ID)
+	if err != nil {
+		return err
+	}
+	if !sameCreatingAttempt(current, attempt) || current.SandboxID != result.SandboxID || current.FailureReason == interruptedCreateCleanup {
+		return state.ErrConflict
+	}
+	current.FailureStage = pendingBootstrapFailure
+	current.LastErrorCode, current.LastErrorRetryable = classifyRetryableError("sandbox_bootstrap", failure)
+	current.LastErrorMessage = "Sandbox bootstrap failed: " + result.BootstrapOperation
+	return writeWatchObservation(s.store, current, attempt.WatchToken)
 }
 
 func (s *Server) failStart(attempt state.RunnerState, stage string, failure error) {
@@ -1506,7 +1529,10 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 				// Persist the exact cleanup target before deleting it. Once this
 				// decision commits, a later recovery must finish it rather than adopt.
 				st.SandboxID = result.SandboxID
-				st.FailureStage, st.FailureReason = "recovery", interruptedCreateCleanup
+				if st.FailureStage != pendingBootstrapFailure {
+					st.FailureStage = "recovery"
+				}
+				st.FailureReason = interruptedCreateCleanup
 				if err := s.store.WriteWatchedState(st, watchToken); err != nil {
 					return err
 				}
@@ -1609,6 +1635,18 @@ const interruptedCreateCleanup = "interrupted_create_cleanup"
 func (s *Server) cleanupInterruptedCreation(ctx context.Context, st state.RunnerState) error {
 	_, _, err := s.stopRunnerIfVersion(ctx, st.ID, &st.Version, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
 	return err
+}
+
+// Even if the creator crashed before saving its failure, cleaning a confirmed
+// Sandbox without a listener consumes the normal retry budget.
+func (s *Server) applyReconciledBootstrapFailure(st *state.RunnerState) failureResult {
+	code, retryable := "runner_missing_after_create", true
+	message := "Sandbox creation ended without a Runner"
+	if st.FailureStage == pendingBootstrapFailure {
+		code, retryable, message = st.LastErrorCode, st.LastErrorRetryable, st.LastErrorMessage
+	}
+	st.SandboxCreateDispatched = false // The exact Sandbox is confirmed gone.
+	return s.applyClassifiedFailure(st, "sandbox_bootstrap", errors.New(message), code, retryable, true)
 }
 
 func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
@@ -2173,6 +2211,10 @@ func clearSandboxServiceSnapshot(st *state.RunnerState) {
 
 func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, allowRetry bool) failureResult {
 	code, retryable := classifyRetryableError(stage, err)
+	return s.applyClassifiedFailure(st, stage, err, code, retryable, allowRetry)
+}
+
+func (s *Server) applyClassifiedFailure(st *state.RunnerState, stage string, err error, code string, retryable, allowRetry bool) failureResult {
 	st.Error = err.Error()
 	st.FailureStage = stage
 	st.FailureReason = code
@@ -2184,7 +2226,7 @@ func (s *Server) applyFailure(st *state.RunnerState, stage string, err error, al
 	st.SandboxID = ""
 	st.ProcessPID = 0
 	st.CompletedAt = time.Time{}
-	if allowRetry && retryable && isQueueDeferFailure(code) {
+	if allowRetry && retryable && stage != "sandbox_bootstrap" && isQueueDeferFailure(code) {
 		st.Status = state.StatusQueued
 		clearRunnerEnvironmentSnapshot(st)
 		clearSandboxServiceSnapshot(st)

@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -84,6 +85,9 @@ type StartInput struct {
 type RunnerApplication = runnerapplication.Application
 
 type StartResult struct {
+	// BootstrapOperation identifies a failed post-create operation while the
+	// Sandbox still requires reconciliation. It contains only a local stage name.
+	BootstrapOperation string
 	SandboxID          string
 	PID                uint32
 	ResolvedTemplateID string
@@ -272,11 +276,12 @@ var (
 )
 
 type E2BService struct {
-	client            *qnsandbox.Client
-	deploymentFactory *deployruntime.Factory
-	apiKey            string
-	endpoint          string
-	httpClient        *http.Client
+	client             *qnsandbox.Client
+	runnerCreateClient *qnsandbox.Client
+	deploymentFactory  *deployruntime.Factory
+	apiKey             string
+	endpoint           string
+	httpClient         *http.Client
 }
 
 const runnerBootstrapUser = "root"
@@ -327,11 +332,19 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	if err != nil {
 		return nil, err
 	}
+	// A later rejection cannot disprove that an earlier POST created a Sandbox.
+	// Runner recovery reconciles the original provision attempt after an uncertain result.
+	createConfig := *cfg
+	createConfig.RetryMax = new(int)
+	runnerCreateClient, err := qnsandbox.NewClient(&createConfig)
+	if err != nil {
+		return nil, err
+	}
 	factory, err := deployruntime.NewFactory(apiKey, endpoint, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	return &E2BService{client: client, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
+	return &E2BService{client: client, runnerCreateClient: runnerCreateClient, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
 }
 
 // CreateDeploymentRuntime allocates a Sandbox runtime for deployd. It uses a
@@ -627,7 +640,14 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		metadata["provision_attempt_id"] = input.ProvisionAttemptID
 		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
-	sb, err := s.client.Create(ctx, qnsandbox.CreateParams{
+	// net/http can also replay a POST with an Idempotency-Key on a reused
+	// connection. Count connection assignments before each transport attempt so
+	// even an early rejection on a replay cannot release the original request.
+	var attempts atomic.Int32
+	createCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { attempts.Add(1) },
+	})
+	sb, err := s.runnerCreateClient.Create(createCtx, qnsandbox.CreateParams{
 		TemplateID:          input.TemplateID,
 		Timeout:             &timeout,
 		AllowInternetAccess: &allowInternet,
@@ -635,7 +655,7 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		IdempotencyKey:      idempotencyKey,
 	})
 	if err != nil {
-		if sandboxCreateRejected(err) {
+		if attempts.Load() == 1 && sandboxCreateRejected(err) {
 			return StartResult{}, err
 		}
 		return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
@@ -645,8 +665,11 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 			return StartResult{SandboxID: sb.ID()}, fmt.Errorf("%w: record created Sandbox: %w", ErrCreateOutcomeUnknown, err)
 		}
 	}
+	bootstrapFailure := func(operation string, err error) (StartResult, error) {
+		return StartResult{SandboxID: sb.ID(), BootstrapOperation: operation}, fmt.Errorf("%w: %s: %w", ErrCreateOutcomeUnknown, operation, err)
+	}
 	if _, err := s.client.WaitForReady(ctx, sb.ID(), qnsandbox.WithPollInterval(500*time.Millisecond)); err != nil {
-		return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("wait for Sandbox readiness", err)
 	}
 	// Once create succeeds, recovery must reconcile the resource. A process
 	// which lost ownership during bootstrap must never kill an adopted Sandbox.
@@ -664,7 +687,7 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		scriptPath, script, cmd = "/tmp/start-github-runner.sh", startScript(input, sb.ID()), "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
 	}
 	if _, err := sb.Files().Write(ctx, scriptPath, []byte(script)); err != nil {
-		return StartResult{}, fmt.Errorf("%w: write runner script: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("write runner script", err)
 	}
 	commandCtx := input.CommandContext
 	if commandCtx == nil {
@@ -689,11 +712,11 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		qnsandbox.WithOnStderr(input.OnStderr),
 	)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("%w: start runner command: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("start runner command", err)
 	}
 	pid, err := handle.WaitPID(ctx)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("%w: wait runner pid: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("wait runner pid", err)
 	}
 	if input.OnExit != nil {
 		go func() {

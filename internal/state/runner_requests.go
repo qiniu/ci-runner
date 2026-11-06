@@ -339,8 +339,10 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
-	if st.Status == StatusQueued {
+	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
 		updates["sandbox_create_dispatched"] = false
+	}
+	if st.Status == StatusQueued {
 		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
 	}
 	result := query.Updates(updates)
