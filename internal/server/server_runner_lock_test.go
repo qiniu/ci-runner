@@ -299,11 +299,6 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 					}
 				}
 				srv.runnerLocksMu.Unlock()
-				if srv.admissionMu.TryLock() {
-					srv.admissionMu.Unlock()
-				} else {
-					t.Error("timing persistence held the admission lock")
-				}
 				batches <- message
 			}
 			done := make(chan struct{})

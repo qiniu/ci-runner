@@ -836,11 +836,11 @@ curl -fsS -b "$COOKIE_JAR" \
 
 Runner 启动诊断将每次启动的耗时合并为一条 `runner_timing` control 事件。每行包含固定阶段、`duration_ms`、时钟来源和 UTC 采集时间 `observed_at`；事件自身的时间表示稍后的持久化时间。耗时先在内存中采集，释放生命周期锁和 admission 锁后再写入。清理和错配 Job 重新排队的耗时也遵循此规则。`queue_wait` 从持久化创建时间计算，可能跨越多次尝试；系统时钟倒退时保留零值并标记 `clock=wall_skew`。“最近一次开始时间”表示最近一次执行尝试，不能仅用创建到开始的间隔衡量单次启动耗时。
 
-启动准入阶段依次记录：`request_read`（`ReadRequest`）、`initial_state_read`（`ReadState`）、`admission_lock_wait`（获取规格变更共享保护锁的等待）、`profile_lookup`（全局或作用域规格查询）、`global_capacity_check`（`InFlightCount`）、`profile_capacity_check`（所选规格的全局或作用域在途数量检查），之后是 `capacity_reservation` 和 `creating_state_persist`。Sandbox 启动后，`running_state_read` 单独记录 `running_lock_wait` 与 `running_state_persist` 之间的状态重读。各段采用单调时钟，以 `observed_at` 为结束观察点，不包含相邻阶段；记录的是整个具名操作的耗时，包括 Store／连接等待和查询执行，而不是纯 SQL 执行时间。规格校验在本地完成；容量检查可能直接返回而不查询数据库。查询失败或容量延后仍保留已执行阶段，不生成后续阶段。初始请求读取失败时仍不写入计时事件。固定阶段名不包含请求数据、SQL、凭证或错误文本。
+worker 领取请求后记录 `request_read` 和 `initial_state_read`。数据库事务依次记录 `admission_lock_wait`、`profile_lookup`、适用的全局／规格／账户／仓库配额检查，以及 `creating_state_persist`。耗时包含连接等待和 SQL 执行时间。启动前重新读取当前规格，校验请求标签后才消费租约。Sandbox 启动后的 `running_state_read` 单独记录写入 running 前的状态重读。
 
-启动与入队准入共享读锁，规格变更持独占锁。单个请求的规格查询、容量查询或 creating 状态写入变慢时，不再串行阻塞其他普通请求；规格变更仍不能插入规格重读至 creating CAS 写入之间。另一个短时内存锁负责预留全局及精确规格作用域容量，锁内不执行 Store I/O。预留键使用重读规格记录返回的名称；在数据库排序规则下指向同一记录的不同请求拼写共享容量，大小写敏感后端的不同规格记录仍独立计数。对锁外读取的数量，同时计入读取前尚未落库的预留，以及读取期间新增的准入，包括读取返回前已完成写入的请求。无法确定是否重叠时保守多计，避免超发；保守拒绝沿用五秒延后，并释放 worker 租约。creating 写入返回后即释放预留，写入错误或 CAS 冲突也一样；后续查询由数据库中的 creating、running、stopping 记录计数。没有读取者或预留时移除规格观察记录，重启后依赖持久化计数。此保证仍限定单个 runnerd 进程，不代表支持多实例准入。
+事务锁定共享数据库中 `runner_admission_guard` 的一行，统计 creating、running、stopping 请求，并按领取时的版本和租约把请求改为 creating。全局及自定义规格变更、入队准入、fork 赞助配额分配也使用该锁。外部服务调用在事务外执行。锁竞争可能增加其他请求的准入等待时间。PostgreSQL 将事务中单条语句及事务空闲时间分别限制为五秒，保留运维侧更短的设置。
 
-`capacity_reservation` 记录 Store 查询之后的最终内存容量决策；`admission_lock_wait` 现在表示与规格变更的竞争，不再表示排在其他普通准入后面。数据库或连接竞争仍可能拖慢 Store 操作，独占规格变更也仍可能延后准入。阻塞式 Store 回归要求在释放首个请求前，另一请求已推进到 running；过时查询与未落库写入测试覆盖全局／作用域容量、写入失败、版本冲突、重复启动和租约释放。生产耗时验收仍需部署后在实际负载下进行。
+双进程验证使用独立的 PostgreSQL schema，覆盖两个 worker 竞争一个名额，以及一个节点禁用规格时另一节点尝试准入。另有用例在 creating 写入中杀死进程，验证事务回滚及存活节点重新准入。所有节点须配置相同的额度。扩副本前应在代表性负载下观察准入等待和整体排队时间。
 
 排查 `queue_wait` 之后的空白区间时，将 `admission_lock_wait`、`profile_lookup`、两项容量检查与 `creating_state_persist` 对照；`running_lock_wait` 之后的状态重读也可与写入分开分析。Store 阶段较慢本身不能区分连接池等待、数据库锁、查询执行或其他 Store 开销。不要累加所有启动阶段：`queue_wait` 是累计墙钟年龄，`sandbox_start` 包含 `cache_credentials`。受控的 Store 延迟和准入锁竞争测试验证耗时归属、提前返回证据及释放锁后落盘；线上根因仍需发布后在实际负载下确认。
 
@@ -1112,8 +1112,7 @@ worker:
 
 未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
 全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
-占用额度，排队和终态不占用。创建状态落库前使用内存预留，失败时释放；重启后从持久状态
-恢复计数。并发协调仅支持单个 runnerd 进程。
+占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。事务失败会回滚 creating 写入并释放数据库行锁。
 
 达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
 继续执行。调度按下次可运行时间排序，首次请求使用原入队时间；已到期的延期请求排在
@@ -1128,7 +1127,7 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 占用降至上限以下才允许新增；删除配置或设为零解除该维度限制，其他限制继续生效。
 这些配置不改变 Sandbox Deploy 配额和仓库授权。
 
-本地回归覆盖跨规格/仓库的过期计数读取与创建预留、独立作用域、落库失败释放、
+本地回归覆盖跨规格／仓库的并发准入、独立作用域、落库失败释放、
 数据库重开后的计数，以及大量受限请求后仍能调度其他仓库的场景。
 真实 GitHub/Sandbox 的完成、清理、降低额度后的重启恢复及负载排队时间仍需上线验收。
 

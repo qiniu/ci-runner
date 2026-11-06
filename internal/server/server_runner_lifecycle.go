@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -234,8 +233,18 @@ func cacheScopePrefixesJSON(cacheBasePrefix string, scopes []string) (string, er
 	return string(value), nil
 }
 
-func (s *Server) createAndStart(w http.ResponseWriter, r *http.Request, req state.RunnerRequest, payload []byte) {
-	st, created, err := s.enqueueRunnerRequest(req, payload)
+func (s *Server) createAndStart(w http.ResponseWriter, r *http.Request, req state.RunnerRequest, expectedProfile time.Time) {
+	st, created, err := s.enqueueRunnerRequest(r.Context(), req, nil, func(tx state.Store, req *state.RunnerRequest) (string, error) {
+		profile, err := tx.GetProfile(req.ProfileName)
+		if errors.Is(err, state.ErrNotFound) || (err == nil && !profile.UpdatedAt.Equal(expectedProfile)) {
+			return "", state.ErrConflict
+		}
+		return "", err
+	})
+	if errors.Is(err, state.ErrConflict) {
+		writeError(w, http.StatusConflict, "Runner Spec changed during admission")
+		return
+	}
 	if err != nil {
 		s.logger.Error("enqueue runner request failed", "id", req.ID, "repository", req.RepositoryFullName, "profile", req.ProfileName, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -250,7 +259,7 @@ func (s *Server) createAndStart(w http.ResponseWriter, r *http.Request, req stat
 	writeJSON(w, http.StatusOK, st)
 }
 
-func (s *Server) enqueueWorkflowJob(repositoryFullName string, githubInstallationID int64, workflowRunName string, job github.WorkflowJob, payload []byte) (state.RunnerState, bool, error) {
+func (s *Server) enqueueWorkflowJob(ctx context.Context, repositoryFullName string, githubInstallationID int64, workflowRunName string, job github.WorkflowJob, payload []byte) (state.RunnerState, bool, error) {
 	id := strconv.FormatInt(job.ID, 10)
 	req := state.RunnerRequest{
 		ID:                   id,
@@ -263,90 +272,90 @@ func (s *Server) enqueueWorkflowJob(repositoryFullName string, githubInstallatio
 		Labels:               []string(job.Labels),
 		RunnerName:           "e2b-" + id,
 	}
-	if !s.cfg.RepositoryAllowed(repositoryFullName) {
-		s.logger.Info("runner repository rejected by allowlist", "id", req.ID, "repository", repositoryFullName, "labels", []string(job.Labels))
-		st, err := s.rejectAdmission(req, payload, "repository_not_allowed")
-		return st, false, err
+	var matched string
+	st, created, err := s.enqueueRunnerRequest(ctx, req, payload, func(tx state.Store, req *state.RunnerRequest) (string, error) {
+		if !s.cfg.RepositoryAllowed(repositoryFullName) {
+			return "repository_not_allowed", nil
+		}
+		match, err := matchProfileForAdmission(tx, repositoryFullName, githubInstallationID, job.Labels)
+		if err != nil {
+			return "", err
+		}
+		req.ProfileSource, req.ProfileScopeType, req.ProfileScopeID = match.Source, match.ScopeType, match.ScopeID
+		if match.Profile == nil {
+			return match.Reason, nil
+		}
+		req.ProfileName, req.RunnerGroup = match.Profile.Name, match.Profile.RunnerGroup
+		req.Labels = append([]string(nil), match.Profile.Labels...)
+		matched = req.ProfileName
+		return "", nil
+	})
+	if err == nil && matched != "" {
+		metrics.RecordWorkflowQueued(repositoryFullName, workflowRunName, job.Name, matched)
 	}
-	// Keep profile matching and request creation in one critical section with
-	// scoped spec updates/deletes. Moving the reads before this lock allows a
-	// mutation to commit between the match and persisted request snapshot.
-	s.admissionMu.RLock()
-	defer s.admissionMu.RUnlock()
-	match, err := s.matchProfileForAdmission(repositoryFullName, githubInstallationID, job.Labels)
-	if err != nil {
-		return state.RunnerState{}, false, err
-	}
-	req.ProfileSource = match.Source
-	req.ProfileScopeType = match.ScopeType
-	req.ProfileScopeID = match.ScopeID
-	if match.Profile == nil {
-		s.logger.Info("runner admission rejected", "id", req.ID, "repository", repositoryFullName, "labels", []string(job.Labels), "reason", match.Reason)
-		st, err := s.rejectAdmission(req, payload, match.Reason)
-		return st, false, err
-	}
-	req.ProfileName = match.Profile.Name
-	req.RunnerGroup = match.Profile.RunnerGroup
-	req.Labels = append([]string(nil), match.Profile.Labels...)
-	s.logger.Info("workflow run job matched profile", "job_id", job.ID, "repository", repositoryFullName, "profile", match.Profile.Name, "runner_group", match.Profile.RunnerGroup, "labels", req.Labels)
-	metrics.RecordWorkflowQueued(repositoryFullName, workflowRunName, job.Name, match.Profile.Name)
-	return s.enqueueRunnerRequestLocked(req, payload)
+	return st, created, err
 }
 
-func (s *Server) matchProfileForAdmission(repository string, installationID int64, labels []string) (state.ProfileMatch, error) {
-	scope, ok, err := s.runnerProfileScopeForInstallation(installationID)
+func matchProfileForAdmission(store state.Store, repository string, installationID int64, labels []string) (state.ProfileMatch, error) {
+	scope, ok, err := runnerProfileScopeForInstallation(store, installationID)
 	if err != nil {
 		return state.ProfileMatch{}, err
 	}
 	if ok {
-		return s.store.MatchProfileForScope(scope, repository, labels)
+		return store.MatchProfileForScope(scope, repository, labels)
 	}
-	return s.store.MatchProfile(repository, labels)
+	return store.MatchProfile(repository, labels)
 }
 
-func (s *Server) enqueueRunnerRequest(req state.RunnerRequest, payload []byte) (state.RunnerState, bool, error) {
-	s.admissionMu.RLock()
-	defer s.admissionMu.RUnlock()
-	return s.enqueueRunnerRequestLocked(req, payload)
-}
-
-func (s *Server) enqueueRunnerRequestLocked(req state.RunnerRequest, payload []byte) (state.RunnerState, bool, error) {
-	if st, err := s.store.ReadState(req.ID); err == nil {
-		st, err = s.wakeWaitingWorkflowJob(req, st)
-		s.logger.Info("runner request already exists", "id", req.ID, "status", st.Status)
-		return st, false, err
-	}
-	created, st, err := s.store.CreateRequest(req, payload)
+func (s *Server) enqueueRunnerRequest(ctx context.Context, req state.RunnerRequest, payload []byte, prepare func(state.Store, *state.RunnerRequest) (string, error)) (state.RunnerState, bool, error) {
+	var st state.RunnerState
+	var created bool
+	var rejected string
+	err := s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		var err error
+		rejected, err = prepare(tx, &req)
+		if err != nil {
+			return err
+		}
+		// MySQL CLIENT_FOUND_ROWS can report a no-op duplicate insert as affected.
+		st, err = tx.ReadState(req.ID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, state.ErrNotFound) {
+			return err
+		}
+		if rejected != "" {
+			created, st, err = tx.CreateRejectedRequest(req, payload, rejected)
+		} else {
+			created, st, err = tx.CreateRequest(req, payload)
+		}
+		return err
+	})
 	if err != nil {
 		return state.RunnerState{}, false, err
 	}
-	if created {
-		s.logger.Info("runner request created", "id", req.ID, "source", req.Source, "labels", req.Labels)
+	if !created {
+		if rejected == "" {
+			st, err = s.wakeWaitingWorkflowJob(req, st)
+		}
+		return st, false, err
+	}
+	if rejected != "" {
+		metrics.RecordRunnerRequest(req.RepositoryFullName, req.ProfileName, req.Source, "rejected")
+		metrics.RecordWorkflowFailure(req.RepositoryFullName, "unknown", req.RunnerName, req.ProfileName, "admission", rejected)
+		s.store.AppendLog(req.ID, "control.log", []byte("runner admission rejected: "+rejected+"\n"))
+		s.logger.Info("runner admission rejected", "id", req.ID, "repository", req.RepositoryFullName, "reason", rejected)
+	} else {
 		metrics.RecordRunnerRequest(req.RepositoryFullName, req.ProfileName, req.Source, "created")
 		s.store.AppendLog(req.ID, "control.log", []byte("runner request created\n"))
-		s.refreshMetrics()
+		s.logger.Info("runner request created", "id", req.ID, "source", req.Source, "labels", req.Labels)
+	}
+	s.refreshMetrics()
+	if rejected == "" {
 		s.signalQueue()
 	}
-	return st, created, nil
-}
-
-func (s *Server) rejectAdmission(req state.RunnerRequest, payload []byte, reason string) (state.RunnerState, error) {
-	// CreateRejectedRequest relies on database uniqueness for duplicate deliveries
-	// and inserts the terminal state without exposing a queued row.
-	created, st, err := s.store.CreateRejectedRequest(req, payload, reason)
-	if err != nil {
-		return state.RunnerState{}, err
-	}
-	if !created {
-		s.logger.Info("runner admission rejection already exists", "id", req.ID, "status", st.Status, "reason", reason)
-		return st, nil
-	}
-	metrics.RecordRunnerRequest(req.RepositoryFullName, req.ProfileName, req.Source, "rejected")
-	s.store.AppendLog(req.ID, "control.log", []byte("runner admission rejected: "+reason+"\n"))
-	s.logger.Info("runner admission rejected and recorded", "id", req.ID, "repository", req.RepositoryFullName, "reason", reason)
-	metrics.RecordWorkflowFailure(req.RepositoryFullName, "unknown", req.RunnerName, req.ProfileName, "admission", reason)
-	s.refreshMetrics()
-	return st, nil
+	return st, rejected == "", nil
 }
 
 func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState) {
@@ -395,66 +404,28 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if !req.CreatedAt.IsZero() {
 		timings.recordWall("queue_wait", req.CreatedAt)
 	}
-	admissionLockWaitStartedAt := time.Now()
-	s.admissionMu.RLock()
-	timings.record("admission_lock_wait", admissionLockWaitStartedAt)
-	profileLookupStartedAt := time.Now()
-	profile, err := s.profileForRunnerRequest(req)
-	timings.record("profile_lookup", profileLookupStartedAt)
+	admissionStarted := time.Now()
+	profile, stage, err := s.admitQueuedRunner(ctx, req, &st, &timings, admissionStarted)
+	unlock()
 	if err != nil {
-		s.admissionMu.RUnlock()
-		unlock()
-		s.failQueuedClaim(claim, "profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
-		return
-	}
-	if err := validateRequestedProfile(profile, req.RequestedLabels); err != nil {
-		s.admissionMu.RUnlock()
-		unlock()
-		s.failQueuedClaim(claim, "profile_validation", err)
-		return
-	}
-	releaseCapacity, capacityStage, err := s.reserveRunnerCapacity(req, profile, &timings)
-	if err != nil || releaseCapacity == nil {
-		s.admissionMu.RUnlock()
-		unlock()
-		if err != nil {
+		if (stage == "profile_lookup" && errors.Is(err, state.ErrNotFound)) || stage == "profile_validation" {
+			s.failQueuedClaim(claim, stage, err)
+		} else {
 			_ = s.store.ReleaseQueuedClaim(claim)
-			s.logger.Error("check runner capacity", "id", id, "stage", capacityStage, "error", err)
-			return
+			s.logger.Error("admit queued runner", "id", id, "stage", stage, "error", err)
 		}
-		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
+		return
+	}
+	if stage != "" {
 		capacityDeferred = true
-		s.deferQueuedRequest(claim, time.Now().UTC().Add(5*time.Second), capacityStage)
+		s.deferQueuedRequest(claim, time.Now().UTC().Add(5*time.Second), stage)
 		s.signalQueue()
 		return
 	}
-	if strings.HasPrefix(st.LastErrorCode, "runner_capacity_") {
-		st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
-		st.NextRetryAt = time.Time{}
-	}
-	st.Status = state.StatusCreating
 	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
-		// Distinguish direct starts as well as worker-claimed retries.
-		attemptAt := time.Now().UTC().Truncate(time.Millisecond)
-		if !attemptAt.After(st.LastAttemptAt) {
-			attemptAt = st.LastAttemptAt.Truncate(time.Millisecond).Add(time.Millisecond)
-		}
-		st.LastAttemptAt = attemptAt
+		attemptAt := st.LastAttemptAt
 		windowsAttempt = &attemptAt
 	}
-	creatingStatePersistStartedAt := time.Now()
-	writeErr := s.store.WriteQueuedClaim(st, workerID)
-	timings.record("creating_state_persist", creatingStatePersistStartedAt)
-	releaseCapacity()
-	if writeErr != nil {
-		s.admissionMu.RUnlock()
-		unlock()
-		_ = s.store.ReleaseQueuedClaim(claim)
-		s.logger.Error("write creating state", "id", id, "error", writeErr)
-		return
-	}
-	s.admissionMu.RUnlock()
-	unlock()
 
 	jobCheckStartedAt := time.Now()
 	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
@@ -485,10 +456,13 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		return
 	}
 	snapshotStartedAt := time.Now()
-	if err := s.persistSandboxServiceSnapshot(id, sandboxConfig); err != nil {
+	if err := s.persistSandboxServiceSnapshot(ctx, st, sandboxConfig); err != nil {
 		timings.record("sandbox_snapshot", snapshotStartedAt)
+		if errors.Is(err, errStaleSnapshotAttempt) {
+			return
+		}
 		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
-			s.deferCreatingRequest(id, workerID, time.Now().UTC().Add(5*time.Second))
+			s.deferCreatingRequest(st, time.Now().UTC().Add(5*time.Second))
 			s.signalQueue()
 			return
 		}
@@ -699,7 +673,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
 	runningStatePersistStartedAt := time.Now()
-	writeErr = s.store.WriteState(st)
+	writeErr := s.store.WriteState(st)
 	timings.record("running_state_persist", runningStatePersistStartedAt)
 	if writeErr != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
@@ -2174,7 +2148,8 @@ func (s *Server) deferQueuedRequest(claim state.RunnerState, nextAttempt time.Ti
 	}
 }
 
-func (s *Server) deferCreatingRequest(id, workerID string, nextAttempt time.Time) {
+func (s *Server) deferCreatingRequest(attempt state.RunnerState, nextAttempt time.Time) {
+	id := attempt.ID
 	unlock := s.lockRunner(id)
 	defer unlock()
 	st, err := s.store.ReadState(id)
@@ -2182,7 +2157,7 @@ func (s *Server) deferCreatingRequest(id, workerID string, nextAttempt time.Time
 		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
 		return
 	}
-	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" {
+	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || !st.LastAttemptAt.Equal(attempt.LastAttemptAt) || st.SandboxID != "" {
 		return
 	}
 	st.Status = state.StatusQueued
@@ -2264,13 +2239,13 @@ func appendError(current, extra string) string {
 	return current + "; " + extra
 }
 
-func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerProfile, error) {
+func profileForRunnerRequest(store state.Store, req state.RunnerRequest) (state.RunnerProfile, error) {
 	source := req.ProfileSource
 	if source == "" || source == "global" {
-		return s.store.GetProfile(req.ProfileName)
+		return store.GetProfile(req.ProfileName)
 	}
 	if source == "scoped_custom" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
-		profile, err := s.store.GetScopedProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, req.ProfileName)
+		profile, err := store.GetScopedProfile(state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, req.ProfileName)
 		if err != nil {
 			return state.RunnerProfile{}, err
 		}
@@ -2289,12 +2264,11 @@ func (s *Server) profileForRunnerRequest(req state.RunnerRequest) (state.RunnerP
 	return state.RunnerProfile{}, state.ErrNotFound
 }
 
-func (s *Server) inFlightForRunnerProfile(req state.RunnerRequest) (int, error) {
-	key := runnerCapacityProfileKey(req)
-	if key.source == "global" {
-		return s.store.InFlightCountForProfile(key.name)
+func inFlightForRunnerProfile(store state.Store, req state.RunnerRequest, name string) (int, error) {
+	if req.ProfileSource == "" || req.ProfileSource == "global" || req.ProfileScopeType == "" || req.ProfileScopeID <= 0 {
+		return store.InFlightCountForProfile(name)
 	}
-	return s.store.InFlightCountForProfileScope(key.source, state.RunnerProfileScope{Type: key.scopeType, ID: key.scopeID}, key.name)
+	return store.InFlightCountForProfileScope(req.ProfileSource, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, name)
 }
 
 func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []string) error {
@@ -2319,6 +2293,12 @@ func (s *Server) recordAudit(actor, action, resourceType, resourceID string, pay
 		return
 	}
 	s.logger.Info("audit event recorded", "id", event.ID, "actor", actor, "action", action, "resource_type", resourceType, "resource_id", resourceID)
+}
+
+func (s *Server) applyRunnerMutationWithAudit(ctx context.Context, actor, action, resourceType, resourceID string, payload any, mutation func(state.Store) error) error {
+	return s.applyMutationWithAudit(actor, action, resourceType, resourceID, payload, func(tx state.Store) error {
+		return tx.WithRunnerAdmission(ctx, mutation)
+	})
 }
 
 func (s *Server) applyMutationWithAudit(actor, action, resourceType, resourceID string, payload any, mutation func(state.Store) error) error {
@@ -2427,18 +2407,6 @@ func (s *Server) lockRunnerEntry(id string, entries *map[string]*runnerRequestLo
 			}
 			s.runnerLocksMu.Unlock()
 		})
-	}
-}
-
-func (s *Server) lockForkSponsorship(sponsorInstallationID, sourceRepositoryID int64) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(strconv.FormatInt(sponsorInstallationID, 10)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strconv.FormatInt(sourceRepositoryID, 10)))
-	mu := &s.forkSponsorshipLocks[int(h.Sum32()%uint32(len(s.forkSponsorshipLocks)))]
-	mu.Lock()
-	return func() {
-		mu.Unlock()
 	}
 }
 

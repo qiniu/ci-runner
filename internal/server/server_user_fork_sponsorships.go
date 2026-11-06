@@ -154,16 +154,11 @@ func (s *Server) handleUserPutForkSponsorshipPolicy(w http.ResponseWriter, r *ht
 		return
 	}
 	var saved state.ForkSponsorshipPolicy
-	unlock := s.lockForkSponsorship(installationID, repository.ID)
-	err = func() error {
-		defer unlock()
-		mutationErr := s.applyMutationWithAudit("github:"+session.Subject, "fork_sponsorship_policy.update", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, repository.ID), map[string]any{"source_repository_full_name": repository.FullName, "mode": policy.Mode, "enabled": policy.Enabled, "max_concurrency": policy.MaxConcurrency}, func(tx state.Store) error {
-			var saveErr error
-			saved, saveErr = tx.UpdateForkSponsorshipPolicy(policy)
-			return saveErr
-		})
-		return mutationErr
-	}()
+	err = s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "fork_sponsorship_policy.update", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, repository.ID), map[string]any{"source_repository_full_name": repository.FullName, "mode": policy.Mode, "enabled": policy.Enabled, "max_concurrency": policy.MaxConcurrency}, func(tx state.Store) error {
+		var saveErr error
+		saved, saveErr = tx.UpdateForkSponsorshipPolicy(policy)
+		return saveErr
+	})
 	if errors.Is(err, state.ErrConflict) {
 		writeErrorCode(w, http.StatusConflict, "fork_sponsorship_source_conflict", "this fork network already has a sponsor")
 		return
@@ -212,16 +207,11 @@ func (s *Server) handleUserCreateForkSponsorshipPolicy(w http.ResponseWriter, r 
 		return
 	}
 	var saved state.ForkSponsorshipPolicy
-	unlock := s.lockForkSponsorship(installationID, repository.ID)
-	err = func() error {
-		defer unlock()
-		mutationErr := s.applyMutationWithAudit("github:"+session.Subject, "fork_sponsorship_policy.create", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, repository.ID), map[string]any{"source_repository_full_name": repository.FullName, "mode": policy.Mode, "enabled": policy.Enabled, "max_concurrency": policy.MaxConcurrency}, func(tx state.Store) error {
-			var saveErr error
-			saved, saveErr = tx.CreateForkSponsorshipPolicy(policy)
-			return saveErr
-		})
-		return mutationErr
-	}()
+	err = s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "fork_sponsorship_policy.create", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, repository.ID), map[string]any{"source_repository_full_name": repository.FullName, "mode": policy.Mode, "enabled": policy.Enabled, "max_concurrency": policy.MaxConcurrency}, func(tx state.Store) error {
+		var saveErr error
+		saved, saveErr = tx.CreateForkSponsorshipPolicy(policy)
+		return saveErr
+	})
 	if errors.Is(err, state.ErrConflict) {
 		writeErrorCode(w, http.StatusConflict, "fork_sponsorship_source_conflict", "this fork network already has a sponsor")
 		return
@@ -242,14 +232,9 @@ func (s *Server) handleUserDeleteForkSponsorshipPolicy(w http.ResponseWriter, r 
 	if !ok {
 		return
 	}
-	unlock := s.lockForkSponsorship(installationID, sourceRepositoryID)
-	err := func() error {
-		defer unlock()
-		mutationErr := s.applyMutationWithAudit("github:"+session.Subject, "fork_sponsorship_policy.delete", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, sourceRepositoryID), nil, func(tx state.Store) error {
-			return tx.DeleteForkSponsorshipPolicy(installationID, sourceRepositoryID)
-		})
-		return mutationErr
-	}()
+	err := s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "fork_sponsorship_policy.delete", "fork_sponsorship_policy", fmt.Sprintf("%d:%d", installationID, sourceRepositoryID), nil, func(tx state.Store) error {
+		return tx.DeleteForkSponsorshipPolicy(installationID, sourceRepositoryID)
+	})
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "fork sponsorship policy not found")
 		return
@@ -295,16 +280,11 @@ func (s *Server) handleUserAddForkSponsorshipApproval(w http.ResponseWriter, r *
 	}
 	approval := state.ForkSponsorshipApproval{SponsorInstallationID: installationID, SourceRepositoryID: sourceRepositoryID, ForkRepositoryID: fork.ID, ForkRepositoryFullName: fork.FullName, ForkOwnerID: fork.Owner.ID, ForkOwnerLogin: fork.Owner.Login}
 	var saved state.ForkSponsorshipApproval
-	unlock := s.lockForkSponsorship(installationID, sourceRepositoryID)
-	err = func() error {
-		defer unlock()
-		mutationErr := s.applyMutationWithAudit("github:"+session.Subject, "fork_sponsorship_approval.upsert", "fork_sponsorship_approval", fmt.Sprintf("%d:%d", sourceRepositoryID, fork.ID), map[string]any{"fork_repository_full_name": fork.FullName, "fork_owner_login": fork.Owner.Login}, func(tx state.Store) error {
-			var saveErr error
-			saved, saveErr = tx.UpsertForkSponsorshipApproval(approval)
-			return saveErr
-		})
-		return mutationErr
-	}()
+	err = s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "fork_sponsorship_approval.upsert", "fork_sponsorship_approval", fmt.Sprintf("%d:%d", sourceRepositoryID, fork.ID), map[string]any{"fork_repository_full_name": fork.FullName, "fork_owner_login": fork.Owner.Login}, func(tx state.Store) error {
+		var saveErr error
+		saved, saveErr = tx.UpsertForkSponsorshipApproval(approval)
+		return saveErr
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save fork sponsorship approval")
 		return
@@ -325,14 +305,9 @@ func (s *Server) handleUserDeleteForkSponsorshipApproval(w http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	unlock := s.lockForkSponsorship(installationID, sourceRepositoryID)
-	err := func() error {
-		defer unlock()
-		mutationErr := s.applyMutationWithAudit("github:"+session.Subject, "fork_sponsorship_approval.delete", "fork_sponsorship_approval", fmt.Sprintf("%d:%d", sourceRepositoryID, forkRepositoryID), nil, func(tx state.Store) error {
-			return tx.DeleteForkSponsorshipApproval(installationID, sourceRepositoryID, forkRepositoryID)
-		})
-		return mutationErr
-	}()
+	err := s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "fork_sponsorship_approval.delete", "fork_sponsorship_approval", fmt.Sprintf("%d:%d", sourceRepositoryID, forkRepositoryID), nil, func(tx state.Store) error {
+		return tx.DeleteForkSponsorshipApproval(installationID, sourceRepositoryID, forkRepositoryID)
+	})
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "fork sponsorship approval not found")
 		return

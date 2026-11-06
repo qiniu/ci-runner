@@ -40,9 +40,6 @@ type Server struct {
 	startedAt        time.Time
 
 	// Admissions share the guard; catalog mutations exclude them through persistence.
-	admissionMu          sync.RWMutex
-	runnerCapacity       runnerAdmissionCapacity
-	forkSponsorshipLocks [64]sync.Mutex
 	runnerLocksMu        sync.Mutex
 	runnerLocks          map[string]*runnerRequestLock
 	windowsCreationLocks map[string]*runnerRequestLock

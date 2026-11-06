@@ -9333,9 +9333,18 @@ type blockingRunnerSpecMutationStore struct {
 }
 
 func (s *blockingRunnerSpecMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
-	s.once.Do(func() { close(s.started) })
-	<-s.proceed
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+	return s.Store.ApplyMutationWithAudit(event, func(tx state.Store) error {
+		return mutation(&blockedAdmissionStore{Store: tx, block: func() { s.once.Do(func() { close(s.started) }); <-s.proceed }})
+	})
+}
+
+type blockedAdmissionStore struct {
+	state.Store
+	block func()
+}
+
+func (s *blockedAdmissionStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error { s.block(); return mutation(tx) })
 }
 
 func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
@@ -9352,17 +9361,16 @@ func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
 	}()
 
 	<-store.started
-	mutationCouldInterleave := srv.admissionMu.TryLock()
-	if mutationCouldInterleave {
-		srv.admissionMu.Unlock()
-	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	err := baseStore.WithRunnerAdmission(ctx, func(state.Store) error { return nil })
+	cancel()
 	close(store.proceed)
 	recorder := <-done
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if mutationCouldInterleave {
-		t.Fatal("admin Runner Spec mutation did not hold the admission serialization lock")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("admin Runner Spec mutation did not hold the database guard: %v", err)
 	}
 }
 
@@ -9553,7 +9561,7 @@ func TestProfileAtCapacityUsesGlobalCountAcrossScopes(t *testing.T) {
 		}
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
-	inFlight, err := srv.inFlightForRunnerProfile(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
+	inFlight, err := inFlightForRunnerProfile(srv.store, state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3}, profile.Name)
 	if err != nil {
 		t.Fatal(err)
 	}

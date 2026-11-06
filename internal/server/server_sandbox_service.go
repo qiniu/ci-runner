@@ -15,6 +15,7 @@ import (
 
 var (
 	errSandboxServiceNotConfigured  = errors.New("sandbox service not configured")
+	errStaleSnapshotAttempt         = errors.New("runner attempt changed before sandbox config persistence")
 	errForkSponsorshipAtCapacity    = errors.New("fork sponsorship is at capacity")
 	errForkSponsorshipPolicyChanged = errors.New("fork sponsorship policy changed during startup")
 )
@@ -122,7 +123,7 @@ func (s *Server) sandboxServiceAndConfigForRunnerRequestContext(ctx context.Cont
 	if scopedCustom {
 		return nil, sandboxServiceConfigSnapshot{}, fmt.Errorf("sandbox service is not configured for scoped custom runner request %s: %w", req.ID, errSandboxServiceNotConfigured)
 	}
-	profile, profileErr := s.profileForRunnerRequest(req)
+	profile, profileErr := profileForRunnerRequest(s.store, req)
 	if profileErr == nil && profile.TemplateSource == state.TemplateSourcePublic {
 		svc, snapshot, sponsorshipErr := s.sandboxServiceForForkSponsorship(ctx, req)
 		if sponsorshipErr == nil {
@@ -186,36 +187,42 @@ func (s *Server) sandboxServiceForForkSponsorship(ctx context.Context, req state
 	return svc, snapshot, nil
 }
 
-func (s *Server) persistSandboxServiceSnapshot(id string, snapshot sandboxServiceConfigSnapshot) error {
+func (s *Server) persistSandboxServiceSnapshot(ctx context.Context, attempt state.RunnerState, snapshot sandboxServiceConfigSnapshot) error {
 	if snapshot.APIURL == "" && snapshot.EncryptedAPIKey == "" {
 		return nil
 	}
 	if snapshot.Source == sandboxConfigSourceForkSponsorship {
-		unlock := s.lockForkSponsorship(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
-		defer unlock()
-
-		policy, err := s.store.GetForkSponsorshipPolicy(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
-		if err != nil || !policy.Enabled || policy.Mode != snapshot.SponsorAuthorizationReason || !strings.EqualFold(policy.SourceRepositoryFullName, snapshot.SponsorSourceRepositoryFullName) {
-			return errForkSponsorshipPolicyChanged
-		}
-		if policy.Mode == state.ForkSponsorshipModeApprovalRequired {
-			approval, approvalErr := s.store.GetForkSponsorshipApproval(policy.SourceRepositoryID, snapshot.ForkRepositoryID)
-			if approvalErr != nil || approval.SponsorInstallationID != policy.SponsorInstallationID || approval.ForkOwnerID != snapshot.ForkOwnerID || !strings.EqualFold(approval.ForkRepositoryFullName, snapshot.ForkRepositoryFullName) || !strings.EqualFold(approval.ForkOwnerLogin, snapshot.ForkOwnerLogin) {
+		return s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+			policy, err := tx.GetForkSponsorshipPolicy(snapshot.SponsorInstallationID, snapshot.SponsorSourceRepositoryID)
+			if err != nil || !policy.Enabled || policy.Mode != snapshot.SponsorAuthorizationReason || !strings.EqualFold(policy.SourceRepositoryFullName, snapshot.SponsorSourceRepositoryFullName) {
 				return errForkSponsorshipPolicyChanged
 			}
-		}
-		inFlight, err := s.store.InFlightCountForForkSponsorship(policy.SponsorInstallationID, policy.SourceRepositoryID)
-		if err != nil {
-			return err
-		}
-		if inFlight >= policy.MaxConcurrency {
-			return errForkSponsorshipAtCapacity
-		}
+			if policy.Mode == state.ForkSponsorshipModeApprovalRequired {
+				approval, approvalErr := tx.GetForkSponsorshipApproval(policy.SourceRepositoryID, snapshot.ForkRepositoryID)
+				if approvalErr != nil || approval.SponsorInstallationID != policy.SponsorInstallationID || approval.ForkOwnerID != snapshot.ForkOwnerID || !strings.EqualFold(approval.ForkRepositoryFullName, snapshot.ForkRepositoryFullName) || !strings.EqualFold(approval.ForkOwnerLogin, snapshot.ForkOwnerLogin) {
+					return errForkSponsorshipPolicyChanged
+				}
+			}
+			inFlight, err := tx.InFlightCountForForkSponsorship(policy.SponsorInstallationID, policy.SourceRepositoryID)
+			if err != nil {
+				return err
+			}
+			if inFlight >= policy.MaxConcurrency {
+				return errForkSponsorshipAtCapacity
+			}
+			return writeSandboxServiceSnapshot(tx, attempt, snapshot)
+		})
 	}
+	return writeSandboxServiceSnapshot(s.store, attempt, snapshot)
+}
 
-	current, err := s.store.ReadState(id)
+func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snapshot sandboxServiceConfigSnapshot) error {
+	current, err := tx.ReadState(attempt.ID)
 	if err != nil {
 		return fmt.Errorf("read state for sandbox config snapshot: %w", err)
+	}
+	if current.Status != state.StatusCreating || current.LeaseOwner != attempt.LeaseOwner || !current.LastAttemptAt.Equal(attempt.LastAttemptAt) {
+		return errStaleSnapshotAttempt
 	}
 	current.SandboxAPIURL = snapshot.APIURL
 	current.SandboxAPIKeyEncrypted = snapshot.EncryptedAPIKey
@@ -224,7 +231,7 @@ func (s *Server) persistSandboxServiceSnapshot(id string, snapshot sandboxServic
 	current.SponsorSourceRepositoryID = snapshot.SponsorSourceRepositoryID
 	current.SponsorSourceRepositoryFullName = snapshot.SponsorSourceRepositoryFullName
 	current.SponsorAuthorizationReason = snapshot.SponsorAuthorizationReason
-	if err := s.store.WriteState(current); err != nil {
+	if err := tx.WriteState(current); err != nil {
 		return fmt.Errorf("write sandbox config snapshot: %w", err)
 	}
 	return nil

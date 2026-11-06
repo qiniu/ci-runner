@@ -255,6 +255,10 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 // A nanosecond in-memory attempt token must not reject its own persisted row.
 type windowsTimestampPrecisionStore struct{ state.Store }
 
+func (s *windowsTimestampPrecisionStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error { return mutation(&windowsTimestampPrecisionStore{tx}) })
+}
+
 func (s *windowsTimestampPrecisionStore) WriteState(st state.RunnerState) error {
 	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
 	return s.Store.WriteState(st)

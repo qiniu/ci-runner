@@ -3610,6 +3610,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				}
 			}
 			testQueuedClaimOwnership(t, migrated)
+			testRunnerAdmissionRollback(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -3633,6 +3634,60 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatalf("second %s migration matcher = %#v, err=%v", backend.name, match, err)
 			}
 		})
+	}
+}
+
+// A transaction that fails after the creating write must leave the same claim
+// usable. Exercise the actual row lock, state CAS and in-flight queries in each dialect.
+func TestRunnerAdmissionRollback(t *testing.T) {
+	testRunnerAdmissionRollback(t, New(t.TempDir()).(*DBStore))
+}
+
+func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
+	t.Helper()
+	const id = "rollback-admission"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id, ProfileName: "MixedCase"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	_, claim, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok || claim.ID != id {
+		t.Fatalf("claim: id=%q ok=%v err=%v", claim.ID, ok, err)
+	}
+	creating := claim
+	creating.Status = StatusCreating
+	injected := errors.New("rollback admission")
+	write := func(tx Store) error { return tx.WriteQueuedClaim(creating, claim.LeaseOwner) }
+	err = store.WithRunnerAdmission(t.Context(), func(tx Store) error {
+		if err := write(tx); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+	current, err := store.ReadState(id)
+	if err != nil || current.Status != StatusQueued || current.Version != claim.Version {
+		t.Fatalf("rollback: status=%s version=%d err=%v", current.Status, current.Version, err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate admission: %v", err)
+	}
+	count, err := store.InFlightCountForProfile("MixedCase")
+	if err != nil || count != 1 {
+		t.Fatalf("profile count = %d, err = %v", count, err)
 	}
 }
 
@@ -4043,6 +4098,7 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 
 func sqlBackendTestTables() []string {
 	return []string{
+		"runner_admission_guard",
 		"deployment_events",
 		"deployment_revisions",
 		"deployments",

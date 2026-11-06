@@ -213,6 +213,7 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	existingSQLiteRunnerRequests := s.opts.Backend == BackendSQLite &&
 		db.Migrator().HasTable(&runnerRequestRecord{})
 	models := []any{
+		&runnerAdmissionGuardRecord{},
 		&runnerEventRecord{},
 	}
 	if !existingSQLiteRunnerProfiles {

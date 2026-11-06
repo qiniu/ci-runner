@@ -141,7 +141,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 
 // A fresh queued delivery can shorten a known wait, but must not reset failed,
 // terminal or active requests, or override a worker's current lease. Use the
-// store's version check rather than taking a runner lock under admissionMu.
+// store's version check to reject concurrent updates.
 func (s *Server) wakeWaitingWorkflowJob(req state.RunnerRequest, fallback state.RunnerState) (state.RunnerState, error) {
 	if req.JobID == 0 {
 		return fallback, nil
@@ -193,23 +193,24 @@ func (s *Server) retryHistoricalWaitingJob(ctx context.Context, id string) (stat
 	}
 	unlock := s.lockRunner(id)
 	defer unlock()
-	s.admissionMu.RLock()
-	defer s.admissionMu.RUnlock()
-	profile, err := s.profileForRunnerRequest(req)
-	if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
-		return st, state.ErrRetryNotAllowed
-	}
-	st.Status = state.StatusQueued
-	st.CompletedAt, st.CreatingAt, st.FailedAt, st.NextRetryAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
-	st.LeaseOwner, st.LeaseExpiresAt = "", time.Time{}
-	st.AssignedJobID, st.AssignedJobName = 0, ""
-	st.Error, st.FailureStage, st.FailureReason = "", "", ""
-	st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
-	st.RetryCount = 0
-	clearRunnerEnvironmentSnapshot(&st)
-	clearSandboxServiceSnapshot(&st)
-	// WriteState's version check rejects any change during the remote lookup.
-	if err := s.store.WriteState(st); err != nil {
+	err = s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		profile, err := profileForRunnerRequest(tx, req)
+		if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
+			return state.ErrRetryNotAllowed
+		}
+		st.Status = state.StatusQueued
+		st.CompletedAt, st.CreatingAt, st.FailedAt, st.NextRetryAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+		st.LeaseOwner, st.LeaseExpiresAt = "", time.Time{}
+		st.AssignedJobID, st.AssignedJobName = 0, ""
+		st.Error, st.FailureStage, st.FailureReason = "", "", ""
+		st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
+		st.RetryCount = 0
+		clearRunnerEnvironmentSnapshot(&st)
+		clearSandboxServiceSnapshot(&st)
+		// WriteState's version check rejects any change during the remote lookup.
+		return tx.WriteState(st)
+	})
+	if err != nil {
 		return st, state.ErrRetryNotAllowed
 	}
 	s.signalQueue()

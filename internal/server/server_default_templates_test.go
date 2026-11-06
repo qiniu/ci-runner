@@ -543,14 +543,13 @@ func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
 	}()
 
 	<-store.entered
-	mutationCouldInterleave := srv.admissionMu.TryLock()
-	if mutationCouldInterleave {
-		srv.admissionMu.Unlock()
-	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	err = baseStore.WithRunnerAdmission(ctx, func(state.Store) error { return nil })
+	cancel()
 	close(store.release)
 	<-done
-	if mutationCouldInterleave {
-		t.Fatal("runner profile reload did not hold the mutation serialization lock")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runner profile reload did not hold the database guard: %v", err)
 	}
 }
 
@@ -593,6 +592,12 @@ type blockingProfileLookupStore struct {
 	once    sync.Once
 }
 
+func (s *blockingProfileLookupStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&blockingProfileLookupStore{Store: tx, entered: s.entered, release: s.release})
+	})
+}
+
 func (s *blockingProfileLookupStore) GetProfile(name string) (state.RunnerProfile, error) {
 	profile, err := s.Store.GetProfile(name)
 	s.once.Do(func() {
@@ -622,7 +627,7 @@ func TestProfileForRunnerRequestUsesDirectScopedLookup(t *testing.T) {
 	}
 	srv := &Server{store: &effectiveProfileLookupRejectingStore{Store: baseStore}}
 
-	got, err := srv.profileForRunnerRequest(state.RunnerRequest{
+	got, err := profileForRunnerRequest(srv.store, state.RunnerRequest{
 		ProfileName: want.Name, ProfileSource: "scoped_custom",
 		ProfileScopeType: scope.Type, ProfileScopeID: scope.ID,
 	})
@@ -1132,6 +1137,21 @@ type catalogReadRejectingStore struct {
 func (s *catalogReadRejectingStore) MatchProfile(string, []string) (state.ProfileMatch, error) {
 	s.matchReads++
 	return state.ProfileMatch{}, errors.New("retry must not rematch the persisted runner spec")
+}
+
+func (s *profileLoadRecordingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&profileLoadRecordingStore{Store: tx, events: s.events})
+	})
+}
+
+func (s *catalogReadRejectingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		wrapped := &catalogReadRejectingStore{Store: tx}
+		err := mutation(wrapped)
+		s.matchReads += wrapped.matchReads
+		return err
+	})
 }
 
 func (s *profileLoadRecordingStore) GetProfile(name string) (state.RunnerProfile, error) {
