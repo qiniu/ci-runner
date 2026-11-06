@@ -200,7 +200,7 @@ func (s *Server) retryHistoricalWaitingJob(ctx context.Context, id string) (stat
 	}
 	unlock := s.lockRunner(id)
 	defer unlock()
-	err = s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+	err = s.store.WithRunnerEnqueue(ctx, func(tx state.Store) error {
 		profile, err := profileForRunnerRequest(tx, req)
 		if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
 			return state.ErrRetryNotAllowed
