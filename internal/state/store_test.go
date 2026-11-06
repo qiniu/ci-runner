@@ -3702,7 +3702,6 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	if err != nil || retried.ProvisionAttemptID != "" {
 		t.Fatalf("retry retained attempt %q, err = %v", retried.ProvisionAttemptID, err)
 	}
-
 }
 
 func TestFreshSchemaIncludesScopedRunnerCatalog(t *testing.T) {
