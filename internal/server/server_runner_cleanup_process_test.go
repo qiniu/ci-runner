@@ -56,7 +56,11 @@ func TestRunnerCleanupProcess(t *testing.T) {
 		srv := newRunnerLifecycleTestServer(t, store, url, fake)
 		srv.cfg.SandboxStopTimeout = 10 * time.Second
 		srv.cfg.WorkerLeaseTTL = time.Second
-		_, _, _ = srv.stopRunner(t.Context(), id, github.WorkflowJob{}, state.TerminationSourceManualStop)
+		if os.Getenv("RUNNERD_TEST_CLEANUP_IDLE_EXIT") == "true" {
+			srv.runnerExitedForAttempt(id, runnerAttemptIdentity{sandboxID: "original", processPID: 17}, sandboxrunner.ExitResult{ExitCode: 0}, nil)
+		} else {
+			_, _, _ = srv.stopRunner(t.Context(), id, github.WorkflowJob{}, state.TerminationSourceManualStop)
+		}
 		if fake.stoppedCount() != 1 {
 			t.Fatal("original owner did not stop the sandbox exactly once")
 		}
@@ -71,7 +75,12 @@ func TestRunnerCleanupProcess(t *testing.T) {
 				dsn = catalogServerTestDSN(t)
 				store = state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn, MigrateOnStart: true})
 			}
-			_, st, err := store.CreateRequest(state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerName: "old-runner"}, nil)
+			idleExit := action == "kill"
+			request := state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerName: "old-runner"}
+			if idleExit {
+				request.JobID = 27
+			}
+			_, st, err := store.CreateRequest(request, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,7 +125,7 @@ func TestRunnerCleanupProcess(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunnerCleanupProcess$")
-			cmd.Env = append(os.Environ(), "RUNNERD_TEST_CLEANUP_DIR="+dir, "RUNNERD_TEST_CLEANUP_DSN="+dsn, "RUNNERD_TEST_CLEANUP_GITHUB="+api.URL)
+			cmd.Env = append(os.Environ(), "RUNNERD_TEST_CLEANUP_DIR="+dir, "RUNNERD_TEST_CLEANUP_DSN="+dsn, "RUNNERD_TEST_CLEANUP_GITHUB="+api.URL, fmt.Sprintf("RUNNERD_TEST_CLEANUP_IDLE_EXIT=%t", idleExit))
 			var log bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &log, &log
 			if err := cmd.Start(); err != nil {
@@ -146,6 +155,11 @@ func TestRunnerCleanupProcess(t *testing.T) {
 			before := assertAdmissionState(t, store, id, state.StatusStopping)
 			if before.CleanupSandboxDone || before.WatchToken == "" || fake.stoppedCount() != 0 || lists.Load() != 0 {
 				t.Fatal("peer repeated an in-flight Sandbox stop")
+			}
+			if idleExit {
+				if _, _, err := peer.stopRunner(ctx, id, github.WorkflowJob{}, state.TerminationSourceManualStop); err != nil {
+					t.Fatal(err)
+				}
 			}
 			close(sandboxRelease)
 			select {
@@ -182,7 +196,11 @@ func TestRunnerCleanupProcess(t *testing.T) {
 				time.Sleep(30 * time.Millisecond)
 			}
 			got := assertAdmissionState(t, store, id, state.StatusCompleted)
-			if got.TerminationSource != state.TerminationSourceManualStop || got.RunnerExitCode == nil || *got.RunnerExitCode != 23 || !got.CleanupGitHubDone || !got.StoppingAt.Equal(live.StoppingAt) || got.WatchToken != "" || fake.stoppedCount() != 0 || lists.Load() != 1 || deletes.Load() != 2 {
+			source, code := state.TerminationSourceManualStop, 23
+			if idleExit {
+				source, code = state.TerminationSourceProcessExit, 0
+			}
+			if !got.ManualStopRequested || got.RetryCount != 0 || got.TerminationSource != source || got.RunnerExitCode == nil || *got.RunnerExitCode != code || !got.CleanupGitHubDone || !got.StoppingAt.Equal(live.StoppingAt) || got.WatchToken != "" || fake.stoppedCount() != 0 || lists.Load() != 1 || deletes.Load() != 2 {
 				t.Fatalf("incorrect takeover status=%s lists=%d deletes=%d stops=%d", got.Status, lists.Load(), deletes.Load(), fake.stoppedCount())
 			}
 			t.Logf("%s to completed cleanup: %v", action, time.Since(start).Round(time.Millisecond))
@@ -241,5 +259,62 @@ func TestManualStopCancelsInterruptedCreationRequeue(t *testing.T) {
 	got := assertAdmissionState(t, store, st.ID, state.StatusCompleted)
 	if !got.CleanupSandboxDone || first.stoppedCount() != 1 || peer.stoppedCount() != 0 {
 		t.Fatal("orphan Sandbox cleaned twice")
+	}
+}
+
+func TestManualStopDuringIdleExitCleanupPreventsRetry(t *testing.T) {
+	for _, exitCode := range []int{0, 137} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
+			dir := t.TempDir()
+			store, peerStore := state.New(dir), state.New(dir)
+			_, st, err := store.CreateRequest(state.RunnerRequest{ID: "manual-stop-during-exit", JobID: 27}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status, st.SandboxID, st.ProcessPID = state.StatusRunning, "box", 17
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}, 1), make(chan struct{})
+			first := &fakeSandbox{stopBlock: release, stopStarted: entered}
+			owner := newRunnerLifecycleTestServer(t, store, "", first)
+			owner.cfg.SandboxStopTimeout = 5 * time.Second
+			next := &fakeSandbox{}
+			peer := newRunnerLifecycleTestServer(t, peerStore, "", next)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				owner.runnerExitedForAttempt(st.ID, runnerAttemptIdentity{sandboxID: "box", processPID: 17}, sandboxrunner.ExitResult{ExitCode: exitCode}, nil)
+			}()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				close(release)
+				t.Fatal("exit cleanup did not start")
+			}
+			_, _, err = peer.stopRunner(t.Context(), st.ID, github.WorkflowJob{}, state.TerminationSourceManualStop)
+			close(release)
+			<-done
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := peer.recoverRunner(t.Context(), st.ID); err != nil {
+				t.Fatal(err)
+			}
+			final, err := store.ReadState(st.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := state.StatusCompleted
+			if exitCode != 0 {
+				want = state.StatusFailed
+			}
+			if final.Status != want || final.TerminationSource != state.TerminationSourceProcessExit || final.RunnerExitCode == nil || *final.RunnerExitCode != exitCode || final.RetryCount != 0 {
+				t.Fatalf("lost accepted stop: status=%s source=%s retries=%d exit=%v", final.Status, final.TerminationSource, final.RetryCount, final.RunnerExitCode)
+			}
+			if first.stoppedCount() != 1 || next.stoppedCount() != 0 {
+				t.Fatal("repeated confirmed Sandbox stop")
+			}
+		})
 	}
 }

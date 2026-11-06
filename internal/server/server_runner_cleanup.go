@@ -129,11 +129,13 @@ func (c *runnerCleanup) write(st state.RunnerState) error {
 	return c.server.store.WriteCleanupState(st, c.token)
 }
 
-func (c *runnerCleanup) writeOrLog(st state.RunnerState, msg string) {
+func (c *runnerCleanup) writeOrLog(st state.RunnerState, msg string) bool {
 	if err := c.write(st); err != nil {
 		c.server.logger.Error(msg, "id", c.id, "error", err)
 		c.server.store.AppendLog(c.id, "control.log", []byte(msg+": "+err.Error()+"\n"))
+		return false
 	}
+	return true
 }
 
 // A recovered Sandbox without a listener must finish cleanup before a new

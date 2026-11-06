@@ -106,6 +106,7 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		WatchToken:                      record.WatchToken,
 		SandboxCreateDispatched:         record.SandboxCreateDispatched,
 		CleanupGitHubRunnerID:           record.CleanupGitHubRunnerID,
+		ManualStopRequested:             record.ManualStopRequested,
 		CleanupSandboxDone:              record.CleanupSandboxDone,
 		CleanupGitHubDone:               record.CleanupGitHubDone,
 		LastAttemptAt:                   pointerToTime(record.LastAttemptAt),

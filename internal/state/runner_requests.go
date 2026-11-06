@@ -339,10 +339,14 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
+	if st.ManualStopRequested {
+		updates["manual_stop_requested"] = true
+	}
 	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
 		updates["sandbox_create_dispatched"] = false
 	}
 	if st.Status == StatusQueued {
+		updates["manual_stop_requested"] = false
 		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
 	}
 	result := query.Updates(updates)
@@ -408,6 +412,7 @@ func (s *DBStore) ListMismatchedCompletedStates(limit int) ([]RunnerState, error
 		Where("status = ?", StatusCompleted).
 		Where("workflow_job_id IS NOT NULL AND workflow_job_id != 0").
 		Where("assigned_job_id != 0 AND assigned_job_id != workflow_job_id").
+		Where("manual_stop_requested IS NULL OR manual_stop_requested = ?", false).
 		Order("updated_at DESC").
 		Limit(limit).
 		Find(&records).Error; err != nil {
@@ -1009,6 +1014,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		record.Status = StatusQueued
 		record.ProvisionAttemptID = ""
 		record.SandboxCreateDispatched = false
+		record.ManualStopRequested = false
 		record.CleanupSandboxDone, record.CleanupGitHubDone, record.CleanupGitHubRunnerID = false, false, 0
 		record.Error = ""
 		record.FailureStage = ""
@@ -1049,6 +1055,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
 				"sandbox_create_dispatched":           false,
+				"manual_stop_requested":               false,
 				"cleanup_sandbox_done":                false,
 				"cleanup_github_done":                 false,
 				"cleanup_github_runner_id":            0,

@@ -619,6 +619,18 @@ func TestListMismatchedCompletedStates(t *testing.T) {
 	if len(states) != 1 || states[0].ID != "mismatch" {
 		t.Fatalf("expected only mismatched completed state, got %#v", states)
 	}
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.ManualStopRequested = true
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	states, err = store.ListMismatchedCompletedStates(10)
+	if err != nil || len(states) != 0 {
+		t.Fatalf("manual stop entered mismatch requeue: %v %+v", err, states)
+	}
 }
 
 func TestListFailedWorkflowJobStates(t *testing.T) {
@@ -3789,6 +3801,7 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 		t.Fatalf("missing create receipt: %v", err)
 	}
 	current.Status = StatusStopping
+	current.ManualStopRequested = true
 	if err := store.BeginRunnerCleanup(t.Context(), current, "first", "stop-a", time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -3815,7 +3828,7 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 		t.Fatal(err)
 	}
 	current, err = store.ReadState(id)
-	if err != nil || !current.CleanupSandboxDone || current.CleanupGitHubRunnerID != 71 || current.CleanupGitHubDone {
+	if err != nil || !current.ManualStopRequested || !current.CleanupSandboxDone || current.CleanupGitHubRunnerID != 71 || current.CleanupGitHubDone {
 		t.Fatalf("lost cleanup progress: %v", err)
 	}
 	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupGitHub); !errors.Is(err, ErrConflict) {
@@ -3835,11 +3848,11 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 		t.Fatal(err)
 	}
 	retried, err := store.RetryRequest(id, time.Now())
-	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
+	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.ManualStopRequested || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
 		t.Fatalf("retry retained old attempt or cleanup evidence: %v", err)
 	}
 	current, err = store.ReadState(id)
-	if err != nil || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
+	if err != nil || current.ManualStopRequested || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
 		t.Fatalf("persisted cleanup on retry: %v", err)
 	}
 }

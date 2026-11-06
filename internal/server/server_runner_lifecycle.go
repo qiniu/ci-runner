@@ -1171,16 +1171,16 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			st.Error = appendError(st.Error, "github runner cleanup: "+githubErr.Error())
 		}
 		st.Status = state.StatusFailed
+		var retryLog string
 		if sandboxErr == nil && githubErr == nil {
-			s.retryRunnerExitedWithoutJob(id, &st)
+			retryLog = s.retryRunnerExitedWithoutJob(&st)
 		}
 		if st.Status == state.StatusFailed {
 			metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
 			s.recordWorkflowRunDuration(st, "", workflowJobName(st, github.WorkflowJob{}), "failure")
 		}
-		cleanup.writeOrLog(st, "write failed exit state")
-		if st.Status == state.StatusQueued {
-			s.signalQueue()
+		if cleanup.writeOrLog(st, "write failed exit state") {
+			s.recordExitRetry(st, retryLog)
 		}
 		return
 	}
@@ -1219,16 +1219,16 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		st.FailureReason = "github_runner_cleanup_failed"
 		st.Error = appendError(st.Error, "github runner cleanup: "+cleanupErr.Error())
 	}
+	var retryLog string
 	if st.Status == state.StatusCompleted || (sandboxErr == nil && st.FailureStage == "runner_exit") {
-		s.retryRunnerExitedWithoutJob(id, &st)
+		retryLog = s.retryRunnerExitedWithoutJob(&st)
 	}
 	if st.Status == state.StatusFailed {
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
 		s.recordWorkflowRunDuration(st, "", workflowJobName(st, github.WorkflowJob{}), "failure")
 	}
-	cleanup.writeOrLog(st, "write exited state")
-	if st.Status == state.StatusQueued {
-		s.signalQueue()
+	if cleanup.writeOrLog(st, "write exited state") {
+		s.recordExitRetry(st, retryLog)
 	}
 	s.refreshMetrics()
 }
@@ -1240,9 +1240,9 @@ var errRunnerExitedWithoutJob = errors.New("runner process exited before accepti
 // and a lost Sandbox output stream ends an idle Runner too; no reconciler
 // requeues that original Job, so retry through the bounded start path, which
 // rechecks the Job before creating another Sandbox.
-func (s *Server) retryRunnerExitedWithoutJob(id string, st *state.RunnerState) {
-	if st.WorkflowJobID == 0 || st.AssignedJobID != 0 || st.AssignedJobName != "" {
-		return
+func (s *Server) retryRunnerExitedWithoutJob(st *state.RunnerState) string {
+	if st.ManualStopRequested || st.WorkflowJobID == 0 || st.AssignedJobID != 0 || st.AssignedJobName != "" {
+		return ""
 	}
 	err := errRunnerExitedWithoutJob
 	if st.Error != "" {
@@ -1253,8 +1253,18 @@ func (s *Server) retryRunnerExitedWithoutJob(id string, st *state.RunnerState) {
 		st.TerminationSource = ""
 		st.RunnerExitCode = nil
 	}
-	s.logger.Warn("runner exited before accepting a job", "id", id, "workflow_job_id", st.WorkflowJobID, "status", st.Status, "retry_count", st.RetryCount)
-	s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte(result.logLine+"\n"))
+	return result.logLine
+}
+
+func (s *Server) recordExitRetry(st state.RunnerState, logLine string) {
+	if logLine == "" {
+		return
+	}
+	s.logger.Warn("runner exited before accepting a job", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "status", st.Status, "retry_count", st.RetryCount)
+	s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageRunnerExit, []byte(logLine+"\n"))
+	if st.Status == state.StatusQueued {
+		s.signalQueue()
+	}
 }
 
 func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
@@ -1789,6 +1799,9 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 			workflowConclusion(job),
 		)))
 	}
+	if source == state.TerminationSourceManualStop {
+		st.ManualStopRequested = true
+	}
 	setTerminationSource(&st, source)
 	stopStartedAt := time.Now()
 	cancelRecoveryRetry := source != state.TerminationSourceRecoveryCleanup || job.ID != 0
@@ -1805,6 +1818,12 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 			// A peer owns the external work, but a delivered completion may be
 			// the only evidence of the original Job result or actual assignment.
 			changed := retainWorkflowJobResult(&current, job, time.Now().UTC())
+			if source == state.TerminationSourceManualStop && !current.ManualStopRequested {
+				// Invalidate any automatic requeue the cleanup owner is preparing.
+				// Keep the first termination source and any observed exit code.
+				current.ManualStopRequested = true
+				changed = true
+			}
 			if current.Status == state.StatusStopping && current.FailureReason == interruptedCreateCleanup && cancelRecoveryRetry {
 				current.FailureStage, current.FailureReason, current.Error = "", "", ""
 				changed = true
@@ -1941,7 +1960,7 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 	if job.ID == 0 && st.TerminationSource == state.TerminationSourceWorkflowJobWebhook && st.AssignedJobID != st.WorkflowJobID {
 		job.ID = st.AssignedJobID
 	}
-	if workflowJobMismatch(st, job) {
+	if !st.ManualStopRequested && workflowJobMismatch(st, job) {
 		queued, queueErr := s.originalWorkflowJobQueued(ctx, st)
 		if queueErr != nil {
 			s.logger.Warn("original workflow job status check failed; requeueing mismatched request for retry", "id", st.ID, "workflow_job_id", st.WorkflowJobID, "assigned_job_id", job.ID, "error", queueErr)
@@ -1976,7 +1995,7 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 		s.refreshMetrics()
 		return st, false, nil
 	}
-	if st.FailureReason == "jit_cleanup_pending" {
+	if st.FailureReason == "jit_cleanup_pending" && !st.ManualStopRequested {
 		if st.WorkflowJobID == 0 {
 			st.FailureStage = "github_registration"
 			st.FailureReason = "jit_cleanup_pending"
@@ -2036,12 +2055,14 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 	st.LastErrorCode = ""
 	st.LastErrorMessage = ""
 	st.LastErrorRetryable = false
+	var retryLog string
 	if st.TerminationSource == state.TerminationSourceProcessExit && (st.Status == state.StatusCompleted || st.FailureStage == "runner_exit") {
-		s.retryRunnerExitedWithoutJob(id, &st)
+		retryLog = s.retryRunnerExitedWithoutJob(&st)
 	}
 	if err := cleanup.write(st); err != nil {
 		return state.RunnerState{}, false, err
 	}
+	s.recordExitRetry(st, retryLog)
 	s.logger.Info("runner stopped", "id", id, "sandbox_id", st.SandboxID, "duration_ms", time.Since(stopStartedAt).Milliseconds())
 	if job.ID != 0 {
 		s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerCleanup, []byte(fmt.Sprintf(

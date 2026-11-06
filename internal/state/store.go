@@ -255,6 +255,7 @@ type RunnerState struct {
 	ProvisionAttemptID              string    `json:"-"`
 	WatchToken                      string    `json:"-"`
 	SandboxCreateDispatched         bool      `json:"-"`
+	ManualStopRequested             bool      `json:"-"`
 	CleanupSandboxDone              bool      `json:"-"`
 	CleanupGitHubDone               bool      `json:"-"`
 	CleanupGitHubRunnerID           int64     `json:"-"`
