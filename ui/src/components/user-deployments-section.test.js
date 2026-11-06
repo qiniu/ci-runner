@@ -61,6 +61,7 @@ for (const [key, value] of Object.entries(domGlobals)) Object.defineProperty(glo
 const mountedRoots = []
 
 afterEach(async () => {
+  toast.dismiss()
   for (const { root, container } of mountedRoots.splice(0)) {
     await act(async () => root.unmount())
     container.remove()

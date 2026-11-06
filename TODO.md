@@ -58,7 +58,6 @@ This file tracks active project work. Completed behavior should move into `READM
 
 - Assess TypeScript 5, Vite 7 and ESLint 9 major-version migrations separately. Evaluate `eslint-plugin-react-hooks` beyond the 7.0.1 pin against existing ref/effect patterns without disabling lint rules.
 - Recheck upstream minimatch fixes before the next UI dependency upgrade. The 2026-11-04 full `bun audit` reported one moderate [advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), while `bun audit --production` reported none. ESLint 9 and TypeScript ESLint require minimatch 3 and 10; the advisory covers versions below 11.0.1. Do not force an incompatible major through an override.
-- Isolate Sonner toast state in `user-deployments-section.test.js`: the PR #168 review found queued-deployment toasts can leak into `use-runner-catalog.test.js` depending on test-file order, including with the previous Sonner version. Add teardown and verify both file orders in a separate test-maintenance change.
 
 - Keep `task ui-terminal-fault-test` covering timed recovery, exact cursor/output continuity and real PTY cleanup. Production ingress, remote Sandbox and permission-revocation acceptance remain separate deployment gates; see [Testing](docs/testing.md#timed-terminal-transport-faults).
 
