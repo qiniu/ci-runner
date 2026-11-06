@@ -438,3 +438,30 @@ func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
 		})
 	}
 }
+
+func TestSponsoredCreatingDeferPreservesReplacedAttempt(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, current, err := store.CreateRequest(state.RunnerRequest{ID: "sponsored-replacement"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Status = state.StatusCreating
+	current.LeaseOwner = "worker"
+	current.ProvisionAttemptID = "replacement"
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	current.Version++
+	stale := current
+	stale.Version--
+	stale.ProvisionAttemptID = "superseded"
+	srv := &Server{store: store, logger: slog.Default()}
+	srv.deferCreatingRequest(stale, time.Second)
+	got, err := store.ReadState(current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != current.Version || got.Status != state.StatusCreating || got.ProvisionAttemptID != current.ProvisionAttemptID {
+		t.Fatalf("stale deferral changed replacement: %+v", got)
+	}
+}
