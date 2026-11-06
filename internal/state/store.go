@@ -575,6 +575,7 @@ type RunnerRequestStore interface {
 
 type RunnerCatalogStore interface {
 	ListProfiles() ([]RunnerProfile, error)
+	ListProfilesContext(ctx context.Context) ([]RunnerProfile, error)
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
