@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func closeTestDB(t *testing.T, db *gorm.DB) {
@@ -3544,6 +3545,67 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 	}
 }
 
+// A worker that opens its transaction before another holder commits must
+// count that holder's newly admitted request after acquiring the capacity row.
+func testSQLAdmissionReadsPreviousCommit(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "previous-capacity-holder"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id}, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	before, err := store.InFlightCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Use an independent SQL transaction to bypass the process-local gate.
+	first := db.WithContext(ctx).Begin()
+	if first.Error != nil {
+		t.Fatal(first.Error)
+	}
+	defer first.Rollback()
+	var guard runnerAdmissionGuardRecord
+	if err := first.Clauses(clause.Locking{Strength: "UPDATE"}).First(&guard, runnerCapacityGuard).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Model(&runnerRequestRecord{}).Where("id = ?", id).Update("status", StatusCreating).Error; err != nil {
+		t.Fatal(err)
+	}
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		done <- store.WithRunnerAdmission(ctx, func(tx Store) error {
+			count, err := tx.InFlightCount()
+			if err == nil && count != before+1 {
+				return fmt.Errorf("in-flight count %d, want %d after prior holder committed", count, before+1)
+			}
+			return err
+		})
+	}()
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("worker passed the held capacity guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := first.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	db, err := store.dbOrEnsure()
@@ -3747,6 +3809,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			}
 			testQueuedClaimOwnership(t, migrated)
 			testConcurrentSQLRunnerEnqueue(t, migrated)
+			testSQLAdmissionReadsPreviousCommit(t, migrated)
 			testRunnerAdmissionRollback(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},

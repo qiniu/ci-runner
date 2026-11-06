@@ -847,7 +847,7 @@ worker 领取请求后记录 `request_read` 和 `initial_state_read`。数据库
 
 迁移会在 `runner_admission_guard` 中初始化两行。PostgreSQL 和 MySQL 上，worker 准入及 fork 赞助分配使用容量写锁。Webhook、手动入队和历史等待 Job 重试共享目录读锁，因此即使 worker 正在统计容量，不同任务也能并发入队。全局及自定义规格、赞助策略及审批的变更同时持有两把写锁直至提交。SQLite 使用单一写连接。外部服务调用均在事务外执行。
 
-runnerd 将每个加锁事务的期限设为五秒。PostgreSQL 还在数据库端限制单条语句和事务空闲时间，保留运维配置的更短期限。MySQL 客户端被挂起时无法主动取消事务，部署方需要为接管场景配置数据库端的 `innodb_lock_wait_timeout` 和空闲连接 `wait_timeout`。数据库故障或目录变更争用仍可能导致 webhook 失败。worker 获取锁失败时记录 `admission_lock_wait`，将仍持有的任务延期五秒。持久化规格无效时记录查询或校验失败原因。
+runnerd 将每个加锁事务的期限设为五秒。PostgreSQL 还在数据库端限制单条语句和事务空闲时间，保留运维配置的更短期限。MySQL 客户端被挂起时无法主动取消事务，部署方需要为接管场景配置数据库端的 `innodb_lock_wait_timeout` 和空闲连接 `wait_timeout`。数据库故障或目录变更争用仍可能导致 webhook 失败。Admin 规格变更因请求超时中断时返回 HTTP 503 和 `runner_spec_mutation_unavailable`，其他未预期的持久化故障返回通用 HTTP 500。worker 获取锁失败时记录 `admission_lock_wait`，将仍持有的任务延期五秒。持久化规格无效时记录查询或校验失败原因。
 
 双进程验证使用独立的 PostgreSQL schema，覆盖两个 worker 竞争一个名额，以及一个节点禁用规格时另一节点尝试准入。另有用例在 creating 写入中杀死进程，验证事务回滚及存活节点重新准入。所有节点须配置相同的额度。扩副本前应在代表性负载下观察准入等待和整体排队时间。
 

@@ -510,11 +510,7 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("persist profile create", "name", input.Name, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
+		s.writeRunnerSpecMutationError(w, input.Name, err)
 		return
 	}
 	s.invalidatePublicRunnerTemplates()
@@ -636,11 +632,7 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("persist profile update", "name", current.Name, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
+		s.writeRunnerSpecMutationError(w, current.Name, err)
 		return
 	}
 	s.invalidatePublicRunnerTemplates()
@@ -715,11 +707,7 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		return tx.DeleteProfile(name)
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("delete profile", "name", name, "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.invalidatePublicRunnerTemplates()
