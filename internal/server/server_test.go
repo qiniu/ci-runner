@@ -9341,23 +9341,42 @@ type blockingRunnerSpecMutationStore struct {
 	once    sync.Once
 }
 
-func (s *blockingRunnerSpecMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
-	return s.Store.ApplyMutationWithAudit(event, func(tx state.Store) error {
-		return mutation(&blockedAdmissionStore{Store: tx, block: func() { s.once.Do(func() { close(s.started) }); <-s.proceed }})
+func (s *blockingRunnerSpecMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error {
+		s.once.Do(func() { close(s.started) })
+		<-s.proceed
+		return mutation(tx)
 	})
 }
 
-type blockedAdmissionStore struct {
-	state.Store
-	block func()
-}
-
-func (s *blockedAdmissionStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
-	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error { s.block(); return mutation(tx) })
+// Use a separate pool and SQLite connection, so the guard must exclude a
+// second database writer rather than simply using up the only connection.
+func assertDatabaseGuardHeld(t *testing.T, probe state.Store, release chan struct{}) {
+	t.Helper()
+	started, result := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		result <- probe.WithRunnerAdmission(t.Context(), func(state.Store) error { return nil })
+	}()
+	<-started
+	select {
+	case err := <-result:
+		close(release)
+		t.Fatalf("independent writer escaped the held guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("independent writer could not proceed after release: %v", err)
+	}
 }
 
 func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
-	baseStore := state.New(t.TempDir())
+	dir := t.TempDir()
+	baseStore, probe := state.New(dir), state.New(dir)
+	if err := probe.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 	store := &blockingRunnerSpecMutationStore{Store: baseStore, started: make(chan struct{}), proceed: make(chan struct{})}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	req := adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(`{"enabled":false}`))
@@ -9370,16 +9389,10 @@ func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
 	}()
 
 	<-store.started
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	err := baseStore.WithRunnerAdmission(ctx, func(state.Store) error { return nil })
-	cancel()
-	close(store.proceed)
+	assertDatabaseGuardHeld(t, probe, store.proceed)
 	recorder := <-done
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("admin Runner Spec mutation did not hold the database guard: %v", err)
 	}
 }
 
@@ -9470,15 +9483,15 @@ type activeRequestBeforeMutationStore struct {
 	once    sync.Once
 }
 
-func (s *activeRequestBeforeMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
+func (s *activeRequestBeforeMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
 	var createErr error
 	s.once.Do(func() {
 		_, _, createErr = s.Store.CreateRequest(s.request, nil)
 	})
 	if createErr != nil {
-		return state.AuditEvent{}, createErr
+		return createErr
 	}
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+	return s.Store.WithRunnerCatalogMutation(ctx, mutation)
 }
 
 func TestUserDeleteRunnerSpecRechecksActiveRequestsInsideMutation(t *testing.T) {

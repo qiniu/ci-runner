@@ -146,6 +146,10 @@ func (s *Server) handleUserPutForkSponsorshipPolicy(w http.ResponseWriter, r *ht
 		return
 	}
 	policy := state.ForkSponsorshipPolicy{SponsorInstallationID: installationID, SourceRepositoryID: repository.ID, SourceRepositoryFullName: repository.FullName, Mode: strings.TrimSpace(input.Mode), Enabled: input.Enabled, MaxConcurrency: input.MaxConcurrency}
+	if err := state.ValidateForkSponsorshipPolicy(policy); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_fork_sponsorship_policy", err.Error())
+		return
+	}
 	if existing, err := s.store.GetForkSponsorshipPolicyBySourceRepositoryID(repository.ID); err == nil && existing.SponsorInstallationID != installationID {
 		writeErrorCode(w, http.StatusConflict, "fork_sponsorship_source_conflict", "this fork network already has a sponsor")
 		return
@@ -168,7 +172,8 @@ func (s *Server) handleUserPutForkSponsorshipPolicy(w http.ResponseWriter, r *ht
 		return
 	}
 	if err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_fork_sponsorship_policy", err.Error())
+		s.logger.Error("save fork sponsorship policy", "installation_id", installationID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save fork sponsorship policy")
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
@@ -199,6 +204,10 @@ func (s *Server) handleUserCreateForkSponsorshipPolicy(w http.ResponseWriter, r 
 		return
 	}
 	policy := state.ForkSponsorshipPolicy{SponsorInstallationID: installationID, SourceRepositoryID: repository.ID, SourceRepositoryFullName: repository.FullName, Mode: strings.TrimSpace(input.Mode), Enabled: input.Enabled, MaxConcurrency: input.MaxConcurrency}
+	if err := state.ValidateForkSponsorshipPolicy(policy); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_fork_sponsorship_policy", err.Error())
+		return
+	}
 	if existing, err := s.store.GetForkSponsorshipPolicyBySourceRepositoryID(repository.ID); err == nil && existing.SponsorInstallationID != installationID {
 		writeErrorCode(w, http.StatusConflict, "fork_sponsorship_source_conflict", "this fork network already has a sponsor")
 		return
@@ -217,7 +226,8 @@ func (s *Server) handleUserCreateForkSponsorshipPolicy(w http.ResponseWriter, r 
 		return
 	}
 	if err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_fork_sponsorship_policy", err.Error())
+		s.logger.Error("save fork sponsorship policy", "installation_id", installationID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save fork sponsorship policy")
 		return
 	}
 	writeJSON(w, http.StatusCreated, saved)

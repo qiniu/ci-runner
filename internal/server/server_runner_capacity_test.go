@@ -156,11 +156,14 @@ func (s *failedRunnerAdmissionStore) WithRunnerAdmission(ctx context.Context, fn
 }
 
 func (s *failedRunnerAdmissionStore) GetProfile(name string) (state.RunnerProfile, error) {
-	return state.RunnerProfile{}, errors.New("invalid profile labels")
+	if s.stage == "profile_lookup" {
+		return state.RunnerProfile{}, state.ErrNotFound
+	}
+	return state.RunnerProfile{}, context.Canceled
 }
 
 func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
-	for _, stage := range []string{"admission_lock_wait", "profile_lookup"} {
+	for _, stage := range []string{"admission_lock_wait", "profile_lookup", "canceled_lookup"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, base, _ := admissionTestFixture(t, 1, 1)
 			claim := queuedRunnerForTest(t, base, "a", "worker")
@@ -173,12 +176,14 @@ func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stage == "admission_lock_wait" {
-				log, err := base.ReadLog("a", "control.log", 65536)
-				if err != nil || strings.Count(string(log), "stage=admission_lock_wait ") != 1 {
-					t.Fatalf("missing or repeated guard failure timing: %s, %v", log, err)
+			if stage != "profile_lookup" {
+				if stage == "admission_lock_wait" {
+					log, err := base.ReadLog("a", "control.log", 65536)
+					if err != nil || strings.Count(string(log), "stage=admission_lock_wait ") != 1 {
+						t.Fatalf("missing or repeated guard failure timing: %s, %v", log, err)
+					}
 				}
-				if st.Status != state.StatusQueued || st.LeaseOwner != "" || st.NextRetryAt.IsZero() || st.LastErrorCode != "runner_admission_unavailable" {
+				if st.Status != state.StatusQueued || st.RetryCount != 0 || st.LeaseOwner != "" || st.NextRetryAt.IsZero() || st.LastErrorCode != "runner_admission_unavailable" {
 					t.Fatalf("guard timeout did not defer the claim: %+v", st)
 				}
 			} else if st.Status != state.StatusFailed || st.FailureStage != stage {

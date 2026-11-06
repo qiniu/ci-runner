@@ -705,7 +705,7 @@ curl -fsS -b "$COOKIE_JAR" \
 常见问题：
 
 - `invalid signature`：GitHub webhook secret 和 `github.webhook_secret` 不一致。
-- `runner start deferred because global concurrency is at capacity` 或 `runner start deferred because profile is at capacity`：request 会保持 queued，直到全局或 per-spec 容量可用。
+- `runner_capacity` 事件表示请求正在等待全局、规格、账户或仓库的可用名额，可根据 `last_error_code` 判断受限维度。
 - GitHub job 一直 queued：managed default 必须同时包含 `qiniu` 和准确的操作
   系统 label。`[ubuntu-24.04]`、`[qiniu]` 和不受支持的额外 labels 都不会匹配；
   自定义 spec 则使用它自己的 advertised labels 和 required labels。
@@ -1116,7 +1116,7 @@ worker:
 
 未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
 全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
-占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。事务失败会回滚 creating 写入并释放数据库行锁。
+占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。同一节点的 worker 先在本地排队，再获取数据库连接。PostgreSQL 和 MySQL 的准入事务采用读已提交隔离级别，以便看到上一持锁事务提交的更改。事务失败会回滚 creating 写入并释放数据库行锁。
 
 达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
 继续执行。调度按下次可运行时间排序，首次请求使用原入队时间；已到期的延期请求排在
@@ -1125,7 +1125,8 @@ worker:
 `last_error_code` 通过 `runner_capacity_global`、`runner_capacity_profile`、
 `runner_capacity_account`、`runner_capacity_repository` 标明受限维度。
 Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因变化；同一限制的重复检查
-不会重复追加容量事件，纯容量等待也不追加 timing 事件；成功准入后清除等待原因。
+不会重复追加容量事件，纯容量等待也不追加 timing 事件。数据库准入暂时失败时，
+`runner_admission` 事件记录 `runner_admission_unavailable`。请求释放领取权并于五秒后重试，无须消耗失败重试次数。成功准入后清除等待原因。
 
 配置需要重启生效，不提供热加载或新的 Settings 界面。降低上限保留已有 Runner，
 占用降至上限以下才允许新增；删除配置或设为零解除该维度限制，其他限制继续生效。

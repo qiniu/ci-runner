@@ -46,9 +46,7 @@ browser or inferred naming conventions.
    installation. Repository transfer fails closed.
 5. Re-evaluate the configured eligibility mode immediately before Sandbox
    creation. GitHub lookup failure fails closed for that attempt.
-6. Keep GitHub I/O outside startup locks, then use a short per-policy critical
-   section to recheck the policy and exact approval, enforce capacity, and save
-   the request snapshot atomically within one runnerd process.
+6. Finish GitHub I/O before taking the database capacity guard shared with Runner admission. In that transaction, recheck the policy and exact approval, enforce the sponsor limit, and save the request snapshot.
 7. Snapshot the encrypted Sandbox configuration and credential-free sponsorship
    provenance on the Runner request.
 
