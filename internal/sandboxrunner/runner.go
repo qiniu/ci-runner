@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -272,11 +273,12 @@ var (
 )
 
 type E2BService struct {
-	client            *qnsandbox.Client
-	deploymentFactory *deployruntime.Factory
-	apiKey            string
-	endpoint          string
-	httpClient        *http.Client
+	client             *qnsandbox.Client
+	runnerCreateClient *qnsandbox.Client
+	deploymentFactory  *deployruntime.Factory
+	apiKey             string
+	endpoint           string
+	httpClient         *http.Client
 }
 
 const runnerBootstrapUser = "root"
@@ -327,11 +329,19 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	if err != nil {
 		return nil, err
 	}
+	// A later rejection cannot disprove that an earlier POST created a Sandbox.
+	// Runner recovery reconciles the original provision attempt after an uncertain result.
+	createConfig := *cfg
+	createConfig.RetryMax = new(int)
+	runnerCreateClient, err := qnsandbox.NewClient(&createConfig)
+	if err != nil {
+		return nil, err
+	}
 	factory, err := deployruntime.NewFactory(apiKey, endpoint, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	return &E2BService{client: client, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
+	return &E2BService{client: client, runnerCreateClient: runnerCreateClient, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
 }
 
 // CreateDeploymentRuntime allocates a Sandbox runtime for deployd. It uses a
@@ -627,7 +637,14 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		metadata["provision_attempt_id"] = input.ProvisionAttemptID
 		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
-	sb, err := s.client.Create(ctx, qnsandbox.CreateParams{
+	// net/http can also replay a POST with an Idempotency-Key on a reused
+	// connection. Count connection assignments before each transport attempt so
+	// even an early rejection on a replay cannot release the original request.
+	var attempts atomic.Int32
+	createCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { attempts.Add(1) },
+	})
+	sb, err := s.runnerCreateClient.Create(createCtx, qnsandbox.CreateParams{
 		TemplateID:          input.TemplateID,
 		Timeout:             &timeout,
 		AllowInternetAccess: &allowInternet,
@@ -635,7 +652,7 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		IdempotencyKey:      idempotencyKey,
 	})
 	if err != nil {
-		if sandboxCreateRejected(err) {
+		if attempts.Load() == 1 && sandboxCreateRejected(err) {
 			return StartResult{}, err
 		}
 		return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
