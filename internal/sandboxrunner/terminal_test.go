@@ -13,6 +13,9 @@ func TestDeploymentTerminalConnectUsesRemainingLifetime(t *testing.T) {
 	calls, timeout := 0, int32(0)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.Method != http.MethodPost || r.URL.Path != "/v2/sandboxes/deployment-sandbox/connect" {
+			t.Errorf("unexpected terminal request: %s %s", r.Method, r.URL.Path)
+		}
 		var input struct {
 			Timeout int32 `json:"timeout"`
 		}

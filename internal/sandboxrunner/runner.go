@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -1175,10 +1176,34 @@ func (s *E2BService) StopRunner(ctx context.Context, sandboxID string, pid uint3
 	if err != nil {
 		return err
 	}
+	if err := capStoppingSandboxLifetime(ctx, sb); err != nil {
+		reason := "update_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "deadline_exceeded"
+		} else if errors.Is(err, context.Canceled) {
+			reason = "canceled"
+		}
+		slog.WarnContext(ctx, "could not cap stopping Sandbox lifetime", "sandbox_id", sandboxID, "reason", reason)
+	}
 	if pid != 0 {
 		_ = sb.Commands().Kill(ctx, pid)
 	}
 	return sb.Kill(ctx)
+}
+
+// Connect v2 only extends the lease. Cap it explicitly in case deletion fails,
+// but reserve time for deletion even if the timeout update stalls.
+func capStoppingSandboxLifetime(ctx context.Context, sb *qnsandbox.Sandbox) error {
+	updateBudget := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		updateBudget = min(updateBudget, time.Until(deadline)/2)
+		if updateBudget <= 0 {
+			return context.DeadlineExceeded
+		}
+	}
+	updateCtx, cancel := context.WithTimeout(ctx, updateBudget)
+	defer cancel()
+	return sb.SetTimeout(updateCtx, 30*time.Second)
 }
 
 type e2bTerminalSession struct {

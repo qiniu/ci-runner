@@ -253,8 +253,8 @@ github.com/prometheus/procfs v0.6.0/go.mod h1:cz+aTbrPOrUb4q7XlbU9ygM+/jj0fzG6c1
 github.com/prometheus/procfs v0.7.3/go.mod h1:cz+aTbrPOrUb4q7XlbU9ygM+/jj0fzG6c1xBZuNvfVA=
 github.com/prometheus/procfs v0.23.0 h1:ad+S6FTkzwaMgacKLM5h6bNKExS+DMH0YiUwXItH/o4=
 github.com/prometheus/procfs v0.23.0/go.mod h1:3AVXO0FqLafyYFU/V/IQRZlC8Rgqz8Dm/x6pKLK+RIk=
-github.com/qiniu/go-sdk/v7 v7.27.0 h1:n+2U0S5fhbmG/lN/agO8KcYJaQDqROUVShtnp56Mkw8=
-github.com/qiniu/go-sdk/v7 v7.27.0/go.mod h1:pTwVR1B+8SXcPLhDzBUasiKFTD9F7jRglRDR553BW3k=
+github.com/qiniu/go-sdk/v7 v7.30.0 h1:tt/mX+m4EyL8ZdPbfiXn83wXefM5fn6uI0PUsv0zh4I=
+github.com/qiniu/go-sdk/v7 v7.30.0/go.mod h1:pTwVR1B+8SXcPLhDzBUasiKFTD9F7jRglRDR553BW3k=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rogpeppe/go-internal v1.3.0/go.mod h1:M8bDsm7K2OlrFYOpmOWEs/qY81heoFRclV5y23lUDJ4=

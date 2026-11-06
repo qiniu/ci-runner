@@ -9,7 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jimmicro/pprof v1.2.0
 	github.com/miclle/deployd v0.0.0-20261008112950-f1ca4144c713
-	github.com/qiniu/go-sdk/v7 v7.27.0
+	github.com/qiniu/go-sdk/v7 v7.30.0
 	golang.org/x/sync v0.24.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0

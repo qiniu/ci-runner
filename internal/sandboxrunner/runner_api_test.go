@@ -2,13 +2,16 @@ package sandboxrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
@@ -21,6 +24,72 @@ func newTestService(t *testing.T, ts *httptest.Server) *E2BService {
 		t.Fatalf("NewE2BService: %v", err)
 	}
 	return svc
+}
+
+func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		updateStatus int // Zero simulates a stalled timeout update.
+		deleteStatus int
+		wantReason   string
+	}{
+		{"delete fails after cap", http.StatusNoContent, http.StatusForbidden, ""},
+		{"cap rejected", http.StatusForbidden, http.StatusNoContent, "update_failed"},
+		{"cap and delete rejected", http.StatusForbidden, http.StatusForbidden, "update_failed"},
+		{"cap stalls", 0, http.StatusNoContent, "deadline_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs strings.Builder
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			var updateCalled, deleteCalled atomic.Bool
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /v2/sandboxes/exact/connect", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"sandboxID":"exact","envdAccessToken":"fixture"}`)
+			})
+			mux.HandleFunc("POST /sandboxes/exact/timeout", func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Timeout int `json:"timeout"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Timeout != 30 {
+					t.Errorf("cleanup timeout = %d, decode error = %v", body.Timeout, err)
+				}
+				updateCalled.Store(true)
+				if tc.updateStatus == 0 {
+					<-r.Context().Done()
+					return
+				}
+				w.WriteHeader(tc.updateStatus)
+				if tc.updateStatus >= 400 {
+					fmt.Fprint(w, `{"message":"provider-private-detail"}`)
+				}
+			})
+			mux.HandleFunc("DELETE /sandboxes/exact", func(w http.ResponseWriter, _ *http.Request) {
+				if !updateCalled.Load() {
+					t.Error("Sandbox deleted before timeout update")
+				}
+				deleteCalled.Store(true)
+				w.WriteHeader(tc.deleteStatus)
+			})
+			api := httptest.NewServer(mux)
+			defer api.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			err := newTestService(t, api).StopRunner(ctx, "exact", 0)
+			if !deleteCalled.Load() || (err != nil) != (tc.deleteStatus != http.StatusNoContent) {
+				t.Fatalf("delete called = %t, StopRunner error = %v", deleteCalled.Load(), err)
+			}
+			if tc.wantReason == "" {
+				if logs.Len() != 0 {
+					t.Errorf("unexpected lifetime warning: %s", &logs)
+				}
+			} else if !strings.Contains(logs.String(), "reason="+tc.wantReason) || strings.Contains(logs.String(), "provider-private-detail") {
+				t.Errorf("expected sanitized lifetime warning with reason %q, got %s", tc.wantReason, &logs)
+			}
+		})
+	}
 }
 
 // templateJSON returns a minimal TemplateWithBuilds JSON payload with the given build status entries.
