@@ -6644,6 +6644,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 			w.Write([]byte(`{"id":1001,"name":"original job","status":"completed","conclusion":"cancelled"}`))
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"total_count":0,"runners":[]}`))
+			return
+		}
 		t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 	}))
 	defer ghServer.Close()
@@ -6670,6 +6674,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		t.Fatal(err)
 	}
 
+	before, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeSandbox{}
 	srv := newTestServer(t, store, ghServer.URL, fake)
 	srv.Close()
@@ -6689,6 +6697,18 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("recovery stopped sandbox assigned to another job %d times", fake.stoppedCount())
+	}
+	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+2 {
+		t.Fatalf("completed Job result and reconnect were not both committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+2)
+	}
+
+	fake.lastRecoverInput().OnExit(sandboxrunner.ExitResult{}, nil)
+	got, err = store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatalf("recovered exit watcher did not finish its attempt: %#v", got)
 	}
 }
 
