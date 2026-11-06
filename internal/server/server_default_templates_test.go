@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -709,6 +710,9 @@ func TestRunnerLifecycleRetryUsesPersistedSpecWithoutLegacyPolicyOrGroupReads(t 
 	if len(inputs) != 1 || inputs[0].TemplateID != "persisted-custom-template" || inputs[0].RunnerGroup != "Default" || !equalStrings(inputs[0].Labels, []string{"self-hosted", "e2b", "legacy-admitted-custom"}) {
 		t.Fatalf("retry StartRunner inputs = %#v, want persisted custom profile", inputs)
 	}
+	if !store.loadedUnderGuard.Load() {
+		t.Fatal("retry bypassed the guarded profile lookup fixture")
+	}
 	if store.matchReads != 0 {
 		t.Fatalf("retry rematched the persisted runner spec: match reads=%d", store.matchReads)
 	}
@@ -1129,7 +1133,16 @@ type profileLoadRecordingStore struct {
 
 type catalogReadRejectingStore struct {
 	state.Store
-	matchReads int
+	matchReads       int
+	loadedUnderGuard atomic.Bool
+	onGuardedLookup  func()
+}
+
+func (s *catalogReadRejectingStore) GetProfile(name string) (state.RunnerProfile, error) {
+	if s.onGuardedLookup != nil {
+		s.onGuardedLookup()
+	}
+	return s.Store.GetProfile(name)
 }
 
 func (s *catalogReadRejectingStore) MatchProfile(string, []string) (state.ProfileMatch, error) {
@@ -1145,7 +1158,7 @@ func (s *profileLoadRecordingStore) WithRunnerAdmission(ctx context.Context, mut
 
 func (s *catalogReadRejectingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
 	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
-		wrapped := &catalogReadRejectingStore{Store: tx}
+		wrapped := &catalogReadRejectingStore{Store: tx, onGuardedLookup: func() { s.loadedUnderGuard.Store(true) }}
 		err := mutation(wrapped)
 		s.matchReads += wrapped.matchReads
 		return err

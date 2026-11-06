@@ -16,8 +16,6 @@ import time
 import uuid
 from urllib.request import Request, urlopen
 
-DSN = os.environ["RUNNERD_POSTGRES_TEST_DSN"]
-
 
 def wait_for(description, condition, timeout=20, interval=0.05):
     deadline = time.monotonic() + timeout
@@ -29,7 +27,7 @@ def wait_for(description, condition, timeout=20, interval=0.05):
 
 
 def sql(env, query):
-    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           input=query, env=env, text=True, stdout=subprocess.PIPE)
     if proc.returncode:
         raise RuntimeError("fixture SQL failed")
@@ -38,7 +36,7 @@ def sql(env, query):
 
 @contextlib.contextmanager
 def hold_lock(env, statement):
-    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           env=env, text=True) as psql:
         psql.stdin.write(f"BEGIN; SET LOCAL lock_timeout='10s'; {statement}; SELECT 'locked';\n")
@@ -59,7 +57,7 @@ def node(binary, directory, name, env, worker=None):
     config = directory / (name + ".json")
     config.write_text(json.dumps({
         "server": {"http_addr": f"127.0.0.1:{port}"},
-        "database": {"backend": "postgres", "dsn": DSN},
+        "database": {"backend": "postgres", "dsn": env["RUNNERD_POSTGRES_TEST_DSN"]},
         "auth": {"session_secret": "fixture-session", "encryption_key": "fixture-key"},
         "sandbox": {"regions": [{"id": "local", "label": "Test", "sandbox_api_url": "http://127.0.0.1:1"}]},
         "github": {"token": "fixture", "webhook_secret": "fixture",
@@ -285,6 +283,8 @@ def main():
     parser.add_argument("binary", type=Path)
     parser.add_argument("--full-ttl", action="store_true", help="wait the full 300s in the crash scenario")
     args = parser.parse_args()
+    if not os.environ.get("RUNNERD_POSTGRES_TEST_DSN"):
+        parser.error("set RUNNERD_POSTGRES_TEST_DSN to a dedicated PostgreSQL *_test database")
     if not sql(os.environ, "SELECT current_database()").endswith("_test"):
         raise RuntimeError("a dedicated database ending in _test is required")
     for scenario in ["paused", "crashed", "cluster capacity", "disable spec", "admission crash"]:
