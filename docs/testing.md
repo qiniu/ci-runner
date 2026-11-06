@@ -1255,6 +1255,21 @@ RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>'
 
 For a PostgreSQL deployment, set `database.postgres_max_open_connections` to cap the application pool per process. A missing or zero value leaves the pool unbounded. Budget the sum of the caps for all simultaneously running processes, including rollout overlap, plus reserved connections, other clients and maintenance headroom, within PostgreSQL’s `max_connections`. Size the cap in preproduction using real request concurrency and database latency. Requests can wait for a free connection when the pool is full.
 
-On PostgreSQL, concurrent startups serialize schema checks, migrations and backfills in a database-wide transaction. A waiting process sees the preceding commit. Killing a migrator rolls back that transaction, and PostgreSQL releases the lock. A paused client is limited by the shorter of its configured idle-in-transaction timeout and 60 seconds. Plan larger migrations in a separate release window because DDL locks last until commit.
+On PostgreSQL, concurrent startups serialize schema checks, migrations and backfills in one database-wide transaction. Waiting processes see the preceding commit. A paused client with an idle transaction is limited by the shorter of the configured idle-in-transaction timeout and 60 seconds. An active statement waiting for a DDL lock can wait until its PostgreSQL `lock_timeout` or `statement_timeout` expires, or its blocker finishes. During this wait, earlier DDL locks are held until transaction end and new readers can queue behind the waiting DDL.
+
+Rehearse the first startup against a representative copy before a large schema change. Give the upgrading runnerd a distinct DSN `application_name` and choose a finite `lock_timeout` for the maintenance window. A DSN setting applies to every connection that process opens, including normal queries after startup. The query below uses the example name `runnerd-upgrade-1`. Run it in the target database with a role that can inspect these sessions.
+
+```sql
+SELECT a.pid, a.state, a.wait_event, pg_blocking_pids(a.pid) AS blockers,
+       l.locktype, l.mode, l.granted, l.relation::regclass AS relation
+FROM pg_stat_activity AS a
+JOIN pg_locks AS l ON l.pid = a.pid
+WHERE a.datname = current_database()
+  AND a.application_name = 'runnerd-upgrade-1'
+  AND l.locktype IN ('relation', 'advisory')
+ORDER BY a.pid, l.granted, l.locktype, relation;
+```
+
+If startup times out, PostgreSQL rolls back earlier DDL in that transaction. If runnerd is killed while PostgreSQL is waiting on a lock, its database backend can outlive the OS process and continue blocking other clients. Confirm that the stopped process’s backend and its locks have gone before retrying or starting the previous version. Investigate the reported blocking session with the database operator.
 
 These checks use isolated schemas and retain PostgreSQL startup, password obfuscation, time-zone and catalog revision coverage. They do not clean production databases. See [the retirement record](database-transfer-retirement.md) for historical procedures and operational boundaries.
