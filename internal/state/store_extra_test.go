@@ -341,6 +341,10 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 		t.Fatal("expected initial claim to succeed")
 	}
 
+	claim.LeaseOwner = ""
+	if err := store.ReleaseQueuedClaim(claim); !errors.Is(err, ErrConflict) {
+		t.Fatalf("empty release owner: %v", err)
+	}
 	// worker-B tries to release worker-A's lease — should be a no-op
 	claim.LeaseOwner = "worker-B"
 	if err := store.ReleaseQueuedClaim(claim); err != nil {

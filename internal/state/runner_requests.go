@@ -934,6 +934,9 @@ func liveQueuedClaim(query *gorm.DB, owner string) *gorm.DB {
 }
 
 func (s *DBStore) ReleaseQueuedClaim(claim RunnerState) error {
+	if strings.TrimSpace(claim.LeaseOwner) == "" {
+		return ErrConflict
+	}
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err

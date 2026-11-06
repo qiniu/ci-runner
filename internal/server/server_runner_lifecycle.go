@@ -419,8 +419,8 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		s.admissionMu.RUnlock()
 		unlock()
 		if err != nil {
-			_ = s.store.ReleaseQueuedClaim(claim)
-			s.logger.Error("check runner capacity", "id", id, "stage", capacityStage, "error", err)
+			releaseErr := s.store.ReleaseQueuedClaim(claim)
+			s.logger.Error("check runner capacity", "id", id, "stage", capacityStage, "error", err, "release_error", releaseErr)
 			return
 		}
 		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
@@ -450,8 +450,8 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if writeErr != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		_ = s.store.ReleaseQueuedClaim(claim)
-		s.logger.Error("write creating state", "id", id, "error", writeErr)
+		releaseErr := s.store.ReleaseQueuedClaim(claim)
+		s.logger.Error("write creating state", "id", id, "error", writeErr, "release_error", releaseErr)
 		return
 	}
 	s.admissionMu.RUnlock()
@@ -887,7 +887,7 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 	st := claim
 	result := s.applyFailure(&st, stage, failure, true)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
-		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "cause", failure, "error", err)
+		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "claim_owner", claim.LeaseOwner, "claim_version", claim.Version, "cause", failure, "error", err)
 		return
 	}
 	s.recordStartFailure(st, stage, failure, result)
@@ -2167,8 +2167,8 @@ func (s *Server) deferQueuedRequest(claim state.RunnerState, delay time.Duration
 	st.ScheduleQueuedRetry(delay)
 	clearSandboxServiceSnapshot(&st)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
-		s.logger.Error("defer queued request", "id", st.ID, "error", err)
-		_ = s.store.ReleaseQueuedClaim(claim)
+		releaseErr := s.store.ReleaseQueuedClaim(claim)
+		s.logger.Error("defer queued request", "id", st.ID, "error", err, "release_error", releaseErr)
 		return
 	}
 	if changed {
