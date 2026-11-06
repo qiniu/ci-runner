@@ -1,6 +1,7 @@
 package state
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,33 +56,11 @@ func (s *DBStore) Ensure() error {
 	if err != nil {
 		return err
 	}
-	// Reject a legacy migration database before schema migrations or backfills.
-	legacyTable, err := hasMigrationControlTable(db)
-	if err != nil {
+	if err := s.initializeSchema(db); err != nil {
 		if pool, poolErr := db.DB(); poolErr == nil {
 			_ = pool.Close()
 		}
 		return err
-	}
-	if legacyTable {
-		if err := validateStandaloneMigrationDB(db); err != nil {
-			if pool, poolErr := db.DB(); poolErr == nil {
-				_ = pool.Close()
-			}
-			return err
-		}
-	}
-	if err := validatePhasedMigrationStartup(db); err != nil {
-		if pool, poolErr := db.DB(); poolErr == nil {
-			_ = pool.Close()
-		}
-		return err
-	}
-	if s.opts.MigrateOnStart && !s.migrated {
-		if err := s.migrate(db); err != nil {
-			return err
-		}
-		s.migrated = true
 	}
 	if s.opts.Backend == BackendSQLite {
 		if err := enableSQLiteForeignKeys(db); err != nil {
@@ -89,6 +68,56 @@ func (s *DBStore) Ensure() error {
 		}
 	}
 	s.db = db
+	return nil
+}
+
+// READ COMMITTED lets a waiting startup see the previous migrator's schema
+// after PostgreSQL grants the transaction-scoped lock.
+func (s *DBStore) initializeSchema(db *gorm.DB) error {
+	migrate := s.opts.MigrateOnStart && !s.migrated
+	if migrate && s.opts.Backend == BackendPostgres {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			// A paused startup must not retain an idle DDL transaction. Keep
+			// any shorter timeout that the operator already configured.
+			if err := tx.Exec(`SELECT set_config(name, LEAST(NULLIF(setting::bigint, 0), 60000)::text, true)
+				FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'`).Error; err != nil {
+				return err
+			}
+			// Fixed database-wide namespace for runnerd startup ("runnerd" in hex).
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x72756e6e657264)).Error; err != nil {
+				return err
+			}
+			return s.validateAndMigrate(tx, true)
+		}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+		if err != nil {
+			return err
+		}
+	} else if err := s.validateAndMigrate(db, migrate); err != nil {
+		return err
+	}
+	if migrate {
+		s.migrated = true
+	}
+	return nil
+}
+
+func (s *DBStore) validateAndMigrate(db *gorm.DB, migrate bool) error {
+	// Retain all transfer fences before schema changes and backfills.
+	legacy, err := hasMigrationControlTable(db)
+	if err != nil {
+		return err
+	}
+	if legacy {
+		if err := validateStandaloneMigrationDB(db); err != nil {
+			return err
+		}
+	}
+	if err := validatePhasedMigrationStartup(db); err != nil {
+		return err
+	}
+	if migrate {
+		return s.migrate(db)
+	}
 	return nil
 }
 

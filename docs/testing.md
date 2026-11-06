@@ -1250,7 +1250,9 @@ Run the PostgreSQL checks against a dedicated `_test` database:
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+On PostgreSQL, concurrent startups serialize schema checks, migrations and backfills in a database-wide transaction. A waiting process sees the preceding commit. Killing a migrator rolls back that transaction, and PostgreSQL releases the lock. A paused client is limited by the shorter of its configured idle-in-transaction timeout and 60 seconds. Plan larger migrations in a separate release window because DDL locks last until commit.
 
 These checks use isolated schemas and retain PostgreSQL startup, password obfuscation, time-zone and catalog revision coverage. They do not clean production databases. See [the retirement record](database-transfer-retirement.md) for historical procedures and operational boundaries.

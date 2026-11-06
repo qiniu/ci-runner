@@ -1139,7 +1139,9 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+PostgreSQL 上的并发启动会在数据库级事务内串行执行结构检查、迁移和回填。等待进程可以看到前一个迁移已提交的结果。迁移进程退出后，PostgreSQL 回滚事务并释放锁；客户端暂停时，空闲事务超时取运维配置与 60 秒中的较短值。DDL 锁会持续到事务提交，较大的迁移应安排独立发布窗口。
 
 这些测试使用隔离 schema，保留 PG 启动、密码混淆、时区与规格版本校验覆盖；不执行生产数据库清理。历史流程和后续运维边界见[迁移退役记录](database-transfer-retirement.md)。
