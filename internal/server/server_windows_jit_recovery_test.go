@@ -94,7 +94,7 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 			}
 			// Completion in the next startup precheck must not bypass old JIT cleanup.
 			jobCompleted.Store(true)
-			srv.startRunner(t.Context(), st.ID, "worker")
+			srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, st.ID, "worker"))
 			current, _ = store.ReadState(st.ID)
 			if current.Status != state.StatusCompleted || registered.Load() || deletes.Load() != 1 {
 				t.Fatalf("completed request retained registration: status=%s deletes=%d", current.Status, deletes.Load())

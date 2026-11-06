@@ -175,7 +175,11 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求会清理旧 lease，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
+catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。 将 runnerd 二进制路径和 `--full-ttl` 传给脚本，可实测默认 300 秒租期下的崩溃接管耗时。
+
+新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，随后使用它构造 Sandbox 创建请求的幂等键并写入可查询的元数据。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。出现多个候选、无法验证精确查询结果或资源列表读取失败时，发现流程返回错误，启动恢复保留 creating 状态。在此阶段，现有巡检仍可能在创建超时后将请求重新排队。重新准入时生成新的标识。
+
+启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
 
 ## 2. 配置 GitHub 鉴权
 
@@ -701,7 +705,7 @@ curl -fsS -b "$COOKIE_JAR" \
 常见问题：
 
 - `invalid signature`：GitHub webhook secret 和 `github.webhook_secret` 不一致。
-- `runner start deferred because global concurrency is at capacity` 或 `runner start deferred because profile is at capacity`：request 会保持 queued，直到全局或 per-spec 容量可用。
+- `runner_capacity` 事件表示请求正在等待全局、规格、账户或仓库的可用名额，可根据 `last_error_code` 判断受限维度。
 - GitHub job 一直 queued：managed default 必须同时包含 `qiniu` 和准确的操作
   系统 label。`[ubuntu-24.04]`、`[qiniu]` 和不受支持的额外 labels 都不会匹配；
   自定义 spec 则使用它自己的 advertised labels 和 required labels。
@@ -834,13 +838,15 @@ curl -fsS -b "$COOKIE_JAR" \
 
 Runner 启动诊断将每次启动的耗时合并为一条 `runner_timing` control 事件。每行包含固定阶段、`duration_ms`、时钟来源和 UTC 采集时间 `observed_at`；事件自身的时间表示稍后的持久化时间。耗时先在内存中采集，释放生命周期锁和 admission 锁后再写入。清理和错配 Job 重新排队的耗时也遵循此规则。`queue_wait` 从持久化创建时间计算，可能跨越多次尝试；系统时钟倒退时保留零值并标记 `clock=wall_skew`。“最近一次开始时间”表示最近一次执行尝试，不能仅用创建到开始的间隔衡量单次启动耗时。
 
-启动准入阶段依次记录：`request_read`（`ReadRequest`）、`initial_state_read`（`ReadState`）、`admission_lock_wait`（获取规格变更共享保护锁的等待）、`profile_lookup`（全局或作用域规格查询）、`global_capacity_check`（`InFlightCount`）、`profile_capacity_check`（所选规格的全局或作用域在途数量检查），之后是 `capacity_reservation` 和 `creating_state_persist`。Sandbox 启动后，`running_state_read` 单独记录 `running_lock_wait` 与 `running_state_persist` 之间的状态重读。各段采用单调时钟，以 `observed_at` 为结束观察点，不包含相邻阶段；记录的是整个具名操作的耗时，包括 Store／连接等待和查询执行，而不是纯 SQL 执行时间。规格校验在本地完成；容量检查可能直接返回而不查询数据库。查询失败或容量延后仍保留已执行阶段，不生成后续阶段。初始请求读取失败时仍不写入计时事件。固定阶段名不包含请求数据、SQL、凭证或错误文本。
+worker 领取请求后记录 `request_read` 和 `initial_state_read`。数据库事务依次记录 `admission_lock_wait`、`profile_lookup`、适用的全局／规格／账户／仓库配额检查，以及 `creating_state_persist`。耗时包含连接等待和 SQL 执行时间。启动前重新读取当前规格，校验请求标签后才消费租约。Sandbox 启动后的 `running_state_read` 单独记录写入 running 前的状态重读。
 
-启动与入队准入共享读锁，规格变更持独占锁。单个请求的规格查询、容量查询或 creating 状态写入变慢时，不再串行阻塞其他普通请求；规格变更仍不能插入规格重读至 creating CAS 写入之间。另一个短时内存锁负责预留全局及精确规格作用域容量，锁内不执行 Store I/O。预留键使用重读规格记录返回的名称；在数据库排序规则下指向同一记录的不同请求拼写共享容量，大小写敏感后端的不同规格记录仍独立计数。对锁外读取的数量，同时计入读取前尚未落库的预留，以及读取期间新增的准入，包括读取返回前已完成写入的请求。无法确定是否重叠时保守多计，避免超发；保守拒绝沿用五秒延后，并释放 worker 租约。creating 写入返回后即释放预留，写入错误或 CAS 冲突也一样；后续查询由数据库中的 creating、running、stopping 记录计数。没有读取者或预留时移除规格观察记录，重启后依赖持久化计数。此保证仍限定单个 runnerd 进程，不代表支持多实例准入。
+迁移会在 `runner_admission_guard` 中初始化两行。PostgreSQL 和 MySQL 上，worker 准入及 fork 赞助分配使用容量写锁。Webhook、手动入队和历史等待 Job 重试共享目录读锁，因此即使 worker 正在统计容量，不同任务也能并发入队。全局及自定义规格、赞助策略及审批的变更同时持有两把写锁直至提交。SQLite 使用单一写连接。外部服务调用均在事务外执行。
 
-`capacity_reservation` 记录 Store 查询之后的最终内存容量决策；`admission_lock_wait` 现在表示与规格变更的竞争，不再表示排在其他普通准入后面。数据库或连接竞争仍可能拖慢 Store 操作，独占规格变更也仍可能延后准入。阻塞式 Store 回归要求在释放首个请求前，另一请求已推进到 running；过时查询与未落库写入测试覆盖全局／作用域容量、写入失败、版本冲突、重复启动和租约释放。生产耗时验收仍需部署后在实际负载下进行。
+runnerd 将每个加锁事务的期限设为五秒。PostgreSQL 还在数据库端限制单条语句和事务空闲时间，保留运维配置的更短期限。MySQL 客户端被挂起时无法主动取消事务，部署方需要为接管场景配置数据库端的 `innodb_lock_wait_timeout` 和空闲连接 `wait_timeout`。数据库故障或目录变更争用仍可能导致 webhook 失败。worker 获取锁失败时记录 `admission_lock_wait`，将仍持有的任务延期五秒。持久化规格无效时记录查询或校验失败原因。
 
-排查 `queue_wait` 之后的空白区间时，将 `admission_lock_wait`、`profile_lookup`、两项容量检查与 `creating_state_persist` 对照；`running_lock_wait` 之后的状态重读也可与写入分开分析。Store 阶段较慢本身不能区分连接池等待、数据库锁、查询执行或其他 Store 开销。不要累加所有启动阶段：`queue_wait` 是累计墙钟年龄，`sandbox_start` 包含 `cache_credentials`。受控的 Store 延迟和准入锁竞争测试验证耗时归属、提前返回证据及释放锁后落盘；线上根因仍需发布后在实际负载下确认。
+双进程验证使用独立的 PostgreSQL schema，覆盖两个 worker 竞争一个名额，以及一个节点禁用规格时另一节点尝试准入。另有用例在 creating 写入中杀死进程，验证事务回滚及存活节点重新准入。所有节点须配置相同的额度。扩副本前应在代表性负载下观察准入等待和整体排队时间。
+
+排查 `queue_wait` 之后的空白区间时，将 `admission_lock_wait`、`profile_lookup`、适用的全局、规格、账户和仓库容量检查与 `creating_state_persist` 对照；`running_lock_wait` 之后的状态重读也可与写入分开分析。Store 阶段较慢本身不能区分连接池等待、数据库锁、查询执行或其他 Store 开销。不要累加所有启动阶段：`queue_wait` 是累计墙钟年龄，`sandbox_start` 包含 `cache_credentials`。受控的 Store 延迟和准入锁竞争测试验证耗时归属、提前返回证据及释放锁后落盘；线上根因仍需发布后在实际负载下确认。
 
 当完成 webhook、启动前检查、恢复、reconciler 或 Runner 退出后的有界补偿查询观察到原始 Workflow Job 的终态时，新请求会保留 Job 名称、状态、结论、Runner 名称和本地采集时间。退出后的查询只会在 Sandbox 清理完成或已进入清理重试状态后执行，因此 GitHub 可用性不会延迟该清理。Job ID 为零、与原始 Job 不一致或仍为非终态的观察不会写入，因此分配到的其他 Job 不能覆盖原始结果，活动请求也会继续保持实时行为。重复观察到相同终态时保留首次采集时间；错配完成请求重新排队时，则会随生命周期及终止字段一起清除旧快照。Diagnostics 使用 `lookup_status` 和 `source: retained` 返回快照；在本次 schema 增量之前创建且没有快照的历史记录继续使用有界实时查询，并标记 `source: live`。成功的实时查询会缓存 30 秒，同一 Job 的并发查询会被合并。事件会先过滤再应用数量上限，避免高频 stdout/stderr 输出挤掉生命周期证据。新的生命周期写入会把首次取得终止流程所有权的来源保存为 `process_exit`、`workflow_job_webhook`、`manual_stop`、`recovery_cleanup` 或 `failure_cleanup`；观察到进程结果时还会保存可空退出码。只有结构化状态、稳定的 `runner_exit`／`runner_hook`／`runner_cleanup` control stage 和历史消息回退都没有提供证据时，才返回“Runner 终止过程未被 runnerd 观察到”。因此，GitHub 成功且已记录完整清理的请求不会被误判为异常终止未观察。GitHub 查询失败不会丢弃本地证据，接口也不会返回已保存的 Sandbox 凭证或原始 webhook payload。集合页通过 `GET /runner_requests_lookup/{identifier}` 执行精确查找；当 Runner Name 与内部 Request ID 命名空间出现同值时，优先匹配 Runner Name，再跳转到规范的 ID 路由。`/diagnostics/runner-requests/{identifier}` 继续作为兼容别名，并采用相同的查找优先级。Runner Hook、退出和清理控制事件使用稳定的 `runner_hook`、`runner_exit`、`sandbox_cleanup`、`github_cleanup` 与 `runner_cleanup` 阶段，同时保持旧 `control.log` 读取兼容。当前 Sandbox command result 不提供实际退出信号，因此 runnerd 不会根据退出码或已请求的停止信号进行猜测。
 
@@ -848,6 +854,14 @@ Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精
 
 空闲 Runner sweeper 使用额外的 `idle_cleanup` 终止来源，避免把从未接受 Job 的 Runner 成功清理误标成失败清理。
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），只要 Sandbox 和 GitHub Runner 注册都清理成功，请求就不记为完成或失败，而是按有限次数安排 `runner_exited_without_job` 重试；下次启动会先复查原 Job 再创建 Sandbox，重试耗尽后明确失败。
+
+`TestLateStartFailureAfterPeerAdoption` 使用两个服务进程和本地 Sandbox 替身。第二个进程先接管 Sandbox，第一个进程随后收到迟到的启动错误。测试检查数据库中的创建尝试、版本、Sandbox ID、PID 和重试次数，覆盖 SQLite 和 CI 的 PostgreSQL。
+
+运行中 Runner 的监听权保存在数据库。写入 running 状态、Sandbox ID 和 PID 的同时设置监听令牌及到期时间。连接存活时每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本号和时间戳。启动时跳过有效监听；后台每五秒按数据库时间扫描，一轮最多接管四条过期记录，使用新令牌重连原 Sandbox 和 PID。监听回调须持有有效令牌才能写忙碌状态或开始清理。创建中、停止中、Deploy 和终端完成故障切换验收后再按发布计划扩容。
+
+Sandbox 启动后若接管写入失败，worker 保留进程句柄并重试当前创建尝试的数据库操作。若提交成功但响应丢失，使用已保存的 Sandbox、PID 和监听令牌确认归属。监听在本地取消时，SDK 可能返回退出码 -1 且 Go error 为空；此时任务继续运行，等待接管。只有成功取得清理权的监听才记录 GitHub 忙碌查询错误。
+
+`TestRunnerWatchPostgresProcess` 使用两个独立 runnerd 服务进程、独立 PG 连接和本地 Sandbox 替身，覆盖健康续期、暂停超时、接管后旧回调到达，以及杀死第二个进程后原节点重新接管并完成任务。设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`，让 `RUNNERD_POSTGRES_TEST_DSN` 指向名称以 `_test` 结尾的专用数据库，再运行 `go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1`。
 
 每个已接受的进程退出 watcher 都绑定到本次执行的 Sandbox ID 和 PID。若匹配的进程结果在 Webhook、管理员操作或恢复路径已经完成清理或安排清理重试后到达，runnerd 只补写此前缺失的退出码和 `runner_exit` 事件，不改变首次终止来源，也不重复清理。旧尝试的延迟回调只要有任一身份值不再匹配就会被忽略。
 
@@ -1110,8 +1124,7 @@ worker:
 
 未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
 全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
-占用额度，排队和终态不占用。创建状态落库前使用内存预留，失败时释放；重启后从持久状态
-恢复计数。并发协调仅支持单个 runnerd 进程。
+占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。同一节点的 worker 先在本地排队，再获取数据库连接。PostgreSQL 和 MySQL 的准入事务采用读已提交隔离级别，以便看到上一持锁事务提交的更改。事务失败会回滚 creating 写入并释放数据库行锁。
 
 达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
 继续执行。调度按下次可运行时间排序，首次请求使用原入队时间；已到期的延期请求排在
@@ -1120,13 +1133,14 @@ worker:
 `last_error_code` 通过 `runner_capacity_global`、`runner_capacity_profile`、
 `runner_capacity_account`、`runner_capacity_repository` 标明受限维度。
 Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因变化；同一限制的重复检查
-不会重复追加容量事件，纯容量等待也不追加 timing 事件；成功准入后清除等待原因。
+不会重复追加容量事件，纯容量等待也不追加 timing 事件。数据库准入暂时失败时，
+`runner_admission` 事件记录 `runner_admission_unavailable`。请求释放领取权并于五秒后重试，无须消耗失败重试次数。成功准入后清除等待原因。
 
 配置需要重启生效，不提供热加载或新的 Settings 界面。降低上限保留已有 Runner，
 占用降至上限以下才允许新增；删除配置或设为零解除该维度限制，其他限制继续生效。
 这些配置不改变 Sandbox Deploy 配额和仓库授权。
 
-本地回归覆盖跨规格/仓库的过期计数读取与创建预留、独立作用域、落库失败释放、
+本地回归覆盖跨规格／仓库的并发准入、独立作用域、落库失败释放、
 数据库重开后的计数，以及大量受限请求后仍能调度其他仓库的场景。
 真实 GitHub/Sandbox 的完成、清理、降低额度后的重启恢复及负载排队时间仍需上线验收。
 

@@ -27,13 +27,16 @@ func isWorkflowJobWaiting(status string) bool {
 	return false
 }
 
-func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, workerID string) (bool, error) {
+func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, attempt state.RunnerState) (bool, error) {
 	if req.JobID == 0 {
 		return true, nil
 	}
 	before, err := s.store.ReadState(req.ID)
 	if err != nil {
 		return false, err
+	}
+	if !sameCreatingAttempt(before, attempt) {
+		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
 	lookupCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
@@ -47,7 +50,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return false, err
 	}
 	// A webhook, retry or stop may have advanced the request during the lookup.
-	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" || st.ProcessPID != 0 || !st.LastAttemptAt.Equal(before.LastAttemptAt) || !st.CreatingAt.Equal(before.CreatingAt) {
+	if !sameCreatingAttempt(st, attempt) || st.SandboxID != "" || st.ProcessPID != 0 || !st.CreatingAt.Equal(before.CreatingAt) {
 		return false, nil
 	}
 	stale := st.Version != before.Version
@@ -68,7 +71,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return true, nil
 	}
 	if !stale && lookupErr == nil && job.Status == "completed" {
-		return false, s.completeWithoutSandbox(req.ID, job, "workflow job is completed/"+job.Conclusion)
+		return false, s.completeWithoutSandbox(st, job, "workflow job is completed/"+job.Conclusion)
 	}
 	// GitHub owns approval/concurrency timeouts. Keep recognized nonterminal
 	// states recoverable until GitHub reports queued or completed, at a capped
@@ -97,6 +100,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	st.CreatingAt = time.Time{}
 	st.Error, st.FailureStage, st.FailureReason = "", "", ""
 	st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = code, message, true
+	var retryDelay time.Duration
 	if !known && !rateLimited && st.RetryCount >= s.cfg.RetryMaxAttempts {
 		st.Status = state.StatusFailed
 		st.Error, st.FailureStage, st.FailureReason = message, "github_job_status", code
@@ -110,14 +114,17 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		for delay > 0 && delay < s.cfg.RetryMaxDelay && now.Sub(st.CreatedAt) >= delay {
 			delay *= 2
 		}
-		st.NextRetryAt = now.Add(min(delay, s.cfg.RetryMaxDelay))
+		retryDelay = min(delay, s.cfg.RetryMaxDelay)
 	} else {
 		// Rate limits defer the queue even after the failure budget is spent,
 		// matching applyFailure; saturate the counter while retaining backoff.
 		if st.RetryCount < s.cfg.RetryMaxAttempts {
 			st.RetryCount++
 		}
-		st.NextRetryAt = s.nextRetryAt(max(st.RetryCount, 1), time.Now().UTC())
+		retryDelay = s.retryDelay(max(st.RetryCount, 1))
+	}
+	if st.Status == state.StatusQueued {
+		st.ScheduleQueuedRetry(retryDelay)
 	}
 	if err := s.store.WriteState(st); err != nil {
 		return false, err
@@ -126,8 +133,8 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		metrics.RecordCreate(st.ProfileName, 0, "failed")
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
-	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "next_retry_at", st.NextRetryAt)
-	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s next_check=%s\n", job.Status, job.RunnerName, st.Status, code, st.NextRetryAt.Format(time.RFC3339))))
+	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "retry_delay", retryDelay)
+	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s retry_delay=%s\n", job.Status, job.RunnerName, st.Status, code, retryDelay)))
 	s.signalQueue()
 	if st.Status == state.StatusFailed {
 		s.refreshMetrics()
@@ -141,7 +148,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 
 // A fresh queued delivery can shorten a known wait, but must not reset failed,
 // terminal or active requests, or override a worker's current lease. Use the
-// store's version check rather than taking a runner lock under admissionMu.
+// store's version check to reject concurrent updates.
 func (s *Server) wakeWaitingWorkflowJob(req state.RunnerRequest, fallback state.RunnerState) (state.RunnerState, error) {
 	if req.JobID == 0 {
 		return fallback, nil
@@ -193,23 +200,24 @@ func (s *Server) retryHistoricalWaitingJob(ctx context.Context, id string) (stat
 	}
 	unlock := s.lockRunner(id)
 	defer unlock()
-	s.admissionMu.RLock()
-	defer s.admissionMu.RUnlock()
-	profile, err := s.profileForRunnerRequest(req)
-	if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
-		return st, state.ErrRetryNotAllowed
-	}
-	st.Status = state.StatusQueued
-	st.CompletedAt, st.CreatingAt, st.FailedAt, st.NextRetryAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
-	st.LeaseOwner, st.LeaseExpiresAt = "", time.Time{}
-	st.AssignedJobID, st.AssignedJobName = 0, ""
-	st.Error, st.FailureStage, st.FailureReason = "", "", ""
-	st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
-	st.RetryCount = 0
-	clearRunnerEnvironmentSnapshot(&st)
-	clearSandboxServiceSnapshot(&st)
-	// WriteState's version check rejects any change during the remote lookup.
-	if err := s.store.WriteState(st); err != nil {
+	err = s.store.WithRunnerEnqueue(ctx, func(tx state.Store) error {
+		profile, err := profileForRunnerRequest(tx, req)
+		if err != nil || validateRequestedProfile(profile, req.RequestedLabels) != nil {
+			return state.ErrRetryNotAllowed
+		}
+		st.Status = state.StatusQueued
+		st.CompletedAt, st.CreatingAt, st.FailedAt, st.NextRetryAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+		st.LeaseOwner, st.LeaseExpiresAt = "", time.Time{}
+		st.AssignedJobID, st.AssignedJobName = 0, ""
+		st.Error, st.FailureStage, st.FailureReason = "", "", ""
+		st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
+		st.RetryCount = 0
+		clearRunnerEnvironmentSnapshot(&st)
+		clearSandboxServiceSnapshot(&st)
+		// WriteState's version check rejects any change during the remote lookup.
+		return tx.WriteState(st)
+	})
+	if err != nil {
 		return st, state.ErrRetryNotAllowed
 	}
 	s.signalQueue()
