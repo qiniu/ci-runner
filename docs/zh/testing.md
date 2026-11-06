@@ -861,6 +861,8 @@ Sandbox 已创建而 Runner 启动失败时，恢复流程先尝试重连。确�
 
 `TestLateStartFailureAfterPeerAdoption` 在 SQLite 和 PostgreSQL 上运行独立服务进程及本地 Sandbox 替身。测试先在创建者健康时触发另一进程启动恢复和超时扫描，再分别制造创建响应迟到、服务端受理后杀死创建者两种故障。首次查询为空，下一次查回 Sandbox，验证沿用原尝试、Sandbox ID、PID 和重试次数。PostgreSQL CI 对这条回归启用竞态检测。
 
+恢复时，元数据匹配后会在重连前保存确切的 Sandbox ID。`TestReconciledBootstrapFailureRespectsRetryBudget` 覆盖随后 Connect 返回 404 的情况，验证缺失进程会消耗重试预算。`TestWindowsJITRecoveryCleansRegistrationBeforeRequeue` 验证 GitHub 清理暂时失败时会保留确定性的启动失败，待 JIT 身份清理完成后再结束请求。
+
 `TestRunnerCleanupProcess` 让子进程停在 Sandbox 停止调用内，同时让另一节点启动恢复。随后在 GitHub 删除期间暂停或杀死子进程，接手节点跳过已确认的 Sandbox 步骤，继续删除同一数字 ID，并保留首次停止来源与并发到达的退出码。测试替身对重复删除返回 404，若再次按名称查询则会返回另一条注册。使用与创建测试相同的专用 PostgreSQL 环境即可复现。
 
 杀死清理进程的用例还会在无接单进程退出时向另一节点发送人工停止。接管后保留首次终止来源和退出码，并让请求保持终态。显式重试会清除这次人工停止意图。
