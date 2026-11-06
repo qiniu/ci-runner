@@ -99,7 +99,7 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 			defer cancel()
 			// Let the successful fake command exit after the state reaches running.
 			if fail {
-				srv.startRunner(ctx, "win-jit", "test-worker")
+				srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, "win-jit", "test-worker"))
 				if scenario == "rate limited" || scenario == "secondary rate limited" {
 					pending, err := store.ReadState("win-jit")
 					if err != nil || pending.Status != state.StatusQueued || pending.NextRetryAt.IsZero() || removed.Load() {
@@ -125,7 +125,7 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 					t.Fatal("pre-created Runner leaked after Sandbox failure")
 				}
 			} else {
-				go srv.startRunner(ctx, "win-jit", "test-worker")
+				go srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, "win-jit", "test-worker"))
 				waitForState(t, store, "win-jit", state.StatusRunning)
 				in := service.startInputs()
 				if len(in) != 1 || in[0].RegistrationToken != "" || in[0].JITConfig == "" || in[0].RequireDocker {
@@ -179,14 +179,14 @@ func TestWindowsJITStaleAttemptCannotMutateReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, _ := store.ReadRequest(old.ID)
-	if _, err := srv.prepareWindowsJIT(t.Context(), req, old.LastAttemptAt); !errors.Is(err, errRunnerCreationSuperseded) {
+	if _, err := srv.prepareWindowsJIT(t.Context(), req, old); !errors.Is(err, errRunnerCreationSuperseded) {
 		t.Fatalf("stale registration: %v", err)
 	}
-	if err := srv.cleanupWindowsJIT(req, old.LastAttemptAt, 0); err != nil {
+	if err := srv.cleanupWindowsJIT(req, old, 0); err != nil {
 		t.Fatal(err)
 	}
 	srv.retainWindowsJITCleanup(old.ID, old.LastAttemptAt)
-	srv.failStartForAttempt(old.ID, old, "sandbox_start", errors.New("temporary failure"), &old.LastAttemptAt)
+	srv.failStart(old, "sandbox_start", errors.New("temporary failure"))
 	final, _ := store.ReadState(old.ID)
 	if calls.Load() != 0 || !final.LastAttemptAt.Equal(next.LastAttemptAt) || final.Status != state.StatusCreating || final.Error != "" {
 		t.Fatalf("stale attempt changed replacement: calls=%d status=%s", calls.Load(), final.Status)
@@ -218,7 +218,7 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 	}
 	req, _ := store.ReadRequest(st.ID)
 	done := make(chan error, 1)
-	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st.LastAttemptAt); done <- err }()
+	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st); done <- err }()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
@@ -255,7 +255,16 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 // A nanosecond in-memory attempt token must not reject its own persisted row.
 type windowsTimestampPrecisionStore struct{ state.Store }
 
+func (s *windowsTimestampPrecisionStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error { return mutation(&windowsTimestampPrecisionStore{tx}) })
+}
+
 func (s *windowsTimestampPrecisionStore) WriteState(st state.RunnerState) error {
 	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
 	return s.Store.WriteState(st)
+}
+
+func (s *windowsTimestampPrecisionStore) BeginRunnerCreation(st state.RunnerState, ttl time.Duration) error {
+	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
+	return s.Store.BeginRunnerCreation(st, ttl)
 }

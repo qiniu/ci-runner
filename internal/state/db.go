@@ -18,10 +18,11 @@ import (
 const runnerRequestGitHubContextBackfillBatchSize = 200
 
 type DBStore struct {
-	opts     Options
-	mu       sync.Mutex
-	db       *gorm.DB
-	migrated bool
+	opts         Options
+	mu           sync.Mutex
+	db           *gorm.DB
+	migrated     bool
+	capacityGate chan struct{}
 }
 
 func New(dir string) Store {
@@ -41,7 +42,7 @@ func NewWithOptions(opts Options) Store {
 		opts.DatabaseDSN = filepath.Join(".", "var", "runnerd.db")
 	}
 	opts.Backend = backend
-	return &DBStore{opts: opts}
+	return &DBStore{opts: opts, capacityGate: make(chan struct{}, 1)}
 }
 
 func (s *DBStore) Ensure() error {
@@ -213,6 +214,7 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	existingSQLiteRunnerRequests := s.opts.Backend == BackendSQLite &&
 		db.Migrator().HasTable(&runnerRequestRecord{})
 	models := []any{
+		&runnerAdmissionGuardRecord{},
 		&runnerEventRecord{},
 	}
 	if !existingSQLiteRunnerProfiles {
@@ -250,6 +252,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 		if err := db.Migrator().CreateIndex(&runnerRequestMetricsIndex{}, "idx_runner_requests_metrics"); err != nil {
 			return fmt.Errorf("create runner request metrics index: %w", err)
 		}
+	}
+	if err := initializeRunnerAdmissionGuards(db); err != nil {
+		return err
 	}
 	return initializeStateBackfills(db)
 }

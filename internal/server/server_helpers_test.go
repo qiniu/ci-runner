@@ -1861,6 +1861,10 @@ func (s *auditFailingStore) AppendAuditEvent(state.AuditEvent) (state.AuditEvent
 	return state.AuditEvent{}, errors.New("audit unavailable")
 }
 
+func (s *auditFailingStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error { return mutation(&auditFailingStore{Store: tx}) })
+}
+
 func (s *auditFailingStore) ApplyMutationWithAudit(state.AuditEvent, func(state.Store) error) (state.AuditEvent, error) {
 	return state.AuditEvent{}, fmt.Errorf("%w: audit unavailable", state.ErrAuditEventPersistence)
 }
@@ -2003,7 +2007,7 @@ func TestMarkRunnerJobStartedSetsMarkerOnRunningRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.markRunnerJobStarted("mark-job-1")
+	srv.markRunnerJobStarted("mark-job-1", nil, "", "")
 
 	got, err := store.ReadState("mark-job-1")
 	if err != nil {
@@ -2036,8 +2040,8 @@ func TestMarkRunnerJobStartedIsIdempotent(t *testing.T) {
 	}
 
 	// Calling twice is safe
-	srv.markRunnerJobStarted("mark-job-2")
-	srv.markRunnerJobStarted("mark-job-2")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
 
 	got, err := store.ReadState("mark-job-2")
 	if err != nil {
@@ -2061,7 +2065,7 @@ func TestAppendRunnerStdoutStagesCompletedHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.appendRunnerStdout("completed-hook", []byte("RUNNERD_JOB_COMPLETED\n"))
+	srv.appendRunnerStdout("completed-hook", "", "", []byte("RUNNERD_JOB_COMPLETED\n"))
 
 	requireRunnerEventStageMessage(t, store, "completed-hook", "runner_hook", "runner completed job hook received")
 }
@@ -3056,7 +3060,7 @@ func TestFailStartTransitionsRunnerToFailed(t *testing.T) {
 	store := state.New(t.TempDir())
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
 
-	// Create a queued runner
+	// Seed the active creation attempt.
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "fail-start-1",
 		Source:             "test",
@@ -3071,11 +3075,13 @@ func TestFailStartTransitionsRunnerToFailed(t *testing.T) {
 
 	// Exhaust retries so it goes straight to failed (not re-queued)
 	st.RetryCount = srv.cfg.RetryMaxAttempts
+	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "current-attempt"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.failStart("fail-start-1", st, "sandbox_start", fmt.Errorf("template not found"))
+	srv.failStart(st, "sandbox_start", fmt.Errorf("template not found"))
 
 	got, err := store.ReadState("fail-start-1")
 	if err != nil {
@@ -3118,12 +3124,14 @@ func TestFailStartRequeuesRunnerWhenRetriesRemain(t *testing.T) {
 	st.SponsorSourceRepositoryID = 300
 	st.SponsorSourceRepositoryFullName = "acme/project"
 	st.SponsorAuthorizationReason = state.ForkSponsorshipModeApprovalRequired
+	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "current-attempt"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
 	// Use a retryable error (status 429)
-	srv.failStart("fail-start-retry", st, "github", fmt.Errorf("received status 429"))
+	srv.failStart(st, "github", fmt.Errorf("received status 429"))
 
 	got, err := store.ReadState("fail-start-retry")
 	if err != nil {
@@ -3157,11 +3165,13 @@ func TestFailStartDefersRateLimitEvenWhenMaxAttemptsReached(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.RetryCount = srv.cfg.RetryMaxAttempts
+	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "current-attempt"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.failStart("fail-start-rate-limit", st, "sandbox_start", fmt.Errorf("api error: status 429"))
+	srv.failStart(st, "sandbox_start", fmt.Errorf("api error: status 429"))
 
 	got, err := store.ReadState("fail-start-rate-limit")
 	if err != nil {
@@ -3197,11 +3207,13 @@ func TestFailStartDefersSandboxCapacityEvenWhenMaxAttemptsReached(t *testing.T) 
 		t.Fatal(err)
 	}
 	st.RetryCount = srv.cfg.RetryMaxAttempts
+	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "current-attempt"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.failStart("fail-start-capacity", st, "sandbox_start", fmt.Errorf("failed to place sandbox"))
+	srv.failStart(st, "sandbox_start", fmt.Errorf("failed to place sandbox"))
 
 	got, err := store.ReadState("fail-start-capacity")
 	if err != nil {
@@ -3234,11 +3246,13 @@ func TestFailStartFailsRetryableErrorWhenMaxAttemptsReached(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.RetryCount = srv.cfg.RetryMaxAttempts
+	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "current-attempt"
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
 
-	srv.failStart("fail-start-timeout-max", st, "sandbox_start", fmt.Errorf("api error: status 408"))
+	srv.failStart(st, "sandbox_start", fmt.Errorf("api error: status 408"))
 
 	got, err := store.ReadState("fail-start-timeout-max")
 	if err != nil {
