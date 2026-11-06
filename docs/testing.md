@@ -188,7 +188,12 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. Run the script with the runnerd binary path and `--full-ttl` to measure crash takeover with the default 300-second lease.
+The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. For local verification, put `psql` on `PATH` and point the DSN at a dedicated database whose name ends in `_test`. With a built runnerd binary, the following measures takeover with the default 300-second lease. Omit `--full-ttl` for the shorter run.
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
 
 The startup-gate test must verify that only `/healthz` remains available before recovery finishes. The `TestRecover*` cases must verify that at most four requests recover concurrently, each worker derives its per-request timeout from the remaining whole-startup budget and remaining worker waves, an exhausted parent budget prevents dispatch, cancellation reports every skipped request, queued requests keep their existing leases and retry deadlines, creating/running requests reconnect without stopping their sandbox, a concurrent state version change wins over both successful and failed reconnect results, timed-out sandboxes stop without reconnecting, missing interrupted creations are requeued while a missing creation whose GitHub job is already in progress fails explicitly, completed workflow jobs continue through cleanup, and one reconnect failure does not prevent other requests from being recovered.
 

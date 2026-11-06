@@ -175,7 +175,12 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。 将 runnerd 二进制路径和 `--full-ttl` 传给脚本，可实测默认 300 秒租期下的崩溃接管耗时。
+catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。本地验证需先构建 runnerd，将 `psql` 加入 `PATH`，并将 DSN 指向库名以 `_test` 结尾的专用数据库。以下命令使用默认 300 秒租期测量接管耗时，省略 `--full-ttl` 可运行缩短租期的用例。
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
 
 启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
 
