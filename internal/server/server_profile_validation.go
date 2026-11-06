@@ -117,6 +117,18 @@ func writeAdminTemplateError(w http.ResponseWriter, err error) {
 	writeErrorCode(w, status, code, message)
 }
 
+func (s *Server) writeRunnerSpecMutationError(w http.ResponseWriter, name string, err error) {
+	if writeProfileInUse(w, err) || writeProfileConflict(w, err) {
+		return
+	}
+	s.logger.Error("persist Runner Spec mutation", "name", name, "error", err)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		writeErrorCode(w, http.StatusServiceUnavailable, "runner_spec_mutation_unavailable", "Runner Spec change was interrupted; retry")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to persist Runner Spec change")
+}
+
 func writeProfileConflict(w http.ResponseWriter, err error) bool {
 	if !errors.Is(err, state.ErrConflict) {
 		return false

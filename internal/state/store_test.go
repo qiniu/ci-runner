@@ -15,7 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func closeTestDB(t *testing.T, db *gorm.DB) {
@@ -530,7 +533,7 @@ func TestCreateRejectedRequestIsNeverRunnable(t *testing.T) {
 		t.Fatalf("rejected request must retain parsed github context: %#v", record)
 	}
 
-	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Now().UTC().Add(time.Minute), time.Minute)
+	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3544,6 +3547,254 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 	}
 }
 
+// A worker that opens its transaction before another holder commits must
+// count that holder's newly admitted request after acquiring the capacity row.
+func testSQLAdmissionReadsPreviousCommit(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "previous-capacity-holder"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id}, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	before, err := store.InFlightCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Use an independent SQL transaction to bypass the process-local gate.
+	first := db.WithContext(ctx).Begin()
+	if first.Error != nil {
+		t.Fatal(first.Error)
+	}
+	defer first.Rollback()
+	var guard runnerAdmissionGuardRecord
+	if err := first.Clauses(clause.Locking{Strength: "UPDATE"}).First(&guard, runnerCapacityGuard).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Model(&runnerRequestRecord{}).Where("id = ?", id).Update("status", StatusCreating).Error; err != nil {
+		t.Fatal(err)
+	}
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		done <- store.WithRunnerAdmission(ctx, func(tx Store) error {
+			count, err := tx.InFlightCount()
+			if err == nil && count != before+1 {
+				return fmt.Errorf("in-flight count %d, want %d after prior holder committed", count, before+1)
+			}
+			return err
+		})
+	}()
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("worker passed the held capacity guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := first.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SQLite permits one connection. An inner contender reaching the pool
+	// would increment WaitCount before its deadline.
+	err = store.WithRunnerAdmission(t.Context(), func(Store) error {
+		before := pool.Stats().WaitCount
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		if err := store.WithRunnerAdmission(ctx, func(Store) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("contending worker returned %v", err)
+		}
+		if pool.Stats().WaitCount != before {
+			return errors.New("local contender occupied the database pool")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Exercise the same duplicate deliveries under InnoDB's repeatable-read
+// snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
+func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	const id = "simultaneous-delivery"
+	defer func() {
+		db, err := store.dbOrEnsure()
+		if err == nil {
+			err = db.Delete(&runnerRequestRecord{}, "id = ?", id).Error
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+	err := store.WithRunnerAdmission(ctx, func(Store) error {
+		const deliveries = 3
+		entered := make(chan struct{}, deliveries)
+		write := make(chan struct{})
+		type result struct {
+			created bool
+			state   RunnerState
+			err     error
+		}
+		results := make(chan result, deliveries)
+		for i := range deliveries {
+			go func() {
+				var r result
+				r.err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+					if _, err := tx.ListProfiles(); err != nil {
+						return err
+					}
+					entered <- struct{}{}
+					select {
+					case <-write:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					var err error
+					r.created, r.state, err = tx.CreateRequest(RunnerRequest{ID: id, JobID: 4747, RunnerName: fmt.Sprintf("runner-%d", i)}, nil)
+					return err
+				})
+				results <- r
+			}()
+		}
+		for range deliveries {
+			select {
+			case <-entered:
+			case r := <-results:
+				return fmt.Errorf("enqueue failed before sharing the guard: %w", r.err)
+			case <-ctx.Done():
+				return fmt.Errorf("enqueue waited for another enqueue or worker: %w", ctx.Err())
+			}
+		}
+		close(write)
+		names := make(map[string]bool)
+		created := 0
+		for range deliveries {
+			r := <-results
+			if r.err != nil {
+				return r.err
+			}
+			if r.created {
+				created++
+			}
+			names[r.state.RunnerName] = true
+		}
+		if created != 1 || len(names) != 1 {
+			return fmt.Errorf("duplicate deliveries created %d requests and saw names %v", created, names)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+		created, row, err := tx.CreateRequest(RunnerRequest{ID: "another-delivery", JobID: 4747}, nil)
+		if created || !errors.Is(err, ErrConflict) || row.ID != id {
+			return fmt.Errorf("same job with a new ID: created=%v row=%q err=%v", created, row.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A catalog writer must wait for active enqueues, even without a worker
+	// holding the capacity row. Bound the wait on the actual SQL connection.
+	err = store.WithRunnerEnqueue(ctx, func(Store) error {
+		writerCtx, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer stop()
+		err := store.WithRunnerCatalogMutation(writerCtx, func(Store) error {
+			return errors.New("catalog writer did not wait for enqueue")
+		})
+		if writerCtx.Err() == nil {
+			return fmt.Errorf("catalog writer completed before its deadline: %v", err)
+		}
+		if err == nil {
+			return errors.New("timed-out writer was admitted")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerCatalogTimeoutClassification(t *testing.T) {
+	store := New(t.TempDir())
+	for _, cause := range []error{
+		&pgconn.PgError{Code: "57014"}, &pgconn.PgError{Code: "55P03"}, &mysql.MySQLError{Number: 1205},
+	} {
+		err := store.WithRunnerCatalogMutation(t.Context(), func(Store) error { return fmt.Errorf("wrapped: %w", cause) })
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, cause) {
+			t.Fatalf("lost deadline or driver cause: %v", err)
+		}
+	}
+}
+
+// A catalog writer blocked by an enqueue must leave unrelated capacity available.
+func testAdmissionDuringPostgresCatalogWait(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	var writerDone chan error
+	err := store.WithRunnerEnqueue(ctx, func(held Store) error {
+		var holderPID int
+		if err := held.(*DBStore).db.Raw("SELECT pg_backend_pid()").Scan(&holderPID).Error; err != nil {
+			return err
+		}
+		writerDone = make(chan error, 1)
+		go func() {
+			writerDone <- store.WithRunnerCatalogMutation(ctx, func(Store) error { return nil })
+		}()
+		for {
+			var blocked bool
+			if err := store.db.WithContext(ctx).Raw(`SELECT EXISTS (SELECT FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid)))`, holderPID).Scan(&blocked).Error; err != nil {
+				return err
+			}
+			if blocked {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		probe, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		return store.WithRunnerAdmission(probe, func(Store) error { return nil })
+	})
+	if writerDone != nil {
+		if writerErr := <-writerDone; writerErr != nil {
+			t.Errorf("catalog writer after enqueue: %v", writerErr)
+		}
+	}
+	if err != nil {
+		t.Fatalf("admission during catalog wait: %v", err)
+	}
+}
+
 func TestFreshSchemaSQLBackends(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("set RUNNERD_CATALOG_BACKEND_TESTS=1 with dedicated Postgres and MySQL test databases")
@@ -3609,6 +3860,13 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 					t.Fatalf("fresh %s migration did not create %s", backend.name, index.name)
 				}
 			}
+			testQueuedClaimOwnership(t, migrated)
+			testConcurrentSQLRunnerEnqueue(t, migrated)
+			testSQLAdmissionReadsPreviousCommit(t, migrated)
+			if backend.name == BackendPostgres {
+				testAdmissionDuringPostgresCatalogWait(t, migrated)
+			}
+			testRunnerAdmissionRollback(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -3632,6 +3890,73 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatalf("second %s migration matcher = %#v, err=%v", backend.name, match, err)
 			}
 		})
+	}
+}
+
+// A transaction that fails after the creating write must leave the same claim
+// usable. Exercise the actual row lock, state CAS and in-flight queries in each dialect.
+func TestRunnerAdmissionRollback(t *testing.T) {
+	testRunnerAdmissionRollback(t, New(t.TempDir()).(*DBStore))
+}
+
+func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
+	t.Helper()
+	const id = "rollback-admission"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id, ProfileName: "MixedCase"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	_, claim, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok || claim.ID != id {
+		t.Fatalf("claim: id=%q ok=%v err=%v", claim.ID, ok, err)
+	}
+	creating := claim
+	creating.Status = StatusCreating
+	creating.ProvisionAttemptID = "attempt-under-test"
+	injected := errors.New("rollback admission")
+	write := func(tx Store) error { return tx.WriteQueuedClaim(creating, claim.LeaseOwner) }
+	err = store.WithRunnerAdmission(t.Context(), func(tx Store) error {
+		if err := write(tx); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+	current, err := store.ReadState(id)
+	if err != nil || current.Status != StatusQueued || current.Version != claim.Version || current.ProvisionAttemptID != "" {
+		t.Fatalf("rollback: status=%s version=%d err=%v", current.Status, current.Version, err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate admission: %v", err)
+	}
+	count, err := store.InFlightCountForProfile("MixedCase")
+	if err != nil || count != 1 {
+		t.Fatalf("profile count = %d, err = %v", count, err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.ProvisionAttemptID != creating.ProvisionAttemptID {
+		t.Fatalf("persisted attempt = %q, err = %v", current.ProvisionAttemptID, err)
+	}
+	current.Status = StatusFailed
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := store.RetryRequest(id, time.Now())
+	if err != nil || retried.ProvisionAttemptID != "" {
+		t.Fatalf("retry retained attempt %q, err = %v", retried.ProvisionAttemptID, err)
 	}
 }
 
@@ -4042,6 +4367,7 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 
 func sqlBackendTestTables() []string {
 	return []string{
+		"runner_admission_guard",
 		"deployment_events",
 		"deployment_revisions",
 		"deployments",
@@ -4378,7 +4704,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		}
 	}
 
-	req, st, claimed, err := store.ClaimNextRunnable("worker-1", now, 30*time.Second)
+	req, st, claimed, err := store.ClaimNextRunnable("worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4386,7 +4712,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		t.Fatalf("unexpected claim result: req=%#v state=%#v claimed=%v", req, st, claimed)
 	}
 
-	_, _, claimed, err = store.ClaimNextRunnable("worker-2", now, 30*time.Second)
+	_, _, claimed, err = store.ClaimNextRunnable("worker-2", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5098,10 +5424,14 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
+	if record.ProvisionAttemptID != "" {
+		t.Fatal("migration assigned a new attempt to historical state")
+	}
 	if !record.UpdatedAt.Equal(originalUpdatedAt) {
 		t.Fatalf("updated_at changed during migration: got %s want %s", record.UpdatedAt, originalUpdatedAt)
 	}
 	for _, column := range []string{
+		"provision_attempt_id",
 		"github_job_name",
 		"github_job_status",
 		"github_job_conclusion",

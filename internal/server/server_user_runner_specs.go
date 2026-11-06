@@ -74,7 +74,7 @@ func (s *Server) userRunnerScope(w http.ResponseWriter, r *http.Request, account
 	}
 	profileScope := state.RunnerProfileScope{Type: prefScope.Type, ID: prefScope.ID}
 	if prefScope.Type == state.AccountScopeTypeGitHubInstall {
-		canonical, ok, err := s.runnerProfileScopeForInstallation(prefScope.ID)
+		canonical, ok, err := runnerProfileScopeForInstallation(s.store, prefScope.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return state.RunnerProfileScope{}, accountPreferenceScope{}, false
@@ -164,12 +164,10 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 	// The insert is the publication point for a new spec. An admission racing
 	// creation may be ordered before or after it, and cannot reference stale
 	// state for a spec that did not previously exist.
-	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.create", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, profile.Name), map[string]any{"template_id": profile.TemplateID, "workflow_labels": labels}, func(tx state.Store) error {
+	err = s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "user_runner_spec.create", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, profile.Name), map[string]any{"template_id": profile.TemplateID, "workflow_labels": labels}, func(tx state.Store) error {
 		_, err := tx.UpsertScopedProfileIfUnchanged(profile, nil)
 		return err
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, state.ErrRunnerProfileNameConflict) {
 			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "runner spec name conflicts with an enabled platform spec")
@@ -183,7 +181,7 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "a runner spec with this name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)
@@ -214,7 +212,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	templateChanged := input.TemplateID != nil && strings.TrimSpace(*input.TemplateID) != current.TemplateID
@@ -272,8 +270,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 	if input.Enabled != nil {
 		current.Enabled = *input.Enabled
 	}
-	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.update", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), map[string]any{"template_id_changed": templateChanged, "workflow_labels_changed": labelsChanged, "runner_group_changed": runnerGroupChanged}, func(tx state.Store) error {
+	err = s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "user_runner_spec.update", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), map[string]any{"template_id_changed": templateChanged, "workflow_labels_changed": labelsChanged, "runner_group_changed": runnerGroupChanged}, func(tx state.Store) error {
 		if labelsChanged || templateChanged || runnerGroupChanged {
 			count, countErr := tx.ActiveCountForProfileScope("scoped_custom", scope, name)
 			if countErr != nil {
@@ -286,7 +283,6 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 		_, err := tx.UpsertScopedProfileIfUnchanged(current, &expected)
 		return err
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errRunnerSpecInUse) {
 			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec cannot change while active requests use it")
@@ -300,7 +296,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while saving; refresh and try again")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)
@@ -341,18 +337,17 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	if count, err := s.store.ActiveCountForProfileScope("scoped_custom", scope, name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	} else if count > 0 {
 		writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec is in use by active requests")
 		return
 	}
-	s.admissionMu.Lock()
-	err := s.applyMutationWithAudit("github:"+session.Subject, "user_runner_spec.delete", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), nil, func(tx state.Store) error {
+	err := s.applyRunnerMutationWithAudit(r.Context(), "github:"+session.Subject, "user_runner_spec.delete", "scoped_runner_profile", fmt.Sprintf("%s:%d:%s", scope.Type, scope.ID, name), nil, func(tx state.Store) error {
 		count, countErr := tx.ActiveCountForProfileScope("scoped_custom", scope, name)
 		if countErr != nil {
 			return countErr
@@ -362,7 +357,6 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 		}
 		return tx.DeleteScopedProfileIfUnchanged(scope, name, &expected)
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errRunnerSpecInUse) {
 			writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec is in use by active requests")
@@ -372,7 +366,7 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while deleting; refresh and try again")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)
