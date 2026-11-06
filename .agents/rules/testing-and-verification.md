@@ -21,9 +21,9 @@ Also inspect the diff and keep `docs/README.md` aligned when adding, removing, o
 - Cover plaintext compatibility, obfuscation round trips, malformed/tampered value rejection, and masking through fmt, slog, JSON, and YAML.
 - When adding a sensitive config field, type it as `config.Secret`, call `Value()` only where plaintext is required, and update the supported-field lists in `README.md`, `README.zh.md`, `docs/testing.md`, and `docs/zh/testing.md`.
 
-For queue ownership changes, exercise expired and superseded claims on the supported SQL backends and run the catalog-backends two-process PostgreSQL lease handoff regression.
-
 ## State Schema
+
+For queue ownership changes, exercise expired and superseded claims on the supported SQL backends and run the catalog-backends two-process PostgreSQL lease handoff regression.
 
 Run `go test ./internal/state -run "Test(MigrationStartup|LegacyMigration)" -count=1` for retained startup fences. With `RUNNERD_CATALOG_BACKEND_TESTS=1` and a dedicated `RUNNERD_POSTGRES_TEST_DSN` ending in `_test`, `TestMigrationStartupFenceSQLBackends` and `TestPostgresObfuscatedPasswordSQLBackends` use isolated PostgreSQL schemas. Keep normal schema/catalog SQL backend tests and server `TestPlatformSpecRevisionPostgresSQLBackends` coverage; see `docs/database-transfer-retirement.md` for the retired transfer boundary.
 
