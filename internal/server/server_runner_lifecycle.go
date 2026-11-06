@@ -878,7 +878,7 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 	st := claim
 	result := s.applyFailure(&st, stage, failure, true)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
-		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "cause", failure, "error", err)
+		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "claim_owner", claim.LeaseOwner, "claim_version", claim.Version, "cause", failure, "error", err)
 		return
 	}
 	s.recordStartFailure(st, stage, failure, result)
