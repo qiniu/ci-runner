@@ -512,3 +512,35 @@ func TestGitSourceUsesRevisionActor(t *testing.T) {
 		}
 	}
 }
+
+func TestDelayedDeploymentStopCannotTouchReplacement(t *testing.T) {
+	store := state.New(t.TempDir())
+	d := deploymentFixture(t)
+	d.Status = state.DeploymentStatusFailed
+	original, err := store.CreateDeployment(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RetryDeployment(original, time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := store.GetDeployment(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.Status = state.DeploymentStatusRunning
+	replacement.Attempt++
+	replacement.SandboxID, replacement.RuntimeID = "replacement", "replacement"
+	if err := store.UpdateDeployment(replacement); err != nil {
+		t.Fatal(err)
+	}
+	factory := &fakeFactory{runtime: &fakeRuntime{id: "replacement"}}
+	w := New(store, factory, nil, nil, t.TempDir())
+	if err := w.StopObserved(t.Context(), original, false); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("late stop: %v", err)
+	}
+	current, err := store.GetDeployment(d.ID)
+	if err != nil || current.Status != state.DeploymentStatusRunning || current.RevisionNumber != replacement.RevisionNumber || current.SandboxID != "replacement" || factory.runtime.closed {
+		t.Fatal("stale stop changed replacement", current.Status, err)
+	}
+}

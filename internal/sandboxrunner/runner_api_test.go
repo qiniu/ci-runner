@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,157 @@ func newTestService(t *testing.T, ts *httptest.Server) *E2BService {
 		t.Fatalf("NewE2BService: %v", err)
 	}
 	return svc
+}
+
+func TestCreateRunnerSandboxTagsProvisionAttempt(t *testing.T) {
+	var called atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Metadata map[string]string `json:"metadata"`
+		}
+		if r.Method != http.MethodPost || r.Header.Get("Idempotency-Key") != "runnerd-attempt-2" || json.NewDecoder(r.Body).Decode(&body) != nil ||
+			body.Metadata["app"] != "e2b-github-runner" || body.Metadata["request_id"] != "job" ||
+			body.Metadata["provision_attempt_id"] != "attempt-2" {
+			t.Errorf("unexpected create key %q or metadata %v", r.Header.Get("Idempotency-Key"), body.Metadata)
+		}
+		called.Store(true)
+		http.Error(w, "fixture rejects creation", http.StatusBadRequest)
+	}))
+	defer api.Close()
+	_, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt-2", TemplateID: "template"})
+	if !called.Load() || err == nil {
+		t.Fatalf("expected fixture to receive and reject create: called=%v err=%v", called.Load(), err)
+	}
+}
+
+func TestRunnerDoesNotRetryAmbiguousCreate(t *testing.T) {
+	t.Setenv("SANDBOX_RETRY_MAX", "1")
+	var posts atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if posts.Add(1) == 1 {
+			// A proxy lost the response after forwarding the create.
+			http.Error(w, "upstream response lost", http.StatusBadGateway)
+			return
+		}
+		http.Error(w, "quota exceeded", http.StatusForbidden)
+	}))
+	defer api.Close()
+	_, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt", TemplateID: "template"})
+	if posts.Load() != 1 || !errors.Is(err, ErrCreateOutcomeUnknown) {
+		t.Fatalf("ambiguous create: posts=%d err=%v", posts.Load(), err)
+	}
+}
+
+func TestRunnerCreateRejectionAfterConnectionLossIsUnknown(t *testing.T) {
+	var posts atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if posts.Add(1) == 1 {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close() // Lost reply to a POST on the primed connection.
+			return
+		}
+		http.Error(w, "quota exceeded", http.StatusForbidden)
+	}))
+	defer api.Close()
+	res, err := api.Client().Get(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	_, err = newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt", TemplateID: "template"})
+	if posts.Load() != 2 || !errors.Is(err, ErrCreateOutcomeUnknown) {
+		t.Fatalf("lost POST response: requests=%d err=%v", posts.Load(), err)
+	}
+}
+
+func TestRunnerCreateOutcomeEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		unknown bool
+	}{
+		{"rejected", http.StatusBadRequest, `{"message":"invalid template"}`, false},
+		{"ambiguous", http.StatusConflict, `{"message":"create is in progress"}`, true},
+		{"checkpoint before readiness", http.StatusCreated, `{"sandboxID":"accepted","templateID":"test","envdAccessToken":"fixture"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("unexpected provider call %s", r.Method)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer api.Close()
+			var saved string
+			got, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "request", ProvisionAttemptID: "attempt", TemplateID: "test", RecordSandbox: func(_ context.Context, id string) error { saved = id; return errors.New("lost checkpoint reply") }})
+			if err == nil || errors.Is(err, ErrCreateOutcomeUnknown) != tc.unknown {
+				t.Fatalf("unexpected outcome: %v", err)
+			}
+			if tc.status == http.StatusCreated && (saved != "accepted" || got.SandboxID != saved) {
+				t.Fatal("lost confirmed Sandbox identity")
+			}
+		})
+	}
+}
+
+func TestFindRunnerSandboxByProvisionAttempt(t *testing.T) {
+	const legacy = `{"sandboxID":"historical","metadata":{"app":"e2b-github-runner","request_id":"job"}}`
+	const current = `{"sandboxID":"current","metadata":{"app":"e2b-github-runner","request_id":"job","provision_attempt_id":"attempt-2"}}`
+	for _, tc := range []struct {
+		name, attempt, response, want string
+		notFound, ambiguous           bool
+	}{
+		{"missing metadata", "", `[{"sandboxID":"unverified"}]`, "", false, true},
+		{"current", "attempt-2", "[" + current + "]", "current", false, false},
+		{"absent", "attempt-2", "[]", "", true, false},
+		{"cannot verify", "attempt-2", "[" + legacy + "]", "", false, true},
+		{"duplicate external create", "attempt-2", "[" + current + "," + current + "]", "", false, true},
+		{"historical", "", "[" + current + "," + legacy + "]", "historical", false, false},
+		{"historical excludes retry", "", "[" + current + "]", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				filter, err := url.ParseQuery(r.URL.Query().Get("metadata"))
+				if err != nil || filter.Get("request_id") != "job" || filter.Get("app") != "e2b-github-runner" ||
+					filter.Has("provision_attempt_id") != (tc.attempt != "") || filter.Get("provision_attempt_id") != tc.attempt {
+					t.Errorf("incorrect sandbox filter: %v (%v)", filter, err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tc.response)
+			}))
+			defer ts.Close()
+			id, err := newTestService(t, ts).FindRunnerSandbox(t.Context(), "job", tc.attempt)
+			if id != tc.want || errors.Is(err, ErrSandboxNotFound) != tc.notFound ||
+				(err != nil && !errors.Is(err, ErrSandboxNotFound)) != tc.ambiguous {
+				t.Fatalf("lookup returned id=%q err=%v", id, err)
+			}
+		})
+	}
+}
+
+func TestFindRunnerSandboxListFailureIsNotAbsence(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer api.Close()
+	id, err := newTestService(t, api).FindRunnerSandbox(t.Context(), "job", "attempt")
+	if id != "" || err == nil || errors.Is(err, ErrSandboxNotFound) {
+		t.Fatalf("failed provider list was treated as discovery: id=%q err=%v", id, err)
+	}
 }
 
 func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {

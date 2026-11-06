@@ -471,12 +471,16 @@ func loadDeploymentPage(db, query *gorm.DB, options DeploymentListOptions) ([]De
 // ListActiveDeployments returns the first bounded batch for diagnostics.
 // Production scheduling walks ListDeploymentWork pages independently per lane.
 func (s *DBStore) ListActiveDeployments() ([]Deployment, error) {
-	items, _, err := s.ListDeploymentWork("all", "", 100, time.Now().UTC())
+	items, _, err := s.listDeploymentWork("all", "", 100, time.Now().UTC(), false)
 	return items, err
 }
 
 // ListDeploymentWork uses bounded keyset pages, independently per scheduling lane.
 func (s *DBStore) ListDeploymentWork(kind, afterID string, limit int, now time.Time) ([]Deployment, bool, error) {
+	return s.listDeploymentWork(kind, afterID, limit, now, true)
+}
+
+func (s *DBStore) listDeploymentWork(kind, afterID string, limit int, now time.Time, availableOnly bool) ([]Deployment, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, false, err
@@ -485,11 +489,15 @@ func (s *DBStore) ListDeploymentWork(kind, afterID string, limit int, now time.T
 		return nil, false, fmt.Errorf("invalid deployment work page")
 	}
 	active := []string{DeploymentStatusQueued, DeploymentStatusPlanning, DeploymentStatusCreating, DeploymentStatusRunning, DeploymentStatusStopping}
-	query := db.Model(&deploymentRecord{})
+	available := db.Model(&deploymentRecord{})
+	if availableOnly {
+		available = available.Where("work_expires_at IS NULL OR work_expires_at <= ?", queueTime(db, 0))
+	}
+	query := available.Session(&gorm.Session{})
 	// Expose each status predicate to the planner and bound candidate IDs before
 	// merging the branches into one keyset page.
 	workIDs := func(predicate string, args ...any) *gorm.DB {
-		return db.Model(&deploymentRecord{}).Select("id").Where(predicate, args...).
+		return available.Session(&gorm.Session{}).Select("id").Where(predicate, args...).
 			Where("id > ?", afterID).Order("id ASC").Limit(limit + 1)
 	}
 	switch kind {
@@ -529,6 +537,17 @@ func (s *DBStore) ListDeploymentWork(kind, afterID string, limit int, now time.T
 }
 
 func (s *DBStore) UpdateDeployment(deployment Deployment) error {
+	return s.updateDeployment(deployment, "")
+}
+
+func (s *DBStore) UpdateClaimedDeployment(deployment Deployment, token string) error {
+	if token == "" {
+		return ErrConflict
+	}
+	return s.updateDeployment(deployment, token)
+}
+
+func (s *DBStore) updateDeployment(deployment Deployment, token string) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
@@ -586,7 +605,13 @@ func (s *DBStore) UpdateDeployment(deployment Deployment) error {
 		"version":                       deployment.Version + 1,
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&deploymentRecord{}).Where("id = ? AND version = ?", deployment.ID, deployment.Version).Updates(updates)
+		query := tx.Model(&deploymentRecord{}).Where("id = ? AND version = ?", deployment.ID, deployment.Version)
+		if token != "" {
+			query = liveDeploymentWork(query.Where("revision_number = ?", deployment.RevisionNumber), token)
+		} else {
+			updates["work_token"], updates["work_expires_at"] = nil, nil
+		}
+		result := query.Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -642,6 +667,7 @@ func retryDeployment(db *gorm.DB, deployment Deployment, expiresAt time.Time) er
 	}
 	now := time.Now().UTC()
 	result := db.Model(&deploymentRecord{}).Where("id = ? AND version = ? AND status IN ?", deployment.ID, deployment.Version, []string{DeploymentStatusFailed, DeploymentStatusCompleted, DeploymentStatusExpired}).Updates(map[string]any{
+		"work_token": nil, "work_expires_at": nil,
 		"execution_account_id": deployment.ExecutionAccountID,
 		"revision_number":      gorm.Expr("revision_number + 1"),
 		"source_repository_id": deployment.SourceRepositoryID, "source_repository_full_name": deployment.SourceRepositoryFullName, "source_ref": deployment.SourceRef, "pull_request_title": deployment.PullRequestTitle,
@@ -778,7 +804,14 @@ func (s *DBStore) AppendDeploymentEvent(event DeploymentEvent) error {
 		// Serialize retention for one deployment so concurrent output callbacks
 		// cannot both observe the same budget and grow the timeline past its cap.
 		var owner deploymentRecord
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", event.DeploymentID).First(&owner).Error; err != nil {
+		row := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", event.DeploymentID)
+		if event.WorkToken != "" {
+			row = liveDeploymentWork(row.Where("attempt = ?", event.Attempt), event.WorkToken)
+		}
+		if err := row.First(&owner).Error; err != nil {
+			if event.WorkToken != "" && errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrConflict
+			}
 			return err
 		}
 		if event.RevisionNumber <= 0 {
@@ -881,7 +914,11 @@ func (s *DBStore) listDeploymentEvents(id string, revisionNumber, beforeID, afte
 			index = len(records) - 1 - i
 		}
 		record := records[index]
-		events[i] = DeploymentEvent(record)
+		events[i] = DeploymentEvent{
+			ID: record.ID, DeploymentID: record.DeploymentID, RevisionNumber: record.RevisionNumber,
+			Attempt: record.Attempt, EventType: record.EventType, Stage: record.Stage,
+			Stream: record.Stream, Message: record.Message, CreatedAt: record.CreatedAt,
+		}
 	}
 	return events, hasMore, nil
 }

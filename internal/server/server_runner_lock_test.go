@@ -20,8 +20,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 	fake := &fakeSandbox{stopBlock: stopBlock, stopStarted: make(chan struct{}, 1)}
 	ghServer := httptest.NewServer(githubRunnerAPI(t))
 	defer ghServer.Close()
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	const cleanupID = "probe-37"
 	const targetID = "118521076552"
@@ -63,7 +62,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 
 	targetDone := make(chan struct{})
 	go func() {
-		srv.appendRunnerStdout(targetID, []byte("Running job: target\n"))
+		srv.appendRunnerStdout(targetID, "", "", []byte("Running job: target\n"))
 		close(targetDone)
 	}()
 	select {
@@ -299,16 +298,11 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 					}
 				}
 				srv.runnerLocksMu.Unlock()
-				if srv.admissionMu.TryLock() {
-					srv.admissionMu.Unlock()
-				} else {
-					t.Error("timing persistence held the admission lock")
-				}
 				batches <- message
 			}
 			done := make(chan struct{})
 			go func() {
-				srv.startRunner(t.Context(), id, "worker-test")
+				srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, id, "worker-test"))
 				close(done)
 			}()
 			var batch string
@@ -351,4 +345,22 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Direct-start fixtures exercise a specific request without running the queue loop.
+func queuedRunnerForTest(t *testing.T, store state.Store, id, owner string) state.RunnerState {
+	t.Helper()
+	st, err := store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status == state.StatusQueued && st.LeaseOwner == "" {
+		st.LeaseOwner = owner
+		st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		st.Version++
+	}
+	return st
 }

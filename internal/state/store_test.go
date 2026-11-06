@@ -530,7 +530,7 @@ func TestCreateRejectedRequestIsNeverRunnable(t *testing.T) {
 		t.Fatalf("rejected request must retain parsed github context: %#v", record)
 	}
 
-	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Now().UTC().Add(time.Minute), time.Minute)
+	_, _, claimed, err := store.ClaimNextRunnable("worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,6 +618,18 @@ func TestListMismatchedCompletedStates(t *testing.T) {
 	}
 	if len(states) != 1 || states[0].ID != "mismatch" {
 		t.Fatalf("expected only mismatched completed state, got %#v", states)
+	}
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.ManualStopRequested = true
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	states, err = store.ListMismatchedCompletedStates(10)
+	if err != nil || len(states) != 0 {
+		t.Fatalf("manual stop entered mismatch requeue: %v %+v", err, states)
 	}
 }
 
@@ -3544,6 +3556,142 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 	}
 }
 
+// Exercise the same duplicate deliveries under InnoDB's repeatable-read
+// snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
+func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SQLite permits one connection. An inner contender reaching the pool
+	// would increment WaitCount before its deadline.
+	err = store.WithRunnerAdmission(t.Context(), func(Store) error {
+		before := pool.Stats().WaitCount
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		if err := store.WithRunnerAdmission(ctx, func(Store) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("contending worker returned %v", err)
+		}
+		if pool.Stats().WaitCount != before {
+			return errors.New("local contender occupied the database pool")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	const id = "simultaneous-delivery"
+	defer func() {
+		db, err := store.dbOrEnsure()
+		if err == nil {
+			err = db.Delete(&runnerRequestRecord{}, "id = ?", id).Error
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+	err := store.WithRunnerAdmission(ctx, func(Store) error {
+		const deliveries = 3
+		entered := make(chan struct{}, deliveries)
+		write := make(chan struct{})
+		type result struct {
+			created bool
+			state   RunnerState
+			err     error
+		}
+		results := make(chan result, deliveries)
+		for i := range deliveries {
+			go func() {
+				var r result
+				r.err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+					if _, err := tx.ListProfiles(); err != nil {
+						return err
+					}
+					entered <- struct{}{}
+					select {
+					case <-write:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					var err error
+					r.created, r.state, err = tx.CreateRequest(RunnerRequest{ID: id, JobID: 4747, RunnerName: fmt.Sprintf("runner-%d", i)}, nil)
+					return err
+				})
+				results <- r
+			}()
+		}
+		for range deliveries {
+			select {
+			case <-entered:
+			case r := <-results:
+				return fmt.Errorf("enqueue failed before sharing the guard: %w", r.err)
+			case <-ctx.Done():
+				return fmt.Errorf("enqueue waited for another enqueue or worker: %w", ctx.Err())
+			}
+		}
+		close(write)
+		names := make(map[string]bool)
+		created := 0
+		for range deliveries {
+			r := <-results
+			if r.err != nil {
+				return r.err
+			}
+			if r.created {
+				created++
+			}
+			names[r.state.RunnerName] = true
+		}
+		if created != 1 || len(names) != 1 {
+			return fmt.Errorf("duplicate deliveries created %d requests and saw names %v", created, names)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+		created, row, err := tx.CreateRequest(RunnerRequest{ID: "another-delivery", JobID: 4747}, nil)
+		if created || !errors.Is(err, ErrConflict) || row.ID != id {
+			return fmt.Errorf("same job with a new ID: created=%v row=%q err=%v", created, row.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A catalog writer must wait for active enqueues, even without a worker
+	// holding the capacity row. Bound the wait on the actual SQL connection.
+	err = store.WithRunnerEnqueue(ctx, func(Store) error {
+		writerCtx, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer stop()
+		err := store.WithRunnerCatalogMutation(writerCtx, func(Store) error {
+			return errors.New("catalog writer did not wait for enqueue")
+		})
+		if writerCtx.Err() == nil {
+			return fmt.Errorf("catalog writer completed before its deadline: %v", err)
+		}
+		if err == nil {
+			return errors.New("timed-out writer was admitted")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFreshSchemaSQLBackends(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("set RUNNERD_CATALOG_BACKEND_TESTS=1 with dedicated Postgres and MySQL test databases")
@@ -3609,6 +3757,10 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 					t.Fatalf("fresh %s migration did not create %s", backend.name, index.name)
 				}
 			}
+			testQueuedClaimOwnership(t, migrated)
+			testConcurrentSQLRunnerEnqueue(t, migrated)
+			testRunnerAdmissionRollback(t, migrated)
+			testRunningWatch(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -3632,6 +3784,253 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatalf("second %s migration matcher = %#v, err=%v", backend.name, match, err)
 			}
 		})
+	}
+}
+
+func TestRunningWatch(t *testing.T) {
+	testRunningWatch(t, New(t.TempDir()).(*DBStore))
+}
+
+func testRunningWatch(t *testing.T, store *DBStore) {
+	t.Helper()
+	_, st, err := store.CreateRequest(RunnerRequest{ID: "watch-cas"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", st.ID).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	st.Status = StatusCreating
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	st.Version++
+	if ok, err := store.ClaimRunnerWatch(t.Context(), st, "first", time.Minute); !ok || err != nil {
+		t.Fatalf("claim creating watch: %v, %v", ok, err)
+	}
+	st.Version++
+	st.Status, st.SandboxID, st.ProcessPID = StatusRunning, "sandbox", 42
+	if err := store.AdoptRunningWatch(st, "first", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.ClaimRunnerWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
+		t.Fatalf("claimed healthy watch: %v, %v", ok, err)
+	}
+	// Exercise same-millisecond renewals on MySQL with changed-row semantics.
+	for range 8 {
+		if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
+			t.Fatalf("renew: %v, %v", ok, err)
+		}
+	}
+	again, err := store.ReadState(st.ID)
+	if err != nil || again.Version != observed.Version || !again.UpdatedAt.Equal(observed.UpdatedAt) {
+		t.Fatalf("heartbeat changed business version or updated_at: %v", err)
+	}
+	if err := db.Model(&runnerRequestRecord{}).Where("id = ?", st.ID).UpdateColumn("watch_expires_at", time.Unix(1, 0).UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); ok || err != nil {
+		t.Fatalf("revived expired watch: %v, %v", ok, err)
+	}
+	if ok, err := store.ClaimRunnerWatch(t.Context(), observed, "second", time.Minute); !ok || err != nil {
+		t.Fatalf("takeover: %v, %v", ok, err)
+	}
+	latest, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest.Status = StatusStopping
+	if err := store.WriteWatchedState(latest, "first"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expired watcher used newly read version: %v", err)
+	}
+	if err := store.WriteWatchedState(latest, "second"); err != nil {
+		t.Fatal(err)
+	}
+	code := 137
+	late := RunnerState{ID: st.ID, SandboxID: "sandbox", ProcessPID: 43, RunnerExitCode: &code}
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); retained || err != nil {
+		t.Fatalf("recorded stale exit: %t %v", retained, err)
+	}
+	late.ProcessPID = 42
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); !retained || err != nil {
+		t.Fatalf("missing late exit: %t %v", retained, err)
+	}
+	code = 0
+	late.EffectiveRunnerVersion = "2.338.2"
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); retained || err != nil {
+		t.Fatalf("replaced exit code: %t %v", retained, err)
+	}
+	got, err := store.ReadState(st.ID)
+	if err != nil || got.RunnerExitCode == nil || *got.RunnerExitCode != 137 || got.EffectiveRunnerVersion != late.EffectiveRunnerVersion || got.Status != StatusStopping {
+		t.Fatalf("failed to retain first exit and later version: %+v %v", got.RunnerExitCode, err)
+	}
+}
+
+// A transaction that fails after the creating write must leave the same claim
+// usable. Exercise the actual row lock, state CAS and in-flight queries in each dialect.
+func TestRunnerAdmissionRollback(t *testing.T) {
+	testRunnerAdmissionRollback(t, New(t.TempDir()).(*DBStore))
+}
+
+func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
+	t.Helper()
+	const id = "rollback-admission"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id, ProfileName: "MixedCase"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	_, claim, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok || claim.ID != id {
+		t.Fatalf("claim: id=%q ok=%v err=%v", claim.ID, ok, err)
+	}
+	creating := claim
+	creating.Status = StatusCreating
+	creating.ProvisionAttemptID = "attempt-under-test"
+	creating.JITRegistrationState = JITUnsent
+	injected := errors.New("rollback admission")
+	creating.WatchToken = "first"
+	write := func(tx Store) error { return tx.BeginRunnerCreation(creating, time.Minute) }
+	err = store.WithRunnerAdmission(t.Context(), func(tx Store) error {
+		if err := write(tx); err != nil {
+			return err
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+	current, err := store.ReadState(id)
+	if err != nil || current.Status != StatusQueued || current.Version != claim.Version || current.ProvisionAttemptID != "" {
+		t.Fatalf("rollback: status=%s version=%d err=%v", current.Status, current.Version, err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if err := store.WithRunnerAdmission(t.Context(), write); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate admission: %v", err)
+	}
+	count, err := store.InFlightCountForProfile("MixedCase")
+	if err != nil || count != 1 {
+		t.Fatalf("profile count = %d, err = %v", count, err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.ProvisionAttemptID != creating.ProvisionAttemptID {
+		t.Fatalf("persisted attempt = %q, err = %v", current.ProvisionAttemptID, err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "other", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale owner dispatched JIT: %v", err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "first", creating.ProvisionAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "first", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate JIT dispatch: %v", err)
+	}
+	wrongAttempt := creating
+	wrongAttempt.ProvisionAttemptID = "older"
+	if err := store.RecordJITRegistrationResult(t.Context(), wrongAttempt, 71); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong attempt recorded JIT ID: %v", err)
+	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "old", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong owner dispatched: %v", err)
+	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "first", creating.ProvisionAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "first", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate dispatch: %v", err)
+	}
+	stale := creating
+	stale.WatchToken = "expired-owner"
+	if err := store.RecordSandboxCreateResult(t.Context(), stale, ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale rejection cleared dispatch: %v", err)
+	}
+	if err := store.RecordSandboxCreateResult(t.Context(), creating, "created"); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || !current.SandboxCreateDispatched || current.SandboxID != "created" {
+		t.Fatalf("missing create receipt: %v", err)
+	}
+	current.Status = StatusStopping
+	current.ManualStopRequested = true
+	if err := store.BeginRunnerCleanup(t.Context(), current, "first", "stop-a", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginRunnerCleanup(t.Context(), current, "", "stop-b", time.Minute); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stole active cleanup: %v", err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupSandbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordJITRegistrationResult(t.Context(), creating, 71); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordJITRegistrationResult(t.Context(), creating, 0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rejection erased confirmed ID: %v", err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.JITRegistrationState != JITDispatched {
+		t.Fatal("lost JIT intent", err)
+	}
+	if err := store.BindCleanupGitHubRunner(t.Context(), id, "stop-a", 72); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rebound cleanup registration: %v", err)
+	}
+	if err := store.ReleaseRunnerCleanup(t.Context(), id, "stop-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginRunnerCleanup(t.Context(), current, "", "stop-b", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || !current.ManualStopRequested || !current.CleanupSandboxDone || current.CleanupGitHubRunnerID != 71 || current.CleanupGitHubDone {
+		t.Fatalf("lost cleanup progress: %v", err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupGitHub); !errors.Is(err, ErrConflict) {
+		t.Fatalf("accepted stale receipt: %v", err)
+	}
+	if err := store.ReleaseRunnerCleanup(t.Context(), id, "stop-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-b", CleanupGitHub); err != nil {
+		t.Fatal(err)
+	}
+	current.Status = StatusFailed
+	if err := store.WriteCleanupState(current, "stop-a"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("accepted stale completion: %v", err)
+	}
+	if err := store.WriteCleanupState(current, "stop-b"); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := store.RetryRequest(id, time.Now())
+	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.JITRegistrationState == JITDispatched || retried.ManualStopRequested || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
+		t.Fatalf("retry retained old attempt or cleanup evidence: %v", err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.JITRegistrationState == JITDispatched || current.ManualStopRequested || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
+		t.Fatalf("persisted cleanup on retry: %v", err)
 	}
 }
 
@@ -4042,6 +4441,7 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 
 func sqlBackendTestTables() []string {
 	return []string{
+		"runner_admission_guard",
 		"deployment_events",
 		"deployment_revisions",
 		"deployments",
@@ -4378,7 +4778,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		}
 	}
 
-	req, st, claimed, err := store.ClaimNextRunnable("worker-1", now, 30*time.Second)
+	req, st, claimed, err := store.ClaimNextRunnable("worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4386,7 +4786,7 @@ func TestClaimNextRunnableHonorsLeaseAndRetryWindow(t *testing.T) {
 		t.Fatalf("unexpected claim result: req=%#v state=%#v claimed=%v", req, st, claimed)
 	}
 
-	_, _, claimed, err = store.ClaimNextRunnable("worker-2", now, 30*time.Second)
+	_, _, claimed, err = store.ClaimNextRunnable("worker-2", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5098,10 +5498,17 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
+	if record.ProvisionAttemptID != "" || record.SandboxCreateDispatched {
+		t.Fatal("migration assigned a new attempt to historical state")
+	}
 	if !record.UpdatedAt.Equal(originalUpdatedAt) {
 		t.Fatalf("updated_at changed during migration: got %s want %s", record.UpdatedAt, originalUpdatedAt)
 	}
 	for _, column := range []string{
+		"provision_attempt_id",
+		"watch_token",
+		"watch_expires_at",
+		"sandbox_create_dispatched",
 		"github_job_name",
 		"github_job_status",
 		"github_job_conclusion",
@@ -5131,6 +5538,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"idx_runner_requests_sponsor_inflight",
 		"idx_runner_requests_metrics",
 		"legacy_metrics_fixture_repository",
+		"idx_runner_watch_expiry",
 	} {
 		if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
 			t.Fatalf("expected runner request list ordering index %s after additive migration", indexName)
