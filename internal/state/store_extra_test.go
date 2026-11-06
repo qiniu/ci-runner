@@ -297,6 +297,33 @@ func TestMySQLQueueTimeWithoutDSNLocation(t *testing.T) {
 	}
 }
 
+func TestQueuedRetryIntentOnlyAppliesToScheduledVersion(t *testing.T) {
+	store := New(t.TempDir())
+	_, st, err := store.CreateRequest(RunnerRequest{ID: "retry-intent"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.ScheduleQueuedRetry(time.Hour)
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.ReadState(st.ID)
+	if err != nil || saved.NextRetryAt.IsZero() {
+		t.Fatalf("initial retry missing: %v", err)
+	}
+	// A caller reusing its original struct must be able to explicitly clear
+	// the deadline on the next version without rearming the previous intent.
+	st.Version = saved.Version
+	st.NextRetryAt = time.Time{}
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = store.ReadState(st.ID)
+	if err != nil || !saved.NextRetryAt.IsZero() {
+		t.Fatalf("old retry rearmed: %v, %v", saved.NextRetryAt, err)
+	}
+}
+
 func TestQueuedClaimOwnership(t *testing.T) {
 	testQueuedClaimOwnership(t, New(t.TempDir()).(*DBStore))
 }
