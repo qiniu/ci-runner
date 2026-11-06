@@ -16,11 +16,12 @@ const workflowJobLookupTimeout = 5 * time.Second
 func (s *Server) startBackgroundLoops() {
 	s.startOnce.Do(func() {
 		s.logger.Info("starting background loops", "worker_id", s.workerID, "max_concurrent_runners", s.cfg.MaxConcurrentRunners)
-		loopCount := 4
+		loopCount := 5
 		s.loopWG.Add(loopCount)
 		go s.workerLoop(s.loopCtx)
 		go s.sweeperLoop(s.loopCtx)
 		go s.reconcilerLoop(s.loopCtx)
+		go s.runnerWatchLoop(s.loopCtx)
 		go s.deploymentLoop(s.loopCtx)
 	})
 }
@@ -183,7 +184,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 			s.store.AppendLog(st.ID, "control.log", []byte("sweeper skipped idle stop because github runner status could not be verified: "+err.Error()+"\n"))
 		} else if busy {
 			s.logger.Info("sweeper keeping idle-timed-out runner because github reports it is busy", "id", st.ID, "runner_name", st.RunnerName)
-			s.markRunnerJobStartedIfVersion(st.ID, &st.Version)
+			s.markRunnerJobStarted(st.ID, &st.Version, "", "")
 		} else {
 			s.logger.Info("sweeper stopping idle runner", "id", st.ID, "sandbox_id", st.SandboxID, "running_at", st.RunningAt, "idle_timeout", s.cfg.RunnerIdleTimeout)
 			s.stopObservedRunner(ctx, st, state.TerminationSourceIdleCleanup)

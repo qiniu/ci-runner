@@ -220,7 +220,7 @@ func (s *DBStore) ReadState(id string) (RunnerState, error) {
 }
 
 func (s *DBStore) WriteState(st RunnerState) error {
-	return s.writeState(st, "")
+	return s.writeState(st, "", "", 0)
 }
 
 // WriteQueuedClaim consumes the exact version obtained by ClaimNextRunnable.
@@ -228,10 +228,10 @@ func (s *DBStore) WriteQueuedClaim(st RunnerState, owner string) error {
 	if owner == "" {
 		return ErrConflict
 	}
-	return s.writeState(st, owner)
+	return s.writeState(st, owner, "", 0)
 }
 
-func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
+func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watchTTL time.Duration) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
@@ -302,6 +302,17 @@ func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
 	if claimOwner != "" {
 		query = liveQueuedClaim(query, claimOwner)
+	}
+	if watchTTL > 0 {
+		// A new watcher may be installed by the creating CAS. Reattaching a
+		// running process requires the recovery claim acquired before remote I/O.
+		query = query.Where("(status = ? OR (status = ? AND watch_token = ? AND watch_expires_at > ?))", StatusCreating, StatusRunning, watchToken, queueTime(db, 0))
+		updates["watch_token"], updates["watch_expires_at"] = watchToken, queueTime(db, watchTTL)
+	} else if watchToken != "" {
+		query = query.Where("status = ? AND watch_token = ? AND watch_expires_at > ?", StatusRunning, watchToken, queueTime(db, 0))
+	}
+	if st.Status != StatusRunning {
+		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
 	result := query.Updates(updates)
 	if result.Error != nil {

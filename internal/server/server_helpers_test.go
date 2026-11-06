@@ -2003,7 +2003,7 @@ func TestMarkRunnerJobStartedSetsMarkerOnRunningRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.markRunnerJobStarted("mark-job-1")
+	srv.markRunnerJobStarted("mark-job-1", nil, "", "")
 
 	got, err := store.ReadState("mark-job-1")
 	if err != nil {
@@ -2036,8 +2036,8 @@ func TestMarkRunnerJobStartedIsIdempotent(t *testing.T) {
 	}
 
 	// Calling twice is safe
-	srv.markRunnerJobStarted("mark-job-2")
-	srv.markRunnerJobStarted("mark-job-2")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
 
 	got, err := store.ReadState("mark-job-2")
 	if err != nil {
@@ -2061,7 +2061,7 @@ func TestAppendRunnerStdoutStagesCompletedHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.appendRunnerStdout("completed-hook", []byte("RUNNERD_JOB_COMPLETED\n"))
+	srv.appendRunnerStdout("completed-hook", "", "", []byte("RUNNERD_JOB_COMPLETED\n"))
 
 	requireRunnerEventStageMessage(t, store, "completed-hook", "runner_hook", "runner completed job hook received")
 }

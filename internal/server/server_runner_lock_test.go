@@ -63,7 +63,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 
 	targetDone := make(chan struct{})
 	go func() {
-		srv.appendRunnerStdout(targetID, []byte("Running job: target\n"))
+		srv.appendRunnerStdout(targetID, "", "", []byte("Running job: target\n"))
 		close(targetDone)
 	}()
 	select {

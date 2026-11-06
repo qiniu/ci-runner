@@ -174,6 +174,8 @@ jobs:
           cache-dependency-path: go.sum
       - uses: oven-sh/setup-bun@v2
       - run: cd ui && bun install --frozen-lockfile && bun run build
+      - name: Verify running watch renewal and takeover between two PostgreSQL-backed Runner processes
+        run: go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1
       - name: Verify late Runner observations on PostgreSQL
         run: go test ./internal/server -run '^TestSweeperDiscardsSupersededIdleObservation$' -count=1
       - name: Verify schema, catalog, deployments, and migrations on SQL backends

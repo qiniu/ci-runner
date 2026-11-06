@@ -540,6 +540,11 @@ type SandboxServiceDefaultAudience struct {
 
 type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	ClaimRunningWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
+	RenewRunningWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
+	ListExpiredRunningWatches(ctx context.Context, limit int) ([]string, error)
+	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error
+	WriteWatchedState(st RunnerState, token string) error
 	Ensure() error
 	CreateRequest(req RunnerRequest, payload []byte) (bool, RunnerState, error)
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)

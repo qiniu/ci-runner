@@ -6680,7 +6680,6 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	}
 	fake := &fakeSandbox{}
 	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6698,8 +6697,8 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("recovery stopped sandbox assigned to another job %d times", fake.stoppedCount())
 	}
-	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+2 {
-		t.Fatalf("completed Job result and reconnect were not both committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+2)
+	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+3 {
+		t.Fatalf("watch claim, completed Job result and reconnect were not all committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+3)
 	}
 
 	fake.lastRecoverInput().OnExit(sandboxrunner.ExitResult{}, nil)

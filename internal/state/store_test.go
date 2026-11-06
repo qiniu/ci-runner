@@ -3611,6 +3611,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			}
 			testQueuedClaimOwnership(t, migrated)
 			testRunnerAdmissionRollback(t, migrated)
+			testRunningWatch(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -3634,6 +3635,70 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatalf("second %s migration matcher = %#v, err=%v", backend.name, match, err)
 			}
 		})
+	}
+}
+
+func TestRunningWatch(t *testing.T) {
+	testRunningWatch(t, New(t.TempDir()).(*DBStore))
+}
+
+func testRunningWatch(t *testing.T, store *DBStore) {
+	t.Helper()
+	_, st, err := store.CreateRequest(RunnerRequest{ID: "watch-cas"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", st.ID).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	st.Status = StatusCreating
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	st.Version++
+	st.Status, st.SandboxID, st.ProcessPID = StatusRunning, "sandbox", 42
+	if err := store.AdoptRunningWatch(st, "first", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.ClaimRunningWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
+		t.Fatalf("claimed healthy watch: %v, %v", ok, err)
+	}
+	if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
+		t.Fatalf("renew: %v, %v", ok, err)
+	}
+	again, err := store.ReadState(st.ID)
+	if err != nil || again.Version != observed.Version || !again.UpdatedAt.Equal(observed.UpdatedAt) {
+		t.Fatalf("heartbeat changed business version or updated_at: %v", err)
+	}
+	if err := db.Model(&runnerRequestRecord{}).Where("id = ?", st.ID).UpdateColumn("watch_expires_at", time.Unix(1, 0).UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); ok || err != nil {
+		t.Fatalf("revived expired watch: %v, %v", ok, err)
+	}
+	if ok, err := store.ClaimRunningWatch(t.Context(), observed, "second", time.Minute); !ok || err != nil {
+		t.Fatalf("takeover: %v, %v", ok, err)
+	}
+	latest, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest.Status = StatusStopping
+	if err := store.WriteWatchedState(latest, "first"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expired watcher used newly read version: %v", err)
+	}
+	if err := store.WriteWatchedState(latest, "second"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -5176,6 +5241,8 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 	}
 	for _, column := range []string{
 		"provision_attempt_id",
+		"watch_token",
+		"watch_expires_at",
 		"github_job_name",
 		"github_job_status",
 		"github_job_conclusion",
@@ -5205,6 +5272,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"idx_runner_requests_sponsor_inflight",
 		"idx_runner_requests_metrics",
 		"legacy_metrics_fixture_repository",
+		"idx_runner_watch_expiry",
 	} {
 		if !db.Migrator().HasIndex(&runnerRequestRecord{}, indexName) {
 			t.Fatalf("expected runner request list ordering index %s after additive migration", indexName)
