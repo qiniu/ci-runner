@@ -4,7 +4,7 @@ Use a supported Qiniu label pair from the table below to select a Sandbox templa
 
 ## Supported labels and resources
 
-| Workflow request | CPU | Memory | System disk | Template status | Notes |
+| Workflow request | CPU | Memory | Free space required at release | Template status | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | Stable | Smaller general-purpose image |
 | `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | Stable after setup | Requires an enabled custom Runner Spec; larger system disk |
@@ -20,12 +20,11 @@ Use a supported Qiniu label pair from the table below to select a Sandbox templa
 
 ## Resource contract
 
-The standard templates provide 8 vCPU and 8 GiB of memory. The Ubuntu `-large` variants
-reuse the same operating system image and installed software as their standard
-counterparts; only the system disk allocation changes from 20 GiB to 80 GiB.
-Disk capacity is supplied by the Sandbox provider rather than a workflow setting,
-and the usable filesystem capacity may be slightly lower after formatting and
-reserved space. Windows 11 uses a 50 GiB physical system disk; its `C:` volume is smaller because of system partitions, and preinstalled software further reduces free space.
+The standard templates provide 8 vCPU and 8 GiB of memory. Ubuntu `-large`
+variants use the same software as the corresponding standard template.
+The table shows the available-space target checked before publication. New builds
+request an additional 5% from the Sandbox provider. Older templates can have less space. Check `df -h /` on
+Ubuntu or `(Get-PSDrive C).Free` in PowerShell for the space available to a job.
 
 `ubuntu-latest-large` is a logical label for the same physical template as
 `ubuntu-24.04-large`; it does not create another physical image.

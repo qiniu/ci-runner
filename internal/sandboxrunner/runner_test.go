@@ -1269,7 +1269,7 @@ func TestRunnerTemplateQshellBuildUsesTemporaryConfigAndRequiresReady(t *testing
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(templateDir, "qshell.sandbox.toml")
-	const trackedConfig = "name = \"fixture-template\"\ndisk_size_mb = 20480\n"
+	const trackedConfig = "name = \"fixture-template\"\nmin_free_disk_mb = 21504\nrunnerd.min_free_disk_mb = 20480\n"
 	if err := os.WriteFile(configPath, []byte(trackedConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1278,7 +1278,7 @@ func TestRunnerTemplateQshellBuildUsesTemporaryConfigAndRequiresReady(t *testing
 	writeExecutable(t, qshellPath, `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = version ]; then
-  printf 'v2.19.13\n'
+  printf 'v2.20.0\n'
   exit 0
 fi
 if [ "$*" = 'sandbox template list --format json' ]; then
@@ -1357,7 +1357,7 @@ func TestRunnerTemplateQshellResolvesRelativeTemplateFromScriptCheckout(t *testi
 	writeExecutable(t, qshellPath, `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = version ]; then
-  printf 'v2.19.13\n'
+  printf 'v2.20.0\n'
   exit 0
 fi
 if [ "$*" = 'sandbox template list --format json' ]; then
@@ -1404,7 +1404,7 @@ func TestRunnerTemplateQshellPublicationUsesResolvedTemplateID(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(templateDir, "qshell.sandbox.large.toml"),
-		[]byte("name = \"fixture-template\"\ndisk_size_mb = 20480\n"),
+		[]byte("name = \"fixture-template\"\nmin_free_disk_mb = 21504\nrunnerd.min_free_disk_mb = 20480\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -2309,8 +2309,8 @@ esac
 	if !result.Passed ||
 		result.SupportChannel != "preview" ||
 		!result.Cleanup.Passed ||
-		len(result.Results) != 10 {
-		t.Fatalf("release smoke result = %#v, want ten passing usability and identity checks plus cleanup", result)
+		len(result.Results) != 11 {
+		t.Fatalf("release smoke result = %#v, want eleven passing usability and identity checks plus cleanup", result)
 	}
 	runnerEnv, err := os.ReadFile(filepath.Join(repositoryRoot(t), "templates", "common", "actions-runner.env"))
 	if err != nil {
@@ -2335,6 +2335,7 @@ esac
 	nvmHomeChecked := false
 	cloudflareDNSChecked := false
 	runtimeRootDiskSizeChecked := false
+	availableSpaceChecked := false
 	for _, check := range result.Results {
 		if check.Category != "Release smoke" {
 			t.Fatalf("release smoke unexpectedly ran full inventory check %#v", check)
@@ -2375,6 +2376,10 @@ esac
 				strings.Contains(check.Command, `test -w "$HOME/.nvm"`) &&
 				strings.Contains(check.Command, `nvm --version`)
 		}
+		if check.Name == "available root disk space" {
+			availableSpaceChecked = strings.Contains(check.Command, "df -B1 --output=avail /") &&
+				strings.Contains(check.Command, "available < 20480 * 1048576")
+		}
 		if check.Name == "runtime root disk size" {
 			runtimeRootDiskSizeChecked = strings.Contains(check.Command, `findmnt -nro SOURCE /`) &&
 				strings.Contains(check.Command, `lsblk -bndo SIZE`) &&
@@ -2403,6 +2408,9 @@ esac
 	}
 	if !cloudflareDNSChecked {
 		t.Fatalf("release smoke did not verify Cloudflare DNS: %#v", result.Results)
+	}
+	if !availableSpaceChecked {
+		t.Fatal("release smoke did not verify the available-space floor")
 	}
 	if !runtimeRootDiskSizeChecked {
 		t.Fatalf("release smoke did not verify the standard template root-disk size floor: %#v", result.Results)

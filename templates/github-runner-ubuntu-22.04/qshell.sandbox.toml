@@ -4,5 +4,9 @@ dockerfile = "./Dockerfile"
 path = ".."
 cpu_count = 8
 memory_mb = 8192
-disk_size_mb = 20480
+# Request 5% above the release minimum for filesystem overhead.
+min_free_disk_mb = 21504
 no_cache = false
+
+# Local release policy (available space, MiB).
+runnerd.min_free_disk_mb = 20480

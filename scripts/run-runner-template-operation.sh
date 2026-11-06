@@ -35,7 +35,7 @@ test -n "$qshell_version" || {
 }
 minimum_qshell_version=2.19.10
 if [ "$operation" = build ]; then
-  minimum_qshell_version=2.19.13
+  minimum_qshell_version=2.20.0
 fi
 if ! awk -v actual="$qshell_version" -v minimum="$minimum_qshell_version" '
   BEGIN {
@@ -89,7 +89,7 @@ check_template_disk() {
     return 1
   fi
   if [ "$disk_size" -lt "$expected_size" ]; then
-    echo "template $template_name total disk size $disk_size MiB is below disk_size_mb $expected_size MiB" >&2
+    echo "template $template_name total disk size $disk_size MiB is below the total disk minimum $expected_size MiB" >&2
     return 1
   fi
 }
@@ -159,11 +159,15 @@ reconcile_build_status() {
   done
 }
 
-expected_disk_size="$(sed -nE 's/^[[:space:]]*disk_size_mb[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$template_config" | head -n 1)"
-test -n "$expected_disk_size" || {
-  echo "template config has no valid disk_size_mb: $template_config" >&2
-  exit 65
-}
+source "$script_root/scripts/lib/runner-template-disk.sh"
+if [ "$operation" = build ]; then
+  requested_free_mib="$(template_disk_mib "$template_config" min_free_disk_mb)"
+  required_free_mib="$(template_disk_mib "$template_config" runnerd.min_free_disk_mb)"
+  if ((requested_free_mib < required_free_mib)); then
+    echo "free-space request is below the release minimum in $template_config" >&2
+    exit 65
+  fi
+fi
 template_name="$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$template_config" | head -n 1)"
 test -n "$template_name" || {
   echo "template config has no name: $template_config" >&2
@@ -212,6 +216,9 @@ case "$operation" in
       echo "BUILD_NAME is only valid for build" >&2
       exit 64
     }
+    if [ "$operation" = publish ]; then
+      expected_disk_size="$(template_disk_mib "$template_config" runnerd.min_free_disk_mb)"
+    fi
     template_record="$(resolve_template_record "$template_name")"
     template_id="$(jq -r '.TemplateID // empty' <<<"$template_record")"
     test -n "$template_id" || {

@@ -4,7 +4,7 @@
 
 ## 支持的标签与资源规格
 
-| Workflow 请求 | CPU | 内存 | 系统盘 | 模板状态 | 说明 |
+| Workflow 请求 | CPU | 内存 | 发布验收的可用空间 | 模板状态 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `[qiniu, ubuntu-slim]` | 8 vCPU | 8 GiB | 20 GiB | 稳定 | 更小的通用镜像 |
 | `[qiniu, ubuntu-slim-large]` | 8 vCPU | 8 GiB | 80 GiB | 配置后稳定 | 需要启用自定义 Runner Spec；使用更大系统盘的 Ubuntu Slim |
@@ -20,7 +20,9 @@
 
 ## 资源规格说明
 
-标准模板当前均提供 8 vCPU 和 8 GiB 内存。Ubuntu 的 `-large` 变体复用对应标准规格的操作系统镜像和预装软件，只将系统盘从 20 GiB 扩大到 80 GiB。磁盘容量由 Sandbox provider 分配，不是 workflow 中可调整的参数；格式化和预留空间可能使文件系统显示的可用容量略低于标称值。Windows 11 的物理系统盘为 50 GiB；系统分区会使 `C:` 卷容量小于物理磁盘容量，预装软件还会进一步占用剩余空间。
+标准模板提供 8 vCPU 和 8 GiB 内存，Ubuntu 的 `-large` 变体与对应标准模板使用相同的软件。
+表格列出发布前实测的可用空间下限。新建模板时会向 Sandbox provider 额外请求 5%，已有模板的可用空间可能更少。
+在 Ubuntu 上用 `df -h /` 查看当前可用空间，在 Windows 上用 PowerShell 执行 `(Get-PSDrive C).Free`。
 
 `ubuntu-latest-large` 是指向同一个 Ubuntu 24.04 large 物理模板的逻辑标签，不会新增物理镜像。
 

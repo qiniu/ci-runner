@@ -95,7 +95,7 @@ Use `task build` when verifying production embedded UI behavior because it rebui
 
 `Check` validates the application. `Template Check` (`.github/workflows/template-check.yaml`) runs template source tests, upstream compatibility and Dockerfile checks for related build/template/script changes or manual dispatch. Keep registry checks independent of source tests, use the shared `templates/` build context, and require both workflows on Runner upgrade PRs. Dockerfile `--check` does not replace real image builds or regional template acceptance.
 
-Public runner templates are built with `qiniu/qshell` 2.19.13 or newer.
+Public runner templates are built with `qiniu/qshell` 2.20.0 or newer.
 The preview `github-runner-windows-11` template also uses qshell, but its
 `qshell.sandbox.toml` sets `from_template = "windows11"` because Windows
 Sandbox templates cannot start from a Docker image; qshell ignores the
@@ -156,17 +156,15 @@ Keep the host-side archive checksum, sixteen small COPY chunks, and remote full
 checksum in the same Docker `RUN` as runtime installation; qshell does not
 restore cached `/tmp` outputs. Each of the four per-Ubuntu source directories
 contains `qshell.sandbox.toml` and `qshell.sandbox.large.toml`; do not recreate
-separate `-large` directories or source links. Keep every qshell `path = ".."`,
-`disk_size_mb = 20480` in the four standard TOML files, and `81920` in the four
-large TOML files. This value is the minimum root disk size; the template API
-and runtime smoke may report a larger total. Qshell 2.19.13 sends the setting
-only when creating a new name. Before rebuilding an existing name in place,
-adjust the provider team's
-`DiskMb`; the build task must preserve the name and ID and must not reject the
-stale pre-rebuild total. Publish and catalog checks still require the rebuilt
-total to meet the configured lower bound.
-Release smoke reads `disk_size_mb` from the selected TOML and requires the
-runtime root disk size to meet the same lower bound. Build tasks
+separate `-large` directories or source links. Keep every qshell `path = ".."`.
+Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). New template requests
+include 5% extra for filesystem overhead (`min_free_disk_mb`). Same-name
+rebuilds keep the existing disk setting. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
+Windows requires 50 GiB available on C: and requests 53,760 MiB on creation.
+Build tasks
 stage ignored archive chunks under
 `templates/common/.build/`; reuse verified chunks without replacing them so
 parallel qshell uploads read stable files. Never commit the archive or chunks.
