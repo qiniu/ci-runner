@@ -153,7 +153,7 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			oldDone := make(chan struct{})
 			go func() {
 				defer close(oldDone)
-				srv.startRunner(ctx, requestID, "old-worker")
+				srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, requestID, "old-worker"))
 			}()
 			await(service.oldStarted, "old Sandbox start did not block")
 			old, err := store.ReadState(requestID)
@@ -164,14 +164,14 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			jobCompleted.Store(true)
 			// Exercise the real worker claim, which advances LastAttemptAt
 			// before the replacement enters the Windows creation lock.
-			claimedReq, _, claimed, err := store.ClaimNextRunnable("new-worker", time.Now().UTC(), time.Minute)
+			claimedReq, _, claimed, err := store.ClaimNextRunnable("new-worker", time.Minute)
 			if err != nil || !claimed || claimedReq.ID != requestID {
 				t.Fatalf("worker claim failed: claimed=%t req=%+v err=%v", claimed, claimedReq, err)
 			}
 			newDone := make(chan struct{})
 			go func() {
 				defer close(newDone)
-				srv.startRunner(ctx, requestID, "new-worker")
+				srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, requestID, "new-worker"))
 			}()
 			// Observe the second caller waiting on the provisioning owner before
 			// releasing the old Sandbox result; scheduling cannot hide the race.

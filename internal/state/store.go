@@ -563,8 +563,9 @@ type RunnerRequestStore interface {
 	InFlightCountForProfile(name string) (int, error)
 	ActiveCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
-	ClaimNextRunnable(workerID string, now time.Time, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
-	ReleaseLease(id, workerID string) error
+	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
+	WriteQueuedClaim(st RunnerState, owner string) error
+	ReleaseQueuedClaim(claim RunnerState) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
 	AppendStagedLog(id, name, stage string, data []byte)

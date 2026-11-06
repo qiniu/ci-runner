@@ -349,7 +349,8 @@ func (s *Server) rejectAdmission(req state.RunnerRequest, payload []byte, reason
 	return st, nil
 }
 
-func (s *Server) startRunner(ctx context.Context, id, workerID string) {
+func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState) {
+	id, workerID := claim.ID, claim.LeaseOwner
 	var timings runnerTimings
 	initialLockWaitStartedAt := time.Now()
 	unlock := s.lockRunner(id)
@@ -387,10 +388,8 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	}
 	var windowsAttempt *time.Time
 	failStart := func(stage string, err error) { s.failStartForAttempt(id, st, stage, err, windowsAttempt) }
-	if st.Status != state.StatusQueued {
+	if st.Status != state.StatusQueued || st.Version != claim.Version || st.LeaseOwner != workerID {
 		unlock()
-		s.logger.Info("runner start skipped because request is not queued", "id", id, "status", st.Status)
-		s.store.AppendLog(id, "control.log", []byte("runner start skipped because request is not queued\n"))
 		return
 	}
 	if !req.CreatedAt.IsZero() {
@@ -405,13 +404,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 	if err != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		failStart("profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
+		s.failQueuedClaim(claim, "profile_lookup", fmt.Errorf("load profile %q: %w", req.ProfileName, err))
 		return
 	}
 	if err := validateRequestedProfile(profile, req.RequestedLabels); err != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		failStart("profile_validation", err)
+		s.failQueuedClaim(claim, "profile_validation", err)
 		return
 	}
 	releaseCapacity, capacityStage, err := s.reserveRunnerCapacity(req, profile, &timings)
@@ -419,13 +418,13 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		s.admissionMu.RUnlock()
 		unlock()
 		if err != nil {
-			_ = s.store.ReleaseLease(id, workerID)
+			_ = s.store.ReleaseQueuedClaim(claim)
 			s.logger.Error("check runner capacity", "id", id, "stage", capacityStage, "error", err)
 			return
 		}
 		s.logger.Info("runner start deferred because capacity is reserved", "id", id, "stage", capacityStage)
 		capacityDeferred = true
-		s.deferQueuedRequest(id, workerID, time.Now().UTC().Add(5*time.Second), capacityStage)
+		s.deferQueuedRequest(claim, time.Now().UTC().Add(5*time.Second), capacityStage)
 		s.signalQueue()
 		return
 	}
@@ -443,16 +442,14 @@ func (s *Server) startRunner(ctx context.Context, id, workerID string) {
 		st.LastAttemptAt = attemptAt
 		windowsAttempt = &attemptAt
 	}
-	st.LeaseOwner = workerID
-	st.LeaseExpiresAt = time.Now().UTC().Add(s.cfg.WorkerLeaseTTL)
 	creatingStatePersistStartedAt := time.Now()
-	writeErr := s.store.WriteState(st)
+	writeErr := s.store.WriteQueuedClaim(st, workerID)
 	timings.record("creating_state_persist", creatingStatePersistStartedAt)
 	releaseCapacity()
 	if writeErr != nil {
 		s.admissionMu.RUnlock()
 		unlock()
-		_ = s.store.ReleaseLease(id, workerID)
+		_ = s.store.ReleaseQueuedClaim(claim)
 		s.logger.Error("write creating state", "id", id, "error", writeErr)
 		return
 	}
@@ -885,6 +882,16 @@ func (s *Server) markRunnerJobStarted(id string) {
 	s.store.AppendLog(id, "control.log", []byte("runner accepted a job\n"))
 }
 
+func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure error) {
+	st := claim
+	result := s.applyFailure(&st, stage, failure, true)
+	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
+		s.logger.Warn("write queued runner failure", "id", st.ID, "error", err)
+		return
+	}
+	s.recordStartFailure(st, stage, failure, result)
+}
+
 func (s *Server) failStart(id string, st state.RunnerState, stage string, err error) {
 	s.failStartForAttempt(id, st, stage, err, nil)
 }
@@ -899,18 +906,22 @@ func (s *Server) failStartForAttempt(id string, st state.RunnerState, stage stri
 	}
 	if readErr == nil {
 		if current.Status == state.StatusCompleted || current.Status == state.StatusStopping {
-			_ = s.store.ReleaseLease(id, s.workerID)
 			s.logger.Info("runner failure ignored because request is stopped", "id", id, "status", current.Status, "error", err)
 			return
 		}
 		st = current
 	}
 	result := s.applyFailure(&st, stage, err, true)
-	s.logger.Error("runner failed", "id", id, "error", err)
-	s.store.AppendLog(id, "control.log", []byte(result.logLine+"\n"))
 	if writeErr := s.store.WriteState(st); writeErr != nil {
 		s.logger.Error("write failed state", "id", id, "error", writeErr)
+		return
 	}
+	s.recordStartFailure(st, stage, err, result)
+}
+
+func (s *Server) recordStartFailure(st state.RunnerState, stage string, err error, result failureResult) {
+	s.logger.Error("runner failed", "id", st.ID, "error", err)
+	s.store.AppendLog(st.ID, "control.log", []byte(result.logLine+"\n"))
 	metrics.RecordCreate(st.ProfileName, 0, result.metricResult)
 	if result.metricResult == "failed" {
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, github.WorkflowJob{}), st.ProfileName, st.FailureStage, st.FailureReason)
@@ -1265,20 +1276,16 @@ func (s *Server) recoverRunner(ctx context.Context, id string) error {
 		unlock()
 		return nil
 	}
+	if st.Status == state.StatusQueued {
+		// The queue already checks the retry deadline and lease expiry. Another
+		// live worker may own this row while this process is starting.
+		unlock()
+		s.signalQueue()
+		return nil
+	}
 	s.logger.Info("recovering runner after restart", "id", id, "status", st.Status, "sandbox_id", st.SandboxID)
 	s.store.AppendLog(id, "control.log", []byte("recovering runner after service restart\n"))
 	switch st.Status {
-	case state.StatusQueued:
-		st.LeaseOwner = ""
-		st.LeaseExpiresAt = time.Time{}
-		if err := s.store.WriteState(st); err != nil {
-			unlock()
-			return fmt.Errorf("clear queued runner lease: %w", err)
-		}
-		unlock()
-		s.store.AppendLog(id, "control.log", []byte("queued runner lease cleared after restart\n"))
-		s.signalQueue()
-		return nil
 	case state.StatusStopping:
 		unlock()
 		_, _, err := s.stopRunner(ctx, id, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
@@ -2145,19 +2152,8 @@ func (s *Server) retryOrFail(st state.RunnerState, stage string, err error) {
 	s.refreshMetrics()
 }
 
-func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time, capacityStage string) {
-	unlock := s.lockRunner(id)
-	defer unlock()
-	st, err := s.store.ReadState(id)
-	if err != nil {
-		s.logger.Error("read state for queue defer", "id", id, "error", err)
-		_ = s.store.ReleaseLease(id, workerID)
-		return
-	}
-	if st.Status != state.StatusQueued || st.LeaseOwner != workerID {
-		_ = s.store.ReleaseLease(id, workerID)
-		return
-	}
+func (s *Server) deferQueuedRequest(claim state.RunnerState, nextAttempt time.Time, capacityStage string) {
+	st := claim
 	dimension := strings.TrimSuffix(capacityStage, "_capacity_check")
 	code := "runner_capacity_" + dimension
 	changed := st.LastErrorCode != code
@@ -2168,13 +2164,13 @@ func (s *Server) deferQueuedRequest(id, workerID string, nextAttempt time.Time, 
 	st.LeaseExpiresAt = time.Time{}
 	st.NextRetryAt = nextAttempt
 	clearSandboxServiceSnapshot(&st)
-	if err := s.store.WriteState(st); err != nil {
-		s.logger.Error("defer queued request", "id", id, "error", err)
-		_ = s.store.ReleaseLease(id, workerID)
+	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
+		s.logger.Error("defer queued request", "id", st.ID, "error", err)
+		_ = s.store.ReleaseQueuedClaim(claim)
 		return
 	}
 	if changed {
-		s.store.AppendStagedLog(id, "control.log", "runner_capacity", []byte(st.LastErrorMessage+"\n"))
+		s.store.AppendStagedLog(st.ID, "control.log", "runner_capacity", []byte(st.LastErrorMessage+"\n"))
 	}
 }
 
@@ -2184,7 +2180,6 @@ func (s *Server) deferCreatingRequest(id, workerID string, nextAttempt time.Time
 	st, err := s.store.ReadState(id)
 	if err != nil {
 		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
-		_ = s.store.ReleaseLease(id, workerID)
 		return
 	}
 	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" {

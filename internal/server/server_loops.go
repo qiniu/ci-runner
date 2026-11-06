@@ -91,7 +91,7 @@ func (s *Server) processQueuedRequests(ctx context.Context) {
 		default:
 			return
 		}
-		req, _, claimed, err := s.store.ClaimNextRunnable(s.workerID, time.Now().UTC(), s.cfg.WorkerLeaseTTL)
+		req, lease, claimed, err := s.store.ClaimNextRunnable(s.workerID, s.cfg.WorkerLeaseTTL)
 		if err != nil {
 			<-s.slots
 			s.logger.Error("claim queued runner", "error", err)
@@ -102,10 +102,10 @@ func (s *Server) processQueuedRequests(ctx context.Context) {
 			return
 		}
 		s.logger.Info("claimed queued runner request", "id", req.ID, "worker_id", s.workerID, "repository", req.RepositoryFullName, "profile", req.ProfileName)
-		go func(id string) {
+		go func() {
 			defer func() { <-s.slots }()
-			s.startRunner(ctx, id, s.workerID)
-		}(req.ID)
+			s.startClaimedRunner(ctx, lease)
+		}()
 	}
 }
 

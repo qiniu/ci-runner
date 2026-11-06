@@ -202,7 +202,7 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if n, _ := store.InFlightCount(); n != 0 {
 					t.Fatalf("waiting consumes capacity: %d", n)
 				}
-				if _, _, claimed, err := store.ClaimNextRunnable("other", before, time.Second); err != nil || claimed {
+				if _, _, claimed, err := store.ClaimNextRunnable("other", time.Second); err != nil || claimed {
 					t.Fatalf("claimed before delay: %v %v", claimed, err)
 				}
 			}
@@ -488,7 +488,7 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			srv.store = &completionFailureStore{Store: base, failRead: operation == "read", failWrite: operation == "write"}
-			srv.startRunner(context.Background(), "1001", "test-worker")
+			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "1001", "test-worker"))
 			st = queueTestState(t, base)
 			if st.Status != state.StatusQueued || st.RetryCount != 1 || st.NextRetryAt.IsZero() || st.LeaseOwner != "" || !st.LeaseExpiresAt.IsZero() || !st.CreatingAt.IsZero() {
 				t.Fatalf("completion persistence failure must release creation capacity and schedule retry: %#v", st)
@@ -504,7 +504,7 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 				t.Fatalf("completion failure logged success: err=%v log=%s", err, control)
 			}
 			// A subsequent normal attempt can retain GitHub's terminal result.
-			srv.startRunner(context.Background(), "1001", "test-worker")
+			srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "1001", "test-worker"))
 			st = queueTestState(t, base)
 			if st.Status != state.StatusCompleted || st.GitHubJobConclusion != "cancelled" || st.GitHubJobObservedAt.IsZero() || st.LeaseOwner != "" || !st.NextRetryAt.IsZero() || fake.startedCount() != 0 {
 				t.Fatalf("completion did not recover after the store failure: %#v", st)

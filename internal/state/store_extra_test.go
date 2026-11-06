@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -289,7 +290,6 @@ func TestInFlightCountForRunnerAccountAndRepository(t *testing.T) {
 
 func TestReleaseLeaseClears(t *testing.T) {
 	store := New(t.TempDir())
-	now := time.Now().UTC()
 
 	if _, _, err := store.CreateRequest(RunnerRequest{
 		ID: "lease-test", Source: "test", Labels: []string{"sl"}, RunnerName: "e2b-lease-test",
@@ -297,7 +297,7 @@ func TestReleaseLeaseClears(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, claimed, err := store.ClaimNextRunnable("worker-A", now, 30*time.Second)
+	_, claim, claimed, err := store.ClaimNextRunnable("worker-A", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestReleaseLeaseClears(t *testing.T) {
 		t.Fatal("expected claim to succeed")
 	}
 
-	if err := store.ReleaseLease("lease-test", "worker-A"); err != nil {
+	if err := store.ReleaseQueuedClaim(claim); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,7 +323,6 @@ func TestReleaseLeaseClears(t *testing.T) {
 
 func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 	store := New(t.TempDir())
-	now := time.Now().UTC()
 
 	if _, _, err := store.CreateRequest(RunnerRequest{
 		ID: "lease-other", Source: "test", Labels: []string{"sl"}, RunnerName: "e2b-lease-other",
@@ -331,7 +330,7 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, claimed, err := store.ClaimNextRunnable("worker-A", now, 30*time.Second)
+	_, claim, claimed, err := store.ClaimNextRunnable("worker-A", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +339,8 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 	}
 
 	// worker-B tries to release worker-A's lease — should be a no-op
-	if err := store.ReleaseLease("lease-other", "worker-B"); err != nil {
+	claim.LeaseOwner = "worker-B"
+	if err := store.ReleaseQueuedClaim(claim); err != nil {
 		t.Fatal(err)
 	}
 
@@ -351,6 +351,63 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 	// Lease should still be held by worker-A
 	if got.LeaseOwner != "worker-A" {
 		t.Errorf("expected lease still owned by worker-A after wrong-worker release, got %q", got.LeaseOwner)
+	}
+}
+
+func TestQueuedClaimOwnership(t *testing.T) {
+	testQueuedClaimOwnership(t, New(t.TempDir()).(*DBStore))
+}
+
+func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
+	t.Helper()
+	const id = "claim-handoff"
+	if _, _, err := store.CreateRequest(RunnerRequest{ID: id}, nil); err != nil {
+		t.Fatal(err)
+	}
+	claim := func() RunnerState {
+		t.Helper()
+		// The same worker name can be reused by a later process.
+		_, st, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+		if err != nil || !ok || st.ID != id {
+			t.Fatalf("claim: id=%q ok=%v err=%v", st.ID, ok, err)
+		}
+		return st
+	}
+	old := claim()
+	if delta := time.Until(old.LeaseExpiresAt); delta <= 0 || delta > 2*time.Minute {
+		t.Fatalf("one-minute lease has unexpected deadline %v", old.LeaseExpiresAt)
+	}
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Delete(&runnerRequestRecord{}, "id = ?", id).Error; err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := db.Model(&runnerRequestRecord{}).Where("id = ?", id).Update("lease_expires_at", time.Unix(1, 0).UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	rejectOldWrites := func() {
+		t.Helper()
+		for _, status := range []string{StatusCreating, StatusQueued, StatusFailed} {
+			next := old
+			next.Status = status
+			if err := store.WriteQueuedClaim(next, old.LeaseOwner); !errors.Is(err, ErrConflict) {
+				t.Fatalf("expired or superseded claim wrote %s: %v", status, err)
+			}
+		}
+	}
+	rejectOldWrites()
+	current := claim()
+	rejectOldWrites()
+	if err := store.ReleaseQueuedClaim(old); err != nil {
+		t.Fatal(err)
+	}
+	current.Status = StatusCreating
+	if err := store.WriteQueuedClaim(current, current.LeaseOwner); err != nil {
+		t.Fatalf("current claim could not start after stale release: %v", err)
 	}
 }
 
@@ -750,12 +807,12 @@ func TestClaimNextRunnableOrdersByEligibilityTime(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"fresh", "due-retry", "old-deferred"} {
-		req, _, claimed, err := store.ClaimNextRunnable("worker", now, time.Minute)
+		req, _, claimed, err := store.ClaimNextRunnable("worker", time.Minute)
 		if err != nil || !claimed || req.ID != want {
 			t.Fatalf("claim=%s claimed=%t err=%v, want %s", req.ID, claimed, err, want)
 		}
 	}
-	if _, _, claimed, err := store.ClaimNextRunnable("worker", now, time.Minute); err != nil || claimed {
+	if _, _, claimed, err := store.ClaimNextRunnable("worker", time.Minute); err != nil || claimed {
 		t.Fatalf("claimed future or leased request: claimed=%t err=%v", claimed, err)
 	}
 }

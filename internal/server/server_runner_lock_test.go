@@ -308,7 +308,7 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 			}
 			done := make(chan struct{})
 			go func() {
-				srv.startRunner(t.Context(), id, "worker-test")
+				srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, id, "worker-test"))
 				close(done)
 			}()
 			var batch string
@@ -351,4 +351,22 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Direct-start fixtures exercise a specific request without running the queue loop.
+func queuedRunnerForTest(t *testing.T, store state.Store, id, owner string) state.RunnerState {
+	t.Helper()
+	st, err := store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status == state.StatusQueued && st.LeaseOwner == "" {
+		st.LeaseOwner = owner
+		st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		st.Version++
+	}
+	return st
 }

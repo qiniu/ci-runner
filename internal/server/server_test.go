@@ -6746,7 +6746,7 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedAfterJobStartedMarker(t 
 	}
 }
 
-func TestRecoverRequeuesQueuedRunner(t *testing.T) {
+func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	store := state.New(t.TempDir())
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:         "recover-queued",
@@ -6772,8 +6772,8 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected queued request with cleared lease, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) {
+		t.Fatalf("expected queued request with original lease, got %#v", got)
 	}
 	if fake.recoveredCount() != 0 || fake.stoppedCount() != 0 {
 		t.Fatalf("queued recovery touched sandbox: recovered=%d stopped=%d", fake.recoveredCount(), fake.stoppedCount())
@@ -7146,8 +7146,8 @@ func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected later queued request to be recovered, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != queued.LeaseOwner || !got.LeaseExpiresAt.Equal(queued.LeaseExpiresAt) {
+		t.Fatalf("expected queued request to retain its lease, got %#v", got)
 	}
 }
 
