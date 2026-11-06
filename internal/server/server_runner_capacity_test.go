@@ -311,6 +311,43 @@ func TestRunnerAdmissionSharedLimits(t *testing.T) {
 	}
 }
 
+func TestReadmittedRunnerGetsNewProvisionAttempt(t *testing.T) {
+	srv, store, _ := admissionTestFixture(t, 1, 1)
+	req, err := store.ReadRequest("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit := func(claim state.RunnerState) state.RunnerState {
+		t.Helper()
+		_, stage, err := srv.admitQueuedRunner(t.Context(), req, &claim, &runnerTimings{}, time.Now())
+		if err != nil || stage != "" {
+			t.Fatalf("admit: stage=%q err=%v", stage, err)
+		}
+		saved, err := store.ReadState(req.ID)
+		if err != nil || saved.ProvisionAttemptID == "" {
+			t.Fatalf("missing durable attempt: %v", err)
+		}
+		return saved
+	}
+	first := admit(queuedRunnerForTest(t, store, req.ID, "worker"))
+	failed := first
+	failed.Status = state.StatusFailed
+	if err := store.WriteState(failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RetryRequest(req.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, claim, ok, err := store.ClaimNextRunnable("other-worker", time.Minute)
+	if err != nil || !ok || claim.ID != req.ID {
+		t.Fatalf("reclaim: id=%q ok=%v err=%v", claim.ID, ok, err)
+	}
+	second := admit(claim)
+	if first.ProvisionAttemptID == second.ProvisionAttemptID {
+		t.Fatal("fresh retry reused the previous provision attempt")
+	}
+}
+
 func TestRunnerAdmissionConcurrentEnqueueIsIdempotent(t *testing.T) {
 	srv, store, _ := admissionTestFixture(t, 3, 3)
 	var created atomic.Int32
