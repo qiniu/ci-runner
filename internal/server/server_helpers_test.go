@@ -2073,7 +2073,7 @@ func TestCleanupSandboxAfterExitNoopWhenNoSandboxID(t *testing.T) {
 	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
 
 	st := state.RunnerState{ID: "cleanup-no-sandbox", SandboxID: ""}
-	if err := srv.cleanupSandboxAfterExit("cleanup-no-sandbox", st); err != nil {
+	if err := srv.cleanupSandboxAfterExit(nil, st); err != nil {
 		t.Errorf("cleanupSandboxAfterExit: expected nil for empty SandboxID, got %v", err)
 	}
 }
@@ -2085,10 +2085,7 @@ type conflictOnStoppingStateStore struct {
 	replacementCompletedAt time.Time
 }
 
-func (s *conflictOnStoppingStateStore) WriteState(st state.RunnerState) error {
-	if st.Status != state.StatusStopping {
-		return s.Store.WriteState(st)
-	}
+func (s *conflictOnStoppingStateStore) BeginRunnerCleanup(ctx context.Context, st state.RunnerState, observedWatch, token string, ttl time.Duration) error {
 	latest, err := s.Store.ReadState(st.ID)
 	if err != nil {
 		return err
@@ -2659,8 +2656,7 @@ func TestRunnerExitedRetainsTerminalWorkflowJobResult(t *testing.T) {
 		}
 	}()
 	fake := &fakeSandbox{stopBlock: stopBlock, stopStarted: make(chan struct{}, 1)}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, fake)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "exited-retained-job",

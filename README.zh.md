@@ -266,6 +266,8 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 
 准入事务会同时授予 worker 创建租约。runnerd 在调用 Sandbox 前记录本次创建已发出，收到服务返回的 Sandbox ID 后立即入库。如果节点在保存 ID 前退出，接管节点会按原尝试标识查回。首次查不到时，任务保留在创建状态并继续占用配额，等待服务端确认。此时收到的停止请求也会等待资源查回并清理。确认上一次创建结果后才能开始新的尝试。
 
+停止 Runner 时，节点也会取得数据库租约。接手节点从上一次确认的清理步骤继续，按已保存的 GitHub Runner 数字 ID 删除注册。如果删除响应丢失，同一个资源可能收到第二次删除请求。
+
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener 而 `run.sh` 仍返回 0，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），runnerd 不把请求记为完成或失败，而是按同样的有限退避重试；重试前会先复查 Job 再创建 Sandbox。
 
 新建 runner request（包括准入拒绝记录）只保存解析后的 GitHub 上下文，不保存 webhook 原文。历史兼容列 `github_payload_json` 及已有值继续保留，用于回填旧记录的元信息；此变更不会清理已有原文、请求历史或日志。

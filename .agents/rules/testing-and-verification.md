@@ -245,4 +245,6 @@ Real deployment readiness still requires `docs/deployment-smoke.md` with a GitHu
 
 - For creating-lease changes, run `TestLateStartFailureAfterPeerAdoption` on a dedicated PostgreSQL database with the race detector. Verify startup and timeout sweeps while the original creator is healthy, kill it after provider acceptance, simulate an empty first lookup, and verify adoption or a pending manual stop against the same attempt.
 
+- For stopping changes, run `TestRunnerCleanupProcess` against the dedicated PostgreSQL database. Exercise a live stop, owner kill, pause/resume, duplicate delete with a 404, and an exit observation from another node. Check the numeric GitHub ID, Sandbox stop count and first termination source.
+
 - Runner account/repository concurrency changes must cover simultaneous claims, admission rollback, concurrent spec mutations, cross-Spec totals, independent owners/repositories, exact case-insensitive name matching, zero/missing and invalid configuration, persisted in-flight lifecycle counts after reopen, and queue progress through a restricted backlog. Run these admission tests with race detection; local fixtures do not replace deployed cleanup/restart acceptance.

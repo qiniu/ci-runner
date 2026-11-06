@@ -5714,8 +5714,7 @@ func TestOriginalWorkflowJobCompletionKeepsRunnerAfterJobStartedMarker(t *testin
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5800,8 +5799,7 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5874,8 +5872,7 @@ func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -6537,9 +6534,8 @@ func TestRecoverStopsRunnerPastSandboxTimeout(t *testing.T) {
 	}
 
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, "http://example.test", fake)
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	srv.cfg.SandboxTimeout = time.Hour
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6631,8 +6627,7 @@ func TestRecoverCleansUpCompletedWorkflowJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6930,8 +6925,7 @@ func TestRecoverFailsCreatingRunnerWithInProgressJobWhenSandboxIsAbsent(t *testi
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6964,8 +6958,7 @@ func TestRecoverStopsDiscoveredSandboxWithoutRunnerBeforeRequeue(t *testing.T) {
 		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-without-runner"},
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -7001,8 +6994,7 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 		stopErr:       errors.New("temporary sandbox cleanup failure"),
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected sandbox cleanup error")
 	}
@@ -7010,8 +7002,8 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusCreating {
-		t.Fatalf("expected failed cleanup to preserve creating state, got %#v", got)
+	if got.Status != state.StatusStopping || got.FailureReason != interruptedCreateCleanup || got.NextRetryAt.IsZero() {
+		t.Fatalf("expected failed cleanup to retain stop intent and retry, got %#v", got)
 	}
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected one sandbox cleanup attempt, got %d", fake.stoppedCount())
@@ -7078,8 +7070,7 @@ func TestRecoverFailsRunningRunnerWhenSandboxIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -8951,6 +8942,13 @@ func newTestServer(t *testing.T, store state.Store, ghURL string, fake *fakeSand
 
 func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
 	t.Helper()
+	srv := newTestServerWithoutLoops(t, store, ghURL, fake, limit)
+	srv.Start()
+	return srv
+}
+
+func newTestServerWithoutLoops(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
+	t.Helper()
 	cfg := config.Config{
 		StateDir:                "./var/runner_requests",
 		StateBackend:            "sqlite",
@@ -8993,7 +8991,6 @@ func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake 
 	}
 	gh := github.NewClient(ghURL, http.DefaultClient)
 	srv := New(cfg, store, gh, fake, nil)
-	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }

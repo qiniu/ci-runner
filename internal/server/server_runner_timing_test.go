@@ -107,7 +107,6 @@ func newStartupTimingFixture(t *testing.T) (*Server, *startupTimingStore, chan s
 	t.Cleanup(gh.Close)
 	srv := newRunnerLifecycleTestServer(t, observer, gh.URL, sandbox)
 	// The constructor may inspect the Store. Only the explicit start is under test.
-	srv.Close()
 	store.initialRead.Store(false)
 	return srv, store, batches
 }

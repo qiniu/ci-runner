@@ -222,7 +222,7 @@ func (s *DBStore) ReadState(id string) (RunnerState, error) {
 }
 
 func (s *DBStore) WriteState(st RunnerState) error {
-	return s.writeState(st, "", "", 0)
+	return s.writeState(st, stateWriteLease{})
 }
 
 // WriteQueuedClaim consumes the exact version obtained by ClaimNextRunnable.
@@ -230,13 +230,23 @@ func (s *DBStore) WriteQueuedClaim(st RunnerState, owner string) error {
 	if owner == "" {
 		return ErrConflict
 	}
-	return s.writeState(st, owner, "", 0)
+	return s.writeState(st, stateWriteLease{queueOwner: owner})
 }
 
-func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watchTTL time.Duration) error {
+type stateWriteLease struct {
+	ctx                                context.Context
+	queueOwner, currentToken, newToken string
+	ttl                                time.Duration
+	beginCleanup, cleanupWrite         bool
+}
+
+func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
+	}
+	if lease.ctx != nil {
+		db = db.WithContext(lease.ctx)
 	}
 	st.ID = sanitizeID(st.ID)
 	if st.ID == "" {
@@ -305,20 +315,33 @@ func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watc
 		updates["next_retry_at"] = queueTime(db, *st.queueRetryDelay)
 	}
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
-	if claimOwner != "" {
-		query = liveQueuedClaim(query, claimOwner)
+	if lease.queueOwner != "" {
+		query = liveQueuedClaim(query, lease.queueOwner)
 	}
-	if watchToken != "" && claimOwner == "" {
-		query = query.Where("status IN ? AND watch_token = ? AND watch_expires_at > ?", []string{StatusCreating, StatusRunning}, watchToken, queueTime(db, 0))
+	if lease.currentToken != "" {
+		if lease.cleanupWrite {
+			query = query.Where("status = ?", StatusStopping)
+		} else {
+			query = query.Where("status IN ?", []string{StatusCreating, StatusRunning})
+		}
+		query = query.Where("watch_token = ? AND watch_expires_at > ?", lease.currentToken, queueTime(db, 0))
 	}
-	if watchTTL > 0 {
-		updates["watch_token"], updates["watch_expires_at"] = watchToken, queueTime(db, watchTTL)
+	if lease.beginCleanup {
+		// A stop preempts a live creator or watcher. Once stopping, only an
+		// unowned or expired cleanup can be taken over, even with a fresh version.
+		query = query.Where("status <> ? OR watch_expires_at IS NULL OR watch_expires_at <= ?", StatusStopping, queueTime(db, 0))
 	}
-	if st.Status != StatusCreating && st.Status != StatusRunning {
+	if lease.newToken != "" {
+		updates["watch_token"], updates["watch_expires_at"] = lease.newToken, queueTime(db, lease.ttl)
+	} else if st.Status != StatusCreating && st.Status != StatusRunning && st.Status != StatusStopping {
+		updates["watch_token"], updates["watch_expires_at"] = nil, nil
+	} else if st.Status == StatusStopping && lease.currentToken != "" && !lease.cleanupWrite {
+		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
 	if st.Status == StatusQueued {
 		updates["sandbox_create_dispatched"] = false
+		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
 	}
 	result := query.Updates(updates)
 	if result.Error != nil {
@@ -984,6 +1007,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		record.Status = StatusQueued
 		record.ProvisionAttemptID = ""
 		record.SandboxCreateDispatched = false
+		record.CleanupSandboxDone, record.CleanupGitHubDone, record.CleanupGitHubRunnerID = false, false, 0
 		record.Error = ""
 		record.FailureStage = ""
 		record.FailureReason = ""
@@ -1023,6 +1047,9 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
 				"sandbox_create_dispatched":           false,
+				"cleanup_sandbox_done":                false,
+				"cleanup_github_done":                 false,
+				"cleanup_github_runner_id":            0,
 				"status":                              record.Status,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,

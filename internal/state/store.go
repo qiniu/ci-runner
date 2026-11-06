@@ -193,6 +193,13 @@ type DeploymentEvent struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+type RunnerCleanupStep string
+
+const (
+	CleanupSandbox RunnerCleanupStep = "cleanup_sandbox_done"
+	CleanupGitHub  RunnerCleanupStep = "cleanup_github_done"
+)
+
 type RunnerState struct {
 	ID                              string    `json:"id"`
 	Status                          string    `json:"status"`
@@ -248,6 +255,9 @@ type RunnerState struct {
 	ProvisionAttemptID              string    `json:"-"`
 	WatchToken                      string    `json:"-"`
 	SandboxCreateDispatched         bool      `json:"-"`
+	CleanupSandboxDone              bool      `json:"-"`
+	CleanupGitHubDone               bool      `json:"-"`
+	CleanupGitHubRunnerID           int64     `json:"-"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
 	queueRetryDelay                 *time.Duration
@@ -553,8 +563,13 @@ type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
 	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
 	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
-	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerState, error)
+	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error)
 	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
+	BeginRunnerCleanup(ctx context.Context, st RunnerState, observedWatch, token string, ttl time.Duration) error
+	WriteCleanupState(st RunnerState, token string) error
+	ReleaseRunnerCleanup(ctx context.Context, id, token string) error
+	BindCleanupGitHubRunner(ctx context.Context, id, token string, runnerID int64) error
+	RecordRunnerCleanup(ctx context.Context, id, token string, step RunnerCleanupStep) error
 	DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error
 	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
 	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error

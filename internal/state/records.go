@@ -60,6 +60,9 @@ type runnerRequestRecord struct {
 	WatchToken                      string     `gorm:"column:watch_token;size:64"`
 	WatchExpiresAt                  *time.Time `gorm:"column:watch_expires_at;index:idx_runner_watch_expiry,priority:2"`
 	SandboxCreateDispatched         bool       `gorm:"column:sandbox_create_dispatched"`
+	CleanupSandboxDone              bool       `gorm:"column:cleanup_sandbox_done"`
+	CleanupGitHubDone               bool       `gorm:"column:cleanup_github_done"`
+	CleanupGitHubRunnerID           int64      `gorm:"column:cleanup_github_runner_id"`
 	ProvisionAttemptID              string     `gorm:"column:provision_attempt_id;size:64"`
 	LastAttemptAt                   *time.Time `gorm:"column:last_attempt_at"`
 	NextRetryAt                     *time.Time `gorm:"column:next_retry_at;index:idx_runner_requests_status_retry_queue"`

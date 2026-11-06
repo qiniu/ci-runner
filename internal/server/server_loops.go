@@ -287,7 +287,7 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 		}
 		var timings runnerTimings
 		requeueStartedAt := time.Now()
-		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued)
+		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued, s.store.WriteState)
 		timings.record("requeue", requeueStartedAt)
 		unlock()
 		timings.flush(s, st.ID)
@@ -302,12 +302,12 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 	}
 }
 
-func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed github.WorkflowJob, queued bool) (bool, state.RunnerState, error) {
+func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed github.WorkflowJob, queued bool, write func(state.RunnerState) error) (bool, state.RunnerState, error) {
 	if !queued {
 		next := st
 		next.AssignedJobID = 0
 		next.AssignedJobName = ""
-		if err := s.store.WriteState(next); err != nil {
+		if err := write(next); err != nil {
 			return false, state.RunnerState{}, fmt.Errorf("write mismatched workflow job inspection: %w", err)
 		}
 		// Keep the returned state aligned with WriteState's CAS-persisted version.
@@ -348,7 +348,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	next.GitHubJobRunnerName = ""
 	next.GitHubJobObservedAt = time.Time{}
 	clearSandboxServiceSnapshot(&next)
-	if err := s.store.WriteState(next); err != nil {
+	if err := write(next); err != nil {
 		return false, state.RunnerState{}, fmt.Errorf("write mismatched workflow job requeue: %w", err)
 	}
 	// Keep the returned state aligned with WriteState's CAS-persisted version.

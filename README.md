@@ -267,6 +267,8 @@ A startup REST check reporting `waiting`, `pending`, or `requested` keeps the re
 
 The admission transaction grants the worker a database lease for creation. Before calling the Sandbox service, runnerd records the attempt as dispatched. It saves the Sandbox ID as soon as the provider returns it. If a node dies before that checkpoint, recovery looks up the same attempt. An empty lookup keeps the request in creation with its capacity reserved until the provider confirms the outcome. An accepted stop also waits for that resource to be reconciled. A fresh retry gets a new attempt only after the previous outcome is established.
 
+Stopping a Runner also acquires a database lease. A replacement worker resumes from the last confirmed cleanup step and uses the saved numeric GitHub Runner ID. A lost delete response can cause another request for the same resource.
+
 If a Runner process ends before accepting any Job, for example because GitHub terminated its listener (`run.sh` still exits 0) or its Sandbox output stream was lost while GitHub reports it idle, runnerd retries the request with the same bounded backoff instead of marking it completed or failed; the retry rechecks the Job before creating another Sandbox.
 
 New runner requests, including admission rejections, store the parsed GitHub context but not the raw webhook body. The legacy `github_payload_json` column and existing values remain available for historical metadata backfill; this change does not clean up old payloads, request history, or logs.

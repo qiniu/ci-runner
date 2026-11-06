@@ -52,8 +52,7 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 				fake.recoverErr = sandboxrunner.ErrRunnerNotFound
 				fake.recoverResult = sandboxrunner.StartResult{SandboxID: "interrupted-sandbox"}
 			}
-			srv := newTestServer(t, store, gh.URL, fake)
-			srv.Close() // Drive recovery and startup deterministically.
+			srv := newTestServerWithoutLoops(t, store, gh.URL, fake, 10)
 			upsertLifecycleProfile(t, store, state.RunnerProfile{Name: "windows", Labels: []string{"self-hosted", "windows"}, Enabled: true, TemplateID: "win"})
 			_, st, err := store.CreateRequest(state.RunnerRequest{ID: "recover-jit", RepositoryFullName: "o/r", RunnerName: "e2b-recover-jit", ProfileName: "windows", Labels: []string{"self-hosted", "windows"}, JobID: 123}, nil)
 			if err != nil {

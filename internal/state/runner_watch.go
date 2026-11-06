@@ -33,19 +33,28 @@ func (s *DBStore) RenewRunnerWatch(ctx context.Context, id, token string, ttl ti
 	if err != nil {
 		return false, err
 	}
-	result := db.WithContext(ctx).Model(&runnerRequestRecord{}).
-		Where("id = ? AND status IN ? AND watch_token = ? AND watch_expires_at > ?", id, []string{StatusCreating, StatusRunning}, token, queueTime(db, 0)).
-		UpdateColumn("watch_expires_at", queueTime(db, ttl))
-	return result.RowsAffected == 1, result.Error
+	live := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND status IN ? AND watch_token = ? AND watch_expires_at > ?", id, []string{StatusCreating, StatusRunning, StatusStopping}, token, queueTime(db, 0))
+	result := live.Session(&gorm.Session{}).UpdateColumn("watch_expires_at", queueTime(db, ttl))
+	if result.Error != nil || result.RowsAffected != 0 || db.Dialector.Name() != "mysql" {
+		return result.RowsAffected == 1, result.Error
+	}
+	// MySQL normally reports changed rows. Two renewals can round to the
+	// same stored millisecond, leaving a matching, live lease unchanged.
+	var count int64
+	err = live.Count(&count).Error
+	return count == 1, err
 }
 
-func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerState, error) {
+type RunnerWatchCandidate struct{ ID, Status string }
+
+func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return nil, err
 	}
-	var rows []RunnerState
-	err = db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("status IN ?", []string{StatusCreating, StatusRunning}).
+	var rows []RunnerWatchCandidate
+	err = db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("status IN ? OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?))", []string{StatusCreating, StatusRunning}, StatusStopping, queueTime(db, 0)).
 		Where("watch_expires_at IS NULL OR watch_expires_at <= ?", queueTime(db, 0)).
 		Order("watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error
 	return rows, err
@@ -55,21 +64,21 @@ func (s *DBStore) AdoptRunningWatch(st RunnerState, token string, ttl time.Durat
 	if st.Status != StatusRunning || token == "" || ttl <= 0 {
 		return ErrConflict
 	}
-	return s.writeState(st, "", token, ttl)
+	return s.writeState(st, stateWriteLease{currentToken: token, newToken: token, ttl: ttl})
 }
 
 func (s *DBStore) WriteWatchedState(st RunnerState, token string) error {
 	if token == "" {
 		return ErrConflict
 	}
-	return s.writeState(st, "", token, 0)
+	return s.writeState(st, stateWriteLease{currentToken: token})
 }
 
 func (s *DBStore) BeginRunnerCreation(st RunnerState, ttl time.Duration) error {
 	if st.Status != StatusCreating || st.LeaseOwner == "" || st.ProvisionAttemptID == "" || st.WatchToken == "" || ttl <= 0 {
 		return ErrConflict
 	}
-	return s.writeState(st, st.LeaseOwner, st.WatchToken, ttl)
+	return s.writeState(st, stateWriteLease{queueOwner: st.LeaseOwner, newToken: st.WatchToken, ttl: ttl})
 }
 
 // Commit intent before crossing the provider boundary. A metadata miss on
@@ -125,4 +134,67 @@ func (s *DBStore) RecordSandboxCreateResult(ctx context.Context, attempt RunnerS
 		return ErrConflict
 	}
 	return nil
+}
+
+// BeginRunnerCleanup atomically persists the first stop intent and replaces the
+// active lifecycle watch. Recovery competes only for an expired stopping lease.
+func (s *DBStore) BeginRunnerCleanup(ctx context.Context, st RunnerState, observedWatch, token string, ttl time.Duration) error {
+	if st.Status != StatusStopping || token == "" || ttl <= 0 {
+		return ErrConflict
+	}
+	return s.writeState(st, stateWriteLease{ctx: ctx, currentToken: observedWatch, newToken: token, ttl: ttl, beginCleanup: true})
+}
+
+func (s *DBStore) ReleaseRunnerCleanup(ctx context.Context, id, token string) error {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return err
+	}
+	return db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("id = ? AND status = ? AND watch_token = ?", id, StatusStopping, token).
+		UpdateColumns(map[string]any{"watch_token": nil, "watch_expires_at": nil}).Error
+}
+
+// Checkpoints do not bump the business version. Concurrent exit/job evidence
+// writes never overwrite them. A fresh attempt clears both receipts.
+func (s *DBStore) RecordRunnerCleanup(ctx context.Context, id, token string, step RunnerCleanupStep) error {
+	if token == "" || (step != CleanupSandbox && step != CleanupGitHub) {
+		return ErrConflict
+	}
+	return s.checkpointRunnerCleanup(ctx, id, token, map[string]any{string(step): true}, false)
+}
+
+// Bind the numeric GitHub identity before DELETE. A retry must not look up
+// another registration that has since acquired the same name.
+func (s *DBStore) BindCleanupGitHubRunner(ctx context.Context, id, token string, runnerID int64) error {
+	if token == "" || runnerID <= 0 {
+		return ErrConflict
+	}
+	return s.checkpointRunnerCleanup(ctx, id, token, map[string]any{"cleanup_github_runner_id": runnerID}, true)
+}
+
+func (s *DBStore) checkpointRunnerCleanup(ctx context.Context, id, token string, updates map[string]any, bindIdentity bool) error {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return err
+	}
+	query := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND status = ? AND watch_token = ? AND watch_expires_at > ?", id, StatusStopping, token, queueTime(db, 0))
+	if bindIdentity {
+		query = query.Where("cleanup_github_runner_id IS NULL OR cleanup_github_runner_id = 0")
+	}
+	result := query.UpdateColumns(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (s *DBStore) WriteCleanupState(st RunnerState, token string) error {
+	if token == "" {
+		return ErrConflict
+	}
+	return s.writeState(st, stateWriteLease{currentToken: token, cleanupWrite: true})
 }

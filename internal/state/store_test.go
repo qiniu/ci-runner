@@ -3677,8 +3677,11 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 	if ok, err := store.ClaimRunnerWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
 		t.Fatalf("claimed healthy watch: %v, %v", ok, err)
 	}
-	if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
-		t.Fatalf("renew: %v, %v", ok, err)
+	// Exercise same-millisecond renewals on MySQL with changed-row semantics.
+	for range 8 {
+		if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
+			t.Fatalf("renew: %v, %v", ok, err)
+		}
 	}
 	again, err := store.ReadState(st.ID)
 	if err != nil || again.Version != observed.Version || !again.UpdatedAt.Equal(observed.UpdatedAt) {
@@ -3785,13 +3788,59 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	if err != nil || !current.SandboxCreateDispatched || current.SandboxID != "created" {
 		t.Fatalf("missing create receipt: %v", err)
 	}
+	current.Status = StatusStopping
+	if err := store.BeginRunnerCleanup(t.Context(), current, "first", "stop-a", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginRunnerCleanup(t.Context(), current, "", "stop-b", time.Minute); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stole active cleanup: %v", err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupSandbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindCleanupGitHubRunner(t.Context(), id, "stop-a", 71); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindCleanupGitHubRunner(t.Context(), id, "stop-a", 72); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rebound cleanup registration: %v", err)
+	}
+	if err := store.ReleaseRunnerCleanup(t.Context(), id, "stop-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginRunnerCleanup(t.Context(), current, "", "stop-b", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || !current.CleanupSandboxDone || current.CleanupGitHubRunnerID != 71 || current.CleanupGitHubDone {
+		t.Fatalf("lost cleanup progress: %v", err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupGitHub); !errors.Is(err, ErrConflict) {
+		t.Fatalf("accepted stale receipt: %v", err)
+	}
+	if err := store.ReleaseRunnerCleanup(t.Context(), id, "stop-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-b", CleanupGitHub); err != nil {
+		t.Fatal(err)
+	}
 	current.Status = StatusFailed
-	if err := store.WriteState(current); err != nil {
+	if err := store.WriteCleanupState(current, "stop-a"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("accepted stale completion: %v", err)
+	}
+	if err := store.WriteCleanupState(current, "stop-b"); err != nil {
 		t.Fatal(err)
 	}
 	retried, err := store.RetryRequest(id, time.Now())
-	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched {
-		t.Fatalf("retry retained attempt %q, err = %v", retried.ProvisionAttemptID, err)
+	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
+		t.Fatalf("retry retained old attempt or cleanup evidence: %v", err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
+		t.Fatalf("persisted cleanup on retry: %v", err)
 	}
 }
 
