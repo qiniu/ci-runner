@@ -577,8 +577,6 @@ type RunnerRequestStore interface {
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
 	WriteQueuedClaim(st RunnerState, owner string) error
-	// ReleaseQueuedClaim is best-effort: an expired or superseded claim is already released for its caller.
-	ReleaseQueuedClaim(claim RunnerState) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
 	AppendStagedLog(id, name, stage string, data []byte)

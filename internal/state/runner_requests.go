@@ -951,20 +951,6 @@ func liveQueuedClaim(query *gorm.DB, owner string) *gorm.DB {
 	return query.Where("status = ? AND lease_owner = ? AND lease_expires_at > ?", StatusQueued, owner, queueTime(query, 0))
 }
 
-func (s *DBStore) ReleaseQueuedClaim(claim RunnerState) error {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return err
-	}
-	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", sanitizeID(claim.ID), claim.Version)
-	return liveQueuedClaim(query, claim.LeaseOwner).
-		Updates(map[string]any{
-			"version":          gorm.Expr("version + 1"),
-			"lease_owner":      "",
-			"lease_expires_at": nil,
-		}).Error
-}
-
 func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {

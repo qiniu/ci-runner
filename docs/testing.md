@@ -1222,7 +1222,7 @@ historical requests retain their saved ownership names until they finish.
 Missing entries and `0` add no limit. Negative limits, invalid names and duplicate
 keys after normalization reject startup. Global, Runner Spec, account and repository
 limits must all allow admission. `creating`, `running` and `stopping` consume
-capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL and MySQL guard transactions use read committed isolation to see the previous holder’s commit. A failed
+capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL guard transactions use read committed isolation. MySQL uses InnoDB repeatable read, acquires the guard rows before its first snapshot read, and supports statement-based binary logging. A failed
 transaction rolls back the creating write and releases the guard.
 
 At capacity, requests stay queued, release their worker lease and become eligible
