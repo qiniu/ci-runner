@@ -66,7 +66,7 @@ func TestPublicRunnerTemplatesSanitizesSharedQueryPanic(t *testing.T) {
 	srv := &Server{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	rec := publicTemplatesResponse(srv)
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "private driver evidence") ||
-		strings.Count(logs.String(), "category=query_failed") != 1 || strings.Contains(logs.String(), "private driver evidence") {
+		strings.Count(logs.String(), "category=query_panicked") != 1 || strings.Contains(logs.String(), "private driver evidence") {
 		t.Fatalf("unexpected sanitized error: status=%d body=%q log=%q", rec.Code, rec.Body, &logs)
 	}
 }

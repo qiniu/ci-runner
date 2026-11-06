@@ -24,11 +24,13 @@ func (s *Server) publicTemplatesRead() <-chan singleflight.Result {
 		// DoChan runs outside the HTTP recovery boundary. Keep diagnostics
 		// independent of any surviving waiter and omit provider/SQL details.
 		defer func() {
+			category := readFailureCategory(err)
 			if recover() != nil {
 				err = errors.New("public catalog query panicked")
+				category = "query_panicked"
 			}
 			if err != nil {
-				s.logger.ErrorContext(ctx, "public runner catalog read failed", "category", readFailureCategory(err))
+				s.logger.ErrorContext(ctx, "public runner catalog read failed", "category", category)
 			}
 		}()
 		profiles, err := s.store.ListProfilesContext(ctx)
