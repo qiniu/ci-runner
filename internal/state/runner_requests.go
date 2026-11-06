@@ -931,9 +931,13 @@ func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
 	case BackendPostgres:
 		return gorm.Expr("clock_timestamp() + ? * interval '1 microsecond'", after.Microseconds())
 	case BackendMySQL:
-		// MySQL time zone tables are optional. Use the driver's offset for the
-		// target instant, keeping both the clock and the deadline database-based.
-		location := db.Dialector.(*gormmysql.Dialector).DSNConfig.Loc
+		// MySQL time zone tables are optional. Use the database for elapsed
+		// time and the driver's location only to encode its DATETIME value.
+		// UTC is also the driver default when no DSN location is available.
+		location := time.UTC
+		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil && dialector.DSNConfig != nil && dialector.DSNConfig.Loc != nil {
+			location = dialector.DSNConfig.Loc
+		}
 		_, offset := time.Now().Add(after).In(location).Zone()
 		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(6))", after.Microseconds()+int64(offset)*1_000_000)
 	default:
