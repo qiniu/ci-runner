@@ -145,7 +145,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 		case state.StatusRunning:
 			if !st.RunningAt.IsZero() && now.Sub(st.RunningAt) > s.cfg.SandboxTimeout {
 				s.logger.Info("sweeper stopping timed out runner", "id", st.ID, "sandbox_id", st.SandboxID, "running_at", st.RunningAt)
-				s.failAndStopRunner(ctx, st.ID, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout")
+				s.failAndStopRunnerVersion(ctx, st.ID, st.Version, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout")
 				stoppedRunning[st.ID] = struct{}{}
 				continue
 			}
@@ -155,7 +155,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 			}
 			if !st.StoppingAt.IsZero() && now.Sub(st.StoppingAt) > s.cfg.SandboxStopTimeout {
 				s.logger.Info("sweeper retrying timed out stop", "id", st.ID, "sandbox_id", st.SandboxID, "stopping_at", st.StoppingAt)
-				s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
+				s.stopObservedRunner(ctx, st, state.TerminationSourceRecoveryCleanup)
 			}
 		}
 	}
@@ -183,12 +183,10 @@ func (s *Server) sweepOnce(ctx context.Context) {
 			s.store.AppendLog(st.ID, "control.log", []byte("sweeper skipped idle stop because github runner status could not be verified: "+err.Error()+"\n"))
 		} else if busy {
 			s.logger.Info("sweeper keeping idle-timed-out runner because github reports it is busy", "id", st.ID, "runner_name", st.RunnerName)
-			s.store.AppendLog(st.ID, "control.log", []byte("sweeper kept runner because github reports it is running a job\n"))
-			s.markRunnerJobStarted(st.ID)
+			s.markRunnerJobStartedIfVersion(st.ID, &st.Version)
 		} else {
 			s.logger.Info("sweeper stopping idle runner", "id", st.ID, "sandbox_id", st.SandboxID, "running_at", st.RunningAt, "idle_timeout", s.cfg.RunnerIdleTimeout)
-			s.store.AppendLog(st.ID, "control.log", []byte("sweeper stopping idle runner that never accepted a job\n"))
-			s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceIdleCleanup)
+			s.stopObservedRunner(ctx, st, state.TerminationSourceIdleCleanup)
 		}
 	}
 }
@@ -239,7 +237,7 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 			}
 			if !st.StoppingAt.IsZero() && time.Since(st.StoppingAt) > s.cfg.SandboxStopTimeout {
 				s.logger.Info("reconciler retrying timed out stop", "id", st.ID, "sandbox_id", st.SandboxID, "stopping_at", st.StoppingAt)
-				s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
+				s.stopObservedRunner(ctx, st, state.TerminationSourceRecoveryCleanup)
 			}
 		}
 	}
@@ -282,7 +280,7 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			s.logger.Error("read mismatched completed state after workflow job check", "id", current.ID, "error", readErr)
 			continue
 		}
-		if latest.Status != state.StatusCompleted || latest.WorkflowJobID != current.WorkflowJobID || latest.AssignedJobID != current.AssignedJobID {
+		if latest.Version != current.Version || latest.Status != state.StatusCompleted || latest.WorkflowJobID != current.WorkflowJobID || latest.AssignedJobID != current.AssignedJobID {
 			unlock()
 			continue
 		}
