@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,12 +31,18 @@ func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
 		name         string
 		updateStatus int // Zero simulates a stalled timeout update.
 		deleteStatus int
+		wantReason   string
 	}{
-		{"delete fails after cap", http.StatusNoContent, http.StatusForbidden},
-		{"cap rejected", http.StatusForbidden, http.StatusNoContent},
-		{"cap stalls", 0, http.StatusNoContent},
+		{"delete fails after cap", http.StatusNoContent, http.StatusForbidden, ""},
+		{"cap rejected", http.StatusForbidden, http.StatusNoContent, "update_failed"},
+		{"cap and delete rejected", http.StatusForbidden, http.StatusForbidden, "update_failed"},
+		{"cap stalls", 0, http.StatusNoContent, "deadline_exceeded"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var logs strings.Builder
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
 			var updateCalled, deleteCalled atomic.Bool
 			mux := http.NewServeMux()
 			mux.HandleFunc("POST /v2/sandboxes/exact/connect", func(w http.ResponseWriter, _ *http.Request) {
@@ -55,6 +62,9 @@ func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
 					return
 				}
 				w.WriteHeader(tc.updateStatus)
+				if tc.updateStatus >= 400 {
+					fmt.Fprint(w, `{"message":"provider-private-detail"}`)
+				}
 			})
 			mux.HandleFunc("DELETE /sandboxes/exact", func(w http.ResponseWriter, _ *http.Request) {
 				if !updateCalled.Load() {
@@ -70,6 +80,13 @@ func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
 			err := newTestService(t, api).StopRunner(ctx, "exact", 0)
 			if !deleteCalled.Load() || (err != nil) != (tc.deleteStatus != http.StatusNoContent) {
 				t.Fatalf("delete called = %t, StopRunner error = %v", deleteCalled.Load(), err)
+			}
+			if tc.wantReason == "" {
+				if logs.Len() != 0 {
+					t.Errorf("unexpected lifetime warning: %s", &logs)
+				}
+			} else if !strings.Contains(logs.String(), "reason="+tc.wantReason) || strings.Contains(logs.String(), "provider-private-detail") {
+				t.Errorf("expected sanitized lifetime warning with reason %q, got %s", tc.wantReason, &logs)
 			}
 		})
 	}
