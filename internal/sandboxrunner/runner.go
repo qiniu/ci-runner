@@ -1175,6 +1175,15 @@ func (s *E2BService) StopRunner(ctx context.Context, sandboxID string, pid uint3
 	if err != nil {
 		return err
 	}
+	// Connect v2 only extends the lease. Cap it explicitly in case deletion fails,
+	// but reserve time for deletion even if the timeout update stalls.
+	updateBudget := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		updateBudget = min(updateBudget, time.Until(deadline)/2)
+	}
+	updateCtx, cancel := context.WithTimeout(ctx, updateBudget)
+	_ = sb.SetTimeout(updateCtx, 30*time.Second)
+	cancel()
 	if pid != 0 {
 		_ = sb.Commands().Kill(ctx, pid)
 	}

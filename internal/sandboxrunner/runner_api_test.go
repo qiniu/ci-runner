@@ -2,6 +2,7 @@ package sandboxrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	qnsandbox "github.com/qiniu/go-sdk/v7/sandbox"
 )
@@ -21,6 +23,56 @@ func newTestService(t *testing.T, ts *httptest.Server) *E2BService {
 		t.Fatalf("NewE2BService: %v", err)
 	}
 	return svc
+}
+
+func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		updateStatus int // Zero simulates a stalled timeout update.
+		deleteStatus int
+	}{
+		{"delete fails after cap", http.StatusNoContent, http.StatusForbidden},
+		{"cap rejected", http.StatusForbidden, http.StatusNoContent},
+		{"cap stalls", 0, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var updateCalled, deleteCalled atomic.Bool
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /v2/sandboxes/exact/connect", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"sandboxID":"exact","envdAccessToken":"fixture"}`)
+			})
+			mux.HandleFunc("POST /sandboxes/exact/timeout", func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Timeout int `json:"timeout"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Timeout != 30 {
+					t.Errorf("cleanup timeout = %d, decode error = %v", body.Timeout, err)
+				}
+				updateCalled.Store(true)
+				if tc.updateStatus == 0 {
+					<-r.Context().Done()
+					return
+				}
+				w.WriteHeader(tc.updateStatus)
+			})
+			mux.HandleFunc("DELETE /sandboxes/exact", func(w http.ResponseWriter, _ *http.Request) {
+				if !updateCalled.Load() {
+					t.Error("Sandbox deleted before timeout update")
+				}
+				deleteCalled.Store(true)
+				w.WriteHeader(tc.deleteStatus)
+			})
+			api := httptest.NewServer(mux)
+			defer api.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			err := newTestService(t, api).StopRunner(ctx, "exact", 0)
+			if !deleteCalled.Load() || (err != nil) != (tc.deleteStatus != http.StatusNoContent) {
+				t.Fatalf("delete called = %t, StopRunner error = %v", deleteCalled.Load(), err)
+			}
+		})
+	}
 }
 
 // templateJSON returns a minimal TemplateWithBuilds JSON payload with the given build status entries.

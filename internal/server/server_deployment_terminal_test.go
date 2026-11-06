@@ -170,6 +170,9 @@ func TestDeploymentTerminalPrefersSavedProvider(t *testing.T) {
 		if r.Header.Get("X-API-Key") != "saved-scope-key" {
 			t.Error("terminal did not use the saved scope credential")
 		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v2/sandboxes/saved-sandbox/connect" {
+			t.Errorf("unexpected terminal request: %s %s", r.Method, r.URL.Path)
+		}
 		var input struct {
 			Timeout int32 `json:"timeout"`
 		}
