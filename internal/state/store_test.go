@@ -3584,6 +3584,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeTestDB(t, migratedDB)
+			testRepositoryAccessRefreshOwnership(t, migrated)
 			for _, table := range sqlBackendTestTables() {
 				if table == "runner_groups" || table == "runner_group_specs" || table == "repository_policies" {
 					if migratedDB.Migrator().HasTable(table) {
@@ -4058,6 +4059,7 @@ func sqlBackendTestTables() []string {
 		"oauth_identities",
 		"github_installations",
 		"github_installation_owners",
+		"repository_access_snapshots",
 		"account_secrets",
 		"account_preferences",
 		"sandbox_service_default_audiences",
