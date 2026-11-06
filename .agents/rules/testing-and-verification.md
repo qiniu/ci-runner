@@ -68,9 +68,10 @@ Deploy startup regressions must keep queued plans untouched during `Server.Recov
 
 ## Go Server Or API
 
-Run `task ui-terminal-fault-test` after changing terminal SSE replay, browser
-recovery deadlines or idle cleanup. Its opt-in `terminalfault` Go fixture and
-Chromium exercise real local PTYs under measured 5/15/25-second transport
+Run both `task ui-production-smoke` and `task ui-terminal-fault-test` after
+terminal dependency changes. Run `task ui-terminal-fault-test` after changing
+terminal SSE replay, browser recovery deadlines or idle cleanup. Its opt-in
+`terminalfault` Go fixture and Chromium exercise real local PTYs under measured 5/15/25-second transport
 outages, preserving the actual 20-second client and 30-second idle deadlines.
 See [Testing](../../docs/testing.md#timed-terminal-transport-faults) for
 prerequisites, artifacts and boundaries; local fixtures do not replace live

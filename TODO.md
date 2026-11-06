@@ -29,7 +29,7 @@ This file tracks active project work. Completed behavior should move into `READM
 - Decide whether GitHub token and basic auth remain supported compatibility modes or should be removed in favor of GitHub App-only operation.
 - Add an effective-config diagnostics view or config validation workflow if operators need to inspect runtime config from the UI.
 - Verify DB lease behavior with two runnerd processes sharing the same database before documenting multi-instance support.
-- Decide whether expvar diagnostics need a Prometheus/export adapter or histogram-style latency views for deployment observability.
+- Decide whether runnerd application expvar diagnostics need a Prometheus/export adapter or histogram-style latency views for deployment observability. The loopback `/metrics` endpoint from `jimmicro/pprof` exposes default Go runtime/process collectors only; it does not complete this work.
 - After landing the Template Check split, retain current-head GitHub evidence for both workflows, verify unrelated PRs skip Template Check and relevant/manual runs execute it, and confirm Fenno follows both workflows. Local Dockerfile checks do not establish hosted trigger behavior or regional template acceptance.
 - After the `ui-production-smoke` check has reported on `main`, enable it as a required status check in branch protection; the repository currently has no required status checks.
 - Define a privacy-safe documentation activation funnel for `/docs` (guide entry, hosted/deploy path selection, and first successful job) before adding analytics; do not collect repository names, workflow names, credentials, or log content.
@@ -55,6 +55,10 @@ This file tracks active project work. Completed behavior should move into `READM
 - Add Windows variants of the fixed-target network diagnostics and the Web Console, which currently assume a POSIX shell.
 
 ## Maintenance
+
+- Assess TypeScript 5, Vite 7 and ESLint 9 major-version migrations separately. Evaluate `eslint-plugin-react-hooks` beyond the 7.0.1 pin against existing ref/effect patterns without disabling lint rules.
+- Recheck upstream minimatch fixes before the next UI dependency upgrade. The 2026-11-04 full `bun audit` reported one moderate [advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), while `bun audit --production` reported none. ESLint 9 and TypeScript ESLint require minimatch 3 and 10; the advisory covers versions below 11.0.1. Do not force an incompatible major through an override.
+- Isolate Sonner toast state in `user-deployments-section.test.js`: the PR #168 review found queued-deployment toasts can leak into `use-runner-catalog.test.js` depending on test-file order, including with the previous Sonner version. Add teardown and verify both file orders in a separate test-maintenance change.
 
 - Keep `task ui-terminal-fault-test` covering timed recovery, exact cursor/output continuity and real PTY cleanup. Production ingress, remote Sandbox and permission-revocation acceptance remain separate deployment gates; see [Testing](docs/testing.md#timed-terminal-transport-faults).
 

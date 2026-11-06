@@ -6,9 +6,7 @@ This guide explains how to test the service with a local Qiniu sandbox environme
 
 Run `task lint` for local quality checks. Its `staticcheck` step uses the Go version declared in `go.mod`, matching CI.
 
-UI dependency maintenance keeps TypeScript 5, Vite 7 and ESLint 9 until their major-version migrations are verified. `eslint-plugin-react-hooks` is pinned to 7.0.1: 7.1.1 reports existing ref and effect patterns as errors, so upgrading it needs a separate assessment without disabling those rules. The terminal uses `@xterm/xterm` and `@xterm/addon-fit`; run `task ui-production-smoke` and `task ui-terminal-fault-test` after terminal dependency changes. Run tasks that install Bun dependencies sequentially to avoid link collisions.
-
-The 2026-11-04 `bun audit` check after the UI updates reports one remaining moderate [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249). ESLint 9 and TypeScript ESLint still require minimatch 3 and 10 respectively, while the advisory identifies versions below 11.0.1. These are development-tool dependencies; this is not a clean audit. Recheck upstream fixes before the next upgrade rather than forcing an incompatible major through an override.
+`eslint-plugin-react-hooks` is pinned to 7.0.1 to preserve the verified lint behavior; keep the enabled rules when evaluating an upgrade. The terminal uses `@xterm/xterm` and `@xterm/addon-fit`; run `task ui-production-smoke` and `task ui-terminal-fault-test` after terminal dependency changes. Run tasks that install Bun dependencies sequentially to avoid link collisions. Track dependency follow-ups and dated audit results in [TODO](../TODO.md#maintenance).
 
 ## CI scope
 
@@ -840,7 +838,17 @@ The service's own logs are printed to runnerd's stdout/stderr, whether captured 
 
 ## 10. Diagnostics / pprof
 
-The service imports `github.com/jimmicro/pprof`. After startup it generates `.pprof` address files and dump scripts near the binary. Diagnostics can be read directly from the management API:
+The service imports `github.com/jimmicro/pprof` v1.2.0. Its diagnostics listener binds only to `127.0.0.1` and serves pprof, expvar and `/metrics`. The Prometheus endpoint exposes the default Go runtime and process collectors; runnerd's application metrics remain in expvar and are not exported through `/metrics`.
+
+Startup writes `<binary>_<pid>_<port>.pprof` address files and `<binary>_<pid>_profile_dump.sh` scripts beside the binary. It also removes stale address files and dump scripts for the same binary name; addresses that still accept a TCP connection and their matching scripts are retained. Archive diagnostic discovery artifacts elsewhere if they need to survive this cleanup.
+
+The generated dump script captures Prometheus metrics and binary profiles. It omits full goroutine text stacks (`goroutine?debug=2`) by default; to include them when diagnosing a hang, run the matching script (example PID `12345`):
+
+```bash
+bash ./runnerd_12345_profile_dump.sh --full-goroutine
+```
+
+Diagnostics can also be read directly from the management API:
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/pprof | jq

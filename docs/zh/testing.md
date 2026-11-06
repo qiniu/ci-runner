@@ -6,9 +6,7 @@
 
 本地质量检查使用 `task lint`；其中的 `staticcheck` 使用 `go.mod` 声明的 Go 版本，与 CI 保持一致。
 
-UI 依赖维护暂时保留 TypeScript 5、Vite 7 和 ESLint 9，主版本迁移需单独验证。`eslint-plugin-react-hooks` 固定为 7.0.1：7.1.1 会将现有 ref 和 effect 用法报告为错误，升级前需单独评估，不通过关闭规则绕过。终端使用 `@xterm/xterm` 和 `@xterm/addon-fit`；终端依赖变更后运行 `task ui-production-smoke` 和 `task ui-terminal-fault-test`。包含 Bun 依赖安装的任务应串行执行，避免链接冲突。
-
-2026-11-04 更新 UI 依赖后的 `bun audit` 仍报告一项中危 [minimatch 公告](https://github.com/advisories/GHSA-g3hv-75wg-m249)。ESLint 9 和 TypeScript ESLint 分别依赖 minimatch 3 和 10，而公告覆盖低于 11.0.1 的版本。这些依赖用于开发工具，但审计尚未清零；下次升级应重新检查上游修复，不通过 override 强行替换为不兼容的主版本。
+`eslint-plugin-react-hooks` 固定为 7.0.1，以保持已验证的 lint 行为；评估升级时保留现有启用的规则。终端使用 `@xterm/xterm` 和 `@xterm/addon-fit`；终端依赖变更后运行 `task ui-production-smoke` 和 `task ui-terminal-fault-test`。包含 Bun 依赖安装的任务应串行执行，避免链接冲突。依赖后续工作及带日期的审计结果记录在 [TODO](../../TODO.md#maintenance)。
 
 ## CI 检查范围
 
@@ -800,7 +798,17 @@ curl -fsS -b "$COOKIE_JAR" \
 
 ## 10. Diagnostics / pprof
 
-服务导入了 `github.com/jimmicro/pprof`，启动后会在 binary 所在目录生成 `.pprof` 地址文件和 dump 脚本。管理 API 可以直接查看 diagnostics：
+服务导入了 `github.com/jimmicro/pprof` v1.2.0。诊断监听器只绑定 `127.0.0.1`，提供 pprof、expvar 和 `/metrics`。Prometheus 端点暴露默认的 Go runtime 和 process collectors；runnerd 的业务指标仍保存在 expvar 中，尚未通过 `/metrics` 导出。
+
+启动时会在 binary 所在目录写入 `<binary>_<pid>_<port>.pprof` 地址文件和 `<binary>_<pid>_profile_dump.sh` 脚本，同时清理同一 binary 名称的过期地址文件及 dump 脚本；仍可建立 TCP 连接的地址及其配套脚本会保留。需要长期保存的诊断发现文件应另行归档，避免被该清理流程删除。
+
+生成的 dump 脚本会采集 Prometheus 指标和二进制 profiles，默认省略完整 goroutine 文本栈（`goroutine?debug=2`）。诊断挂起问题时如需完整文本栈，执行对应脚本（以下以 PID `12345` 为例）：
+
+```bash
+bash ./runnerd_12345_profile_dump.sh --full-goroutine
+```
+
+管理 API 也可以直接查看 diagnostics：
 
 ```bash
 curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/diagnostics/pprof | jq
