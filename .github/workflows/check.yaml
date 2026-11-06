@@ -174,10 +174,21 @@ jobs:
           cache-dependency-path: go.sum
       - uses: oven-sh/setup-bun@v2
       - run: cd ui && bun install --frozen-lockfile && bun run build
+      - name: Verify running watch renewal and takeover between two PostgreSQL-backed Runner processes
+        run: go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1
+      - name: Verify creation, cleanup, and network diagnostic ownership on PostgreSQL
+        run: go test -race ./internal/server -run '^Test(SweeperDiscardsSupersededIdleObservation|LateStartFailureAfterPeerAdoption|RunnerCleanupProcess|NetworkDiagnosticPeerPostgresSQLBackends|ReconciledBootstrapFailureRespectsRetryBudget|WindowsJITRegistrationProcess)$' -count=1
+      - name: Verify Deploy work ownership across PostgreSQL processes
+        run: go test -race ./internal/deployment/worker -run '^Test(DeploymentWorkProcess|LateDeploymentCreateReceiptSurvivesStop)$' -count=1
       - name: Verify schema, catalog, deployments, and migrations on SQL backends
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
           go test ./internal/server -run 'TestPlatformSpecRevisionPostgresSQLBackends' -count=1 -v
+
+      - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
+        run: |
+          go build -o "$RUNNER_TEMP/runnerd" ./cmd/runnerd
+          python3 scripts/test-runner-queue-leases.py "$RUNNER_TEMP/runnerd"
 
   ui-production-smoke:
     runs-on: ubuntu-latest

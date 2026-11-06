@@ -24,6 +24,7 @@ const (
 	defaultInstallTimeout = 15 * time.Minute
 	defaultStartTimeout   = 2 * time.Minute
 	defaultCleanupTimeout = 30 * time.Second
+	defaultLeaseTTL       = time.Minute
 	expiryCleanupStage    = "expiry_cleanup"
 )
 
@@ -59,26 +60,29 @@ type EventSink func(state.Deployment, state.DeploymentEvent)
 // Worker processes durable deployment records. It is intentionally independent
 // of HTTP handlers so recovery and later queue scheduling share the same path.
 type Worker struct {
-	Store          state.DeploymentStore
-	Runtime        RuntimeFactory
-	Source         SourceFactory
-	DecodeSpec     SpecDecoder
-	WorkRoot       string
-	Output         OutputSink
-	Event          EventSink
-	CloneTimeout   time.Duration
-	InstallTimeout time.Duration
-	StartTimeout   time.Duration
-	CleanupTimeout time.Duration
-	Retention      time.Duration
-	TemplateID     string
-	CreateTimeout  time.Duration
+	workID, workToken string
+	LeaseTTL          time.Duration
+	Store             state.DeploymentStore
+	Runtime           RuntimeFactory
+	Source            SourceFactory
+	DecodeSpec        SpecDecoder
+	WorkRoot          string
+	Output            OutputSink
+	Event             EventSink
+	CloneTimeout      time.Duration
+	InstallTimeout    time.Duration
+	StartTimeout      time.Duration
+	CleanupTimeout    time.Duration
+	Retention         time.Duration
+	TemplateID        string
+	CreateTimeout     time.Duration
 }
 
 // New creates a worker with conservative execution bounds.
 func New(store state.DeploymentStore, runtime RuntimeFactory, source SourceFactory, decode SpecDecoder, workRoot string) *Worker {
 	return &Worker{
 		Store:          store,
+		LeaseTTL:       defaultLeaseTTL,
 		Runtime:        runtime,
 		Source:         source,
 		DecodeSpec:     decode,
@@ -103,7 +107,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			return err
 		}
 	}
-	items, err := w.Store.ListActiveDeployments()
+	items, _, err := w.Store.ListDeploymentWork("all", "", 100, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -121,6 +125,14 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 }
 
 func (w *Worker) advance(ctx context.Context, item state.Deployment) error {
+	err := w.withWork(ctx, item, (*Worker).advanceOwned)
+	if errors.Is(err, ErrWorkClaimed) {
+		return nil
+	}
+	return err
+}
+
+func (w *Worker) advanceOwned(ctx context.Context, item state.Deployment) error {
 	switch {
 	case item.Status == state.DeploymentStatusCreating:
 		return w.recoverCreating(ctx, item)
@@ -128,13 +140,13 @@ func (w *Worker) advance(ctx context.Context, item state.Deployment) error {
 		// Planning has no provider side effects; resume the saved attempt.
 		return w.transition(&item, state.DeploymentStatusQueued, "recovery", "")
 	case !item.ExpiresAt.IsZero() && !time.Now().UTC().Before(item.ExpiresAt):
-		return w.Stop(ctx, item.ID, true)
+		return w.stop(ctx, item, true)
 	case item.Status == state.DeploymentStatusQueued:
-		return w.Process(ctx, item.ID)
+		return w.process(ctx, item)
 	case item.Status == state.DeploymentStatusFailed && strings.TrimSpace(item.SandboxID) != "":
-		return w.Stop(ctx, item.ID, false)
+		return w.stop(ctx, item, false)
 	case item.Status == state.DeploymentStatusStopping:
-		return w.Stop(ctx, item.ID, false)
+		return w.stop(ctx, item, false)
 	case item.Status == state.DeploymentStatusRunning:
 		return w.checkRunning(ctx, item)
 	}
@@ -154,8 +166,12 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 	if d.Status != state.DeploymentStatusQueued {
 		return nil
 	}
-	if !time.Now().UTC().Before(d.ExpiresAt) {
-		return w.Stop(ctx, d.ID, true)
+	return w.advance(ctx, d)
+}
+
+func (w *Worker) process(ctx context.Context, d state.Deployment) error {
+	if w.Runtime == nil || w.Source == nil || w.DecodeSpec == nil {
+		return errors.New("deployment worker is not configured")
 	}
 	ctx, cancel := context.WithDeadline(ctx, d.ExpiresAt)
 	defer cancel()
@@ -191,6 +207,10 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 		return err
 	}
 	createCtx, cancelCreate := context.WithTimeout(ctx, w.CreateTimeout)
+	if err := w.requireWork(createCtx); err != nil {
+		cancelCreate()
+		return err
+	}
 	rt, sandboxID, err := w.Runtime.Create(createCtx, d, d.Attempt)
 	cancelCreate()
 	if err != nil {
@@ -206,7 +226,7 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 			if rt != nil {
 				d.RuntimeID = rt.ID()
 			}
-			if persistErr := w.persist(&d); persistErr != nil {
+			if persistErr := w.persistCreatedSandbox(ctx, &d); persistErr != nil {
 				return persistErr
 			}
 			cleanupErr := w.closeAttempt(ctx, rt)
@@ -238,7 +258,7 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 			d.ExpiresAt = actual.UTC()
 		}
 	}
-	if err := w.persist(&d); err != nil {
+	if err := w.persistCreatedSandbox(ctx, &d); err != nil {
 		return err
 	}
 
@@ -246,7 +266,7 @@ func (w *Worker) Process(ctx context.Context, id string) error {
 	// limit including the attempt, independently of the persisted ID format.
 	identity := sha256.Sum256([]byte(d.ID))
 	operationID := fmt.Sprintf("deploy-%x-%d", identity[:16], d.Attempt)
-	application := &applicationRuntime{RuntimeHandle: rt, port: plan.Spec().Port}
+	application := &applicationRuntime{RuntimeHandle: leasedRuntime{RuntimeHandle: rt, owner: w}, port: plan.Spec().Port}
 	result, applyErr := deploy.Apply(ctx, source, application, plan, deploy.Options{
 		WorkRoot:       w.WorkRoot,
 		OperationID:    operationID,
@@ -339,7 +359,7 @@ func (w *Worker) recoverCreating(ctx context.Context, d state.Deployment) error 
 	if err := w.fail(&d, "recovery", "deployment execution was interrupted"); err != nil {
 		return err
 	}
-	return w.Stop(ctx, d.ID, !time.Now().Before(d.ExpiresAt))
+	return w.stop(ctx, d, !time.Now().Before(d.ExpiresAt))
 }
 
 func (w *Worker) checkRunning(ctx context.Context, d state.Deployment) error {
@@ -364,7 +384,7 @@ func (w *Worker) checkRunning(ctx context.Context, d state.Deployment) error {
 	// Provider I/O may cross the saved expiry while the provider itself removes
 	// the resource. Recheck the deadline before classifying a missing process.
 	if !d.ExpiresAt.IsZero() && !time.Now().UTC().Before(d.ExpiresAt) {
-		return w.stop(checkCtx, d.ID, true, &d)
+		return w.stop(checkCtx, d, true)
 	}
 	if rt != nil && process.Running {
 		return nil
@@ -372,7 +392,7 @@ func (w *Worker) checkRunning(ctx context.Context, d state.Deployment) error {
 	if err := w.fail(&d, "process_exit", "deployment process is no longer running"); err != nil {
 		return err
 	}
-	return w.Stop(checkCtx, d.ID, false)
+	return w.stop(checkCtx, d, false)
 }
 
 func (w *Worker) closeAttempt(ctx context.Context, rt RuntimeHandle) error {
@@ -381,6 +401,9 @@ func (w *Worker) closeAttempt(ctx context.Context, rt RuntimeHandle) error {
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.CleanupTimeout)
 	defer cancel()
+	if err := w.requireWork(cleanup); err != nil {
+		return err
+	}
 	return rt.Close(cleanup)
 }
 
@@ -388,18 +411,42 @@ func (w *Worker) closeAttempt(ctx context.Context, rt RuntimeHandle) error {
 // missing Sandbox is treated as already cleaned; a live replacement cannot be
 // touched because RuntimeFactory.Connect must bind to the saved Sandbox ID.
 func (w *Worker) Stop(ctx context.Context, id string, expired bool) error {
-	return w.stop(ctx, id, expired, nil)
-}
-
-func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *state.Deployment) error {
-	ctx, cancel := context.WithTimeout(ctx, w.CleanupTimeout)
-	defer cancel()
 	d, err := w.Store.GetDeployment(strings.TrimSpace(id))
 	if err != nil {
 		return err
 	}
-	if observed != nil && d.Version != observed.Version {
-		return state.ErrConflict
+	return w.StopObserved(ctx, d, expired)
+}
+
+// StopObserved binds cleanup to the revision, attempt and version observed by
+// the caller. If another worker owns it, the persisted stop remains eligible.
+func (w *Worker) StopObserved(ctx context.Context, d state.Deployment, expired bool) error {
+	err := w.withWork(ctx, d, func(owned *Worker, ctx context.Context, item state.Deployment) error {
+		return owned.stop(ctx, item, expired)
+	})
+	if errors.Is(err, ErrWorkClaimed) {
+		current, readErr := w.Store.GetDeployment(d.ID)
+		if readErr != nil {
+			return readErr
+		}
+		if current.RevisionNumber != d.RevisionNumber || current.Attempt != d.Attempt {
+			return state.ErrConflict
+		}
+		if current.SandboxID == "" && (current.Status == state.DeploymentStatusCompleted || current.Status == state.DeploymentStatusExpired || current.Status == state.DeploymentStatusFailed) {
+			return nil
+		}
+		if current.Version != d.Version && current.Status != state.DeploymentStatusStopping {
+			return state.ErrConflict
+		}
+	}
+	return err
+}
+
+func (w *Worker) stop(ctx context.Context, d state.Deployment, expired bool) error {
+	ctx, cancel := context.WithTimeout(ctx, w.CleanupTimeout)
+	defer cancel()
+	if err := w.requireWork(ctx); err != nil {
+		return err
 	}
 	expiryCleanup := d.FailureStage == expiryCleanupStage
 	preserveFailed := (d.Status == state.DeploymentStatusFailed ||
@@ -449,12 +496,18 @@ func (w *Worker) stop(ctx context.Context, id string, expired bool, observed *st
 				runtimeID = rt.ID()
 			}
 			if d.ProcessID != "" && d.ProcessTag != "" {
+				if err := w.requireWork(ctx); err != nil {
+					return err
+				}
 				if stopErr := deploy.Stop(ctx, rt, deploy.ProcessRef{RuntimeID: runtimeID, ID: d.ProcessID, Tag: d.ProcessTag}); stopErr != nil && !errors.Is(stopErr, deploy.ErrProcessUnknown) {
 					if persistErr := failCleanup(); persistErr != nil {
 						return persistErr
 					}
 					return stopErr
 				}
+			}
+			if err := w.requireWork(ctx); err != nil {
+				return err
 			}
 			if closeErr := rt.Close(ctx); closeErr != nil {
 				if persistErr := failCleanup(); persistErr != nil {
@@ -515,6 +568,7 @@ func (w *Worker) emit(d state.Deployment, event state.DeploymentEvent) {
 	if w == nil || w.Event == nil {
 		return
 	}
+	event.WorkToken = w.workToken
 	event.DeploymentID = d.ID
 	event.RevisionNumber = d.RevisionNumber
 	if event.Attempt == 0 {
@@ -523,8 +577,20 @@ func (w *Worker) emit(d state.Deployment, event state.DeploymentEvent) {
 	w.Event(d, event)
 }
 
+// Losing the lease forbids continuing the plan. A late successful create can
+// still tell the cleanup worker the exact Sandbox ID while metadata is hidden.
+func (w *Worker) persistCreatedSandbox(ctx context.Context, d *state.Deployment) error {
+	err := w.persist(d)
+	if err == nil || d.SandboxID == "" {
+		return err
+	}
+	receiptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return errors.Join(err, w.Store.RecordDeploymentSandbox(receiptCtx, *d))
+}
+
 func (w *Worker) persist(d *state.Deployment) error {
-	if err := w.Store.UpdateDeployment(*d); err != nil {
+	if err := w.Store.UpdateClaimedDeployment(*d, w.workToken); err != nil {
 		return err
 	}
 	d.Version++

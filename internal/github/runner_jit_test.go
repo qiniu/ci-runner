@@ -3,9 +3,13 @@ package github
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -47,7 +51,7 @@ func TestRunnerJITConfigScopeAndNoCache(t *testing.T) {
 			defer ts.Close()
 			client := NewClient(ts.URL, ts.Client())
 			for range 2 {
-				if _, err := client.CreateRunnerJITConfig(t.Context(), "o/r", group, "dedicated", []string{"windows", "one-job"}); err != nil {
+				if _, err := client.CreateRunnerJITConfig(t.Context(), "o/r", group, "dedicated", []string{"windows", "one-job"}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -61,7 +65,7 @@ func TestRunnerJITConfigScopeAndNoCache(t *testing.T) {
 func TestRunnerJITConfigRejectsMalformedAndRedactsErrors(t *testing.T) {
 	for _, body := range []string{`secret-value`, `{"runner":{"id":42,"name":"other"},"encoded_jit_config":"` + jitTestConfig(t, "other", "42") + `"}`, `{"runner":{"id":42,"name":"dedicated"},"encoded_jit_config":"secret-value"}`} {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(201); _, _ = w.Write([]byte(body)) }))
-		_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"})
+		_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"}, nil)
 		ts.Close()
 		if err == nil || strings.Contains(err.Error(), "secret-value") {
 			t.Fatalf("invalid or unredacted error: %v", err)
@@ -69,7 +73,7 @@ func TestRunnerJITConfigRejectsMalformedAndRedactsErrors(t *testing.T) {
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "secret-value", http.StatusForbidden) }))
 	defer ts.Close()
-	_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"})
+	_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"}, nil)
 	if err == nil || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("unredacted status error: %v", err)
 	}
@@ -123,7 +127,7 @@ func TestRunnerJITConfigRetainsRateLimitClassification(t *testing.T) {
 		http.Error(w, "private body", http.StatusForbidden)
 	}))
 	defer ts.Close()
-	_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"})
+	_, err := NewClient(ts.URL, ts.Client()).CreateRunnerJITConfig(t.Context(), "o/r", "", "dedicated", []string{"windows"}, nil)
 	if !IsRateLimitError(err) || strings.Contains(err.Error(), "private body") {
 		t.Fatal("rate limit classification lost or body leaked")
 	}
@@ -140,4 +144,37 @@ func jitTestConfig(t *testing.T, name, id string) string {
 		t.Fatal(err)
 	}
 	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func TestJITDispatchBoundary(t *testing.T) {
+	labels := make([]string, 100)
+	for i := range labels {
+		labels[i] = strconv.Itoa(i)
+	}
+	withAttempt := JITAttemptLabels(labels[:99], "ABC")
+	if len(withAttempt) != 100 || withAttempt[99] != "runnerd-jit-abc" || labels[99] != "99" {
+		t.Fatal("attempt label changed input labels")
+	}
+	if got := JITAttemptLabels(labels, "ABC"); !slices.Equal(got, labels) {
+		t.Fatal("full label set changed")
+	}
+	var posts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		if r.URL.Path == "/redirected" {
+			t.Error("redirect replayed JIT POST")
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	defer ts.Close()
+	c := NewClient(ts.URL, ts.Client())
+	lost := errors.New("lease lost")
+	jit, err := c.CreateRunnerJITConfig(t.Context(), "o/r", "", "runner", labels, func() error { return lost })
+	if !errors.Is(err, lost) || jit.CleanupRequired || posts.Load() != 0 {
+		t.Fatal("POST escaped the dispatch guard", err)
+	}
+	jit, err = c.CreateRunnerJITConfig(t.Context(), "o/r", "", "runner", labels, nil)
+	if err == nil || !jit.CleanupRequired || posts.Load() != 1 {
+		t.Fatal("redirect did not retain unknown outcome", err)
+	}
 }

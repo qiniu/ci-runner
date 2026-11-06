@@ -149,6 +149,9 @@ func (s *Server) newDeploymentWorker() *deploymentworker.Worker {
 		})
 	}
 	worker := deploymentworker.New(s.store, factory, s.deploymentSource, decode, s.cfg.DeploymentWorkRoot)
+	if s.cfg.WorkerLeaseTTL > 0 {
+		worker.LeaseTTL = s.cfg.WorkerLeaseTTL
+	}
 	worker.Retention = s.cfg.DeploymentRetention
 	worker.TemplateID = s.cfg.DeploymentTemplateID
 	worker.CreateTimeout = s.cfg.SandboxCreateTimeout

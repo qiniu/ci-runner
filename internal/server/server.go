@@ -39,20 +39,15 @@ type Server struct {
 	deploymentWorker *deploymentworker.Worker
 	startedAt        time.Time
 
-	// Admissions share the guard; catalog mutations exclude them through persistence.
-	admissionMu          sync.RWMutex
-	runnerCapacity       runnerAdmissionCapacity
-	forkSponsorshipLocks [64]sync.Mutex
-	runnerLocksMu        sync.Mutex
-	runnerLocks          map[string]*runnerRequestLock
-	windowsCreationLocks map[string]*runnerRequestLock
-	queueNotify          chan struct{}
-	deploymentNotify     chan struct{}
-	startOnce            sync.Once
-	workerID             string
-	loopCtx              context.Context
-	loopCancel           context.CancelFunc
-	loopWG               sync.WaitGroup
+	runnerLocksMu    sync.Mutex
+	runnerLocks      map[string]*runnerRequestLock
+	queueNotify      chan struct{}
+	deploymentNotify chan struct{}
+	startOnce        sync.Once
+	workerID         string
+	loopCtx          context.Context
+	loopCancel       context.CancelFunc
+	loopWG           sync.WaitGroup
 
 	recoveryMetricsDeferred atomic.Int32
 	waitingMetricsDirty     atomic.Bool
@@ -73,9 +68,6 @@ type Server struct {
 	diagnosticJobMu    sync.Mutex
 	diagnosticJobCache map[string]cachedDiagnosticJob
 	diagnosticJobGroup singleflight.Group
-
-	networkDiagnosticMu       sync.Mutex
-	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
 
 	userRepositoryAccessMu    sync.Mutex
 	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
@@ -210,7 +202,6 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		pullTitleCache:            map[string]cachedPullTitle{},
 		workflowRunCache:          map[string]cachedWorkflowRun{},
 		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
-		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
 		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
 		userRepositoryAccessEpoch: map[int64]uint64{},
 	}
