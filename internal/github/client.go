@@ -957,20 +957,31 @@ func (c *Client) RemoveRunner(ctx context.Context, repositoryFullName, runnerGro
 }
 
 func (c *Client) RemoveRunnerByName(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) (bool, error) {
+	id, err := c.FindRunnerIDByName(ctx, repositoryFullName, runnerGroup, runnerName)
+	if err != nil || id == 0 {
+		return false, err
+	}
+	return true, c.RemoveRunner(ctx, repositoryFullName, runnerGroup, id)
+}
+
+func (c *Client) FindRunnerIDByName(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) (int64, error) {
 	runnerName = strings.TrimSpace(runnerName)
 	if runnerName == "" {
-		return false, nil
+		return 0, nil
 	}
 	runners, err := c.listRunners(ctx, repositoryFullName, runnerGroup, runnerName)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	for _, runner := range runners {
 		if runner.Name == runnerName {
-			return true, c.RemoveRunner(ctx, repositoryFullName, runnerGroup, runner.ID)
+			if runner.ID <= 0 {
+				return 0, fmt.Errorf("github runner has invalid ID")
+			}
+			return runner.ID, nil
 		}
 	}
-	return false, nil
+	return 0, nil
 }
 
 func (c *Client) ListWorkflowRunJobs(ctx context.Context, repositoryFullName string, runID int64) ([]WorkflowJob, error) {

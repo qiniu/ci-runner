@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func validateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) error {
+func ValidateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) error {
 	if policy.SponsorInstallationID <= 0 {
 		return fmt.Errorf("sponsor installation id must be positive")
 	}
@@ -81,7 +81,7 @@ func (s *DBStore) GetForkSponsorshipPolicyBySourceRepositoryID(sourceRepositoryI
 func (s *DBStore) UpsertForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error) {
 	policy.SourceRepositoryFullName = strings.TrimSpace(policy.SourceRepositoryFullName)
 	policy.Mode = strings.TrimSpace(policy.Mode)
-	if err := validateForkSponsorshipPolicy(policy); err != nil {
+	if err := ValidateForkSponsorshipPolicy(policy); err != nil {
 		return ForkSponsorshipPolicy{}, err
 	}
 	existing, err := s.GetForkSponsorshipPolicyBySourceRepositoryID(policy.SourceRepositoryID)
@@ -100,7 +100,7 @@ func (s *DBStore) UpsertForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (For
 func (s *DBStore) CreateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error) {
 	policy.SourceRepositoryFullName = strings.TrimSpace(policy.SourceRepositoryFullName)
 	policy.Mode = strings.TrimSpace(policy.Mode)
-	if err := validateForkSponsorshipPolicy(policy); err != nil {
+	if err := ValidateForkSponsorshipPolicy(policy); err != nil {
 		return ForkSponsorshipPolicy{}, err
 	}
 	db, err := s.dbOrEnsure()
@@ -134,7 +134,7 @@ func (s *DBStore) CreateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (For
 func (s *DBStore) UpdateForkSponsorshipPolicy(policy ForkSponsorshipPolicy) (ForkSponsorshipPolicy, error) {
 	policy.SourceRepositoryFullName = strings.TrimSpace(policy.SourceRepositoryFullName)
 	policy.Mode = strings.TrimSpace(policy.Mode)
-	if err := validateForkSponsorshipPolicy(policy); err != nil {
+	if err := ValidateForkSponsorshipPolicy(policy); err != nil {
 		return ForkSponsorshipPolicy{}, err
 	}
 	db, err := s.dbOrEnsure()

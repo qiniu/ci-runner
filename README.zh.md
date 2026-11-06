@@ -111,7 +111,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 要点：
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
-- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL，但多实例共享数据库尚未验证。
+- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL。重启时保留排队请求的租约。若 worker 领取后立即退出，接手须等待剩余租期（默认租期 300 秒），同时满足重试时间，随后由队列轮询领取。Runner 准入在同一数据库事务中检查配额并写入 creating，各节点须配置相同额度。运行中任务恢复、Deploy 和终端的故障切换完成验收前，生产保持一个活动 runnerd。
 - 一次性 SQLite 到 PostgreSQL 迁移工具已退役，完成记录、历史手册及后续运维边界见[迁移退役记录](docs/zh/database-transfer-retirement.md)。
 - CI 会创建全新的 PostgreSQL 与 MySQL schema，并在已有 catalog 上重复执行迁移，再验证 policy-free matching。本地 opt-in 的真实方言命令见 [docs/zh/testing.md](docs/zh/testing.md)。
 - 已有 SQLite `runner_requests` 和 `runner_profiles` 表会在启动时补建缺失的 model columns 和 indexes，不会重建整张表，从而保留历史 runner 字段以及旧 profile rows 和 indexes。创建缺失索引不会重写 rows，但大数据库可能出现短暂的启动 I/O 和锁等待；迁移与查询计划检查见 [docs/zh/testing.md](docs/zh/testing.md)。
@@ -264,6 +264,10 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 
 启动前 REST 查询返回 `waiting`、`pending` 或 `requested` 时，请求保留排队状态，按指数退避复查且延迟有上限，不占用 Runner 资源或 lease。`in_progress` 只监测已有执行，不重复创建 Runner。后续 queued 投递可唤醒等待请求；没有新 webhook 也会自动复查。审批及并发等待超时由 GitHub 控制；未知状态或查询失败使用已配置的有限重试次数，耗尽后明确失败，不记为成功完成。HTTP 429 和 GitHub secondary rate limit 即使耗尽该次数也保持排队并按有上限的退避重试，限流解除后自动恢复。历史误标记录的定向恢复见[测试与排查指南](docs/zh/testing.md#等待中的-workflow-job)。
 
+准入事务会同时授予 worker 创建租约。runnerd 在调用 Sandbox 前记录本次创建已发出，收到服务返回的 Sandbox ID 后立即入库。如果节点在保存 ID 前退出，接管节点会按原尝试标识查回。首次查不到时，任务保留在创建状态并继续占用配额，等待服务端确认。此时收到的停止请求也会等待资源查回并清理。确认上一次创建结果后才能开始新的尝试。
+
+停止 Runner 时，节点也会取得数据库租约。接手节点从上一次确认的清理步骤继续，按已保存的 GitHub Runner 数字 ID 删除注册。如果删除响应丢失，同一个资源可能收到第二次删除请求。
+
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener 而 `run.sh` 仍返回 0，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），runnerd 不把请求记为完成或失败，而是按同样的有限退避重试；重试前会先复查 Job 再创建 Sandbox。
 
 新建 runner request（包括准入拒绝记录）只保存解析后的 GitHub 上下文，不保存 webhook 原文。历史兼容列 `github_payload_json` 及已有值继续保留，用于回填旧记录的元信息；此变更不会清理已有原文、请求历史或日志。
@@ -343,7 +347,7 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | Job 一直卡在 **queued**，runnerd 日志无 webhook 记录 | GitHub App 未订阅事件                    | 进入 GitHub App 设置 → 勾选 **Workflow jobs** 事件                                 |
 | `runner_group_permission_denied`（旧版：`github registration token: status 404`） | 无法访问 owner 组织的组，包括个人 owner 或 App 缺少权限 | 个人仓库清空 `runner_group`；组织仓库检查 App 安装及 Self-hosted runners 权限 |
 | 日志中出现 `invalid signature`                       | Webhook secret 不匹配                    | 确保 `github.webhook_secret` 与 GitHub App/仓库 webhook 设置中的 secret 一致       |
-| `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
+| `runner_capacity` 事件 | 全局、规格、账户或仓库并发达到上限 | 根据 `last_error_code` 判断受限维度，等待容量释放或调整该维度的限额 |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
 | GitHub 报告 self-hosted runner 失联                  | Runner、Sandbox 或其网络链路停止上报心跳 | 打开 **Admin → Runner 请求**，用 GitHub 显示的 Runner Name（如 `e2b-101445685709`）精确查找请求，再检查诊断结论和生命周期时间线 |
 

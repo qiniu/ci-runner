@@ -23,6 +23,8 @@ Also inspect the diff and keep `docs/README.md` aligned when adding, removing, o
 
 ## State Schema
 
+For queue ownership changes, exercise expired and superseded claims on the supported SQL backends and run the catalog-backends two-process PostgreSQL lease handoff regression.
+
 Run `go test ./internal/state -run "Test(MigrationStartup|LegacyMigration)" -count=1` for retained startup fences. With `RUNNERD_CATALOG_BACKEND_TESTS=1` and a dedicated `RUNNERD_POSTGRES_TEST_DSN` ending in `_test`, `TestMigrationStartupFenceSQLBackends` and `TestPostgresObfuscatedPasswordSQLBackends` use isolated PostgreSQL schemas. Keep normal schema/catalog SQL backend tests and server `TestPlatformSpecRevisionPostgresSQLBackends` coverage; see `docs/database-transfer-retirement.md` for the retired transfer boundary.
 
 For runner-request payload persistence changes, extend the existing state tests: assert accepted and rejected requests leave `github_payload_json` empty, `workflow_job` and `workflow_run` context survives reopening the database, and legacy metadata/installation-ID backfills preserve historical payloads. Keep repeated-migration coverage; do not use tests that create new requests as a substitute for legacy raw-payload fixtures.
@@ -241,4 +243,8 @@ Real deployment readiness still requires `docs/deployment-smoke.md` with a GitHu
 
 - Deployment scheduler changes must cover occupied provisioning slots alongside independent monitoring and expiry cleanup, capacity bounds, fair keyset continuation, no duplicate in-flight identity, one probe per monitoring cycle, and cancellation/join of blocked work. Event-counter changes require old SQLite column upgrade with history/timestamp preservation, rollback on counter persistence failure, per-revision isolation, concurrent appends and byte-budget coverage on PostgreSQL/MySQL as well as SQLite.
 
-- Runner account/repository concurrency changes must cover stale reads, pending creating writes, failed-write release, cross-Spec totals, independent owners/repositories, exact case-insensitive name matching, zero/missing and invalid configuration, persisted in-flight lifecycle counts after reopen, and queue progress through a restricted backlog. Run these admission tests with race detection; local fixtures do not replace deployed cleanup/restart acceptance.
+- For creating-lease changes, run `TestLateStartFailureAfterPeerAdoption` on a dedicated PostgreSQL database with the race detector. Verify startup and timeout sweeps while the original creator is healthy, kill it after provider acceptance, simulate an empty first lookup, and verify adoption or a pending manual stop against the same attempt.
+
+- For stopping changes, run `TestRunnerCleanupProcess` against the dedicated PostgreSQL database. Exercise a live stop, owner kill, pause/resume, duplicate delete with a 404, and an exit observation from another node. Check the numeric GitHub ID, Sandbox stop count and first termination source.
+
+- Runner account/repository concurrency changes must cover simultaneous claims, admission rollback, concurrent spec mutations, cross-Spec totals, independent owners/repositories, exact case-insensitive name matching, zero/missing and invalid configuration, persisted in-flight lifecycle counts after reopen, and queue progress through a restricted backlog. Run these admission tests with race detection; local fixtures do not replace deployed cleanup/restart acceptance.
