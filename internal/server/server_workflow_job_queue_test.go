@@ -184,7 +184,8 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if err := store.WriteState(st); err != nil {
 					t.Fatal(err)
 				}
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+				st.Version++
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -263,7 +264,7 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}
-				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); err != nil || start {
+				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); err != nil || start {
 					t.Fatalf("terminal request must ignore a repeated lookup: start=%v err=%v", start, err)
 				}
 			}
@@ -321,7 +322,8 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 					if err := store.WriteState(st); err != nil {
 						t.Fatal(err)
 					}
-					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+					st.Version++
+					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -418,7 +420,8 @@ func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
 		if err := base.WriteState(st); err != nil {
 			t.Fatal(err)
 		}
-		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); start || err != nil {
+		st.Version++
+		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); start || err != nil {
 			t.Fatalf("unexpected start=%v err=%v", start, err)
 		}
 	}
@@ -561,8 +564,10 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 			}
 			req, _ := store.ReadRequest("1001")
 			done := make(chan bool, 1)
+			attempt := st
+			attempt.Version++
 			go func() {
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "worker")
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &attempt)
 				done <- start || err != nil
 			}()
 			<-lookup

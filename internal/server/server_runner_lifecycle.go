@@ -455,11 +455,12 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		s.logger.Error("write creating state", "id", id, "error", writeErr, "release_error", releaseErr)
 		return
 	}
+	st.Version++ // WriteQueuedClaim committed the creating row.
 	s.admissionMu.RUnlock()
 	unlock()
 
 	jobCheckStartedAt := time.Now()
-	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
+	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, &st)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
 		failStart("github_job_status", err)
@@ -490,8 +491,6 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if err := s.persistSandboxServiceSnapshot(id, sandboxConfig); err != nil {
 		timings.record("sandbox_snapshot", snapshotStartedAt)
 		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
-			// WriteQueuedClaim committed creating at the version following the claim.
-			st.Version++
 			s.deferCreatingRequest(st, 5*time.Second)
 			s.signalQueue()
 			return
