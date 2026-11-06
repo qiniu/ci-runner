@@ -45,7 +45,8 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 				fmt.Fprint(w, `{"repositories":[{"full_name":"hubot/project"}]}`)
 			}))
 			defer api.Close()
-			store := state.New(t.TempDir())
+			dir := t.TempDir()
+			store := state.New(dir)
 			srv := newTestServer(t, store, api.URL, &fakeSandbox{})
 			srv.Close()
 			ctx, cancel := context.WithCancel(context.Background())
@@ -109,7 +110,7 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			changed.Store(true)
-			srv.invalidateUserRepositoryAccess(account.ID)
+			ageAccessSnapshot(t, dir, account.ID, true)
 			wait := 45 * time.Second
 			switch change {
 			case "completed", "sandbox replaced", "repository changed":
