@@ -114,7 +114,7 @@ Runner Spec 不是 `runnerd.yaml` 字段。内部 Runner Group 和 Repository Po
 
 PATCH 比较去除首尾空白后的绑定，以及发布／启用转换。验证拒绝或过期保存不修改规格和审计，活动执行配置修改／删除返回 `409 runner_spec_in_use`，而启用、容量和取消发布仍可修改。迁移测试须保留时间戳、策略和索引，审计失败时回滚，并证明重启不会覆盖新策略或恢复已删除行。后台校验不证明镜像内容或其他 scope 的访问权，仍需区域和真实 workflow smoke。
 
-`database.backend` 支持 `sqlite`、`postgres` 和 `mysql`。本地开发优先使用 sqlite；共享数据库的多实例部署需要先用两个 runnerd 进程验证 lease 行为，再作为正式运行方式记录。
+`database.backend` 支持 `sqlite`、`postgres` 和 `mysql`。本地开发优先使用 SQLite。两个 runnerd 进程共享 PostgreSQL 的排队租约接管已有验证。多实例部署还需分别验收共享容量、运行中任务和 Deploy 的恢复以及生产故障切换，见[跟踪清单](../../TODO.md)。
 
 新建的已接受和已拒绝 runner request 在内存中从 webhook 解析 workflow 上下文、分支、SHA、Job URL 和 PR 编号，并将 `github_payload_json` 留空。Installation ID 和 Job ID 来自 `RunnerRequest` 字段；这些字段、仓库、标签及解析后的 webhook 上下文仍保存到结构化字段，供运行和展示使用。另一组结构化快照字段只保留原始 Workflow Job 的终态名称、状态、结论、Runner 名称和本地观察时间；它不会恢复 raw webhook 留存，也不会回填历史记录。State 测试覆盖重新打开数据库后的 `workflow_job`、`workflow_run` 元信息、终态结果 round trip、拒绝请求的持久化，以及重复迁移和 installation ID 修复时保留历史原文。保留历史兼容列、已有值和回填逻辑；清理历史原文与回收磁盘空间需要单独安排维护操作。请求与日志的保留行为不变。
 

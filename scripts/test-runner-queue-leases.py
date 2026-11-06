@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -140,6 +141,31 @@ def exercise(binary, directory, schema, crash, full_ttl):
             assert row() == "failed||3", row()
 
 
+@contextlib.contextmanager
+def fixture_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        try:
+            yield directory
+        except Exception:
+            # Surface lifecycle evidence without dumping DSNs, raw SQL errors,
+            # config files or provider responses into CI output.
+            fields = ("time", "level", "msg", "id", "status", "worker", "lease_owner",
+                      "claim_owner", "claim_version", "state_version", "stage", "decision")
+            for log in sorted(directory.glob("*.log")):
+                print(f"--- {log.name}: last runnerd events ---", file=sys.stderr)
+                with log.open("rb") as stream:
+                    stream.seek(max(0, log.stat().st_size - 16384))
+                    for line in stream.read().splitlines()[-20:]:
+                        try:
+                            event = json.loads(line)
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                        if isinstance(event, dict):
+                            print(json.dumps({k: str(event[k])[:200] for k in fields if k in event}), file=sys.stderr)
+            raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
@@ -151,8 +177,8 @@ def main():
         schema = "queue_" + uuid.uuid4().hex
         sql(os.environ, f"CREATE SCHEMA {schema}")
         try:
-            with tempfile.TemporaryDirectory() as tmp:
-                exercise(args.binary.resolve(), Path(tmp), schema, crash, args.full_ttl and crash)
+            with fixture_directory() as directory:
+                exercise(args.binary.resolve(), directory, schema, crash, args.full_ttl and crash)
             print("PASS:", "crashed owner" if crash else "paused and resumed owner", flush=True)
         finally:
             sql(os.environ, f"DROP SCHEMA {schema} CASCADE")
