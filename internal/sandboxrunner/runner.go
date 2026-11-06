@@ -604,14 +604,17 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		"app":        "e2b-github-runner",
 		"request_id": input.RequestID,
 	}
+	var idempotencyKey string
 	if input.ProvisionAttemptID != "" {
 		metadata["provision_attempt_id"] = input.ProvisionAttemptID
+		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
 	sb, _, err := s.client.CreateAndWait(ctx, qnsandbox.CreateParams{
 		TemplateID:          input.TemplateID,
 		Timeout:             &timeout,
 		AllowInternetAccess: &allowInternet,
 		Metadata:            &metadata,
+		IdempotencyKey:      idempotencyKey,
 	}, qnsandbox.WithPollInterval(500*time.Millisecond))
 	if err != nil {
 		return StartResult{}, err

@@ -33,10 +33,10 @@ func TestCreateRunnerSandboxTagsProvisionAttempt(t *testing.T) {
 		var body struct {
 			Metadata map[string]string `json:"metadata"`
 		}
-		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&body) != nil ||
+		if r.Method != http.MethodPost || r.Header.Get("Idempotency-Key") != "runnerd-attempt-2" || json.NewDecoder(r.Body).Decode(&body) != nil ||
 			body.Metadata["app"] != "e2b-github-runner" || body.Metadata["request_id"] != "job" ||
 			body.Metadata["provision_attempt_id"] != "attempt-2" {
-			t.Errorf("unexpected create metadata %v", body.Metadata)
+			t.Errorf("unexpected create key %q or metadata %v", r.Header.Get("Idempotency-Key"), body.Metadata)
 		}
 		called.Store(true)
 		http.Error(w, "fixture rejects creation", http.StatusBadRequest)
