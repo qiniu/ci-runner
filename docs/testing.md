@@ -188,7 +188,12 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. Run the script with the runnerd binary path and `--full-ttl` to measure crash takeover with the default 300-second lease.
+The catalog-backends CI job runs `scripts/test-runner-queue-leases.py` with two runnerd processes in an isolated PostgreSQL schema. It pauses a claimed worker during admission, starts a second process, shortens the queue lease, and verifies both stale-owner and crash recovery after the retry deadline. For local verification, put `psql` on `PATH` and point the DSN at a dedicated database whose name ends in `_test`. With a built runnerd binary, the following measures takeover with the default 300-second lease. Omit `--full-ttl` for the shorter run.
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
 
 New Runner attempts persist a random `provision_attempt_id` in the creating transaction before Sandbox creation. The same ID supplies the Sandbox API idempotency key and the metadata used for discovery. After an interrupted start, a saved Sandbox ID takes precedence. With no saved ID, recovery searches by request and attempt metadata. Legacy rows use the untagged resource for the same request. On multiple candidates, an unverifiable exact-match response or a failed list, discovery returns an error and startup leaves the request in creating. At this stage the existing sweeper can still requeue it after the creation timeout. A fresh retry receives a new ID.
 
@@ -1219,7 +1224,7 @@ historical requests retain their saved ownership names until they finish.
 Missing entries and `0` add no limit. Negative limits, invalid names and duplicate
 keys after normalization reject startup. Global, Runner Spec, account and repository
 limits must all allow admission. `creating`, `running` and `stopping` consume
-capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL and MySQL guard transactions use read committed isolation to see the previous holder’s commit. A failed
+capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL guard transactions use read committed isolation. MySQL uses InnoDB repeatable read, acquires the guard rows before its first snapshot read, and supports statement-based binary logging. A failed
 transaction rolls back the creating write and releases the guard.
 
 At capacity, requests stay queued, release their worker lease and become eligible

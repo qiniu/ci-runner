@@ -51,10 +51,16 @@ func (s *DBStore) withRunnerGuards(ctx context.Context, ids []int, strength stri
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var opts *sql.TxOptions
-	if db.Dialector.Name() != BackendSQLite {
+	switch db.Dialector.Name() {
+	case BackendPostgres:
 		// The guarded reads must see the previous lock holder's commit,
 		// including when the deployment defaults to repeatable read.
 		opts = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	case BackendMySQL:
+		// InnoDB creates its repeatable-read snapshot on the first consistent
+		// read. Acquire every guard with a locking read before that point.
+		// Statement-based binlogs also require this isolation for writes.
+		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == BackendPostgres {

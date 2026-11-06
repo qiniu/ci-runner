@@ -175,7 +175,12 @@ go test -tags development ./internal/server -run TestRecover -count=1
 go test ./internal/sandboxrunner -count=1
 ```
 
-catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。 将 runnerd 二进制路径和 `--full-ttl` 传给脚本，可实测默认 300 秒租期下的崩溃接管耗时。
+catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。本地验证需先构建 runnerd，将 `psql` 加入 `PATH`，并将 DSN 指向库名以 `_test` 结尾的专用数据库。以下命令使用默认 300 秒租期测量接管耗时，省略 `--full-ttl` 可运行缩短租期的用例。
+
+```bash
+RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
+  python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
+```
 
 新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，随后使用它构造 Sandbox 创建请求的幂等键并写入可查询的元数据。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。出现多个候选、无法验证精确查询结果或资源列表读取失败时，发现流程返回错误，启动恢复保留 creating 状态。在此阶段，现有巡检仍可能在创建超时后将请求重新排队。重新准入时生成新的标识。
 
@@ -1116,7 +1121,7 @@ worker:
 
 未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
 全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
-占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。同一节点的 worker 先在本地排队，再获取数据库连接。PostgreSQL 和 MySQL 的准入事务采用读已提交隔离级别，以便看到上一持锁事务提交的更改。事务失败会回滚 creating 写入并释放数据库行锁。
+占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。同一节点的 worker 先在本地排队，再获取数据库连接。PostgreSQL 的准入事务采用读已提交隔离级别。MySQL 使用 InnoDB 可重复读隔离，在首次快照读取前锁住所需的行，也支持基于语句的二进制日志。事务失败会回滚 creating 写入并释放数据库行锁。
 
 达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
 继续执行。调度按下次可运行时间排序，首次请求使用原入队时间；已到期的延期请求排在

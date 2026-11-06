@@ -3544,8 +3544,6 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 	}
 }
 
-// Exercise the same duplicate deliveries under InnoDB's repeatable-read
-// snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
 func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
 	store := New(t.TempDir()).(*DBStore)
 	db, err := store.dbOrEnsure()
@@ -3575,6 +3573,8 @@ func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
 	}
 }
 
+// Exercise the same duplicate deliveries under InnoDB's repeatable-read
+// snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
 func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)

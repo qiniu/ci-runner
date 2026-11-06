@@ -189,14 +189,21 @@ func (s *failedRunnerAdmissionStore) GetProfile(name string) (state.RunnerProfil
 	return state.RunnerProfile{}, context.Canceled
 }
 
+func releaseAdmissionTestClaim(t *testing.T, store state.Store, claim state.RunnerState) {
+	t.Helper()
+	owner := claim.LeaseOwner
+	claim.LeaseOwner, claim.LeaseExpiresAt = "", time.Time{}
+	if err := store.WriteQueuedClaim(claim, owner); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
 	for _, stage := range []string{"admission_lock_wait", "profile_lookup", "canceled_lookup"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, base, _ := admissionTestFixture(t, 1, 1)
 			claim := queuedRunnerForTest(t, base, "a", "worker")
-			if err := base.ReleaseQueuedClaim(queuedRunnerForTest(t, base, "b", "worker")); err != nil {
-				t.Fatal(err)
-			}
+			releaseAdmissionTestClaim(t, base, queuedRunnerForTest(t, base, "b", "worker"))
 			srv.store = &failedRunnerAdmissionStore{Store: base, stage: stage}
 			srv.startClaimedRunner(t.Context(), claim)
 			st, err := base.ReadState("a")
@@ -384,9 +391,7 @@ func TestRunnerScopeCapacityQueuePassesBusyRepository(t *testing.T) {
 			if err := store.Store.WriteState(active); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.Store.ReleaseQueuedClaim(assertAdmissionState(t, store.Store, "b", state.StatusQueued)); err != nil {
-				t.Fatal(err)
-			}
+			releaseAdmissionTestClaim(t, store.Store, assertAdmissionState(t, store.Store, "b", state.StatusQueued))
 			for i := range 20 {
 				if _, _, err := store.Store.CreateRequest(state.RunnerRequest{ID: fmt.Sprintf("busy-%02d", i), RepositoryFullName: "o/r", ProfileName: "shared"}, nil); err != nil {
 					t.Fatal(err)
