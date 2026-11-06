@@ -27,8 +27,8 @@ func isWorkflowJobWaiting(status string) bool {
 	return false
 }
 
-// On a successful startup decision, attempt retains the last state this worker
-// confirmed or committed, including cleared waiting evidence and its version.
+// Keep the caller's fallback snapshot current after this worker clears waiting
+// evidence on the exact creating version it admitted.
 func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, attempt *state.RunnerState) (bool, error) {
 	if req.JobID == 0 {
 		return true, nil
@@ -37,7 +37,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if err != nil {
 		return false, err
 	}
-	if before.Version != attempt.Version || before.Status != state.StatusCreating || before.LeaseOwner != attempt.LeaseOwner {
+	if before.Status != state.StatusCreating || before.LeaseOwner != attempt.LeaseOwner || !before.LastAttemptAt.Equal(attempt.LastAttemptAt) {
 		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
@@ -69,7 +69,12 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			}
 			st.Version++
 		}
-		*attempt = st
+		// A webhook may already have written assignment evidence before the
+		// lookup. Process its Job normally, but don't borrow an externally
+		// advanced version for a later deferral when the row cannot be read.
+		if before.Version == attempt.Version {
+			*attempt = st
+		}
 		s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "decision", "start")
 		s.store.AppendLog(req.ID, "control.log", []byte("workflow job observed_status=queued decision=start\n"))
 		return true, nil
