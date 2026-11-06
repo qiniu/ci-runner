@@ -100,6 +100,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	st.CreatingAt = time.Time{}
 	st.Error, st.FailureStage, st.FailureReason = "", "", ""
 	st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = code, message, true
+	var retryDelay time.Duration
 	if !known && !rateLimited && st.RetryCount >= s.cfg.RetryMaxAttempts {
 		st.Status = state.StatusFailed
 		st.Error, st.FailureStage, st.FailureReason = message, "github_job_status", code
@@ -113,14 +114,17 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		for delay > 0 && delay < s.cfg.RetryMaxDelay && now.Sub(st.CreatedAt) >= delay {
 			delay *= 2
 		}
-		st.NextRetryAt = now.Add(min(delay, s.cfg.RetryMaxDelay))
+		retryDelay = min(delay, s.cfg.RetryMaxDelay)
 	} else {
 		// Rate limits defer the queue even after the failure budget is spent,
 		// matching applyFailure; saturate the counter while retaining backoff.
 		if st.RetryCount < s.cfg.RetryMaxAttempts {
 			st.RetryCount++
 		}
-		st.NextRetryAt = s.nextRetryAt(max(st.RetryCount, 1), time.Now().UTC())
+		retryDelay = s.retryDelay(max(st.RetryCount, 1))
+	}
+	if st.Status == state.StatusQueued {
+		st.ScheduleQueuedRetry(retryDelay)
 	}
 	if err := s.store.WriteState(st); err != nil {
 		return false, err
@@ -129,8 +133,8 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		metrics.RecordCreate(st.ProfileName, 0, "failed")
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
-	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "next_retry_at", st.NextRetryAt)
-	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s next_check=%s\n", job.Status, job.RunnerName, st.Status, code, st.NextRetryAt.Format(time.RFC3339))))
+	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "retry_delay", retryDelay)
+	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s retry_delay=%s\n", job.Status, job.RunnerName, st.Status, code, retryDelay)))
 	s.signalQueue()
 	if st.Status == state.StatusFailed {
 		s.refreshMetrics()

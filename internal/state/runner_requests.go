@@ -299,6 +299,9 @@ func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watc
 		"lease_owner":                         st.LeaseOwner,
 		"lease_expires_at":                    zeroTimeToPointer(st.LeaseExpiresAt),
 	}
+	if st.Status == StatusQueued && st.queueRetryDelay != nil {
+		updates["next_retry_at"] = queueTime(db, *st.queueRetryDelay)
+	}
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
 	if claimOwner != "" {
 		query = liveQueuedClaim(query, claimOwner)
