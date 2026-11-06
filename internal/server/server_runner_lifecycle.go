@@ -311,18 +311,10 @@ func (s *Server) enqueueRunnerRequest(ctx context.Context, req state.RunnerReque
 	var st state.RunnerState
 	var created bool
 	var rejected string
-	err := s.store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+	err := s.store.WithRunnerEnqueue(ctx, func(tx state.Store) error {
 		var err error
 		rejected, err = prepare(tx, &req)
 		if err != nil {
-			return err
-		}
-		// MySQL CLIENT_FOUND_ROWS can report a no-op duplicate insert as affected.
-		st, err = tx.ReadState(req.ID)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, state.ErrNotFound) {
 			return err
 		}
 		if rejected != "" {
@@ -409,11 +401,14 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	profile, stage, err := s.admitQueuedRunner(ctx, req, &st, &timings, admissionStarted)
 	unlock()
 	if err != nil {
-		if (stage == "profile_lookup" && errors.Is(err, state.ErrNotFound)) || stage == "profile_validation" {
+		if errors.Is(err, state.ErrConflict) {
+			return
+		}
+		if stage == "profile_lookup" || stage == "profile_validation" {
 			s.failQueuedClaim(claim, stage, err)
 		} else {
-			_ = s.store.ReleaseQueuedClaim(claim)
 			s.logger.Error("admit queued runner", "id", id, "stage", stage, "error", err)
+			s.deferQueuedRunner(claim, 5*time.Second, "runner_admission_unavailable", "Waiting to retry database admission", "runner_admission")
 		}
 		return
 	}
@@ -460,6 +455,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if err := s.persistSandboxServiceSnapshot(ctx, st, sandboxConfig); err != nil {
 		timings.record("sandbox_snapshot", snapshotStartedAt)
 		if errors.Is(err, errStaleSnapshotAttempt) {
+			s.logger.Info("runner Sandbox snapshot skipped for superseded attempt", "id", id, "error", err)
 			return
 		}
 		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
@@ -2131,12 +2127,15 @@ func (s *Server) retryOrFail(st state.RunnerState, stage string, err error) {
 }
 
 func (s *Server) deferQueuedRequest(claim state.RunnerState, delay time.Duration, capacityStage string) {
-	st := claim
 	dimension := strings.TrimSuffix(capacityStage, "_capacity_check")
-	code := "runner_capacity_" + dimension
+	s.deferQueuedRunner(claim, delay, "runner_capacity_"+dimension, "Waiting for "+dimension+" Runner concurrency capacity", "runner_capacity")
+}
+
+func (s *Server) deferQueuedRunner(claim state.RunnerState, delay time.Duration, code, message, stage string) {
+	st := claim
 	changed := st.LastErrorCode != code
 	st.LastErrorCode = code
-	st.LastErrorMessage = "Waiting for " + dimension + " Runner concurrency capacity"
+	st.LastErrorMessage = message
 	st.LastErrorRetryable = true
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
@@ -2144,11 +2143,10 @@ func (s *Server) deferQueuedRequest(claim state.RunnerState, delay time.Duration
 	clearSandboxServiceSnapshot(&st)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
 		s.logger.Error("defer queued request", "id", st.ID, "error", err)
-		_ = s.store.ReleaseQueuedClaim(claim)
 		return
 	}
 	if changed {
-		s.store.AppendStagedLog(st.ID, "control.log", "runner_capacity", []byte(st.LastErrorMessage+"\n"))
+		s.store.AppendStagedLog(st.ID, "control.log", stage, []byte(st.LastErrorMessage+"\n"))
 	}
 }
 
@@ -2301,7 +2299,7 @@ func (s *Server) recordAudit(actor, action, resourceType, resourceID string, pay
 
 func (s *Server) applyRunnerMutationWithAudit(ctx context.Context, actor, action, resourceType, resourceID string, payload any, mutation func(state.Store) error) error {
 	return s.applyMutationWithAudit(actor, action, resourceType, resourceID, payload, func(tx state.Store) error {
-		return tx.WithRunnerAdmission(ctx, mutation)
+		return tx.WithRunnerCatalogMutation(ctx, mutation)
 	})
 }
 

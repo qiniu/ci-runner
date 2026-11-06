@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
@@ -222,7 +223,9 @@ func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snap
 		return fmt.Errorf("read state for sandbox config snapshot: %w", err)
 	}
 	if current.Status != state.StatusCreating || current.LeaseOwner != attempt.LeaseOwner || !current.LastAttemptAt.Equal(attempt.LastAttemptAt) {
-		return errStaleSnapshotAttempt
+		return fmt.Errorf("%w: expected owner=%q attempt=%s, current status=%s owner=%q attempt=%s",
+			errStaleSnapshotAttempt, attempt.LeaseOwner, attempt.LastAttemptAt.UTC().Format(time.RFC3339Nano),
+			current.Status, current.LeaseOwner, current.LastAttemptAt.UTC().Format(time.RFC3339Nano))
 	}
 	current.SandboxAPIURL = snapshot.APIURL
 	current.SandboxAPIKeyEncrypted = snapshot.EncryptedAPIKey

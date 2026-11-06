@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func TestWriteStateCompletedWithoutCleanupLeavesStoppingTimeUnset(t *testing.T) {
@@ -351,6 +354,14 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 	// Lease should still be held by worker-A
 	if got.LeaseOwner != "worker-A" {
 		t.Errorf("expected lease still owned by worker-A after wrong-worker release, got %q", got.LeaseOwner)
+	}
+}
+
+func TestMySQLQueueTimeWithoutDSNLocation(t *testing.T) {
+	db := &gorm.DB{Config: &gorm.Config{Dialector: gormmysql.New(gormmysql.Config{})}}
+	expr := queueTime(db, time.Minute)
+	if len(expr.Vars) != 1 || expr.Vars[0] != time.Minute.Microseconds() || !strings.Contains(expr.SQL, "UTC_TIMESTAMP(6)") {
+		t.Fatalf("expected a one-minute UTC database deadline, got %+v", expr)
 	}
 }
 
