@@ -1450,8 +1450,8 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	}
 
 	timeout := s.remainingSandboxTimeout(st, time.Now().UTC())
-	expiredUnknownCreate := timeout <= 0 && st.Status == state.StatusCreating && st.SandboxCreateDispatched && st.SandboxID == ""
-	if timeout <= 0 && !expiredUnknownCreate {
+	undiscoveredCreate := st.Status == state.StatusCreating && st.SandboxCreateDispatched && st.SandboxID == ""
+	if timeout <= 0 && !undiscoveredCreate {
 		s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout during recovery")
 		return nil
 	}
@@ -1463,17 +1463,30 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	if err != nil {
 		return fmt.Errorf("resolve sandbox service for recovery: %w", err)
 	}
-	if expiredUnknownCreate {
+	if undiscoveredCreate {
 		box, err := sandboxService.FindRunnerSandbox(ctx, st.ID, st.ProvisionAttemptID)
 		if err != nil {
-			return fmt.Errorf("locate dispatched Sandbox after timeout: %w", err)
+			if errors.Is(err, sandboxrunner.ErrSandboxNotFound) && st.LastErrorCode != "sandbox_create_outcome_unknown" {
+				st.LastErrorCode = "sandbox_create_outcome_unknown"
+				st.LastErrorMessage = "Awaiting provider confirmation for the dispatched Sandbox creation"
+				if writeErr := s.store.WriteWatchedState(st, watchToken); writeErr != nil {
+					return writeErr
+				}
+			}
+			return fmt.Errorf("locate dispatched Sandbox: %w", err)
 		}
+		// The list proved which Sandbox was allocated. Persist its identity before
+		// connecting so a later 404 or another node's recovery retains that evidence.
 		st.SandboxID = box
 		if err := s.store.WriteWatchedState(st, watchToken); err != nil {
 			return err
 		}
-		s.failAndStopRunnerVersion(ctx, st.ID, st.Version+1, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout during recovery")
-		return nil
+		st.Version++
+		stateVersion = st.Version
+		if timeout <= 0 {
+			s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout during recovery")
+			return nil
+		}
 	}
 	// Keep this gate buffered and signal it exactly once after RecoverRunner
 	// returns: false on error or a deferred version-guard decision on success.
@@ -1502,16 +1515,6 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 			return nil
 		}
 		if st.Status == state.StatusCreating {
-			if st.SandboxCreateDispatched && st.SandboxID == "" && errors.Is(err, sandboxrunner.ErrSandboxNotFound) {
-				if st.LastErrorCode != "sandbox_create_outcome_unknown" {
-					st.LastErrorCode = "sandbox_create_outcome_unknown"
-					st.LastErrorMessage = "Awaiting provider confirmation for the dispatched Sandbox creation"
-					if writeErr := s.store.WriteWatchedState(st, watchToken); writeErr != nil {
-						return writeErr
-					}
-				}
-				return fmt.Errorf("dispatched Sandbox creation still awaiting provider evidence: %w", err)
-			}
 			switch {
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && (!hasJob || job.Status == "queued" || isWorkflowJobWaiting(job.Status)):
 				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
@@ -1664,6 +1667,11 @@ func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stat
 		// A crash can leave a JIT identity without a Sandbox. Reconcile before
 		// requeueing: the next start may finish early for an already-completed Job.
 		if err := s.cleanupGitHubRunner(ctx, st); err != nil {
+			if st.SandboxCreateDispatched && st.SandboxID != "" {
+				// Keep the exact Sandbox and bootstrap decision. The next lease owner
+				// must finish JIT cleanup before applying the retry budget.
+				return fmt.Errorf("cleanup interrupted JIT Runner: %w", err)
+			}
 			if persistErr := s.writeWindowsJITCleanupPending(&st); persistErr != nil {
 				return fmt.Errorf("retain interrupted JIT cleanup: %w", persistErr)
 			}

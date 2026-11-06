@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,11 +13,12 @@ import (
 )
 
 func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
-	for _, scenario := range []string{"missing sandbox", "missing process", "cleanup failure"} {
+	for _, scenario := range []string{"missing sandbox", "missing process", "cleanup failure", "bootstrap cleanup failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			var registered, cleanupUnavailable, jobCompleted atomic.Bool
 			registered.Store(true) // Persisted creating request after JIT POST, before adoption.
-			cleanupUnavailable.Store(scenario == "cleanup failure")
+			bootstrapFailed := scenario == "bootstrap cleanup failure"
+			cleanupUnavailable.Store(scenario == "cleanup failure" || bootstrapFailed)
 			var deletes atomic.Int64
 			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -47,8 +49,11 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 			}))
 			defer gh.Close()
 			store := state.New(t.TempDir())
+			if bootstrapFailed && os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				store = state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true})
+			}
 			fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-			if scenario == "missing process" {
+			if scenario == "missing process" || bootstrapFailed {
 				fake.recoverErr = sandboxrunner.ErrRunnerNotFound
 				fake.recoverResult = sandboxrunner.StartResult{SandboxID: "interrupted-sandbox"}
 			}
@@ -61,13 +66,49 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 			}
 			st.Status = state.StatusCreating
 			st.LastAttemptAt = time.Now().UTC().Truncate(time.Millisecond)
+			if bootstrapFailed {
+				st.ProvisionAttemptID = "attempt"
+				st.FailureStage, st.LastErrorCode = pendingBootstrapFailure, "auth_error"
+				st.LastErrorMessage = "Sandbox bootstrap failed: write runner script"
+			}
 			if err = store.WriteState(st); err != nil {
 				t.Fatal(err)
+			}
+			if bootstrapFailed {
+				const ttl = 200 * time.Millisecond
+				srv.cfg.WorkerLeaseTTL = ttl
+				st = assertAdmissionState(t, store, st.ID, state.StatusCreating)
+				ok, err := store.ClaimRunnerWatch(t.Context(), st, "creator", ttl)
+				if err != nil || !ok {
+					t.Fatalf("creator lease: %t %v", ok, err)
+				}
+				if err := store.DispatchSandboxCreate(t.Context(), st.ID, "creator", st.ProvisionAttemptID); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.RecordSandboxCreateResult(t.Context(), st, "interrupted-sandbox"); err != nil {
+					t.Fatal(err)
+				}
+				waitExpiredCreatingWatch(t, store, st.ID)
 			}
 			err = srv.recoverRunner(t.Context(), st.ID)
 			current, readErr := store.ReadState(st.ID)
 			if readErr != nil {
 				t.Fatal(readErr)
+			}
+			if bootstrapFailed {
+				if err == nil || current.Status != state.StatusCreating || current.FailureStage != pendingBootstrapFailure || current.FailureReason != interruptedCreateCleanup || current.SandboxID != "interrupted-sandbox" || current.LastErrorCode != "auth_error" || !registered.Load() {
+					t.Fatalf("lost bootstrap decision during JIT cleanup: %#v err=%v", current, err)
+				}
+				cleanupUnavailable.Store(false)
+				waitExpiredCreatingWatch(t, store, st.ID)
+				if err := srv.recoverRunner(t.Context(), st.ID); err != nil {
+					t.Fatal(err)
+				}
+				current = assertAdmissionState(t, store, st.ID, state.StatusFailed)
+				if current.LastErrorCode != "auth_error" || current.FailureStage != "sandbox_bootstrap" || current.RetryCount != 0 || current.SandboxCreateDispatched || registered.Load() || deletes.Load() != 2 {
+					t.Fatalf("bootstrap outcome bypassed after JIT cleanup: %#v deletes=%d", current, deletes.Load())
+				}
+				return
 			}
 			if scenario == "cleanup failure" {
 				if err == nil || current.Status != state.StatusStopping || current.FailureReason != "jit_cleanup_pending" || current.NextRetryAt.IsZero() || !registered.Load() {
@@ -101,4 +142,22 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 			}
 		})
 	}
+}
+
+func waitExpiredCreatingWatch(t *testing.T, store state.Store, id string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := store.ListExpiredRunnerWatches(t.Context(), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.ID == id && row.Status == state.StatusCreating {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for creating lease to expire")
 }

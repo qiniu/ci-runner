@@ -94,7 +94,7 @@ func TestRunnerCreateRejectionAfterConnectionLossIsUnknown(t *testing.T) {
 	}
 	_ = res.Body.Close()
 	_, err = newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt", TemplateID: "template"})
-	if !errors.Is(err, ErrCreateOutcomeUnknown) {
+	if posts.Load() != 2 || !errors.Is(err, ErrCreateOutcomeUnknown) {
 		t.Fatalf("lost POST response: requests=%d err=%v", posts.Load(), err)
 	}
 }

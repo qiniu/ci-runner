@@ -861,6 +861,8 @@ Sandbox 已创建而 Runner 启动失败时，恢复流程先尝试重连。确�
 
 `TestLateStartFailureAfterPeerAdoption` 在 SQLite 和 PostgreSQL 上运行独立服务进程及本地 Sandbox 替身。测试先在创建者健康时触发另一进程启动恢复和超时扫描，再分别制造创建响应迟到、服务端受理后杀死创建者两种故障。首次查询为空，下一次查回 Sandbox，验证沿用原尝试、Sandbox ID、PID 和重试次数。PostgreSQL CI 对这条回归启用竞态检测。
 
+恢复时，元数据匹配后会在重连前保存确切的 Sandbox ID。`TestReconciledBootstrapFailureRespectsRetryBudget` 覆盖随后 Connect 返回 404 的情况，验证缺失进程会消耗重试预算。`TestWindowsJITRecoveryCleansRegistrationBeforeRequeue` 验证 GitHub 清理暂时失败时会保留确定性的启动失败，待 JIT 身份清理完成后再结束请求。
+
 创建和运行阶段共用数据库租约。准入时写入令牌，worker 每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本和时间戳。后台每五秒按数据库时间扫描，每轮最多接管四条过期记录。已发出的创建还没有 Sandbox ID 时，`sandbox_create_outcome_unknown` 表示保留原尝试及配额等待对账。元数据列表为空或本地超时均不足以证明服务端拒绝创建；长期未决时应与服务端核对。运行中任务按原 Sandbox/PID 重连，退出回调须持有有效监听权才能启动清理。生产扩容仍需另行验收，升级时应排空旧版本写入者。
 
 对长期未决的创建，运维可在 PostgreSQL 的 `runner_requests` 表按请求 ID 读取 `id, status, provision_attempt_id, sandbox_id, watch_expires_at, last_error_code`，再到该尝试保存的 Sandbox 端点核对 `app=e2b-github-runner`、`request_id` 和 `provision_attempt_id` 三项元数据。停止请求会等待查回资源或收到明确的创建拒绝。
