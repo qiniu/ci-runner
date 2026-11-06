@@ -513,8 +513,8 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
 		}
-		s.logger.Info("profile create rejected", "name", input.Name, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.logger.Error("persist profile create", "name", input.Name, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
 		return
 	}
 	s.invalidatePublicRunnerTemplates()
@@ -639,8 +639,8 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
 			return
 		}
-		s.logger.Info("profile update rejected", "name", current.Name, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.logger.Error("persist profile update", "name", current.Name, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
 		return
 	}
 	s.invalidatePublicRunnerTemplates()

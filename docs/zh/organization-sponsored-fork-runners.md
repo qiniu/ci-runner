@@ -36,7 +36,7 @@
 3. 按 source repository 稳定 ID 查找启用策略；
 4. 确认 source owner 仍匹配赞助组织 installation，仓库转移 fail closed；
 5. 创建 Sandbox 前重新检查准入条件，GitHub 查询失败时本次启动 fail closed；
-6. GitHub I/O 不持有启动锁；完成远程检查后，在短时 per-policy 临界区内重新检查策略和精确审批、检查容量并保存 request 快照；
+6. 先完成 GitHub 请求，再获取与 Runner 准入共用的数据库容量锁。在同一事务内重新核对策略和精确审批、检查赞助容量并保存请求快照。
 7. 在 Runner request 保存加密 Sandbox 配置和不含凭据的赞助来源。
 
 Managed Runner request 的解析顺序变为：request 快照、Fork installation 配置、个人
