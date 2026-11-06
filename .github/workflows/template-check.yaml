@@ -12,6 +12,9 @@ on:
       - "scripts/test-update-actions-runner-pin.mjs"
       - "scripts/check-runner-template-matrix.sh"
       - "scripts/test-runner-template-disk.sh"
+      - "scripts/build-template-batch.py"
+      - "scripts/test-template-batch.py"
+      - "scripts/lib/runner-template-disk.sh"
       - "scripts/test-prepare-runner-archive.sh"
       - "scripts/prepare-runner-archive.sh"
       - "scripts/run-runner-template-operation.sh"
@@ -45,6 +48,9 @@ on:
       - "scripts/test-update-actions-runner-pin.mjs"
       - "scripts/check-runner-template-matrix.sh"
       - "scripts/test-runner-template-disk.sh"
+      - "scripts/build-template-batch.py"
+      - "scripts/test-template-batch.py"
+      - "scripts/lib/runner-template-disk.sh"
       - "scripts/test-prepare-runner-archive.sh"
       - "scripts/prepare-runner-archive.sh"
       - "scripts/run-runner-template-operation.sh"
@@ -124,6 +130,8 @@ jobs:
         run: bash scripts/check-runner-template-matrix.sh
       - name: Test template disk gates independently of host environment
         run: bash scripts/test-runner-template-disk.sh
+      - name: Test regional batch resume and concurrency
+        run: python3 scripts/test-template-batch.py
       - name: Test Runner archive preparation
         run: bash scripts/test-prepare-runner-archive.sh
 

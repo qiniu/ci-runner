@@ -412,7 +412,7 @@ source directory or build target.
 Run `task template-python-test` when changing Python/pipx installation; it uses
 Docker and network access to verify isolation from apt-owned Python packages.
 Run `task template-check-all`, then use `task template-build-all` to build all
-eight templates sequentially, or use an individual `task template-build-ubuntu-*`
+eight Ubuntu templates with default concurrency 4 (add `INCLUDE_WINDOWS=1` for Windows), or use an individual `task template-build-ubuntu-*`
 target for one real qshell Sandbox build. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and
@@ -442,16 +442,12 @@ evidence in the versioned release record. See
 for activation, asset validation, no-op/failure behavior and acceptance boundaries.
 
 Template source validation requires Node.js 24, and template builds require
-qshell 2.19.13 or newer. Standard configs request
-`disk_size_mb = 20480`, while large configs request `81920` for new templates.
-This setting is the minimum root disk size; the reported total can be larger.
-Qshell does not send the setting on same-name
-rebuilds. After the provider team's `DiskMb` is adjusted, the build tasks rebuild
-the existing names and IDs in place without rejecting their stale pre-rebuild
-totals. Publish and catalog checks require the rebuilt totals to meet the
-configured lower bounds; a larger total is not a mismatch by itself.
-Release smoke reads the corresponding TOML and requires the runtime root disk
-size to meet its `disk_size_mb` lower bound.
+qshell 2.20.0 or newer. Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). New templates request
+the release minimum via `min_free_disk_mb`. With qshell 2.20.0, same-name
+rebuilds use the team default for free space. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
 The 2.337.0 baseline completed the two-region, eight-template rebuild, catalog,
 standard workflow, and large workflow gates recorded in
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93).

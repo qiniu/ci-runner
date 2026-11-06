@@ -3,11 +3,13 @@
 This 8-vCPU, 8192-MiB Windows 11 x64 template is built with qshell on top of
 the provider's `windows11` template. Windows Sandbox templates cannot start from
 a Docker image, so `qshell.sandbox.toml` sets `from_template = "windows11"` and
-qshell ignores the Dockerfile `FROM` line. The template keeps the base
-template's 50 GiB disk; free space must be remeasured after rebuilding with GCC;
-`disk_size_mb = 51200` records that size because the shared qshell build
-helper requires the field. The Windows template is not part of the publication
-or catalog gates.
+qshell ignores the Dockerfile `FROM` line. Windows requires 50 GiB free on C: at release.
+New templates request 51,200 MiB. With qshell 2.20.0, same-name rebuilds use the team default for free space.
+The Windows preview has a separate acceptance step. Check the system drive in a fresh Windows Sandbox before promotion:
+
+```powershell
+if ((Get-PSDrive C).Free -lt 50GB) { throw 'C: has less than 50 GiB available' }
+```
 
 The Dockerfile uses the `` ` `` escape directive so Windows paths keep their
 backslashes. qshell always prepends `USER root` and `WORKDIR /`, and appends

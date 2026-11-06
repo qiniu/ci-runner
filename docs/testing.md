@@ -736,9 +736,8 @@ Common issues:
   scoped Sandbox endpoint exposes exactly one public default template with the
   managed stable name with a nonzero effective default BuildID, including when the latest rebuild failed.
 - sandbox creation fails: confirm the account/organization Preferences or enabled admin default has a complete Sandbox service config matching the template and local environment; the Runner detail shows which source was selected.
-- `template-smoke` reports insufficient runtime root disk size: verify the
-  fresh Sandbox root disk meets `disk_size_mb` from the selected TOML.
-  Confirm the provider team's `DiskMb`, then follow the
+- If disk smoke fails, check both the root disk total and the bytes available
+  to the runner. Confirm the provider allocation, then follow the
   [same-name rebuild steps](default-runner-templates.md) and repeat smoke.
 - Template conformance or release smoke loses `stdout.raw` or its temporary
   directory: verify cleanup runs only in the main shell. A watchdog terminated

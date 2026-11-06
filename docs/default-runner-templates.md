@@ -4,7 +4,7 @@
 
 Qiniu maintains eight physical Linux x64 Sandbox templates for GitHub Actions:
 four standard images (Ubuntu Slim, Ubuntu 22.04, Ubuntu 24.04, and preview
-Ubuntu 26.04) plus four `-large` variants with an 80-GiB minimum disk size.
+Ubuntu 26.04) plus four `-large` variants with an 80-GiB release minimum for available space.
 `ubuntu-latest` is a logical runner catalog mapping to Ubuntu 24.04, not a
 ninth image.
 
@@ -24,25 +24,19 @@ verified both the standard and large workflow matrices on 2026-09-21. The
 catalog and production evidence are retained in
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 
-The four standard build configs set `disk_size_mb = 20480`, a 20-GiB minimum
-root disk size for new templates. The provider may report a larger total.
-Qshell does not send the setting when
-rebuilding an existing name. After the provider team's `DiskMb` is adjusted,
-the build helper rebuilds the existing name and ID without checking its stale
-total. Publish and catalog checks require the rebuilt total to be at least
-20,480 MiB. Runtime Sandbox smoke remains required.
+Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). New templates request
+the release minimum via `min_free_disk_mb`. With qshell 2.20.0, same-name
+rebuilds use the team default for free space. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
 
 Each standard source directory also contains a
 `qshell.sandbox.large.toml` for its `-large` variant. Standard and large configs
 reuse the same Dockerfile and scripts while using distinct physical template
 names. The large variants are documented
-operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit physical template ID. Public directory inclusion additionally requires a verified public template (name or physical ID) and explicit catalog display. Each `qshell.sandbox.large.toml` sets
-`disk_size_mb = 81920`, an 80-GiB minimum root disk size for a new template; the
-provider team's `DiskMb` must be at least 81,920 MiB before an in-place rebuild.
-Qshell does not send this setting when rebuilding an existing same-name
-template. The build helper therefore allows the rebuild despite a stale lower
-total; publish and catalog checks enforce the lower bound after the rebuild.
-[Qshell v2.19.13 documents the create-only disk option](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48).
+operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit physical template ID. Public directory inclusion additionally requires a verified public template (name or physical ID) and explicit catalog display.
+[Qshell v2.20.0 template build options](https://github.com/qiniu/qshell/blob/v2.20.0/docs/sandbox_template_build.md).
 
 All eight qshell configurations across the four source directories use
 `templates/` as the build context. The
@@ -128,8 +122,8 @@ quiet; closing the initial acceptance Issue does not stop future maintenance.
 
 Source automation receives no Sandbox credentials and cannot build, publish,
 unpublish or roll back templates. An operator uses the existing local Task
-targets to rebuild all eight Linux templates in both regions, publish them,
-verify catalogs and real Sandbox smoke, and retain standard/large production
+targets to rebuild all eight Linux templates in both regions, run real Sandbox smoke,
+publish them, verify catalogs, and retain standard/large production
 Job evidence. Windows pin synchronization does not add Windows production
 promotion to that Linux acceptance checklist. Keep production credentials in
 the operator's shell and stop for review on uncertain outcomes.
@@ -201,10 +195,9 @@ jobs:
       - run: uname -a
 ```
 
-The public large defaults use the same contract and resources with an 80-GiB
-minimum disk size:
+The public large defaults use the same contract and resources and require 80 GiB available at release:
 
-| Workflow label | Physical template | Minimum disk size |
+| Workflow label | Physical template | Available space required at release |
 | --- | --- | --- |
 | `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
 | `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
@@ -224,8 +217,8 @@ At bootstrap, public-name specs fail closed if Docker cannot become available. P
 
 These templates track the pinned `actions/runner-images` reports item by item,
 but they are not byte-for-byte GitHub-hosted runner images. Earlier standard
-regional templates have roughly 22,222-MiB root disks; this revision requests
-20,480 MiB. The complete GitHub-hosted runner inventory requires more space.
+regional templates had roughly 22,222-MiB root disks. The complete GitHub-hosted
+runner inventory exceeded that allocation.
 The three versioned templates guarantee the Ubuntu Slim-compatible core on the requested
 Ubuntu release, plus Apache, Podman, Buildah, Skopeo, Ninja, Docker support,
 pinned Pester for installer validation, the preinstalled Actions runner, and
@@ -240,7 +233,7 @@ dependency, but workflows must not rely on it.
 
 ## Requirements
 
-- `qiniu/qshell` 2.19.13 or newer;
+- `qiniu/qshell` 2.20.0 or newer;
 - Node.js 24, plus `task`, `jq`, `curl`, `sha256sum`, and `split` on the
   build host;
 - a `QINIU_API_KEY` for the selected Sandbox region;
@@ -310,18 +303,39 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-`template-build-all` runs these eight remote builds sequentially and stops at
-the first failure. Use an individual target when rebuilding only one template.
+The regional batch builds the eight Ubuntu templates with up to four builds
+in flight. Add `INCLUDE_WINDOWS=1` to include the Windows 11 preview, or
+set `BUILD_CONCURRENCY=1` to run one at a time (valid range 1–9).
+The batch controller requires Python 3.11+ on a Unix build host.
 
-Standard and large build targets set minimum disk sizes of 20,480 MiB and
-81,920 MiB, respectively, in their tracked TOML files. Qshell does not send
-this value to a same-name rebuild. Adjust the
-provider team's `DiskMb` first, then run the corresponding build task to rebuild
-the existing name and ID in place. The build helper deliberately does not reject
-the stale pre-rebuild total. After qshell reports `Status: ready`, verify the
-catalog total `disk_size_mb`, run Sandbox smoke, and publish only when both gates
-pass. A total above the configured minimum is valid. A provider quota can still
-reject the allocation.
+```sh
+task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
+```
+
+Run the command in the shell where you exported the regional
+`QINIU_SANDBOX_API_URL` and `QINIU_API_KEY`. Every build and status query inherits them.
+
+Repeat the same command to resume. The batch checks the saved Template ID and
+Build ID with qshell, waits for outstanding attempts and skips successful
+matching builds after checking the current catalog. A failed build is retried
+on the next run. Changes to a template's build inputs trigger a fresh build.
+Use a **new** `BUILD_BATCH` label for a periodic refresh with unchanged inputs.
+The default label is `default`. Receipts track the most recent attempt for
+each name and endpoint in this clone's Git common directory, shared across
+its worktrees. Each endpoint allows one batch controller at a time. Coordinate
+single-template commands and builds from other clones separately.
+
+If a status query fails or the wait expires (default 3600 seconds per build,
+configurable via the `BUILD_WAIT_SECONDS` environment variable), rerun the same
+batch. If interrupted before qshell returns IDs, the next run reports the
+receipt path and stops. Inspect the regional build history. Only after ruling
+out an active build, move that receipt aside and rerun. A successful batch
+still requires the separate regional smoke and publication steps.
+
+If an existing template falls short of the free-space target, arrange sufficient
+capacity with the provider before rebuilding the same name and ID. Once
+qshell reports `Status: ready`, verify the total disk and use release smoke
+on that ID to check available space before publishing.
 
 The Dockerfiles keep `bootstrap`, `platform`, `node`, `toolchain`, and
 `runtime` work in separate qshell-compatible cache layers where applicable.
@@ -347,10 +361,34 @@ Xvfb, binutils, and `systemd-coredump` dependency sets are isolated, and the
 final batch is open-ended so appended pinned packages are not skipped. If a
 remote build reaches the service
 time limit after completing an earlier layer, rerun the same command with the
-normal cache enabled. Do not force `--no-cache`; the release gate remains a
-single build reaching terminal `Status: ready`.
+normal cache enabled. Do not force `--no-cache`; before smoke, verify that the
+build reached terminal `Status: ready`.
 
-Publish only after all eight builds are ready:
+Use the Template ID from each ready build to run Sandbox smoke before publishing:
+
+```bash
+task template-smoke IMAGE_KEY=ubuntu-slim TEMPLATE_ID=<slim-template-id>
+task template-smoke IMAGE_KEY=ubuntu-22.04 TEMPLATE_ID=<22.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<24.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-26.04 TEMPLATE_ID=<26.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-slim-large TEMPLATE_ID=<slim-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-22.04-large TEMPLATE_ID=<22.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04-large TEMPLATE_ID=<24.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-template-id>
+```
+
+Smoke creates a temporary Sandbox with qshell and checks the OS release,
+architecture, preinstalled Actions runner, outbound HTTPS, Docker daemon,
+writable work/tool-cache paths, runtime root disk size, and cleanup. Release smoke checks both total capacity and available bytes on the root filesystem.
+Preserve the emitted JSON paths as
+release evidence. The full compatibility manifest remains the static inventory
+contract; per-entry runtime conformance is an optional diagnostic and does not
+block the release usability gate.
+The Docker check imports and runs a local minimal root filesystem with
+networking disabled. Registry reachability is not part of the daemon check;
+outbound HTTPS is verified independently.
+
+After all eight IDs pass smoke, publish the templates and verify the public catalog:
 
 ```bash
 task template-publish-ubuntu-slim
@@ -370,55 +408,25 @@ variants. It rejects missing and duplicate catalog entries, a standard
 template whose total `diskSizeMB` is below 20,480 MiB, or a large template
 whose total `diskSizeMB` is below 81,920 MiB.
 
-Retain each ID printed by the catalog check, then run actual Sandbox smoke:
-
-```bash
-task template-smoke IMAGE_KEY=ubuntu-slim TEMPLATE_ID=<slim-template-id>
-task template-smoke IMAGE_KEY=ubuntu-22.04 TEMPLATE_ID=<22.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<24.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-26.04 TEMPLATE_ID=<26.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-slim-large TEMPLATE_ID=<slim-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-22.04-large TEMPLATE_ID=<22.04-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-24.04-large TEMPLATE_ID=<24.04-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-template-id>
-```
-
-Smoke creates a temporary Sandbox with qshell and checks the OS release,
-architecture, preinstalled Actions runner, outbound HTTPS, Docker daemon,
-writable work/tool-cache paths, runtime root disk size, and cleanup. The runtime
-check reads `disk_size_mb` from the selected TOML and requires the root disk to
-meet that lower bound.
-Preserve the emitted JSON paths as
-release evidence. The full compatibility manifest remains the static inventory
-contract; per-entry runtime conformance is an optional diagnostic and does not
-block the release usability gate.
-The Docker check imports and runs a local minimal root filesystem with
-networking disabled. Registry reachability is not part of the daemon check;
-outbound HTTPS is verified independently.
-
 Local Docker builds and `task template-conformance-local` remain optional
 diagnostic tools. They are not substitutes for qshell template builds or
 Sandbox smoke.
 
 ## First release in both regions
 
-Complete the whole build, publish, catalog, and smoke sequence in this order:
+Complete the whole build, smoke, publish, and catalog sequence in this order:
 
 1. Export
    `QINIU_SANDBOX_API_URL=https://cn-yangzhou-1-sandbox.qiniuapi.com` and the
    Yangzhou `QINIU_API_KEY`.
-2. Plan an ID/name transition only for existing standard or large templates
-   whose total disk is below the tracked `disk_size_mb`, keeping old
-   referenced IDs available. Build and publish the four standard templates.
-   After the provider accepts an 81,920-MiB request, build and publish the four
-   large templates; then run `task template-defaults-check` and smoke all
-   eight returned IDs. Migrate and repeat the gate for any existing name whose
-   runtime disk-size smoke fails.
+2. Build the four standard and four large templates. Run smoke on each rebuilt
+   ID and verify total capacity before publishing. Then run
+   `task template-defaults-check` to verify the eight public catalog entries.
 3. Retain the build output, catalog IDs, smoke JSON, and relevant workflow URL.
 4. Export
    `QINIU_SANDBOX_API_URL=https://us-south-1-sandbox.qiniuapi.com` and the
    US South `QINIU_API_KEY`.
-5. Repeat the eight builds, publication, catalog check, and smoke checks.
+5. Repeat the builds, smoke checks, publication, and catalog check.
 6. Confirm both catalog results contain one runnable public entry for every
    physical stable name.
 7. Attach both-region evidence to Issue #38 before marking the template rows

@@ -6,7 +6,7 @@
 #
 # Prefer a stable name over a committed environment-specific template_id.
 # Windows templates cannot start from a Docker image; build on the provider's
-# windows11 template instead and keep its 50 GiB disk.
+# windows11 template instead and verify 50 GiB free after the build.
 
 name = "github-runner-windows-11"
 from_template = "windows11"
@@ -14,6 +14,9 @@ dockerfile = "./Dockerfile"
 path = ".."
 cpu_count = 8
 memory_mb = 8192
-disk_size_mb = 51200
+min_free_disk_mb = 51200
 ready_cmd = "ver"
 no_cache = false
+
+# Local release policy (available space, MiB).
+runnerd.min_free_disk_mb = 51200
