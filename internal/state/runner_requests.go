@@ -187,7 +187,7 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if db.Dialector.Name() == BackendMySQL {
 		// A normal consistent read after a duplicate can see an older
 		// REPEATABLE READ snapshot. Read the winning row under a shared lock.
-		lookup = db.Clauses(clause.Locking{Strength: "SHARE"})
+		lookup = db.Clauses(clause.Locking{Strength: "SHARE"}).Session(&gorm.Session{})
 	} else {
 		insert = db.Clauses(clause.OnConflict{DoNothing: true})
 	}

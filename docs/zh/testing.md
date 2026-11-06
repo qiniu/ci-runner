@@ -177,9 +177,9 @@ go test ./internal/sandboxrunner -count=1
 
 catalog-backends CI 使用 `scripts/test-runner-queue-leases.py` 在隔离的 PostgreSQL schema 中启动两个 runnerd。用例在准入期间暂停持有租约的进程，启动第二个进程，再缩短队列租期，验证旧进程恢复及退出两种情况下的接手行为与重试时间。 将 runnerd 二进制路径和 `--full-ttl` 传给脚本，可实测默认 300 秒租期下的崩溃接管耗时。
 
-新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，随后使用它构造 Sandbox 创建请求的幂等键并写入可查询的元数据。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。多个候选或无法验证的精确查询结果需继续核对。重新准入时生成新的标识。
+新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，随后使用它构造 Sandbox 创建请求的幂等键并写入可查询的元数据。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。出现多个候选、无法验证精确查询结果或资源列表读取失败时，发现流程返回错误，启动恢复保留 creating 状态。创建请求已发出时，若查到多个候选、列表为空或只发生本地创建超时，系统会保留该尝试及其配额，直到服务商确认结果。元数据精确匹配后，恢复流程先保存 Sandbox ID，再尝试重连。重新准入时生成新的标识。
 
-启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
+启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，旧记录的创建中断且找不到沙箱时可重新排队，已发出创建请求且资源尚未确认时则保留容量，GitHub job 已进入 `in_progress` 的旧记录找不到沙箱时会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
 
 ## 2. 配置 GitHub 鉴权
 
@@ -705,7 +705,7 @@ curl -fsS -b "$COOKIE_JAR" \
 常见问题：
 
 - `invalid signature`：GitHub webhook secret 和 `github.webhook_secret` 不一致。
-- `runner start deferred because global concurrency is at capacity` 或 `runner start deferred because profile is at capacity`：request 会保持 queued，直到全局或 per-spec 容量可用。
+- `runner_capacity` 事件表示请求正在等待全局、规格、账户或仓库的可用名额，可根据 `last_error_code` 判断受限维度。
 - GitHub job 一直 queued：managed default 必须同时包含 `qiniu` 和准确的操作
   系统 label。`[ubuntu-24.04]`、`[qiniu]` 和不受支持的额外 labels 都不会匹配；
   自定义 spec 则使用它自己的 advertised labels 和 required labels。
@@ -1132,7 +1132,7 @@ worker:
 
 未配置或填写 `0` 表示该维度不增加限制。负数、非法名称、规范化后的重复键会阻止启动。
 全局、Runner Spec、账户、仓库限制须同时满足才可启动。`creating`、`running`、`stopping`
-占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。事务失败会回滚 creating 写入并释放数据库行锁。
+占用额度，排队和终态不占用。各节点在准入事务内读取相同的持久状态。同一节点的 worker 先在本地排队，再获取数据库连接。PostgreSQL 和 MySQL 的准入事务采用读已提交隔离级别，以便看到上一持锁事务提交的更改。事务失败会回滚 creating 写入并释放数据库行锁。
 
 达到限制后请求继续排队、释放 worker lease，五秒后重新参与调度，让其他符合条件的仓库
 继续执行。调度按下次可运行时间排序，首次请求使用原入队时间；已到期的延期请求排在
@@ -1141,7 +1141,8 @@ worker:
 `last_error_code` 通过 `runner_capacity_global`、`runner_capacity_profile`、
 `runner_capacity_account`、`runner_capacity_repository` 标明受限维度。
 Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因变化；同一限制的重复检查
-不会重复追加容量事件，纯容量等待也不追加 timing 事件；成功准入后清除等待原因。
+不会重复追加容量事件，纯容量等待也不追加 timing 事件。数据库准入暂时失败时，
+`runner_admission` 事件记录 `runner_admission_unavailable`。请求释放领取权并于五秒后重试，无须消耗失败重试次数。成功准入后清除等待原因。
 
 配置需要重启生效，不提供热加载或新的 Settings 界面。降低上限保留已有 Runner，
 占用降至上限以下才允许新增；删除配置或设为零解除该维度限制，其他限制继续生效。

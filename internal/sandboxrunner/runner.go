@@ -517,8 +517,15 @@ func (s *E2BService) ListDefaultTemplates(ctx context.Context) ([]CatalogTemplat
 	return result, nil
 }
 
+const (
+	sandboxAppKey     = "app"
+	runnerSandboxApp  = "e2b-github-runner"
+	sandboxRequestKey = "request_id"
+	sandboxAttemptKey = "provision_attempt_id"
+)
+
 func (s *E2BService) ListRunnerSandboxes(ctx context.Context) ([]CatalogSandbox, error) {
-	metadata := "app=e2b-github-runner"
+	metadata := sandboxAppKey + "=" + runnerSandboxApp
 	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &metadata})
 	if err != nil {
 		return nil, err
@@ -632,12 +639,12 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	timeout := sandboxTimeoutSeconds(input.Timeout)
 	allowInternet := true
 	metadata := qnsandbox.Metadata{
-		"app":        "e2b-github-runner",
-		"request_id": input.RequestID,
+		sandboxAppKey:     runnerSandboxApp,
+		sandboxRequestKey: input.RequestID,
 	}
 	var idempotencyKey string
 	if input.ProvisionAttemptID != "" {
-		metadata["provision_attempt_id"] = input.ProvisionAttemptID
+		metadata[sandboxAttemptKey] = input.ProvisionAttemptID
 		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
 	// net/http can also replay a POST with an Idempotency-Key on a reused
@@ -1183,11 +1190,11 @@ func (s *E2BService) FindRunnerSandbox(ctx context.Context, requestID, attemptID
 		return "", ErrSandboxNotFound
 	}
 	metadata := url.Values{
-		"app":        {"e2b-github-runner"},
-		"request_id": {requestID},
+		sandboxAppKey:     {runnerSandboxApp},
+		sandboxRequestKey: {requestID},
 	}
 	if attemptID != "" {
-		metadata.Set("provision_attempt_id", attemptID)
+		metadata.Set(sandboxAttemptKey, attemptID)
 	}
 	query := metadata.Encode()
 	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &query})
@@ -1196,10 +1203,10 @@ func (s *E2BService) FindRunnerSandbox(ctx context.Context, requestID, attemptID
 	}
 	var sandboxID string
 	for _, item := range items {
-		if item.Metadata == nil || (*item.Metadata)["app"] != "e2b-github-runner" || (*item.Metadata)["request_id"] != requestID {
+		if item.Metadata == nil || (*item.Metadata)[sandboxAppKey] != runnerSandboxApp || (*item.Metadata)[sandboxRequestKey] != requestID {
 			return "", fmt.Errorf("cannot verify sandbox metadata for request %s", requestID)
 		}
-		if (*item.Metadata)["provision_attempt_id"] != attemptID {
+		if (*item.Metadata)[sandboxAttemptKey] != attemptID {
 			if attemptID == "" {
 				// A legacy request only owns Sandboxes created without a tag.
 				continue
