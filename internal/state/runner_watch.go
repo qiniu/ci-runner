@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -197,4 +198,41 @@ func (s *DBStore) WriteCleanupState(st RunnerState, token string) error {
 		return ErrConflict
 	}
 	return s.writeState(st, stateWriteLease{currentToken: token, cleanupWrite: true})
+}
+
+// RecordLateRunnerExit fills missing evidence for the exact stopping or terminal
+// attempt. A concurrent cleanup may advance the business version between the
+// observer's read and this write. Advance it again to fence stale full writes.
+func (s *DBStore) RecordLateRunnerExit(ctx context.Context, observed RunnerState) (bool, error) {
+	if observed.SandboxID == "" || observed.ProcessPID == 0 {
+		return false, nil
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return false, err
+	}
+	target := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND sandbox_id = ? AND process_pid = ? AND status IN ?", observed.ID, observed.SandboxID, observed.ProcessPID, []string{StatusStopping, StatusCompleted, StatusFailed})
+	if observed.ProvisionAttemptID != "" {
+		target = target.Where("provision_attempt_id = ?", observed.ProvisionAttemptID)
+	}
+	effective := strings.TrimSpace(observed.EffectiveRunnerVersion)
+	updates := map[string]any{"version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}
+	if observed.RunnerExitCode != nil {
+		updates["runner_exit_code"] = *observed.RunnerExitCode
+		if effective != "" {
+			updates["effective_runner_version"] = gorm.Expr("COALESCE(NULLIF(effective_runner_version, ''), ?)", effective)
+		}
+		res := target.Session(&gorm.Session{}).Where("runner_exit_code IS NULL").UpdateColumns(updates)
+		if res.Error != nil || res.RowsAffected != 0 {
+			return res.RowsAffected == 1, res.Error
+		}
+		delete(updates, "runner_exit_code")
+	}
+	if effective == "" {
+		return false, nil
+	}
+	updates["effective_runner_version"] = effective
+	err = target.Where("effective_runner_version IS NULL OR effective_runner_version = ''").UpdateColumns(updates).Error
+	return false, err
 }

@@ -568,6 +568,7 @@ type RunnerRequestStore interface {
 	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
 	BeginRunnerCleanup(ctx context.Context, st RunnerState, observedWatch, token string, ttl time.Duration) error
 	WriteCleanupState(st RunnerState, token string) error
+	RecordLateRunnerExit(ctx context.Context, observed RunnerState) (bool, error)
 	ReleaseRunnerCleanup(ctx context.Context, id, token string) error
 	BindCleanupGitHubRunner(ctx context.Context, id, token string, runnerID int64) error
 	RecordRunnerCleanup(ctx context.Context, id, token string, step RunnerCleanupStep) error

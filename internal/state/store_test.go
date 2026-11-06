@@ -3719,6 +3719,24 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 	if err := store.WriteWatchedState(latest, "second"); err != nil {
 		t.Fatal(err)
 	}
+	code := 137
+	late := RunnerState{ID: st.ID, SandboxID: "sandbox", ProcessPID: 43, RunnerExitCode: &code}
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); retained || err != nil {
+		t.Fatalf("recorded stale exit: %t %v", retained, err)
+	}
+	late.ProcessPID = 42
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); !retained || err != nil {
+		t.Fatalf("missing late exit: %t %v", retained, err)
+	}
+	code = 0
+	late.EffectiveRunnerVersion = "2.338.2"
+	if retained, err := store.RecordLateRunnerExit(t.Context(), late); retained || err != nil {
+		t.Fatalf("replaced exit code: %t %v", retained, err)
+	}
+	got, err := store.ReadState(st.ID)
+	if err != nil || got.RunnerExitCode == nil || *got.RunnerExitCode != 137 || got.EffectiveRunnerVersion != late.EffectiveRunnerVersion || got.Status != StatusStopping {
+		t.Fatalf("failed to retain first exit and later version: %+v %v", got.RunnerExitCode, err)
+	}
 }
 
 // A transaction that fails after the creating write must leave the same claim

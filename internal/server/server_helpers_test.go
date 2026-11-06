@@ -2108,8 +2108,7 @@ func TestRunnerExitedDoesNotCleanupWhenStoppingStateConflicts(t *testing.T) {
 	replacementCompletedAt := time.Date(2026, time.September, 14, 3, 30, 0, 0, time.UTC)
 	store := &conflictOnStoppingStateStore{Store: baseStore, replacementCompletedAt: replacementCompletedAt}
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := baseStore.CreateRequest(state.RunnerRequest{
 		ID:                 "exited-stopping-conflict",
@@ -2137,6 +2136,9 @@ func TestRunnerExitedDoesNotCleanupWhenStoppingStateConflicts(t *testing.T) {
 	got, err := baseStore.ReadState(st.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatal("matching exit evidence was lost at the cleanup claim")
 	}
 	if got.Status != state.StatusCompleted || !got.CompletedAt.Equal(replacementCompletedAt) {
 		t.Fatalf("newer replacement state was overwritten: %#v", got)

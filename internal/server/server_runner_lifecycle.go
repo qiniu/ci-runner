@@ -1047,15 +1047,18 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		return
 	}
 	if st.Status != state.StatusCreating && st.Status != state.StatusRunning {
-		s.recordLateRunnerExitEvidence(id, &st, attempt, result, err)
+		s.recordLateRunnerExitEvidence(id, attempt, result, err)
 		unlock()
 		return
 	}
 	if attempt.watchToken != "" {
 		checkCtx, cancel := context.WithTimeout(context.Background(), s.runnerWatchTTL()/3)
-		live, err := s.store.RenewRunnerWatch(checkCtx, id, attempt.watchToken, s.runnerWatchTTL())
+		live, renewErr := s.store.RenewRunnerWatch(checkCtx, id, attempt.watchToken, s.runnerWatchTTL())
 		cancel()
-		if !live || err != nil {
+		if !live || renewErr != nil {
+			if renewErr == nil {
+				s.recordLateRunnerExitEvidence(id, attempt, result, err)
+			}
 			unlock()
 			return
 		}
@@ -1079,7 +1082,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			return
 		}
 		if st.Status != state.StatusCreating && st.Status != state.StatusRunning {
-			s.recordLateRunnerExitEvidence(id, &st, attempt, result, err)
+			s.recordLateRunnerExitEvidence(id, attempt, result, err)
 			unlock()
 			return
 		}
@@ -1105,6 +1108,9 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 				st.AssignedJobName = runnerJobStartedMarker
 			}
 			if writeErr := writeWatchObservation(s.store, st, attempt.watchToken); writeErr != nil {
+				if errors.Is(writeErr, state.ErrConflict) {
+					s.recordLateRunnerExitEvidence(id, attempt, result, err)
+				}
 				s.logger.Warn("discarded busy runner observation", "id", id, "error", writeErr)
 				unlock()
 				return
@@ -1143,6 +1149,9 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	}
 	cleanup, claimErr := s.beginRunnerCleanup(s.loopCtx, &st, time.Now(), attempt.watchToken)
 	if claimErr != nil {
+		if errors.Is(claimErr, state.ErrConflict) {
+			s.recordLateRunnerExitEvidence(id, attempt, result, err)
+		}
 		s.logger.Warn("claim runner exit cleanup", "id", id, "error", claimErr)
 		return
 	}
@@ -1267,31 +1276,19 @@ func (s *Server) recordExitRetry(st state.RunnerState, logLine string) {
 	}
 }
 
-func (s *Server) recordLateRunnerExitEvidence(id string, st *state.RunnerState, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, err error) {
-	if !attempt.matches(*st) ||
-		(st.Status != state.StatusStopping && !isTerminalRunnerStatus(st.Status)) {
+func (s *Server) recordLateRunnerExitEvidence(id string, attempt runnerAttemptIdentity, result sandboxrunner.ExitResult, exitErr error) {
+	observed := state.RunnerState{ID: id, ProvisionAttemptID: attempt.provisionID, SandboxID: attempt.sandboxID, ProcessPID: attempt.processPID, EffectiveRunnerVersion: result.EffectiveRunnerVersion}
+	if exitErr == nil && result.ExitCode >= 0 {
+		observed.RunnerExitCode = &result.ExitCode
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recorded, err := s.store.RecordLateRunnerExit(ctx, observed)
+	if err != nil {
+		s.logger.Error("write late runner exit evidence", "id", id, "error", err)
 		return
 	}
-	versionChanged := false
-	if st.EffectiveRunnerVersion == "" {
-		if effectiveVersion := strings.TrimSpace(result.EffectiveRunnerVersion); effectiveVersion != "" {
-			st.EffectiveRunnerVersion = effectiveVersion
-			versionChanged = true
-		}
-	}
-	if err != nil || st.RunnerExitCode != nil {
-		if !versionChanged {
-			return
-		}
-		if writeErr := s.store.WriteState(*st); writeErr != nil {
-			s.logger.Error("write late effective runner version", "id", id, "error", writeErr)
-		}
-		return
-	}
-	exitCode := result.ExitCode
-	st.RunnerExitCode = &exitCode
-	if writeErr := s.store.WriteState(*st); writeErr != nil {
-		s.logger.Error("write late runner exit code", "id", id, "exit_code", result.ExitCode, "error", writeErr)
+	if !recorded {
 		return
 	}
 	s.logger.Info("runner process exit observed after cleanup started", "id", id, "exit_code", result.ExitCode)
