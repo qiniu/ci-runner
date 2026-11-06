@@ -855,6 +855,8 @@ Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 liste
 
 Runner 创建关闭 SDK 的 Create 自动重试。若 HTTP 传输层在复用连接上重放 POST，后续拒绝仍按结果未知处理，由同一创建尝试继续对账。`TestRunnerDoesNotRetryAmbiguousCreate` 和 `TestRunnerCreateRejectionAfterConnectionLossIsUnknown` 分别覆盖这两个边界。
 
+Sandbox 已创建而 Runner 启动失败时，恢复流程先尝试重连。确认该 Sandbox 已消失或已完成清理后，确定性错误终止请求；瞬时错误或原失败原因缺失时，消耗重试额度并按数据库时钟退避。保存的诊断仅含操作名称与失败分类。
+
 `TestLateStartFailureAfterPeerAdoption` 在 SQLite 和 PostgreSQL 上运行独立服务进程及本地 Sandbox 替身。测试先在创建者健康时触发另一进程启动恢复和超时扫描，再分别制造创建响应迟到、服务端受理后杀死创建者两种故障。首次查询为空，下一次查回 Sandbox，验证沿用原尝试、Sandbox ID、PID 和重试次数。PostgreSQL CI 对这条回归启用竞态检测。
 
 创建和运行阶段共用数据库租约。准入时写入令牌，worker 每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本和时间戳。后台每五秒按数据库时间扫描，每轮最多接管四条过期记录。已发出的创建还没有 Sandbox ID 时，`sandbox_create_outcome_unknown` 表示保留原尝试及配额等待对账。元数据列表为空或本地超时均不足以证明服务端拒绝创建；长期未决时应与服务端核对。运行中任务按原 Sandbox/PID 重连，退出回调须持有有效监听权才能启动清理。生产扩容仍需另行验收，升级时应排空旧版本写入者。

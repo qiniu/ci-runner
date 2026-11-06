@@ -85,6 +85,9 @@ type StartInput struct {
 type RunnerApplication = runnerapplication.Application
 
 type StartResult struct {
+	// BootstrapOperation identifies a failed post-create operation while the
+	// Sandbox still requires reconciliation. It contains only a local stage name.
+	BootstrapOperation string
 	SandboxID          string
 	PID                uint32
 	ResolvedTemplateID string
@@ -662,8 +665,11 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 			return StartResult{SandboxID: sb.ID()}, fmt.Errorf("%w: record created Sandbox: %w", ErrCreateOutcomeUnknown, err)
 		}
 	}
+	bootstrapFailure := func(operation string, err error) (StartResult, error) {
+		return StartResult{SandboxID: sb.ID(), BootstrapOperation: operation}, fmt.Errorf("%w: %s: %w", ErrCreateOutcomeUnknown, operation, err)
+	}
 	if _, err := s.client.WaitForReady(ctx, sb.ID(), qnsandbox.WithPollInterval(500*time.Millisecond)); err != nil {
-		return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("wait for Sandbox readiness", err)
 	}
 	// Once create succeeds, recovery must reconcile the resource. A process
 	// which lost ownership during bootstrap must never kill an adopted Sandbox.
@@ -681,7 +687,7 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		scriptPath, script, cmd = "/tmp/start-github-runner.sh", startScript(input, sb.ID()), "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
 	}
 	if _, err := sb.Files().Write(ctx, scriptPath, []byte(script)); err != nil {
-		return StartResult{}, fmt.Errorf("%w: write runner script: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("write runner script", err)
 	}
 	commandCtx := input.CommandContext
 	if commandCtx == nil {
@@ -706,11 +712,11 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		qnsandbox.WithOnStderr(input.OnStderr),
 	)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("%w: start runner command: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("start runner command", err)
 	}
 	pid, err := handle.WaitPID(ctx)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("%w: wait runner pid: %w", ErrCreateOutcomeUnknown, err)
+		return bootstrapFailure("wait runner pid", err)
 	}
 	if input.OnExit != nil {
 		go func() {

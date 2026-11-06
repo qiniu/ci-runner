@@ -317,7 +317,7 @@ func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watc
 	if st.Status != StatusCreating && st.Status != StatusRunning {
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
 	}
-	if st.Status == StatusQueued {
+	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
 		updates["sandbox_create_dispatched"] = false
 	}
 	result := query.Updates(updates)
