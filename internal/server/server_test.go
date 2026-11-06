@@ -1738,6 +1738,64 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	}
 }
 
+func TestUserRunnerAuthorizationSharesRefreshTimeout(t *testing.T) {
+	started := make(chan struct{})
+	var lookups atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/installations" {
+			t.Errorf("unexpected GitHub endpoint %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if lookups.Add(1) > 1 {
+			http.Error(w, "duplicate lookup", http.StatusServiceUnavailable)
+			return
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer api.Close()
+
+	dir := t.TempDir()
+	store := state.New(dir)
+	owner := newTestServer(t, store, api.URL, &fakeSandbox{})
+	peer := newTestServer(t, state.New(dir), api.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987}); err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, owner.cfg.AuthEncryptionKey.Value(), "user-token")
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := owner.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cold refresh did not start")
+	}
+	_, err = peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+	var shared *repositoryAccessFailure
+	if !errors.As(err, &shared) || shared.code != state.AccessRefreshUnavailable {
+		t.Errorf("waiter error = %v, want shared unavailable result", err)
+	}
+	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("owner error = %v, want GitHub refresh timeout", err)
+	}
+	if got := lookups.Load(); got != 1 {
+		t.Errorf("GitHub lookups = %d, want 1", got)
+	}
+	result, err := store.ReadRepositoryAccessSnapshot(t.Context(), account.ID)
+	if err != nil || result.Valid || result.Refreshing || result.RefreshDue || result.Failure != state.AccessRefreshUnavailable {
+		t.Fatalf("shared timeout cooldown = %+v, error = %v", result, err)
+	}
+}
+
 func TestUserRunnerAuthorizationSharedRefreshSurvivesCallerCancellation(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})

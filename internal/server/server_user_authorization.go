@@ -15,7 +15,10 @@ import (
 
 var errGitHubUserAccessTokenRequired = errors.New("github user access token is required")
 
-const userRepositoryAccessConcurrency = 4
+const (
+	userRepositoryAccessConcurrency = 4
+	repositoryAccessFinishTimeout   = 2 * time.Second
+)
 
 func (s *Server) githubUserAccessToken(accountID int64) (string, error) {
 	secret, err := s.store.GetAccountSecret(state.AccountScopeTypeAccount, accountID, state.AccountSecretTypeGitHubOAuthToken)
@@ -104,9 +107,10 @@ func (s *Server) refreshRepositoryAccessClaim(accountID int64, claim string) err
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, state.RepositoryAccessRefreshTimeout)
-	defer cancel()
-	access, loadErr := s.loadUserRepositoryAccess(ctx, accountID)
+	// Leave time on the claim to publish a GitHub timeout to other waiters.
+	lookupCtx, cancelLookup := context.WithTimeout(parent, state.RepositoryAccessRefreshTimeout-repositoryAccessFinishTimeout)
+	access, loadErr := s.loadUserRepositoryAccess(lookupCtx, accountID)
+	cancelLookup()
 	result := state.RepositoryAccessResult{Access: access}
 	if loadErr != nil {
 		switch {
@@ -126,7 +130,9 @@ func (s *Server) refreshRepositoryAccessClaim(accountID int64, claim string) err
 			result.Failure = state.AccessRefreshUnavailable
 		}
 	}
-	err := s.store.FinishRepositoryAccessRefresh(ctx, accountID, claim, result)
+	finishCtx, cancelFinish := context.WithTimeout(parent, repositoryAccessFinishTimeout)
+	defer cancelFinish()
+	err := s.store.FinishRepositoryAccessRefresh(finishCtx, accountID, claim, result)
 	if loadErr != nil {
 		return loadErr
 	}
