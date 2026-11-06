@@ -68,7 +68,7 @@ func newStartProtocolFixture(t *testing.T, mode string) (*Handle, <-chan string)
 			_, _ = io.Copy(io.Discard, r.Body)
 		}
 		switch r.URL.Path {
-		case "/sandboxes/exact/connect":
+		case "/v2/sandboxes/exact/connect":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"sandboxID":"exact","templateID":"template-a","envdAccessToken":"fixture","envdVersion":"0.1","clientID":"fixture","domain":"example.test"}`)
 		case "/process.Process/Start":
@@ -225,12 +225,12 @@ func TestProviderOperationErrorRetainsOnlySafeDiagnostics(t *testing.T) {
 func TestConnectPreservesSavedLifetimeAndRecognizesMissingSandbox(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/sandboxes/missing/connect" {
+		if r.URL.Path == "/v2/sandboxes/missing/connect" {
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"message":"gone"}`)
 			return
 		}
-		if r.Method != http.MethodPost || r.URL.Path != "/sandboxes/exact/connect" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v2/sandboxes/exact/connect" {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 			return

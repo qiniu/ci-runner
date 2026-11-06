@@ -190,8 +190,7 @@ func (f *Factory) Connect(ctx context.Context, sandboxID string, remaining time.
 }
 
 func connectTimeout(remaining time.Duration) int32 {
-	// The provider Connect call resets lifetime. Preserve the saved expiry
-	// rather than shrinking a healthy service to the cleanup timeout.
+	// Connect v2 only extends lifetime. Request the time left until the saved expiry.
 	seconds := int64((remaining + time.Second - 1) / time.Second)
 	return int32(min(max(seconds, 1), 86400))
 }
