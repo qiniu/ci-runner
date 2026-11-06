@@ -52,6 +52,7 @@ func (p Platform) runnerApplicationOS() string {
 }
 
 type StartInput struct {
+	ProvisionAttemptID  string
 	Platform            Platform
 	RequestID           string
 	RunnerName          string
@@ -163,13 +164,14 @@ printf 'template_version=%s\nrunner_version=%s\n' \
 )
 
 type RecoverInput struct {
-	Platform       Platform
-	RequestID      string
-	SandboxID      string
-	PID            uint32
-	Timeout        time.Duration
-	CommandContext context.Context
-	OnExit         func(ExitResult, error)
+	ProvisionAttemptID string
+	Platform           Platform
+	RequestID          string
+	SandboxID          string
+	PID                uint32
+	Timeout            time.Duration
+	CommandContext     context.Context
+	OnExit             func(ExitResult, error)
 }
 
 type PtySize struct {
@@ -498,8 +500,15 @@ func (s *E2BService) ListDefaultTemplates(ctx context.Context) ([]CatalogTemplat
 	return result, nil
 }
 
+const (
+	sandboxAppKey     = "app"
+	runnerSandboxApp  = "e2b-github-runner"
+	sandboxRequestKey = "request_id"
+	sandboxAttemptKey = "provision_attempt_id"
+)
+
 func (s *E2BService) ListRunnerSandboxes(ctx context.Context) ([]CatalogSandbox, error) {
-	metadata := "app=e2b-github-runner"
+	metadata := sandboxAppKey + "=" + runnerSandboxApp
 	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &metadata})
 	if err != nil {
 		return nil, err
@@ -599,14 +608,20 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 	timeout := sandboxTimeoutSeconds(input.Timeout)
 	allowInternet := true
 	metadata := qnsandbox.Metadata{
-		"app":        "e2b-github-runner",
-		"request_id": input.RequestID,
+		sandboxAppKey:     runnerSandboxApp,
+		sandboxRequestKey: input.RequestID,
+	}
+	var idempotencyKey string
+	if input.ProvisionAttemptID != "" {
+		metadata[sandboxAttemptKey] = input.ProvisionAttemptID
+		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
 	sb, _, err := s.client.CreateAndWait(ctx, qnsandbox.CreateParams{
 		TemplateID:          input.TemplateID,
 		Timeout:             &timeout,
 		AllowInternetAccess: &allowInternet,
 		Metadata:            &metadata,
+		IdempotencyKey:      idempotencyKey,
 	}, qnsandbox.WithPollInterval(500*time.Millisecond))
 	if err != nil {
 		return StartResult{}, err
@@ -678,7 +693,7 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 	sandboxID := strings.TrimSpace(input.SandboxID)
 	if sandboxID == "" {
 		var err error
-		sandboxID, err = s.findRunnerSandbox(ctx, input.RequestID)
+		sandboxID, err = s.findRunnerSandbox(ctx, input.RequestID, input.ProvisionAttemptID)
 		if err != nil {
 			return StartResult{}, err
 		}
@@ -1108,26 +1123,49 @@ func parseWindowsRuntimeEnvironment(output string) runtimeEnvironment {
 	return environment
 }
 
-func (s *E2BService) findRunnerSandbox(ctx context.Context, requestID string) (string, error) {
+func (s *E2BService) findRunnerSandbox(ctx context.Context, requestID, attemptID string) (string, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return "", ErrSandboxNotFound
 	}
 	metadata := url.Values{
-		"app":        {"e2b-github-runner"},
-		"request_id": {requestID},
-	}.Encode()
-	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &metadata})
+		sandboxAppKey:     {runnerSandboxApp},
+		sandboxRequestKey: {requestID},
+	}
+	if attemptID != "" {
+		metadata.Set(sandboxAttemptKey, attemptID)
+	}
+	query := metadata.Encode()
+	items, err := s.client.List(ctx, &qnsandbox.ListParams{Metadata: &query})
 	if err != nil {
 		return "", fmt.Errorf("find runner sandbox for request %s: %w", requestID, err)
 	}
-	if len(items) == 0 {
+	var sandboxID string
+	for _, item := range items {
+		if item.Metadata == nil || (*item.Metadata)[sandboxAppKey] != runnerSandboxApp || (*item.Metadata)[sandboxRequestKey] != requestID {
+			return "", fmt.Errorf("cannot verify sandbox metadata for request %s", requestID)
+		}
+		if (*item.Metadata)[sandboxAttemptKey] != attemptID {
+			if attemptID == "" {
+				// A legacy request only owns Sandboxes created without a tag.
+				continue
+			}
+			// An exact query returning an unverified resource is ambiguous.
+			// Returning ErrSandboxNotFound here could trigger a fresh attempt.
+			return "", fmt.Errorf("cannot verify sandbox attempt for request %s", requestID)
+		}
+		if sandboxID != "" {
+			return "", fmt.Errorf("multiple sandboxes found for request %s", requestID)
+		}
+		if item.SandboxID == "" {
+			return "", fmt.Errorf("missing sandbox ID for request %s", requestID)
+		}
+		sandboxID = item.SandboxID
+	}
+	if sandboxID == "" {
 		return "", fmt.Errorf("%w for request %s", ErrSandboxNotFound, requestID)
 	}
-	if len(items) > 1 {
-		return "", fmt.Errorf("multiple sandboxes found for request %s", requestID)
-	}
-	return items[0].SandboxID, nil
+	return sandboxID, nil
 }
 
 func recoveredRunnerPID(processes []qnsandbox.ProcessInfo, expectedPID uint32) (uint32, bool) {

@@ -1861,6 +1861,10 @@ func (s *auditFailingStore) AppendAuditEvent(state.AuditEvent) (state.AuditEvent
 	return state.AuditEvent{}, errors.New("audit unavailable")
 }
 
+func (s *auditFailingStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error { return mutation(&auditFailingStore{Store: tx}) })
+}
+
 func (s *auditFailingStore) ApplyMutationWithAudit(state.AuditEvent, func(state.Store) error) (state.AuditEvent, error) {
 	return state.AuditEvent{}, fmt.Errorf("%w: audit unavailable", state.ErrAuditEventPersistence)
 }
@@ -2003,7 +2007,7 @@ func TestMarkRunnerJobStartedSetsMarkerOnRunningRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.markRunnerJobStarted("mark-job-1")
+	srv.markRunnerJobStarted("mark-job-1", nil, "", "")
 
 	got, err := store.ReadState("mark-job-1")
 	if err != nil {
@@ -2036,8 +2040,8 @@ func TestMarkRunnerJobStartedIsIdempotent(t *testing.T) {
 	}
 
 	// Calling twice is safe
-	srv.markRunnerJobStarted("mark-job-2")
-	srv.markRunnerJobStarted("mark-job-2")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
+	srv.markRunnerJobStarted("mark-job-2", nil, "", "")
 
 	got, err := store.ReadState("mark-job-2")
 	if err != nil {
@@ -2061,7 +2065,7 @@ func TestAppendRunnerStdoutStagesCompletedHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.appendRunnerStdout("completed-hook", []byte("RUNNERD_JOB_COMPLETED\n"))
+	srv.appendRunnerStdout("completed-hook", "", "", []byte("RUNNERD_JOB_COMPLETED\n"))
 
 	requireRunnerEventStageMessage(t, store, "completed-hook", "runner_hook", "runner completed job hook received")
 }
