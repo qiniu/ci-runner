@@ -87,7 +87,8 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 		case <-ctx.Done():
 		}
 	}
-	srv := &Server{store: store, logger: slog.Default()}
+	var logs bytes.Buffer
+	srv := &Server{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	leaderCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	leaderDone := make(chan struct{})
@@ -115,6 +116,8 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("disconnected leader kept waiting for the shared read")
 	}
+	// Only direct result readers remain; every HTTP handler has already returned.
+	store.fail.Store(true)
 	close(release)
 	await := func(ch <-chan singleflight.Result) singleflight.Result {
 		t.Helper()
@@ -127,10 +130,14 @@ func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
 		}
 	}
 	for _, result := range readers {
-		if r := await(result); r.Err != nil || !r.Shared {
+		if r := await(result); r.Err == nil || !r.Shared {
 			t.Fatalf("shared read: %+v", r)
 		}
 	}
+	if strings.Count(logs.String(), "category=query_failed") != 1 || strings.Contains(logs.String(), "database unavailable") {
+		t.Fatalf("expected one sanitized failure after disconnect: %q", &logs)
+	}
+	store.fail.Store(false)
 	if result := await(srv.publicTemplatesRead()); result.Err != nil || result.Shared || store.calls.Load() != 2 {
 		t.Fatalf("subsequent read: calls=%d result=%+v", store.calls.Load(), result)
 	}
