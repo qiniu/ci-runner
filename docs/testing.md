@@ -781,7 +781,7 @@ every poll; failed metric reads remain pending, and terminal failures refresh
 gauges immediately. If persisting a completed Job fails, propagate the error
 through normal startup failure handling to release the lease and creation
 capacity; a temporary store failure retries without starting a Runner.
-Control events show the decision/reason/next check, and service logs correlate
+Control events show the decision and reason. Queued decisions include the retry delay. The saved `next_retry_at` is the database-derived deadline. Service logs correlate
 webhook action with Delivery ID. Raw webhook bodies are not persisted.
 
 For a historical false completion from Issue #134, an authenticated admin may

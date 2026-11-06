@@ -241,6 +241,25 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				for i := 0; i < srv.cfg.RetryMaxAttempts && queueTestState(t, store).Status != state.StatusFailed; i++ {
 					check()
 				}
+				log, err := store.ReadLog("1001", "control.log", 65536)
+				if err != nil {
+					t.Fatal(err)
+				}
+				seenFailure, seenDelay := false, false
+				for _, line := range strings.Split(string(log), "\n") {
+					if strings.Contains(line, "decision=queued") && strings.Contains(line, "retry_delay=") {
+						seenDelay = true
+					}
+					if strings.Contains(line, "decision=failed") {
+						seenFailure = true
+						if strings.Contains(line, "retry_delay=") {
+							t.Fatalf("terminal decision scheduled a retry: %s", line)
+						}
+					}
+				}
+				if !seenFailure || !seenDelay {
+					t.Fatalf("missing queue decisions: %s", log)
+				}
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}

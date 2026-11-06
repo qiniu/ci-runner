@@ -294,8 +294,8 @@ func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 		"lease_owner":                         st.LeaseOwner,
 		"lease_expires_at":                    zeroTimeToPointer(st.LeaseExpiresAt),
 	}
-	if st.Status == StatusQueued && st.queueRetryDelay != nil {
-		updates["next_retry_at"] = queueTime(db, *st.queueRetryDelay)
+	if st.Status == StatusQueued && st.queueRetry != nil && st.queueRetry.version == st.Version {
+		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
 	}
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
 	if claimOwner != "" {

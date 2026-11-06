@@ -130,8 +130,14 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		metrics.RecordCreate(st.ProfileName, 0, "failed")
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
-	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "retry_delay", retryDelay)
-	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s retry_delay=%s\n", job.Status, job.RunnerName, st.Status, code, retryDelay)))
+	logger := s.logger
+	detail := fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s", job.Status, job.RunnerName, st.Status, code)
+	if st.Status == state.StatusQueued {
+		logger = logger.With("retry_delay", retryDelay)
+		detail += " retry_delay=" + retryDelay.String()
+	}
+	logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code)
+	s.store.AppendLog(req.ID, "control.log", []byte(detail+"\n"))
 	s.signalQueue()
 	if st.Status == state.StatusFailed {
 		s.refreshMetrics()
