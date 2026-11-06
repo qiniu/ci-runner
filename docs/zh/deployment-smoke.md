@@ -318,7 +318,7 @@ Workflow 完成后确认：
   重新启用后确认恢复调度。
 - 降低某个 managed spec 的 concurrency，并触发两个 jobs。
 - 运行 `deployment-custom` spec，确认使用显式 template ID；清理后删除它。任何活动全局规格的执行参数修改或删除应返回 `409 runner_spec_in_use`；空闲的原托管规格可编辑和删除，重启后修改仍保留且删除条目不会重建。
-- 发布经过校验的公共名称规格，检查 `/runner-specs` 和公共模板 API；取消发布后两处均隐藏（直连源站，以绕过 60 秒的 HTTP 缓存）。私有 ID 不得出现，无效公共名称应拒绝且没有审计记录。
+- 发布经过校验的公共名称规格，检查 `/runner-specs` 和公共模板 API，取消发布后确认两处均隐藏。公共模板 API 设置 `Cache-Control: public, max-age=60`。验证该 API 时，可直连 runnerd 后端地址以绕过 CDN 或代理，或等待最多 60 秒让已有缓存响应过期。私有 ID 不得出现，无效公共名称应拒绝且没有审计记录。
 
 预期结果取决于场景：
 
