@@ -292,7 +292,7 @@ The database is the single catalog authority. Startup migrates old managed rows 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials. Each origin request reads the current database catalog. Browsers and proxies may cache successful responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
+`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials. Overlapping origin requests share one database read. The next request after it completes reads the catalog again. Browsers and proxies may cache successful responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
 
 Ordinary users browse the read-only platform Runner Spec catalog at
 `/runner-specs`. That page has no account/Organization selector or user-editable

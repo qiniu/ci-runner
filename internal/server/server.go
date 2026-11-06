@@ -57,6 +57,8 @@ type Server struct {
 	recoveryMetricsDeferred atomic.Int32
 	waitingMetricsDirty     atomic.Bool
 
+	publicTemplatesGroup singleflight.Group
+
 	pullTitleMu    sync.Mutex
 	pullTitleCache map[string]cachedPullTitle
 	pullTitleGroup singleflight.Group
