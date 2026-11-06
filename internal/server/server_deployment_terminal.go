@@ -111,7 +111,7 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadGateway, "failed to connect deployment terminal")
 		return
 	}
-	wrapped := &deploymentTerminalProcess{TerminalSession: term, cancel: cancel}
+	wrapped := &terminalProcess{TerminalSession: term, cancel: cancel}
 	// Provisioning races with stop/redeploy must never expose a stale shell.
 	current, loadErr := s.store.GetDeployment(d.ID)
 	if ctx.Err() != nil || r.Context().Err() != nil || loadErr != nil || !sameDeploymentTerminal(d, current) {
@@ -130,16 +130,6 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 	go s.watchDeploymentTerminal(ctx, d, accountID, session.id)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{"session_id": session.id, "pid": term.PID(), "sandbox_id": d.SandboxID})
-}
-
-type deploymentTerminalProcess struct {
-	sandboxrunner.TerminalSession
-	cancel context.CancelFunc
-}
-
-func (p *deploymentTerminalProcess) Close(ctx context.Context) error {
-	defer p.cancel()
-	return p.TerminalSession.Close(ctx)
 }
 
 func sameDeploymentTerminal(expected, current state.Deployment) bool {

@@ -99,19 +99,37 @@ func (h *terminalHub) Add(requestID, sandboxID string, terminal sandboxrunner.Te
 }
 
 func (h *terminalHub) add(id, requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
-	session := &terminalSession{
+	session := newTerminalSession(id, requestID, sandboxID)
+	h.attach(session, terminal)
+	return session
+}
+
+func newTerminalSession(id, requestID, sandboxID string) *terminalSession {
+	return &terminalSession{
 		id:        id,
 		requestID: requestID,
 		sandboxID: sandboxID,
-		terminal:  terminal,
 		createdAt: time.Now().UTC(),
 		idleSince: time.Now(),
 		watchers:  map[chan []byte]struct{}{},
 	}
+}
+
+func (h *terminalHub) attach(session *terminalSession, terminal sandboxrunner.TerminalSession) {
+	session.terminal = terminal
 	h.mu.Lock()
 	h.sessions[session.id] = session
 	h.mu.Unlock()
-	return session
+}
+
+type terminalProcess struct {
+	sandboxrunner.TerminalSession
+	cancel context.CancelFunc
+}
+
+func (p *terminalProcess) Close(ctx context.Context) error {
+	defer p.cancel()
+	return p.TerminalSession.Close(ctx)
 }
 
 func (h *terminalHub) Get(sessionID string) (*terminalSession, bool) {
@@ -571,28 +589,26 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	var session *terminalSession
-	var sessionMu sync.Mutex
-	var pending [][]byte
-	terminalCtx := s.loopCtx
-	if terminalCtx == nil {
-		terminalCtx = context.Background()
+	parent := s.loopCtx
+	if parent == nil {
+		parent = context.Background()
 	}
-	terminal, err := svc.StartTerminal(terminalCtx, st.SandboxID, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}, func(data []byte) {
-		sessionMu.Lock()
-		defer sessionMu.Unlock()
-		if session != nil {
-			session.append(data)
-			return
-		}
-		pending = append(pending, append([]byte(nil), data...))
-	})
+	terminalCtx, cancelStream := context.WithCancel(parent)
+	stopRequestCancel := context.AfterFunc(r.Context(), cancelStream)
+	// Buffer handshake output in the same bounded tail as an attached PTY.
+	// Only publish the session once both the provider and authorization agree.
+	session := newTerminalSession(sessionID, runnerTerminalKey(st, accountID), st.SandboxID)
+	terminal, err := svc.StartTerminal(terminalCtx, st.SandboxID, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}, session.append)
 	if err != nil {
+		stopRequestCancel()
+		cancelStream()
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	current, currentAccount, authorized := s.userRunnerStateAndAccount(w, r)
+	stopRequestCancel()
 	if !authorized || currentAccount != accountID || r.Context().Err() != nil || terminalCtx.Err() != nil || !sameRunnerTerminal(st, current, accountID) {
+		cancelStream()
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = terminal.Close(closeCtx)
@@ -601,14 +617,8 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		}
 		return
 	}
-	sessionMu.Lock()
-	session = s.terminals.add(sessionID, runnerTerminalKey(st, accountID), st.SandboxID, terminal)
+	s.terminals.attach(session, &terminalProcess{TerminalSession: terminal, cancel: cancelStream})
 	s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
-	for _, data := range pending {
-		session.append(data)
-	}
-	pending = nil
-	sessionMu.Unlock()
 	go s.watchRunnerTerminal(terminalCtx, st, accountID, session.id)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{
