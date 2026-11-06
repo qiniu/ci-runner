@@ -548,6 +548,8 @@ type SandboxServiceDefaultAudience struct {
 
 type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	WithRunnerEnqueue(ctx context.Context, mutation func(Store) error) error
+	WithRunnerCatalogMutation(ctx context.Context, mutation func(Store) error) error
 	Ensure() error
 	CreateRequest(req RunnerRequest, payload []byte) (bool, RunnerState, error)
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)

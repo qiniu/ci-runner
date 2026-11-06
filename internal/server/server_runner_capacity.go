@@ -36,7 +36,7 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 			return err
 		}
 
-		if strings.HasPrefix(st.LastErrorCode, "runner_capacity_") {
+		if strings.HasPrefix(st.LastErrorCode, "runner_capacity_") || st.LastErrorCode == "runner_admission_unavailable" {
 			st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
 			st.NextRetryAt = time.Time{}
 		}
@@ -57,6 +57,12 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 		}
 		return err
 	})
+	if err != nil && stage == "admission_lock_wait" {
+		timings.record(stage, started)
+	}
+	if err != nil && stage == "" {
+		stage = "admission_commit"
+	}
 	return profile, stage, err
 }
 

@@ -178,25 +178,43 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if req.JobID != 0 {
 		record.WorkflowJobID = &req.JobID
 	}
-	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
-	if result.Error != nil {
+	// MySQL CLIENT_FOUND_ROWS reports a no-op duplicate upsert as one
+	// affected row. A plain insert distinguishes an actual creation.
+	insert, lookup := db, db
+	if db.Dialector.Name() == BackendMySQL {
+		// A normal consistent read after a duplicate can see an older
+		// REPEATABLE READ snapshot. Read the winning row under a shared lock.
+		lookup = db.Clauses(clause.Locking{Strength: "SHARE"})
+	} else {
+		insert = db.Clauses(clause.OnConflict{DoNothing: true})
+	}
+	result := insert.Create(&record)
+	if result.Error == nil && result.RowsAffected > 0 {
+		return true, recordToState(record), nil
+	}
+	if result.Error != nil && !isDuplicatedKeyError(db, result.Error) {
 		return false, RunnerState{}, result.Error
 	}
-	if result.RowsAffected == 0 {
-		st, err := s.ReadState(req.ID)
-		if errors.Is(err, ErrNotFound) && req.JobID != 0 {
-			var conflicting runnerRequestRecord
-			conflictErr := db.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
-			if conflictErr == nil {
-				return false, recordToState(conflicting), ErrConflict
-			}
-			if !errors.Is(conflictErr, gorm.ErrRecordNotFound) {
-				return false, RunnerState{}, conflictErr
-			}
-		}
-		return false, st, err
+
+	var existing runnerRequestRecord
+	err = lookup.First(&existing, "id = ?", req.ID).Error
+	if err == nil {
+		return false, recordToState(existing), nil
 	}
-	return true, recordToState(record), nil
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, RunnerState{}, err
+	}
+	if req.JobID != 0 {
+		var conflicting runnerRequestRecord
+		err = lookup.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
+		if err == nil {
+			return false, recordToState(conflicting), ErrConflict
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, RunnerState{}, err
+		}
+	}
+	return false, RunnerState{}, ErrNotFound
 }
 
 func (s *DBStore) ReadRequest(id string) (RunnerRequest, error) {
