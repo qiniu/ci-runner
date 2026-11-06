@@ -353,7 +353,7 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | Job stays **queued** forever, no webhook in runnerd logs | GitHub App has no subscribed events | Go to GitHub App settings → Subscribe to **Workflow jobs** event |
 | `runner_group_permission_denied` (legacy: `github registration token: status 404`) | Group lookup cannot access the owner organization, including personal-account owners or missing App permissions | Leave `runner_group` empty for personal repositories; for organizations, check the App installation and Self-hosted runners permission |
 | `invalid signature` in logs | Webhook secret mismatch | Ensure `github.webhook_secret` matches the secret in GitHub App/repo webhook settings |
-| `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
+| `runner_capacity` event | Global, spec, account or repository limit reached | Check the dimension in `last_error_code`. Wait for capacity or adjust that limit |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |
 | GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Runner Requests**, look up the Runner Name shown by GitHub (for example, `e2b-101445685709`), and inspect the request resource's findings and lifecycle timeline |
 

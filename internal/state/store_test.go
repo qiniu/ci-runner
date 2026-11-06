@@ -3558,6 +3558,35 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 
 // Exercise the same duplicate deliveries under InnoDB's repeatable-read
 // snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
+func TestRunnerAdmissionLocalWaiterDoesNotUsePool(t *testing.T) {
+	store := New(t.TempDir()).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SQLite permits one connection. An inner contender reaching the pool
+	// would increment WaitCount before its deadline.
+	err = store.WithRunnerAdmission(t.Context(), func(Store) error {
+		before := pool.Stats().WaitCount
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		if err := store.WithRunnerAdmission(ctx, func(Store) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("contending worker returned %v", err)
+		}
+		if pool.Stats().WaitCount != before {
+			return errors.New("local contender occupied the database pool")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
@@ -3596,7 +3625,7 @@ func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
 						return ctx.Err()
 					}
 					var err error
-					r.created, r.state, err = tx.CreateRequest(RunnerRequest{ID: id, RunnerName: fmt.Sprintf("runner-%d", i)}, nil)
+					r.created, r.state, err = tx.CreateRequest(RunnerRequest{ID: id, JobID: 4747, RunnerName: fmt.Sprintf("runner-%d", i)}, nil)
 					return err
 				})
 				results <- r
@@ -3626,6 +3655,16 @@ func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
 		}
 		if created != 1 || len(names) != 1 {
 			return fmt.Errorf("duplicate deliveries created %d requests and saw names %v", created, names)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+		created, row, err := tx.CreateRequest(RunnerRequest{ID: "another-delivery", JobID: 4747}, nil)
+		if created || !errors.Is(err, ErrConflict) || row.ID != id {
+			return fmt.Errorf("same job with a new ID: created=%v row=%q err=%v", created, row.ID, err)
 		}
 		return nil
 	})
