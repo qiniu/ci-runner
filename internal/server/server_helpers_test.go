@@ -1861,6 +1861,10 @@ func (s *auditFailingStore) AppendAuditEvent(state.AuditEvent) (state.AuditEvent
 	return state.AuditEvent{}, errors.New("audit unavailable")
 }
 
+func (s *auditFailingStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error { return mutation(&auditFailingStore{Store: tx}) })
+}
+
 func (s *auditFailingStore) ApplyMutationWithAudit(state.AuditEvent, func(state.Store) error) (state.AuditEvent, error) {
 	return state.AuditEvent{}, fmt.Errorf("%w: audit unavailable", state.ErrAuditEventPersistence)
 }

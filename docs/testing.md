@@ -730,7 +730,7 @@ curl -fsS -b "$COOKIE_JAR" \
 Common issues:
 
 - `invalid signature`: GitHub webhook secret and `github.webhook_secret` do not match.
-- `runner start deferred because global concurrency is at capacity` or `runner start deferred because profile is at capacity`: the request remains queued until global or per-spec capacity is available.
+- A `runner_capacity` event identifies a queued request waiting for a global, spec, account or repository slot. Read the dimension from its `last_error_code`.
 - GitHub job stays queued: a managed default requires both `qiniu` and the
   exact OS label. `[ubuntu-24.04]`, `[qiniu]`, and unsupported extra labels do
   not match. For a custom spec, use its advertised and required labels.
@@ -1217,7 +1217,7 @@ historical requests retain their saved ownership names until they finish.
 Missing entries and `0` add no limit. Negative limits, invalid names and duplicate
 keys after normalization reject startup. Global, Runner Spec, account and repository
 limits must all allow admission. `creating`, `running` and `stopping` consume
-capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A failed
+capacity; queued and terminal requests do not. All nodes check these counts under the database admission guard. A local worker waits for its turn before borrowing a connection. PostgreSQL and MySQL guard transactions use read committed isolation to see the previous holder’s commit. A failed
 transaction rolls back the creating write and releases the guard.
 
 At capacity, requests stay queued, release their worker lease and become eligible
@@ -1228,7 +1228,7 @@ This does not consume the failure retry budget or promise equal scheduling share
 `last_error_code` identifies `runner_capacity_global`, `runner_capacity_profile`,
 `runner_capacity_account` or `runner_capacity_repository`; Job details show the
 waiting message and the event timeline records changes under `runner_capacity`.
-The reason clears on successful admission. Repeated checks of the same restriction
+A transient database admission failure instead records `runner_admission_unavailable` under the `runner_admission` event stage. It releases the claim and retries after five seconds without consuming the failure budget. The reason clears on successful admission. Repeated checks of the same restriction
 do not append duplicate capacity events. Capacity-only deferrals also skip timing
 events to keep repeated polling from growing the timeline.
 

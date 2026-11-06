@@ -527,7 +527,11 @@ func TestRunnerLifecycleRejectsNewRequiredLabelsBeforeStarting(t *testing.T) {
 }
 
 func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
-	baseStore := state.New(t.TempDir())
+	dir := t.TempDir()
+	baseStore, probe := state.New(dir), state.New(dir)
+	if err := probe.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 	profile := state.RunnerProfile{Name: "platform-custom", Labels: []string{"self-hosted", "custom"}, RequiredLabels: []string{"custom"}, TemplateID: "custom-template-id", MaxConcurrency: 10, Enabled: true}
 	upsertLifecycleProfile(t, baseStore, profile)
 	created, _, err := baseStore.CreateRequest(state.RunnerRequest{ID: "serialized-profile-reload", Source: "test", RepositoryFullName: "o/r", RequestedLabels: append([]string(nil), profile.Labels...), Labels: append([]string(nil), profile.Labels...), ProfileName: profile.Name, ProfileSource: "global", RunnerName: "e2b-serialized-profile-reload"}, nil)
@@ -543,14 +547,8 @@ func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
 	}()
 
 	<-store.entered
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	err = baseStore.WithRunnerAdmission(ctx, func(state.Store) error { return nil })
-	cancel()
-	close(store.release)
+	assertDatabaseGuardHeld(t, probe, store.release)
 	<-done
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("runner profile reload did not hold the database guard: %v", err)
-	}
 }
 
 func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
