@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -3742,6 +3744,57 @@ func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
 	}
 }
 
+func TestRunnerCatalogTimeoutClassification(t *testing.T) {
+	store := New(t.TempDir())
+	for _, cause := range []error{
+		&pgconn.PgError{Code: "57014"}, &pgconn.PgError{Code: "55P03"}, &mysql.MySQLError{Number: 1205},
+	} {
+		err := store.WithRunnerCatalogMutation(t.Context(), func(Store) error { return fmt.Errorf("wrapped: %w", cause) })
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, cause) {
+			t.Fatalf("lost deadline or driver cause: %v", err)
+		}
+	}
+}
+
+// A catalog writer blocked by an enqueue must leave unrelated capacity available.
+func testAdmissionDuringPostgresCatalogWait(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	var writerDone chan error
+	err := store.WithRunnerEnqueue(ctx, func(held Store) error {
+		var holderPID int
+		if err := held.(*DBStore).db.Raw("SELECT pg_backend_pid()").Scan(&holderPID).Error; err != nil {
+			return err
+		}
+		writerDone = make(chan error, 1)
+		go func() {
+			writerDone <- store.WithRunnerCatalogMutation(ctx, func(Store) error { return nil })
+		}()
+		for {
+			var blocked bool
+			if err := store.db.WithContext(ctx).Raw(`SELECT EXISTS (SELECT FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid)))`, holderPID).Scan(&blocked).Error; err != nil {
+				return err
+			}
+			if blocked {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		probe, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		return store.WithRunnerAdmission(probe, func(Store) error { return nil })
+	})
+	if writerDone != nil {
+		if writerErr := <-writerDone; writerErr != nil {
+			t.Errorf("catalog writer after enqueue: %v", writerErr)
+		}
+	}
+	if err != nil {
+		t.Fatalf("admission during catalog wait: %v", err)
+	}
+}
+
 func TestFreshSchemaSQLBackends(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("set RUNNERD_CATALOG_BACKEND_TESTS=1 with dedicated Postgres and MySQL test databases")
@@ -3810,6 +3863,9 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			testQueuedClaimOwnership(t, migrated)
 			testConcurrentSQLRunnerEnqueue(t, migrated)
 			testSQLAdmissionReadsPreviousCommit(t, migrated)
+			if backend.name == BackendPostgres {
+				testAdmissionDuringPostgresCatalogWait(t, migrated)
+			}
 			testRunnerAdmissionRollback(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},

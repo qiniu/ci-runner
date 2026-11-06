@@ -416,6 +416,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	unlock()
 	if err != nil {
 		if errors.Is(err, state.ErrConflict) {
+			s.logger.Info("runner admission skipped after claim changed", "id", id, "stage", stage, "claim_version", claim.Version, "worker", workerID)
 			return
 		}
 		var syntax *json.SyntaxError

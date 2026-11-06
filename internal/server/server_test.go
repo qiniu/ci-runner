@@ -9486,6 +9486,43 @@ func (s *activeRequestBeforeMutationStore) WithRunnerCatalogMutation(ctx context
 	return s.Store.WithRunnerCatalogMutation(ctx, mutation)
 }
 
+func TestUserRunnerSpecMutationMasksGuardErrors(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	srv := newTestServer(t, baseStore, "", &fakeSandbox{})
+	account, _, err := baseStore.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: account.ID}
+	profile, err := baseStore.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{
+		ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom-guard",
+		WorkflowLabels: []string{"qiniu", "custom-guard"}, TemplateID: "template", Enabled: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("/user/runner-specs/%s?expected_updated_at=%s", profile.Name, url.QueryEscape(profile.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	for _, tc := range []struct {
+		method  string
+		cause   error
+		status  int
+		message string
+	}{
+		{http.MethodPatch, fmt.Errorf("private database error: %w", context.DeadlineExceeded), http.StatusServiceUnavailable, "runner_spec_mutation_unavailable"},
+		{http.MethodDelete, errors.New("private database error"), http.StatusInternalServerError, "failed to persist Runner Spec change"},
+	} {
+		srv.store = runnerSpecGuardErrorStore{Store: baseStore, err: tc.cause}
+		body := fmt.Sprintf(`{"enabled":false,"expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		req := httptest.NewRequest(tc.method, target, strings.NewReader(body))
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.message) || strings.Contains(rec.Body.String(), "private database error") {
+			t.Fatalf("%s status=%d body=%s", tc.method, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestUserDeleteRunnerSpecRechecksActiveRequestsInsideMutation(t *testing.T) {
 	baseStore := state.New(t.TempDir())
 	srv := newTestServer(t, baseStore, "", &fakeSandbox{})
