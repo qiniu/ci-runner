@@ -269,6 +269,8 @@ The admission transaction grants the worker a database lease for creation. Befor
 
 Stopping a Runner also acquires a database lease. A replacement worker resumes from the last confirmed cleanup step and uses the saved numeric GitHub Runner ID. A lost delete response can cause another request for the same resource.
 
+Windows JIT registration records the dispatch in the database before sending it to GitHub. A worker taking over cleans up by the returned numeric Runner ID or by matching both the attempt label and Runner name. An empty lookup keeps the request in `stopping` and holds its capacity. If the dispatch never reached GitHub, or all 100 labels were occupied and the response was lost, an operator must reconcile the registration before releasing the request. JIT credentials stay in memory.
+
 If a Runner process ends before accepting any Job, for example because GitHub terminated its listener (`run.sh` still exits 0) or its Sandbox output stream was lost while GitHub reports it idle, runnerd retries the request with the same bounded backoff instead of marking it completed or failed; the retry rechecks the Job before creating another Sandbox.
 
 New runner requests, including admission rejections, store the parsed GitHub context but not the raw webhook body. The legacy `github_payload_json` column and existing values remain available for historical metadata backfill; this change does not clean up old payloads, request history, or logs.

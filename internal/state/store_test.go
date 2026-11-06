@@ -3767,6 +3767,7 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	creating := claim
 	creating.Status = StatusCreating
 	creating.ProvisionAttemptID = "attempt-under-test"
+	creating.JITRegistrationState = JITUnsent
 	injected := errors.New("rollback admission")
 	creating.WatchToken = "first"
 	write := func(tx Store) error { return tx.BeginRunnerCreation(creating, time.Minute) }
@@ -3796,6 +3797,20 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	current, err = store.ReadState(id)
 	if err != nil || current.ProvisionAttemptID != creating.ProvisionAttemptID {
 		t.Fatalf("persisted attempt = %q, err = %v", current.ProvisionAttemptID, err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "other", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale owner dispatched JIT: %v", err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "first", creating.ProvisionAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DispatchJITRegistration(t.Context(), id, "first", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate JIT dispatch: %v", err)
+	}
+	wrongAttempt := creating
+	wrongAttempt.ProvisionAttemptID = "older"
+	if err := store.RecordJITRegistrationResult(t.Context(), wrongAttempt, 71); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong attempt recorded JIT ID: %v", err)
 	}
 	if err := store.DispatchSandboxCreate(t.Context(), id, "old", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("wrong owner dispatched: %v", err)
@@ -3833,8 +3848,15 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	if err := store.RecordRunnerCleanup(t.Context(), id, "stop-a", CleanupSandbox); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BindCleanupGitHubRunner(t.Context(), id, "stop-a", 71); err != nil {
+	if err := store.RecordJITRegistrationResult(t.Context(), creating, 71); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.RecordJITRegistrationResult(t.Context(), creating, 0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rejection erased confirmed ID: %v", err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || current.JITRegistrationState != JITDispatched {
+		t.Fatal("lost JIT intent", err)
 	}
 	if err := store.BindCleanupGitHubRunner(t.Context(), id, "stop-a", 72); !errors.Is(err, ErrConflict) {
 		t.Fatalf("rebound cleanup registration: %v", err)
@@ -3866,11 +3888,11 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 		t.Fatal(err)
 	}
 	retried, err := store.RetryRequest(id, time.Now())
-	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.ManualStopRequested || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
+	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched || retried.JITRegistrationState == JITDispatched || retried.ManualStopRequested || retried.CleanupSandboxDone || retried.CleanupGitHubDone || retried.CleanupGitHubRunnerID != 0 {
 		t.Fatalf("retry retained old attempt or cleanup evidence: %v", err)
 	}
 	current, err = store.ReadState(id)
-	if err != nil || current.ManualStopRequested || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
+	if err != nil || current.JITRegistrationState == JITDispatched || current.ManualStopRequested || current.CleanupSandboxDone || current.CleanupGitHubDone || current.CleanupGitHubRunnerID != 0 {
 		t.Fatalf("persisted cleanup on retry: %v", err)
 	}
 }

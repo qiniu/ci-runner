@@ -1,12 +1,15 @@
 package server
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
@@ -46,7 +49,8 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 				}
 			}))
 			defer gh.Close()
-			store := state.New(t.TempDir())
+			dir := t.TempDir()
+			store := state.New(dir)
 			fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
 			if scenario == "missing process" {
 				fake.recoverErr = sandboxrunner.ErrRunnerNotFound
@@ -61,6 +65,15 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 			st.Status = state.StatusCreating
 			st.LastAttemptAt = time.Now().UTC().Truncate(time.Millisecond)
 			if err = store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			// Released Windows rows predate the registration ledger.
+			db, err := sql.Open("sqlite", filepath.Join(dir, "runnerd.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec("UPDATE runner_requests SET jit_registration_state = NULL WHERE id = ?", st.ID); err != nil {
 				t.Fatal(err)
 			}
 			err = srv.recoverRunner(t.Context(), st.ID)
@@ -99,5 +112,28 @@ func TestWindowsJITRecoveryCleansRegistrationBeforeRequeue(t *testing.T) {
 				t.Fatalf("completed request retained registration: status=%s deletes=%d", current.Status, deletes.Load())
 			}
 		})
+	}
+}
+
+// A Windows request stopped before its JIT POST owns no registration, even
+// when a previous Runner with its reusable name is still visible to GitHub.
+func TestWindowsJITStopBeforeDispatch(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unsent registration contacted GitHub: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer gh.Close()
+	store := state.New(t.TempDir())
+	srv := newRunnerLifecycleTestServer(t, store, gh.URL, &fakeSandbox{})
+	_, st, err := store.CreateRequest(state.RunnerRequest{ID: "unsent-jit", RepositoryFullName: "o/r", Labels: []string{"windows"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.stopRunner(t.Context(), st.ID, github.WorkflowJob{}, state.TerminationSourceManualStop); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.ReadState(st.ID)
+	if err != nil || saved.Status != state.StatusCompleted || !saved.CleanupGitHubDone || saved.CleanupGitHubRunnerID != 0 {
+		t.Fatal("unsent registration did not finish cleanly", saved.Status, err)
 	}
 }

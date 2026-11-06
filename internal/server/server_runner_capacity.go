@@ -45,6 +45,7 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 		st.ProvisionAttemptID = rand.Text()
 		st.WatchToken = rand.Text()
 		if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
+			st.JITRegistrationState = state.JITUnsent
 			attemptAt := time.Now().UTC().Truncate(time.Millisecond)
 			if !attemptAt.After(st.LastAttemptAt) {
 				attemptAt = st.LastAttemptAt.Truncate(time.Millisecond).Add(time.Millisecond)

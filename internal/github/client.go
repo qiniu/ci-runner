@@ -143,11 +143,16 @@ type OrganizationMember struct {
 	UserLogin string
 }
 
+type RunnerLabel struct {
+	Name string `json:"name"`
+}
+
 type Runner struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Busy   bool   `json:"busy"`
+	Labels []RunnerLabel `json:"labels,omitempty"`
+	ID     int64         `json:"id"`
+	Name   string        `json:"name"`
+	Status string        `json:"status"`
+	Busy   bool          `json:"busy"`
 }
 
 type Installation struct {

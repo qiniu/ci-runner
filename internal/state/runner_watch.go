@@ -85,6 +85,15 @@ func (s *DBStore) BeginRunnerCreation(st RunnerState, ttl time.Duration) error {
 // Commit intent before crossing the provider boundary. A metadata miss on
 // recovery cannot distinguish a lost response from a delayed create request.
 func (s *DBStore) DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error {
+	return s.dispatchCreationOperation(ctx, id, token, attempt, "sandbox_create_dispatched")
+}
+
+func (s *DBStore) DispatchJITRegistration(ctx context.Context, id, token, attempt string) error {
+	return s.dispatchCreationOperation(ctx, id, token, attempt, "jit_registration_state")
+}
+
+// column is one of the two server-owned, one-shot create intents.
+func (s *DBStore) dispatchCreationOperation(ctx context.Context, id, token, attempt, column string) error {
 	if token == "" || attempt == "" {
 		return ErrConflict
 	}
@@ -92,10 +101,16 @@ func (s *DBStore) DispatchSandboxCreate(ctx context.Context, id, token, attempt 
 	if err != nil {
 		return err
 	}
-	res := db.WithContext(ctx).Model(&runnerRequestRecord{}).
-		Where("id = ? AND status = ? AND provision_attempt_id = ? AND watch_token = ? AND watch_expires_at > ?", id, StatusCreating, attempt, token, queueTime(db, 0)).
-		Where("sandbox_create_dispatched IS NULL OR sandbox_create_dispatched = ?", false).
-		UpdateColumns(map[string]any{"sandbox_create_dispatched": true, "version": gorm.Expr("version + 1")})
+	query := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND status = ? AND provision_attempt_id = ? AND watch_token = ? AND watch_expires_at > ?", id, StatusCreating, attempt, token, queueTime(db, 0))
+	var dispatched any = true
+	if column == "jit_registration_state" {
+		query = query.Where("jit_registration_state = ?", JITUnsent)
+		dispatched = JITDispatched
+	} else {
+		query = query.Where("sandbox_create_dispatched IS NULL OR sandbox_create_dispatched = ?", false)
+	}
+	res := query.UpdateColumns(map[string]any{column: dispatched, "version": gorm.Expr("version + 1")})
 	if res.Error != nil {
 		return res.Error
 	}
@@ -132,6 +147,38 @@ func (s *DBStore) RecordSandboxCreateResult(ctx context.Context, attempt RunnerS
 		return res.Error
 	}
 	if res.RowsAffected == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// The POST reply can arrive after its owner lost the lease. A confirmed
+// numeric ID belongs to its attempt and pins all future deletion to that ID.
+// Zero records a definitive rejection, never a list miss or a transport error.
+func (s *DBStore) RecordJITRegistrationResult(ctx context.Context, attempt RunnerState, runnerID int64) error {
+	if attempt.ProvisionAttemptID == "" || runnerID < 0 {
+		return ErrConflict
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return err
+	}
+	query := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND provision_attempt_id = ? AND jit_registration_state = ?", attempt.ID, attempt.ProvisionAttemptID, JITDispatched).
+		Where("status IN ?", []string{StatusCreating, StatusStopping}).
+		Where("cleanup_github_runner_id IS NULL OR cleanup_github_runner_id = 0")
+	updates := map[string]any{"version": gorm.Expr("version + 1")}
+	if runnerID == 0 {
+		updates["jit_registration_state"] = JITRejected
+		updates["cleanup_github_done"] = true
+	} else {
+		updates["cleanup_github_runner_id"] = runnerID
+	}
+	result := query.UpdateColumns(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
 		return ErrConflict
 	}
 	return nil

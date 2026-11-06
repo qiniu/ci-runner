@@ -59,6 +59,7 @@ type runnerRequestRecord struct {
 	QueuedAt                        time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
 	WatchToken                      string     `gorm:"column:watch_token;size:64"`
 	WatchExpiresAt                  *time.Time `gorm:"column:watch_expires_at;index:idx_runner_watch_expiry,priority:2"`
+	JITRegistrationState            string     `gorm:"column:jit_registration_state;size:16"`
 	SandboxCreateDispatched         bool       `gorm:"column:sandbox_create_dispatched"`
 	ManualStopRequested             bool       `gorm:"column:manual_stop_requested"`
 	CleanupSandboxDone              bool       `gorm:"column:cleanup_sandbox_done"`

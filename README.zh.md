@@ -268,6 +268,8 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 
 停止 Runner 时，节点也会取得数据库租约。接手节点从上一次确认的清理步骤继续，按已保存的 GitHub Runner 数字 ID 删除注册。如果删除响应丢失，同一个资源可能收到第二次删除请求。
 
+Windows Runner 向 GitHub 发送 JIT 注册前，先在数据库记录本次尝试。接手节点按返回的 Runner 数字 ID 清理，也可以通过尝试专属标签和 Runner 名称查回 ID。查询为空时，请求保持 `stopping` 并继续占用配额。如果请求实际未送达 GitHub，或 100 个标签已用满且注册响应丢失，需要运维核实后再释放请求。JIT 凭据仅保存在内存中。
+
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener 而 `run.sh` 仍返回 0，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），runnerd 不把请求记为完成或失败，而是按同样的有限退避重试；重试前会先复查 Job 再创建 Sandbox。
 
 新建 runner request（包括准入拒绝记录）只保存解析后的 GitHub 上下文，不保存 webhook 原文。历史兼容列 `github_payload_json` 及已有值继续保留，用于回填旧记录的元信息；此变更不会清理已有原文、请求历史或日志。

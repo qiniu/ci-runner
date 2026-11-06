@@ -28,6 +28,7 @@ const maxRunnerRequestRepositoryAccessQueryParameters = 900
 // list-derived RunnerState values; mutation paths re-read the full record.
 var runnerRequestListSelectColumns = []string{
 	"watch_token",
+	"jit_registration_state",
 	"sandbox_create_dispatched",
 	"id",
 	"workflow_job_id",
@@ -141,7 +142,12 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if status == StatusFailed {
 		failedAt = &now
 	}
+	jitState := ""
+	if labelsMatch([]string{"windows"}, req.Labels) {
+		jitState = JITUnsent
+	}
 	record := runnerRequestRecord{
+		JITRegistrationState:            jitState,
 		ID:                              req.ID,
 		Source:                          req.Source,
 		GitHubInstallationID:            req.GitHubInstallationID,
@@ -331,6 +337,9 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		// unowned or expired cleanup can be taken over, even with a fresh version.
 		query = query.Where("status <> ? OR watch_expires_at IS NULL OR watch_expires_at <= ?", StatusStopping, queueTime(db, 0))
 	}
+	if lease.queueOwner != "" && lease.newToken != "" && st.JITRegistrationState == JITUnsent {
+		updates["jit_registration_state"] = JITUnsent
+	}
 	if lease.newToken != "" {
 		updates["watch_token"], updates["watch_expires_at"] = lease.newToken, queueTime(db, lease.ttl)
 	} else if st.Status != StatusCreating && st.Status != StatusRunning && st.Status != StatusStopping {
@@ -347,6 +356,9 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 	}
 	if st.Status == StatusQueued {
 		updates["manual_stop_requested"] = false
+		if st.JITRegistrationState != "" {
+			updates["jit_registration_state"] = JITUnsent
+		}
 		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
 	}
 	result := query.Updates(updates)
@@ -1013,6 +1025,9 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		}
 		record.Status = StatusQueued
 		record.ProvisionAttemptID = ""
+		if record.JITRegistrationState != "" {
+			record.JITRegistrationState = JITUnsent
+		}
 		record.SandboxCreateDispatched = false
 		record.ManualStopRequested = false
 		record.CleanupSandboxDone, record.CleanupGitHubDone, record.CleanupGitHubRunnerID = false, false, 0
@@ -1054,6 +1069,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
+				"jit_registration_state":              record.JITRegistrationState,
 				"sandbox_create_dispatched":           false,
 				"manual_stop_requested":               false,
 				"cleanup_sandbox_done":                false,

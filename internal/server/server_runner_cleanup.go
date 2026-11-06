@@ -86,6 +86,9 @@ func (c *runnerCleanup) removeGitHub(st state.RunnerState) error {
 	if st.CleanupGitHubDone {
 		return nil
 	}
+	if st.JITRegistrationState == state.JITUnsent {
+		return c.confirm(state.CleanupGitHub)
+	}
 	if err := c.requireLease(); err != nil {
 		return err
 	}
@@ -95,7 +98,14 @@ func (c *runnerCleanup) removeGitHub(st state.RunnerState) error {
 		runnerID := st.CleanupGitHubRunnerID
 		var err error
 		if runnerID == 0 {
-			runnerID, err = c.server.gh.FindRunnerIDByName(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
+			if st.JITRegistrationState == state.JITDispatched {
+				runnerID, err = c.server.gh.FindJITRunnerID(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName, st.ProvisionAttemptID)
+			} else {
+				runnerID, err = c.server.gh.FindRunnerIDByName(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
+			}
+			if err == nil && runnerID == 0 && st.JITRegistrationState == state.JITDispatched {
+				return errors.New("dispatched JIT registration is not visible yet")
+			}
 			if err == nil && runnerID != 0 {
 				if err := c.server.store.BindCleanupGitHubRunner(ctx, c.id, c.token, runnerID); err != nil {
 					return fmt.Errorf("%w: %w", errCleanupUnconfirmed, err)

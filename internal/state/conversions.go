@@ -104,6 +104,7 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		CreatedAt:                       record.QueuedAt,
 		ProvisionAttemptID:              record.ProvisionAttemptID,
 		WatchToken:                      record.WatchToken,
+		JITRegistrationState:            record.JITRegistrationState,
 		SandboxCreateDispatched:         record.SandboxCreateDispatched,
 		CleanupGitHubRunnerID:           record.CleanupGitHubRunnerID,
 		ManualStopRequested:             record.ManualStopRequested,

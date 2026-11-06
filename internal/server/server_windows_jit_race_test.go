@@ -24,12 +24,11 @@ type supersededWindowsSandbox struct {
 	starts     int
 	stopped    []string
 	oldStarted chan struct{}
-	newStarted chan sandboxrunner.StartInput
 	releaseOld chan struct{}
 	oldErr     error
 }
 
-func (s *supersededWindowsSandbox) StartRunner(_ context.Context, input sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
+func (s *supersededWindowsSandbox) StartRunner(_ context.Context, _ sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
 	s.mu.Lock()
 	s.starts++
 	attempt := s.starts
@@ -42,8 +41,7 @@ func (s *supersededWindowsSandbox) StartRunner(_ context.Context, input sandboxr
 		}
 		return sandboxrunner.StartResult{SandboxID: "old-sandbox", PID: 41}, nil
 	}
-	s.newStarted <- input
-	return sandboxrunner.StartResult{SandboxID: "new-sandbox", PID: 42}, nil
+	return sandboxrunner.StartResult{}, errors.New("unexpected replacement Sandbox start")
 }
 
 func (s *supersededWindowsSandbox) StopRunner(_ context.Context, sandboxID string, _ uint32) error {
@@ -53,11 +51,9 @@ func (s *supersededWindowsSandbox) StopRunner(_ context.Context, sandboxID strin
 	return nil
 }
 
-// Value: protects=Windows attempts finish old cleanup before a replacement provisions;
-// fails_when=late failure overwrites running state or cleanup deletes its JIT identity;
-// why_new=synchronous JIT failure tests never overlap two attempts; seam=none;
-// no_claim=GitHub and Sandbox provider acceptance (both providers are mocked).
-func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
+// A second server stops the attempt while its Sandbox start is in flight.
+// Exercise both outcomes and an unavailable GitHub registration cleanup.
+func TestWindowsJITPendingSandboxStopBlocksReplacement(t *testing.T) {
 	for _, lateResult := range []string{"success", "error", "cleanup failure"} {
 		t.Run(lateResult, func(t *testing.T) {
 			const requestID = "win-jit-race"
@@ -66,7 +62,6 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			registered := map[int64]bool{}
 			var deletes []int64
 			var cleanupUnavailable, jobCompleted atomic.Bool
-			var jobChecks atomic.Int64
 			cleanupUnavailable.Store(lateResult == "cleanup failure")
 			nextID := int64(70)
 			ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +69,6 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				defer ghMu.Unlock()
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/123":
-					jobChecks.Add(1)
 					if jobCompleted.Load() {
 						_, _ = w.Write([]byte(`{"id":123,"status":"completed","conclusion":"success"}`))
 					} else {
@@ -119,7 +113,6 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			service := &supersededWindowsSandbox{
 				lifecycleSandboxService: &lifecycleSandboxService{},
 				oldStarted:              make(chan struct{}),
-				newStarted:              make(chan sandboxrunner.StartInput, 1),
 				releaseOld:              make(chan struct{}),
 			}
 			if lateResult == "error" {
@@ -161,125 +154,49 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			srv.retryOrFail(old, "sweeper_create_timeout", context.DeadlineExceeded)
+			peer := newRunnerLifecycleTestServer(t, store, ghServer.URL, service)
+			current, err := store.ReadState(requestID)
+			if err != nil || current.Status != state.StatusCreating || current.CleanupGitHubRunnerID != 71 {
+				t.Fatalf("sweeper released unresolved Windows attempt: status=%s id=%d err=%v", current.Status, current.CleanupGitHubRunnerID, err)
+			}
+			if _, _, ok, err := store.ClaimNextRunnable("second", time.Minute); ok || err != nil {
+				t.Fatal("replacement claimed before original settled", err)
+			}
+			pending, _, err := peer.stopRunner(ctx, requestID, github.WorkflowJob{}, state.TerminationSourceManualStop)
+			if err != nil || pending.Status != state.StatusStopping {
+				t.Fatalf("stop lost the original Sandbox: %s %v", pending.Status, err)
+			}
 			jobCompleted.Store(true)
-			// Exercise the real worker claim, which advances LastAttemptAt
-			// before the replacement enters the Windows creation lock.
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			var replacement state.RunnerState
-			for {
-				req, claim, claimed, err := store.ClaimNextRunnable("new-worker", time.Minute)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if claimed {
-					if req.ID != requestID {
-						t.Fatalf("claimed request %q, want %q", req.ID, requestID)
-					}
-					replacement = claim
-					break
-				}
-				select {
-				case <-ctx.Done():
-					t.Fatal("replacement retry never became runnable")
-				case <-ticker.C:
-				}
-			}
-			newDone := make(chan struct{})
-			go func() {
-				defer close(newDone)
-				srv.startClaimedRunner(ctx, replacement)
-			}()
-			// Observe the second caller waiting on the provisioning owner before
-			// releasing the old Sandbox result; scheduling cannot hide the race.
-		waiting:
-			for {
-				srv.runnerLocksMu.Lock()
-				entry := srv.windowsCreationLocks[requestID]
-				waiting := entry != nil && entry.refs == 2
-				srv.runnerLocksMu.Unlock()
-				if waiting {
-					break waiting
-				}
-				select {
-				case <-newDone:
-					t.Fatal("replacement finished before old cleanup")
-				case <-ctx.Done():
-					t.Fatal("replacement never waited for provisioning owner")
-				case <-ticker.C:
-				}
-			}
 			release()
-			await(oldDone, "superseded start did not clean up")
-			if lateResult == "cleanup failure" {
-				await(newDone, "replacement did not observe pending cleanup")
-				pending, err := store.ReadState(requestID)
-				if err != nil || pending.Status != state.StatusStopping || pending.FailureReason != "jit_cleanup_pending" {
-					t.Fatalf("cleanup disappeared: status=%s reason=%s err=%v", pending.Status, pending.FailureReason, err)
-				}
-				select {
-				case <-service.newStarted:
-					t.Fatal("replacement provisioned before cleanup")
-				default:
-				}
-				cleanupUnavailable.Store(false)
-				if err := srv.Recover(ctx); err != nil {
-					t.Fatal(err)
-				}
-				final, _ := store.ReadState(requestID)
-				ghMu.Lock()
-				left := len(registered)
-				ghMu.Unlock()
-				if left != 0 || final.Status != state.StatusCompleted || jobChecks.Load() < 1 {
-					t.Fatalf("recovery leaked registration: left=%d status=%s job_checks=%d", left, final.Status, jobChecks.Load())
-				}
-				return
-			}
-			var input sandboxrunner.StartInput
-			select {
-			case input = <-service.newStarted:
-			case <-ctx.Done():
-				t.Fatal("replacement Sandbox did not start")
-			}
-			waitForState(t, store, requestID, state.StatusRunning)
-			before, err := store.ReadState(requestID)
-			if err != nil {
+			await(oldDone, "late start did not finish")
+			// A lost stop response or definitive start rejection is reconciled
+			// by another node. Only the original registration can be removed.
+			cleanupUnavailable.Store(false)
+			if err := peer.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			release()
-			await(oldDone, "superseded start did not return")
-			after, err := store.ReadState(requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if after.Status != state.StatusRunning || after.SandboxID != "new-sandbox" || after.ProcessPID != 42 || !after.LastAttemptAt.Equal(before.LastAttemptAt) || after.Version != before.Version {
-				t.Errorf("superseded %s changed replacement: before=%+v after=%+v", lateResult, before, after)
+			final, err := store.ReadState(requestID)
+			if err != nil || final.Status != state.StatusCompleted || final.TerminationSource != state.TerminationSourceManualStop || !final.CleanupGitHubDone {
+				t.Fatalf("late response lost manual stop: %s %s %v", final.Status, final.TerminationSource, err)
 			}
 			ghMu.Lock()
-			oldDeletes, newDeleted := 0, false
-			for _, id := range deletes {
-				if id == 71 {
-					oldDeletes++
-				}
-				newDeleted = newDeleted || id == 72
+			defer ghMu.Unlock()
+			if nextID != 71 || len(registered) != 0 || len(deletes) == 0 {
+				t.Fatalf("Windows registration leaked or was repeated: posts=%d remaining=%v deletes=%v", nextID-70, registered, deletes)
 			}
-			newRegistered := registered[72]
-			ghMu.Unlock()
-			if oldDeletes != 1 || newDeleted || !newRegistered {
-				t.Errorf("JIT cleanup ownership lost: oldDeletes=%d newDeleted=%t newRegistered=%t", oldDeletes, newDeleted, newRegistered)
+			for _, id := range deletes {
+				if id != 71 {
+					t.Fatalf("deleted other registration %d", id)
+				}
 			}
 			service.mu.Lock()
-			stopped := append([]string(nil), service.stopped...)
-			service.mu.Unlock()
-			if lateResult == "success" && (len(stopped) != 1 || stopped[0] != "old-sandbox") {
-				t.Errorf("late Sandbox cleanup = %v, want only old-sandbox", stopped)
+			defer service.mu.Unlock()
+			if lateResult != "error" && (len(service.stopped) != 1 || service.stopped[0] != "old-sandbox") {
+				t.Fatalf("late Sandbox cleanup %v", service.stopped)
 			}
-			if lateResult == "error" && len(stopped) != 0 {
-				t.Errorf("failed old start stopped another Sandbox: %v", stopped)
+			if lateResult == "error" && len(service.stopped) != 0 {
+				t.Fatalf("unexpected Sandbox cleanup %v", service.stopped)
 			}
-			// Finish the replacement only after all ownership assertions.
-			input.OnExit(sandboxrunner.ExitResult{}, nil)
-			await(newDone, "replacement start did not finish")
 		})
 	}
 }

@@ -200,6 +200,13 @@ const (
 	CleanupGitHub  RunnerCleanupStep = "cleanup_github_done"
 )
 
+// An empty JIT state also covers registrations made by older versions.
+const (
+	JITUnsent     = "unsent"
+	JITDispatched = "dispatched"
+	JITRejected   = "rejected"
+)
+
 type RunnerState struct {
 	ID                              string    `json:"id"`
 	Status                          string    `json:"status"`
@@ -254,6 +261,7 @@ type RunnerState struct {
 	CreatedAt                       time.Time `json:"created_at"`
 	ProvisionAttemptID              string    `json:"-"`
 	WatchToken                      string    `json:"-"`
+	JITRegistrationState            string    `json:"-"`
 	SandboxCreateDispatched         bool      `json:"-"`
 	ManualStopRequested             bool      `json:"-"`
 	CleanupSandboxDone              bool      `json:"-"`
@@ -572,6 +580,8 @@ type RunnerRequestStore interface {
 	ReleaseRunnerCleanup(ctx context.Context, id, token string) error
 	BindCleanupGitHubRunner(ctx context.Context, id, token string, runnerID int64) error
 	RecordRunnerCleanup(ctx context.Context, id, token string, step RunnerCleanupStep) error
+	DispatchJITRegistration(ctx context.Context, id, token, attempt string) error
+	RecordJITRegistrationResult(ctx context.Context, attempt RunnerState, runnerID int64) error
 	DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error
 	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
 	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error
