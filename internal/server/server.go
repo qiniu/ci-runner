@@ -39,7 +39,6 @@ type Server struct {
 	deploymentWorker *deploymentworker.Worker
 	startedAt        time.Time
 
-	// Admissions share the guard; catalog mutations exclude them through persistence.
 	runnerLocksMu    sync.Mutex
 	runnerLocks      map[string]*runnerRequestLock
 	queueNotify      chan struct{}
