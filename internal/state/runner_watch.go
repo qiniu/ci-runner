@@ -33,10 +33,17 @@ func (s *DBStore) RenewRunningWatch(ctx context.Context, id, token string, ttl t
 	if err != nil {
 		return false, err
 	}
-	result := db.WithContext(ctx).Model(&runnerRequestRecord{}).
-		Where("id = ? AND status = ? AND watch_token = ? AND watch_expires_at > ?", id, StatusRunning, token, queueTime(db, 0)).
-		UpdateColumn("watch_expires_at", queueTime(db, ttl))
-	return result.RowsAffected == 1, result.Error
+	live := db.WithContext(ctx).Model(&runnerRequestRecord{}).
+		Where("id = ? AND status = ? AND watch_token = ? AND watch_expires_at > ?", id, StatusRunning, token, queueTime(db, 0))
+	result := live.Session(&gorm.Session{}).UpdateColumn("watch_expires_at", queueTime(db, ttl))
+	if result.Error != nil || result.RowsAffected != 0 || db.Dialector.Name() != "mysql" {
+		return result.RowsAffected == 1, result.Error
+	}
+	// MySQL normally reports changed rows. Two renewals can round to the
+	// same stored millisecond, leaving a matching, live lease unchanged.
+	var count int64
+	err = live.Count(&count).Error
+	return count == 1, err
 }
 
 func (s *DBStore) ListExpiredRunningWatches(ctx context.Context, limit int) ([]string, error) {
