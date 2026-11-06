@@ -588,7 +588,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			OnExit: func(result sandboxrunner.ExitResult, err error) {
 				defer close(exitCh)
 				attempt := <-exitWatchAttempt
-				if attempt.specified() && (watchCtx.Err() == nil || err == nil) {
+				if attempt.specified() && runnerWatchObservedExit(watchCtx, result, err) {
 					s.runnerExitedForAttempt(id, attempt, result, err)
 				}
 			},
@@ -643,73 +643,81 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		return
 	}
 
-	runningLockWaitStartedAt := time.Now()
-	unlock = s.lockRunner(id)
-	timings.record("running_lock_wait", runningLockWaitStartedAt)
-	runningStateReadStartedAt := time.Now()
-	current, err := s.store.ReadState(id)
-	timings.record("running_state_read", runningStateReadStartedAt)
-	if err != nil {
-		exitWatchAttempt <- runnerAttemptIdentity{}
-		unlock()
-		s.logger.Error("read state before running update", "id", id, "error", err)
-		jitAdopted = true // Preserve resources until recovery can verify the database outcome.
-		return
-	}
-	if current.Status == state.StatusRunning && current.SandboxID == result.SandboxID && current.ProcessPID == result.PID {
-		exitWatchAttempt <- runnerAttemptIdentity{}
-		unlock()
-		jitAdopted = true // Recovery already owns this exact Sandbox and process.
-		return
-	}
-	if current.Status != state.StatusCreating || current.ProvisionAttemptID != st.ProvisionAttemptID || (platform == sandboxrunner.PlatformWindows && !current.LastAttemptAt.Equal(*windowsAttempt)) {
-		exitWatchAttempt <- runnerAttemptIdentity{}
-		unlock()
-		s.logger.Info("runner status changed before running update", "id", id, "status", current.Status)
-		s.cleanupStartedSandbox(id, sandboxService, result)
-		return
-	}
-	st = current
-	st.Status = state.StatusRunning
-	st.SandboxID = result.SandboxID
-	sandboxAPIURL := strings.TrimSpace(sandboxConfig.APIURL)
-	if sandboxAPIURL == "" {
-		sandboxAPIURL = strings.TrimSpace(req.SandboxAPIURL)
-	}
-	st.SandboxRegion = s.sandboxRegionForAPIURL(sandboxAPIURL)
-	st.ResolvedTemplateID = strings.TrimSpace(result.ResolvedTemplateID)
-	if st.ResolvedTemplateID == "" {
-		st.ResolvedTemplateID = strings.TrimSpace(templateID)
-	}
-	st.TemplateVersion = strings.TrimSpace(result.TemplateVersion)
-	st.RunnerVersion = strings.TrimSpace(result.RunnerVersion)
-	st.ProcessPID = result.PID
-	st.Error = ""
-	st.LeaseOwner = ""
-	st.LeaseExpiresAt = time.Time{}
-	runningStatePersistStartedAt := time.Now()
-	writeErr := s.store.AdoptRunningWatch(st, watchToken, s.runnerWatchTTL())
-	timings.record("running_state_persist", runningStatePersistStartedAt)
-	if writeErr != nil {
-		exitWatchAttempt <- runnerAttemptIdentity{}
-		unlock()
-		s.logger.Error("write running state", "id", id, "error", writeErr)
-		s.store.AppendLog(id, "control.log", []byte("write running state failed: "+writeErr.Error()+"\n"))
-		// Keep a possibly adopted resource. Clean a proven superseded
-		// result through the same provider credentials that created it.
-		latest, readErr := s.store.ReadState(id)
-		switch {
-		case readErr != nil, latest.SandboxID == result.SandboxID, latest.Status == state.StatusCreating && latest.ProvisionAttemptID == provisionID:
-			jitAdopted = true
-		default:
-			s.cleanupStartedSandbox(id, sandboxService, result)
+	commitRunning := func(st state.RunnerState) error {
+		st.Status = state.StatusRunning
+		st.SandboxID = result.SandboxID
+		sandboxAPIURL := strings.TrimSpace(sandboxConfig.APIURL)
+		if sandboxAPIURL == "" {
+			sandboxAPIURL = strings.TrimSpace(req.SandboxAPIURL)
 		}
-		return
+		st.SandboxRegion = s.sandboxRegionForAPIURL(sandboxAPIURL)
+		st.ResolvedTemplateID = strings.TrimSpace(result.ResolvedTemplateID)
+		if st.ResolvedTemplateID == "" {
+			st.ResolvedTemplateID = strings.TrimSpace(templateID)
+		}
+		st.TemplateVersion = strings.TrimSpace(result.TemplateVersion)
+		st.RunnerVersion = strings.TrimSpace(result.RunnerVersion)
+		st.ProcessPID = result.PID
+		st.Error = ""
+		st.LeaseOwner = ""
+		st.LeaseExpiresAt = time.Time{}
+		return s.store.AdoptRunningWatch(st, watchToken, s.runnerWatchTTL())
+	}
+	// Keep the provider result and its observer until a database read and CAS
+	// establish who owns it. A lost commit reply must never stop an adopted Sandbox.
+	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
+		runningLockWaitStartedAt := time.Now()
+		unlock = s.lockRunner(id)
+		timings.record("running_lock_wait", runningLockWaitStartedAt)
+		runningStateReadStartedAt := time.Now()
+		current, err := s.store.ReadState(id)
+		timings.record("running_state_read", runningStateReadStartedAt)
+		if err == nil {
+			switch {
+			case current.Status == state.StatusRunning && current.SandboxID == result.SandboxID && current.ProcessPID == result.PID:
+				// The write may have committed even though its response was lost.
+				var ownsWatch bool
+				ownsWatch, err = s.store.RenewRunningWatch(ctx, id, watchToken, s.runnerWatchTTL())
+				if err == nil && !ownsWatch {
+					unlock()
+					exitWatchAttempt <- runnerAttemptIdentity{}
+					jitAdopted = true
+					return
+				}
+			case current.Status != state.StatusCreating || current.ProvisionAttemptID != provisionID ||
+				(windowsAttempt != nil && !current.LastAttemptAt.Equal(*windowsAttempt)):
+				unlock()
+				exitWatchAttempt <- runnerAttemptIdentity{}
+				if current.SandboxID == result.SandboxID {
+					jitAdopted = true
+				} else {
+					s.cleanupStartedSandbox(id, sandboxService, result)
+				}
+				return
+			default:
+				runningStatePersistStartedAt := time.Now()
+				err = commitRunning(current)
+				timings.record("running_state_persist", runningStatePersistStartedAt)
+			}
+		}
+		unlock()
+		if err == nil {
+			break
+		}
+		s.logger.Warn("retrying started runner adoption", "id", id, "error", err)
+		timings.flush(s, id)
+		select {
+		case <-ctx.Done():
+			// Startup recovery can rediscover this Sandbox by provision attempt.
+			jitAdopted = true
+			exitWatchAttempt <- runnerAttemptIdentity{}
+			return
+		case <-time.After(delay):
+		}
 	}
 	jitAdopted = true
 	go s.renewRunnerWatch(watchCtx, cancelWatch, id, watchToken)
 	exitWatchAttempt <- runnerAttemptIdentity{provisionID: provisionID, watchToken: watchToken, sandboxID: result.SandboxID, processPID: result.PID}
-	unlock()
 	s.logger.Info("sandbox runner started", "id", id, "sandbox_id", result.SandboxID, "pid", result.PID)
 	s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("sandbox runner started sandbox_id=%s pid=%d\n", result.SandboxID, result.PID)))
 	metrics.RecordCreate(req.ProfileName, time.Since(createStartedAt), "success")
@@ -986,6 +994,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	if st.EffectiveRunnerVersion == "" {
 		st.EffectiveRunnerVersion = strings.TrimSpace(result.EffectiveRunnerVersion)
 	}
+	var busyCheckErr error
 	if shouldCheckGitHubBusyAfterRunnerExit(result, err) {
 		unlock()
 		busy, busyErr := s.githubRunnerBusy(context.Background(), st)
@@ -1010,7 +1019,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 		}
 		if busyErr != nil {
 			s.logger.Warn("could not verify github runner busy state after runner exit", "id", id, "runner_name", st.RunnerName, "error", busyErr)
-			s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("could not verify github runner busy state after runner exit: "+busyErr.Error()+"\n"))
+			busyCheckErr = busyErr
 		} else if busy {
 			message := "runner process stream ended while GitHub still reports the runner is busy"
 			if err != nil {
@@ -1043,6 +1052,9 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	defer func() {
 		unlock()
 		if cleanupClaimed {
+			if busyCheckErr != nil {
+				s.store.AppendStagedLog(id, "control.log", runnerEventStageRunnerExit, []byte("could not verify github runner busy state after runner exit: "+busyCheckErr.Error()+"\n"))
+			}
 			s.retainWorkflowJobResultAfterRunnerExit(id)
 		}
 	}()
@@ -1398,7 +1410,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		OnExit: func(result sandboxrunner.ExitResult, err error) {
 			defer cancelWatch()
 			attempt := <-exitWatchAccepted
-			if attempt.specified() && (watchCtx.Err() == nil || err == nil) {
+			if attempt.specified() && runnerWatchObservedExit(watchCtx, result, err) {
 				s.runnerExitedForAttempt(st.ID, attempt, result, err)
 			}
 		},

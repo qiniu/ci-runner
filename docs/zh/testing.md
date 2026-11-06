@@ -855,6 +855,8 @@ Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 liste
 
 运行中 Runner 的监听权保存在数据库。写入 running 状态、Sandbox ID 和 PID 的同时设置监听令牌及到期时间。连接存活时每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本号和时间戳。启动时跳过有效监听；后台每五秒按数据库时间扫描，一轮最多接管四条过期记录，使用新令牌重连原 Sandbox 和 PID。监听回调须持有有效令牌才能写忙碌状态或开始清理。创建中、停止中、Deploy 和终端完成故障切换验收后再按发布计划扩容。
 
+Sandbox 启动后若接管写入失败，worker 保留进程句柄并重试当前创建尝试的数据库操作。若提交成功但响应丢失，使用已保存的 Sandbox、PID 和监听令牌确认归属。监听在本地取消时，SDK 可能返回退出码 -1 且 Go error 为空；此时任务继续运行，等待接管。只有成功取得清理权的监听才记录 GitHub 忙碌查询错误。
+
 `TestRunnerWatchPostgresProcess` 使用两个独立 runnerd 服务进程、独立 PG 连接和本地 Sandbox 替身，覆盖健康续期、暂停超时、接管后旧回调到达，以及杀死第二个进程后原节点重新接管并完成任务。设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`，让 `RUNNERD_POSTGRES_TEST_DSN` 指向名称以 `_test` 结尾的专用数据库，再运行 `go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1`。
 
 每个已接受的进程退出 watcher 都绑定到本次执行的 Sandbox ID 和 PID。若匹配的进程结果在 Webhook、管理员操作或恢复路径已经完成清理或安排清理重试后到达，runnerd 只补写此前缺失的退出码和 `runner_exit` 事件，不改变首次终止来源，也不重复清理。旧尝试的延迟回调只要有任一身份值不再匹配就会被忽略。

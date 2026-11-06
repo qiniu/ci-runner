@@ -202,7 +202,15 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 					if _, ok := samples[later]; ok {
 						t.Errorf("failed %s fabricated later %s", stage, later)
 					}
-				} else {
+				}
+				if fail && stage == "running_state_read" {
+					select {
+					case <-batches: // The next read allows the same provider result to be adopted.
+					case <-time.After(5 * time.Second):
+						t.Fatal("running-state read was not retried")
+					}
+				}
+				if !fail || stage == "running_state_read" {
 					st, err := store.Store.ReadState("timing-start")
 					if err != nil || st.Status != state.StatusRunning {
 						t.Fatalf("successful start = %#v, %v", st, err)

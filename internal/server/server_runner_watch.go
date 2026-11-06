@@ -6,8 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
+
+// A canceled SDK stream without an end event returns exit code -1 and a nil
+// Go error. Only a real process result may race watch cancellation into cleanup.
+func runnerWatchObservedExit(ctx context.Context, result sandboxrunner.ExitResult, err error) bool {
+	return ctx.Err() == nil || (err == nil && result.ExitCode >= 0)
+}
 
 func (s *Server) runnerWatchTTL() time.Duration {
 	if s.cfg.WorkerLeaseTTL > 0 {
