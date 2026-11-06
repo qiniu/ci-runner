@@ -365,3 +365,76 @@ func queuedRunnerForTest(t *testing.T, store state.Store, id, owner string) stat
 	}
 	return st
 }
+
+func TestChangedQueueClaimRecordsStartSkip(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, _, err := store.CreateRequest(state.RunnerRequest{ID: "claim-skip"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, first, ok, err := store.ClaimNextRunnable("same-worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("initial claim", ok, err)
+	}
+	released := first
+	released.LeaseOwner = ""
+	released.LeaseExpiresAt = time.Time{}
+	if err := store.WriteQueuedClaim(released, first.LeaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	_, second, ok, err := store.ClaimNextRunnable("same-worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("second claim", ok, err)
+	}
+	srv := &Server{store: store, logger: slog.Default()}
+	srv.startClaimedRunner(t.Context(), first)
+	saved, err := store.ReadState(first.ID)
+	if err != nil || saved.Version != second.Version || saved.LeaseOwner != second.LeaseOwner || saved.Status != state.StatusQueued {
+		t.Fatalf("stale worker modified the replacement: %+v, %v", saved, err)
+	}
+	log, err := store.ReadLog(first.ID, "control.log", 0)
+	if err != nil || !strings.Contains(string(log), "runner start skipped after queue claim changed") {
+		t.Fatalf("skipped attempt missing from control log: %q, %v", log, err)
+	}
+}
+
+func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("advanced=%t", changed), func(t *testing.T) {
+			store := state.New(t.TempDir())
+			_, _, err := store.CreateRequest(state.RunnerRequest{ID: "sponsored"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+			if err != nil || !ok {
+				t.Fatal("claim", ok, err)
+			}
+			attempt.Status = state.StatusCreating
+			if err := store.WriteQueuedClaim(attempt, attempt.LeaseOwner); err != nil {
+				t.Fatal(err)
+			}
+			attempt.Version++
+			if changed {
+				latest := attempt
+				latest.SandboxID = "newer-sandbox"
+				if err := store.WriteState(latest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv := &Server{store: &readStateErrorStore{Store: store, err: fmt.Errorf("transient read failure")}, logger: slog.Default()}
+			srv.deferCreatingRequest(attempt, 5*time.Second)
+			got, err := store.ReadState(attempt.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				if got.Status != state.StatusCreating || got.SandboxID != "newer-sandbox" || got.LeaseOwner != attempt.LeaseOwner || got.Version != attempt.Version+1 {
+					t.Fatalf("stale deferral cleared a newer version: %+v", got)
+				}
+			} else if got.Status != state.StatusQueued || got.LeaseOwner != "" || got.NextRetryAt.IsZero() || got.Version != attempt.Version+1 {
+				t.Fatalf("unchanged attempt lost its delayed requeue: %+v", got)
+			}
+		})
+	}
+}
