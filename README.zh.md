@@ -111,7 +111,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 要点：
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
-- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL，但多实例共享数据库尚未验证。
+- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL。重启时保留排队请求的租约。若 worker 领取后立即退出，接手须等待剩余租期（默认租期 300 秒），同时满足重试时间，随后由队列轮询领取。Runner 准入在同一数据库事务中检查配额并写入 creating，各节点须配置相同额度。运行中任务恢复、Deploy 和终端的故障切换完成验收前，生产保持一个活动 runnerd。
 - 一次性 SQLite 到 PostgreSQL 迁移工具已退役，完成记录、历史手册及后续运维边界见[迁移退役记录](docs/zh/database-transfer-retirement.md)。
 - CI 会创建全新的 PostgreSQL 与 MySQL schema，并在已有 catalog 上重复执行迁移，再验证 policy-free matching。本地 opt-in 的真实方言命令见 [docs/zh/testing.md](docs/zh/testing.md)。
 - 已有 SQLite `runner_requests` 和 `runner_profiles` 表会在启动时补建缺失的 model columns 和 indexes，不会重建整张表，从而保留历史 runner 字段以及旧 profile rows 和 indexes。创建缺失索引不会重写 rows，但大数据库可能出现短暂的启动 I/O 和锁等待；迁移与查询计划检查见 [docs/zh/testing.md](docs/zh/testing.md)。
@@ -343,7 +343,7 @@ Runner request 列表默认返回最新 100 行，单页最多 500 行，并且�
 | Job 一直卡在 **queued**，runnerd 日志无 webhook 记录 | GitHub App 未订阅事件                    | 进入 GitHub App 设置 → 勾选 **Workflow jobs** 事件                                 |
 | `runner_group_permission_denied`（旧版：`github registration token: status 404`） | 无法访问 owner 组织的组，包括个人 owner 或 App 缺少权限 | 个人仓库清空 `runner_group`；组织仓库检查 App 安装及 Self-hosted runners 权限 |
 | 日志中出现 `invalid signature`                       | Webhook secret 不匹配                    | 确保 `github.webhook_secret` 与 GitHub App/仓库 webhook 设置中的 secret 一致       |
-| `runner start deferred ... at capacity`              | 全局或 spec 并发上限已满                 | 等待运行中的 job 完成，或调大 `max_concurrent_runners` / spec 的 `max_concurrency` |
+| `runner_capacity` 事件 | 全局、规格、账户或仓库并发达到上限 | 根据 `last_error_code` 判断受限维度，等待容量释放或调整该维度的限额 |
 | 沙箱创建失败                                         | 仓库 owner 没有有效的 Sandbox service    | 打开 **Repositories**，选择账户或组织并完成 **Runner readiness**；管理员也可在 `/admin/sandbox_service` 配置适用的兜底 |
 | GitHub 报告 self-hosted runner 失联                  | Runner、Sandbox 或其网络链路停止上报心跳 | 打开 **Admin → Runner 请求**，用 GitHub 显示的 Runner Name（如 `e2b-101445685709`）精确查找请求，再检查诊断结论和生命周期时间线 |
 

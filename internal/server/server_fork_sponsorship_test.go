@@ -279,7 +279,7 @@ func TestForkSponsorshipCapacityAndPublicPolicyBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = srv.persistSandboxServiceSnapshot("at-capacity", snapshot)
+	err = srv.persistSandboxServiceSnapshot(t.Context(), state.RunnerState{ID: "at-capacity"}, snapshot)
 	if !errors.Is(err, errForkSponsorshipAtCapacity) {
 		t.Fatalf("capacity error = %v", err)
 	}
@@ -302,6 +302,77 @@ func TestForkSponsorshipCapacityAndPublicPolicyBoundary(t *testing.T) {
 	_, snapshot, err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), state.RunnerRequest{ID: "unpublished-sponsorship", GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "ubuntu-managed", ProfileSource: "global"})
 	if err != nil || snapshot.Source != sandboxConfigSourceForkSponsorship {
 		t.Fatalf("publication changed independent sponsorship: %#v %v", snapshot, err)
+	}
+}
+
+func TestForkSponsorshipConcurrentAllocation(t *testing.T) {
+	api := forkSponsorshipGitHubServer(t)
+	defer api.Close()
+	dir := t.TempDir()
+	cfg := config.Config{AuthEncryptionKey: "encryption-key", MaxConcurrentRunners: 10}
+	client := github.NewClient(api.URL, api.Client())
+	// Independent connections and Server instances share only the database.
+	servers := []*Server{New(cfg, state.New(dir), client, nil, nil), New(cfg, state.New(dir), client, nil, nil)}
+	store := servers[0].store
+	configureForkSponsorshipTestState(t, servers[0], store, state.ForkSponsorshipModeApprovalRequired, 1)
+	attempts := make([]state.RunnerState, len(servers))
+	snapshots := make([]sandboxServiceConfigSnapshot, len(servers))
+	for i, srv := range servers {
+		id := "fork-" + strconv.Itoa(i)
+		req := state.RunnerRequest{ID: id, GitHubInstallationID: 100, RepositoryFullName: "member/project", ProfileName: "ubuntu-managed", ProfileSource: "global"}
+		_, st, err := store.CreateRequest(req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.Status = state.StatusCreating
+		st.LeaseOwner = id
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		attempts[i] = st
+		_, snapshots[i], err = srv.sandboxServiceAndConfigForRunnerRequestContext(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		index int
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, len(servers))
+	for i, srv := range servers {
+		go func() {
+			<-start
+			results <- result{i, srv.persistSandboxServiceSnapshot(t.Context(), attempts[i], snapshots[i])}
+		}()
+	}
+	close(start)
+	winner, waiting := -1, -1
+	for range servers {
+		out := <-results
+		switch {
+		case out.err == nil:
+			winner = out.index
+		case errors.Is(out.err, errForkSponsorshipAtCapacity):
+			waiting = out.index
+		default:
+			t.Fatalf("allocation failed: %v", out.err)
+		}
+	}
+	if winner == -1 || waiting == -1 {
+		t.Fatalf("expected one reservation and one deferral, got winner=%d waiting=%d", winner, waiting)
+	}
+	st := assertAdmissionState(t, store, attempts[winner].ID, state.StatusCreating)
+	if st.SponsorInstallationID != 200 || st.SponsorSourceRepositoryID != 300 {
+		t.Fatal("winning reservation lost its policy identity")
+	}
+	st.Status = state.StatusCompleted
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	if err := servers[waiting].persistSandboxServiceSnapshot(t.Context(), attempts[waiting], snapshots[waiting]); err != nil {
+		t.Fatalf("reuse released sponsorship slot: %v", err)
 	}
 }
 
@@ -348,7 +419,7 @@ func TestForkSponsorshipReservationRechecksExactApproval(t *testing.T) {
 	if err := store.DeleteForkSponsorshipApproval(200, 300, 400); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.persistSandboxServiceSnapshot("approval-revoked", snapshot); !errors.Is(err, errForkSponsorshipPolicyChanged) {
+	if err := srv.persistSandboxServiceSnapshot(t.Context(), state.RunnerState{ID: "approval-revoked"}, snapshot); !errors.Is(err, errForkSponsorshipPolicyChanged) {
 		t.Fatalf("reservation after approval revocation = %v, want policy changed", err)
 	}
 	got, err := store.ReadState("approval-revoked")

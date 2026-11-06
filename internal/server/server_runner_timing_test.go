@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -20,6 +21,15 @@ type startupTimingStore struct {
 	initialRead      atomic.Bool
 	afterInitialRead func()
 	capacityStage    string
+}
+
+func (s *startupTimingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	if err := s.before("admission_lock_wait"); err != nil {
+		return err
+	}
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&startupTimingStore{Store: tx, before: s.before, capacityStage: s.capacityStage})
+	})
 }
 
 func (s *startupTimingStore) ReadRequest(id string) (state.RunnerRequest, error) {
@@ -140,6 +150,7 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%s/error_%t", stage, fail), func(t *testing.T) {
 				srv, store, batches := newStartupTimingFixture(t)
+				claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
 				var injected atomic.Bool
 				var entered, released time.Time
 				store.before = func(operation string) error {
@@ -155,7 +166,7 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 					return nil
 				}
 				done := make(chan struct{})
-				go func() { srv.startRunner(t.Context(), "timing-start", "test-worker"); close(done) }()
+				go func() { srv.startClaimedRunner(t.Context(), claim); close(done) }()
 				var batch string
 				select {
 				case batch = <-batches:
@@ -210,20 +221,26 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 
 func TestRunnerStartupRecordsAdmissionWaitBeforeProfileLookup(t *testing.T) {
 	srv, store, batches := newStartupTimingFixture(t)
-	read := make(chan struct{})
-	store.afterInitialRead = func() { close(read) }
-	srv.admissionMu.Lock()
+	claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
+	entered, release := make(chan struct{}), make(chan struct{})
+	store.before = func(stage string) error {
+		if stage == "admission_lock_wait" {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
 	done := make(chan struct{})
-	go func() { srv.startRunner(t.Context(), "timing-start", "test-worker"); close(done) }()
+	go func() { srv.startClaimedRunner(t.Context(), claim); close(done) }()
 	select {
-	case <-read:
+	case <-entered:
 	case <-time.After(5 * time.Second):
-		srv.admissionMu.Unlock()
-		t.Fatal("initial read did not finish")
+		close(release)
+		t.Fatal("admission did not begin")
 	}
 	time.Sleep(50 * time.Millisecond)
 	released := time.Now()
-	srv.admissionMu.Unlock()
+	close(release)
 	var batch string
 	select {
 	case batch = <-batches:
@@ -251,8 +268,9 @@ func TestRunnerStartupSkipsTimingsWhenCapacityDefers(t *testing.T) {
 	for _, stage := range []string{"global_capacity_check", "profile_capacity_check"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, store, batches := newStartupTimingFixture(t)
+			claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
 			store.capacityStage = stage
-			srv.startRunner(t.Context(), "timing-start", "test-worker")
+			srv.startClaimedRunner(t.Context(), claim)
 			select {
 			case batch := <-batches:
 				t.Fatalf("capacity-only deferral appended timing events: %s", batch)

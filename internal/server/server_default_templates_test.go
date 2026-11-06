@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -271,7 +272,7 @@ func TestRunnerLifecyclePublishedIDTemplateUsesStoredIDWithoutCatalog(t *testing
 	srv.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "us-south-1", SandboxAPIURL: "https://us-south-1.example"}}
 	createLifecycleRequestWithSandboxAPIURL(t, store, "custom-request", "custom", 0, "https://us-south-1.example")
 
-	go srv.startRunner(context.Background(), "custom-request", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "custom-request", "worker-test"))
 	waitForState(t, store, "custom-request", state.StatusRunning)
 
 	inputs := sandbox.startInputs()
@@ -322,7 +323,7 @@ func TestStartRunnerManagedRunnerApplicationsSkipsDownloadLookup(t *testing.T) {
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "managed-applications", "managed", 987)
 
-	go srv.startRunner(context.Background(), "managed-applications", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "managed-applications", "worker-test"))
 	waitForState(t, store, "managed-applications", state.StatusRunning)
 	got, err := store.ReadState("managed-applications")
 	if err != nil {
@@ -363,7 +364,7 @@ func TestStartRunnerCustomRunnerApplicationsMapsValidatedDownload(t *testing.T) 
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "custom-applications", "custom", 987)
 
-	go srv.startRunner(context.Background(), "custom-applications", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "custom-applications", "worker-test"))
 	waitForState(t, store, "custom-applications", state.StatusRunning)
 	got, err := store.ReadState("custom-applications")
 	if err != nil {
@@ -411,7 +412,7 @@ func TestStartRunnerCustomRunnerApplicationsFailsBeforeRegistration(t *testing.T
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "custom-applications-error", "custom", 987)
 
-	srv.startRunner(context.Background(), "custom-applications-error", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "custom-applications-error", "worker-test"))
 	got, err := store.ReadState("custom-applications-error")
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +452,7 @@ func TestStartRunnerCustomRunnerApplicationsRequireSelectedPlatform(t *testing.T
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "custom-windows-applications", "windows", 987)
 
-	srv.startRunner(context.Background(), "custom-windows-applications", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "custom-windows-applications", "worker-test"))
 	got, err := store.ReadState("custom-windows-applications")
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +479,7 @@ func TestRunnerLifecycleRevalidatesGlobalProfileBeforeStarting(t *testing.T) {
 	sandbox := &lifecycleSandboxService{}
 	srv := newRunnerLifecycleTestServer(t, store, "http://127.0.0.1:1", sandbox)
 
-	srv.startRunner(context.Background(), "disabled-global-request", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "disabled-global-request", "worker-test"))
 
 	got, err := store.ReadState("disabled-global-request")
 	if err != nil {
@@ -512,7 +513,7 @@ func TestRunnerLifecycleRejectsNewRequiredLabelsBeforeStarting(t *testing.T) {
 	sandbox := &lifecycleSandboxService{}
 	srv := newRunnerLifecycleTestServer(t, store, "http://127.0.0.1:1", sandbox)
 
-	srv.startRunner(context.Background(), "changed-required-labels", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "changed-required-labels", "worker-test"))
 
 	got, err := store.ReadState("changed-required-labels")
 	if err != nil {
@@ -527,7 +528,11 @@ func TestRunnerLifecycleRejectsNewRequiredLabelsBeforeStarting(t *testing.T) {
 }
 
 func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
-	baseStore := state.New(t.TempDir())
+	dir := t.TempDir()
+	baseStore, probe := state.New(dir), state.New(dir)
+	if err := probe.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 	profile := state.RunnerProfile{Name: "platform-custom", Labels: []string{"self-hosted", "custom"}, RequiredLabels: []string{"custom"}, TemplateID: "custom-template-id", MaxConcurrency: 10, Enabled: true}
 	upsertLifecycleProfile(t, baseStore, profile)
 	created, _, err := baseStore.CreateRequest(state.RunnerRequest{ID: "serialized-profile-reload", Source: "test", RepositoryFullName: "o/r", RequestedLabels: append([]string(nil), profile.Labels...), Labels: append([]string(nil), profile.Labels...), ProfileName: profile.Name, ProfileSource: "global", RunnerName: "e2b-serialized-profile-reload"}, nil)
@@ -539,19 +544,12 @@ func TestRunnerLifecycleSerializesProfileReloadWithMutations(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		srv.startRunner(context.Background(), "serialized-profile-reload", "worker-test")
+		srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "serialized-profile-reload", "worker-test"))
 	}()
 
 	<-store.entered
-	mutationCouldInterleave := srv.admissionMu.TryLock()
-	if mutationCouldInterleave {
-		srv.admissionMu.Unlock()
-	}
-	close(store.release)
+	assertDatabaseGuardHeld(t, probe, store.release)
 	<-done
-	if mutationCouldInterleave {
-		t.Fatal("runner profile reload did not hold the mutation serialization lock")
-	}
 }
 
 func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
@@ -572,7 +570,7 @@ func TestRunnerLifecycleRevalidatesScopedProfileBeforeStarting(t *testing.T) {
 	sandbox := &lifecycleSandboxService{}
 	srv := newRunnerLifecycleTestServer(t, store, "http://127.0.0.1:1", sandbox)
 
-	srv.startRunner(context.Background(), "disabled-scoped-request", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "disabled-scoped-request", "worker-test"))
 
 	got, err := store.ReadState("disabled-scoped-request")
 	if err != nil {
@@ -591,6 +589,12 @@ type blockingProfileLookupStore struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+func (s *blockingProfileLookupStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&blockingProfileLookupStore{Store: tx, entered: s.entered, release: s.release})
+	})
 }
 
 func (s *blockingProfileLookupStore) GetProfile(name string) (state.RunnerProfile, error) {
@@ -622,7 +626,7 @@ func TestProfileForRunnerRequestUsesDirectScopedLookup(t *testing.T) {
 	}
 	srv := &Server{store: &effectiveProfileLookupRejectingStore{Store: baseStore}}
 
-	got, err := srv.profileForRunnerRequest(state.RunnerRequest{
+	got, err := profileForRunnerRequest(srv.store, state.RunnerRequest{
 		ProfileName: want.Name, ProfileSource: "scoped_custom",
 		ProfileScopeType: scope.Type, ProfileScopeID: scope.ID,
 	})
@@ -692,7 +696,7 @@ func TestRunnerLifecycleRetryUsesPersistedSpecWithoutLegacyPolicyOrGroupReads(t 
 	store := &catalogReadRejectingStore{Store: baseStore}
 	sandbox := &lifecycleSandboxService{}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
-	go srv.startRunner(context.Background(), "retry-persisted-spec", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "retry-persisted-spec", "worker-test"))
 	waitForState(t, baseStore, "retry-persisted-spec", state.StatusRunning)
 
 	got, err := baseStore.ReadState("retry-persisted-spec")
@@ -705,6 +709,9 @@ func TestRunnerLifecycleRetryUsesPersistedSpecWithoutLegacyPolicyOrGroupReads(t 
 	inputs := sandbox.startInputs()
 	if len(inputs) != 1 || inputs[0].TemplateID != "persisted-custom-template" || inputs[0].RunnerGroup != "Default" || !equalStrings(inputs[0].Labels, []string{"self-hosted", "e2b", "legacy-admitted-custom"}) {
 		t.Fatalf("retry StartRunner inputs = %#v, want persisted custom profile", inputs)
+	}
+	if !store.loadedUnderGuard.Load() {
+		t.Fatal("retry bypassed the guarded profile lookup fixture")
 	}
 	if store.matchReads != 0 {
 		t.Fatalf("retry rematched the persisted runner spec: match reads=%d", store.matchReads)
@@ -732,7 +739,7 @@ func TestRunnerLifecycleManagedDefaultResolvesBeforeRegistration(t *testing.T) {
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "managed-request", "managed", 987)
 
-	go srv.startRunner(context.Background(), "managed-request", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "managed-request", "worker-test"))
 	waitForState(t, store, "managed-request", state.StatusRunning)
 
 	inputs := sandbox.startInputs()
@@ -758,7 +765,7 @@ func TestRunnerLifecycleDatabasePublicBindingPreservesStartupBehavior(t *testing
 	sandbox := &managedLifecycleSandboxService{lifecycleSandboxService: &lifecycleSandboxService{events: events}, templates: []sandboxrunner.CatalogTemplate{{TemplateID: "scoped-id", Names: []string{"github-runner-ubuntu-24-04"}, BuildID: "00000000-0000-0000-0000-000000000001", BuildStatus: "ready", Public: true}}}
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "database-public", "managed", 987)
-	go srv.startRunner(context.Background(), "database-public", "worker-test")
+	go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "database-public", "worker-test"))
 	waitForState(t, store, "database-public", state.StatusRunning)
 	inputs := sandbox.startInputs()
 	if len(inputs) != 1 || inputs[0].TemplateID != "scoped-id" || !inputs[0].RequireDocker {
@@ -816,7 +823,7 @@ func TestRunnerLifecycleManagedResolutionFailuresAreNonRetryable(t *testing.T) {
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 			createLifecycleRequest(t, store, "resolution-failure", "managed", 987)
 
-			go srv.startRunner(context.Background(), "resolution-failure", "worker-test")
+			go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "resolution-failure", "worker-test"))
 			waitForLifecycleOutcome(t, store, "resolution-failure")
 
 			got, err := store.ReadState("resolution-failure")
@@ -863,7 +870,7 @@ func TestRunnerLifecycleManagedServiceWithoutDefaultTemplateCatalogFailsBeforeRe
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 	createLifecycleRequest(t, store, "catalog-capability-missing", "managed", 987)
 
-	srv.startRunner(context.Background(), "catalog-capability-missing", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "catalog-capability-missing", "worker-test"))
 
 	got, err := store.ReadState("catalog-capability-missing")
 	if err != nil {
@@ -915,7 +922,7 @@ func TestRunnerLifecycleDefaultCatalogErrorsKeepRetryClassification(t *testing.T
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, sandbox)
 			createLifecycleRequest(t, store, "catalog-error", "managed", 987)
 
-			go srv.startRunner(context.Background(), "catalog-error", "worker-test")
+			go srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "catalog-error", "worker-test"))
 			waitForLifecycleOutcome(t, store, "catalog-error")
 
 			got, err := store.ReadState("catalog-error")
@@ -992,7 +999,7 @@ func TestRunnerLifecycleManagedResolutionUsesScopedSandboxServiceWithoutLeakingK
 	}
 	createLifecycleRequest(t, store, "scoped-resolution", "managed", 987)
 
-	srv.startRunner(context.Background(), "scoped-resolution", "worker-test")
+	srv.startClaimedRunner(context.Background(), queuedRunnerForTest(t, srv.store, "scoped-resolution", "worker-test"))
 
 	got, err := store.ReadState("scoped-resolution")
 	if err != nil {
@@ -1039,7 +1046,7 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 	firstServer := newRunnerLifecycleTestServer(t, store, ghServer.URL, firstSandbox)
 	firstServer.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "region-a", SandboxAPIURL: "https://region-a.example"}}
 	createLifecycleRequestWithSandboxAPIURL(t, store, "region-a", "managed", 101, "https://region-a.example")
-	go firstServer.startRunner(context.Background(), "region-a", "worker-a")
+	go firstServer.startClaimedRunner(context.Background(), queuedRunnerForTest(t, firstServer.store, "region-a", "worker-a"))
 	waitForState(t, store, "region-a", state.StatusRunning)
 
 	secondSandbox := &managedLifecycleSandboxService{
@@ -1055,7 +1062,7 @@ func TestRunnerLifecycleManagedResolutionDoesNotCacheOrRewriteProfile(t *testing
 	secondServer := newRunnerLifecycleTestServer(t, store, ghServer.URL, secondSandbox)
 	secondServer.cfg.SandboxRegions = []config.SandboxRegionConfig{{ID: "region-b", SandboxAPIURL: "https://region-b.example"}}
 	createLifecycleRequestWithSandboxAPIURL(t, store, "region-b", "managed", 202, "https://region-b.example")
-	go secondServer.startRunner(context.Background(), "region-b", "worker-b")
+	go secondServer.startClaimedRunner(context.Background(), queuedRunnerForTest(t, secondServer.store, "region-b", "worker-b"))
 	waitForState(t, store, "region-b", state.StatusRunning)
 
 	firstInputs := firstSandbox.startInputs()
@@ -1126,12 +1133,36 @@ type profileLoadRecordingStore struct {
 
 type catalogReadRejectingStore struct {
 	state.Store
-	matchReads int
+	matchReads       int
+	loadedUnderGuard atomic.Bool
+	onGuardedLookup  func()
+}
+
+func (s *catalogReadRejectingStore) GetProfile(name string) (state.RunnerProfile, error) {
+	if s.onGuardedLookup != nil {
+		s.onGuardedLookup()
+	}
+	return s.Store.GetProfile(name)
 }
 
 func (s *catalogReadRejectingStore) MatchProfile(string, []string) (state.ProfileMatch, error) {
 	s.matchReads++
 	return state.ProfileMatch{}, errors.New("retry must not rematch the persisted runner spec")
+}
+
+func (s *profileLoadRecordingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&profileLoadRecordingStore{Store: tx, events: s.events})
+	})
+}
+
+func (s *catalogReadRejectingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		wrapped := &catalogReadRejectingStore{Store: tx, onGuardedLookup: func() { s.loadedUnderGuard.Store(true) }}
+		err := mutation(wrapped)
+		s.matchReads += wrapped.matchReads
+		return err
+	})
 }
 
 func (s *profileLoadRecordingStore) GetProfile(name string) (state.RunnerProfile, error) {

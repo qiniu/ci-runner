@@ -204,6 +204,14 @@ type runnerEventRecord struct {
 
 func (runnerEventRecord) TableName() string { return "runner_events" }
 
+// Fixed rows guard capacity updates and catalog edits. In-flight capacity
+// lives in runner_requests.
+type runnerAdmissionGuardRecord struct {
+	ID int `gorm:"primaryKey;autoIncrement:false"`
+}
+
+func (runnerAdmissionGuardRecord) TableName() string { return "runner_admission_guard" }
+
 type runnerProfileRecord struct {
 	TemplateSource      string    `gorm:"column:template_source;not null;default:''"`
 	Published           bool      `gorm:"column:published;not null;default:false"`

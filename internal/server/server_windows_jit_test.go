@@ -99,7 +99,7 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 			defer cancel()
 			// Let the successful fake command exit after the state reaches running.
 			if fail {
-				srv.startRunner(ctx, "win-jit", "test-worker")
+				srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, "win-jit", "test-worker"))
 				if scenario == "rate limited" || scenario == "secondary rate limited" {
 					pending, err := store.ReadState("win-jit")
 					if err != nil || pending.Status != state.StatusQueued || pending.NextRetryAt.IsZero() || removed.Load() {
@@ -125,7 +125,7 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 					t.Fatal("pre-created Runner leaked after Sandbox failure")
 				}
 			} else {
-				go srv.startRunner(ctx, "win-jit", "test-worker")
+				go srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, "win-jit", "test-worker"))
 				waitForState(t, store, "win-jit", state.StatusRunning)
 				in := service.startInputs()
 				if len(in) != 1 || in[0].RegistrationToken != "" || in[0].JITConfig == "" || in[0].RequireDocker {
@@ -255,7 +255,16 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 // A nanosecond in-memory attempt token must not reject its own persisted row.
 type windowsTimestampPrecisionStore struct{ state.Store }
 
+func (s *windowsTimestampPrecisionStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error { return mutation(&windowsTimestampPrecisionStore{tx}) })
+}
+
 func (s *windowsTimestampPrecisionStore) WriteState(st state.RunnerState) error {
 	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
 	return s.Store.WriteState(st)
+}
+
+func (s *windowsTimestampPrecisionStore) WriteQueuedClaim(st state.RunnerState, owner string) error {
+	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
+	return s.Store.WriteQueuedClaim(st, owner)
 }

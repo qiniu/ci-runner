@@ -247,6 +247,7 @@ type RunnerState struct {
 	CreatedAt                       time.Time `json:"created_at"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
+	queueRetryDelay                 *time.Duration
 	CreatingAt                      time.Time `json:"creating_at,omitempty"`
 	RunningAt                       time.Time `json:"running_at,omitempty"`
 	StoppingAt                      time.Time `json:"stopping_at,omitempty"`
@@ -255,6 +256,14 @@ type RunnerState struct {
 	LeaseOwner                      string    `json:"lease_owner,omitempty"`
 	LeaseExpiresAt                  time.Time `json:"lease_expires_at,omitempty"`
 	Version                         int64     `json:"version"`
+}
+
+// ScheduleQueuedRetry makes the next queued-state write derive the deadline from
+// the database clock. A state read from storage retains its absolute deadline
+// across unrelated writes, including writes after a process restart.
+func (st *RunnerState) ScheduleQueuedRetry(delay time.Duration) {
+	st.NextRetryAt = time.Time{}
+	st.queueRetryDelay = &delay
 }
 
 // RunnerRequestListOptions controls admin Runner request filtering and pagination.
@@ -538,6 +547,9 @@ type SandboxServiceDefaultAudience struct {
 }
 
 type RunnerRequestStore interface {
+	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	WithRunnerEnqueue(ctx context.Context, mutation func(Store) error) error
+	WithRunnerCatalogMutation(ctx context.Context, mutation func(Store) error) error
 	Ensure() error
 	CreateRequest(req RunnerRequest, payload []byte) (bool, RunnerState, error)
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)
@@ -563,8 +575,8 @@ type RunnerRequestStore interface {
 	InFlightCountForProfile(name string) (int, error)
 	ActiveCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
-	ClaimNextRunnable(workerID string, now time.Time, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
-	ReleaseLease(id, workerID string) error
+	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
+	WriteQueuedClaim(st RunnerState, owner string) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
 	AppendStagedLog(id, name, stage string, data []byte)

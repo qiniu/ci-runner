@@ -111,7 +111,7 @@ Operators can set `worker.account_concurrency_limits` by GitHub repository owner
 Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.
-- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported but multi-instance operation on a shared database has not been verified.
+- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported. On restart, queued requests keep their leases. If a worker dies after claiming a request, the queue can reclaim it on a poll after both the lease (default 300 seconds) and any retry delay have expired. Runner admission checks capacity and commits the creating state in one database transaction. Keep worker limits identical across nodes. Production remains at one active runnerd pending running-attempt recovery, Deploy and terminal failover acceptance.
 - The one-time SQLite-to-PostgreSQL transfer tool is retired; see [the retirement record](docs/database-transfer-retirement.md) for archived procedures and remaining operational work.
 - CI creates fresh PostgreSQL and MySQL schemas and reruns migration against an existing catalog before exercising policy-free matching. See [docs/testing.md](docs/testing.md) for the opt-in local real-dialect command.
 - Existing SQLite `runner_requests` and `runner_profiles` tables add missing model columns and indexes on startup without table recreation. This preserves historical runner values plus legacy profile rows and indexes. Creating missing indexes does not rewrite rows, but it can add brief startup I/O and lock contention on a large database; see [docs/testing.md](docs/testing.md) for migration and query-plan checks.
@@ -349,7 +349,7 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | Job stays **queued** forever, no webhook in runnerd logs | GitHub App has no subscribed events | Go to GitHub App settings → Subscribe to **Workflow jobs** event |
 | `runner_group_permission_denied` (legacy: `github registration token: status 404`) | Group lookup cannot access the owner organization, including personal-account owners or missing App permissions | Leave `runner_group` empty for personal repositories; for organizations, check the App installation and Self-hosted runners permission |
 | `invalid signature` in logs | Webhook secret mismatch | Ensure `github.webhook_secret` matches the secret in GitHub App/repo webhook settings |
-| `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
+| `runner_capacity` event | Global, spec, account or repository limit reached | Check the dimension in `last_error_code`. Wait for capacity or adjust that limit |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |
 | GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Runner Requests**, look up the Runner Name shown by GitHub (for example, `e2b-101445685709`), and inspect the request resource's findings and lifecycle timeline |
 
