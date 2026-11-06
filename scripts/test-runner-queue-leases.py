@@ -16,26 +16,46 @@ import sys
 import tempfile
 import time
 import uuid
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
 def psql_connection(dsn):
-    """Keep libpq passwords out of argv, preserving URI and keyword DSNs."""
+    """Keep libpq passwords out of argv, preserving URI and keyword DSNs.
+
+    >>> psql_connection("postgres:///runnerd_test")
+    ('postgres:///runnerd_test', None)
+    >>> psql_connection("postgresql:///db?host=/tmp&password=x%23y")
+    ('postgresql:///db?host=/tmp', 'x#y')
+    >>> psql_connection("postgresql://ci:x#y?z@[::1],db/db")
+    ('postgresql://ci@[::1],db/db', 'x#y?z')
+    >>> psql_connection("postgres://ci:old@db/db?password=new&sslmode=require")
+    ('postgres://ci@db/db?sslmode=require', 'new')
+    >>> psql_connection("user=ci password='x y' host=/tmp")
+    ('user=ci host=/tmp', 'x y')
+    """
     password = None
     if dsn.startswith(("postgres://", "postgresql://")):
-        uri = urlsplit(dsn)
-        userinfo, at, hosts = uri.netloc.rpartition("@")
-        user, colon, encoded = userinfo.partition(":")
-        if colon:
-            password = unquote(encoded)
-        query = []
-        for item in uri.query.split("&"):
+        scheme, _, rest = dsn.partition("://")
+        # libpq looks for userinfo before the first slash. A raw ? or #
+        # before the @ can belong to the password.
+        credentials = re.match(r"([^/@]*)@", rest)
+        if credentials:
+            user, colon, encoded = credentials.group(1).partition(":")
+            if colon:
+                password = unquote(encoded)
+            rest = user + "@" + rest[credentials.end():]
+        address, _, query = rest.partition("?")
+        options = []
+        for item in query.split("&") if query else []:
             key, _, value = item.partition("=")
             if unquote(key) == "password":
                 password = unquote(value)
             else:
-                query.append(item)
-        return urlunsplit(uri._replace(netloc=user + at + hosts, query="&".join(query))), password
+                options.append(item)
+        safe = scheme + "://" + address
+        if options:
+            safe += "?" + "&".join(options)
+        return safe, password
 
     # libpq keyword values support single quotes and backslash-escaped bytes.
     # Preserve each non-password option verbatim, including its quoting.
