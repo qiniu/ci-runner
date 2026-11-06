@@ -381,12 +381,12 @@ echo 'Status: ready'
 	for _, want := range []string{
 		`name = "github-runner-windows-11"`,
 		`from_template = "windows11"`,
-		`min_free_disk_mb = 53760`,
+		`min_free_disk_mb = 51200`,
 		`runnerd.min_free_disk_mb = 51200`,
 		`dockerfile = "./Dockerfile"`,
 		`path = ".."`,
 	} {
-		if !strings.Contains(string(config), want+"\n") {
+		if !strings.Contains("\n"+string(config), "\n"+want+"\n") {
 			t.Fatalf("qshell config does not contain %q:\n%s", want, config)
 		}
 	}

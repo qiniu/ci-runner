@@ -41,7 +41,7 @@ case "$*" in
     echo 'Template fixture published'
     ;;
   sandbox\ template\ build\ --wait\ --config\ *)
-    grep -Fxq 'min_free_disk_mb = 86016' "${*: -1}"
+    grep -Fxq 'min_free_disk_mb = 81920' "${*: -1}"
     grep -Fq 'name = "github-runner-ubuntu-24-04-large"' "${*: -1}"
     echo 'Template ID: existing-template-id'
     echo 'Build ID: fixture-build-id'
@@ -175,7 +175,7 @@ cat >"$workdir/nested.toml" <<'CONFIG'
 name = "github-runner-ubuntu-24-04-large"
 runnerd.min_free_disk_mb = 81920
 [release]
-min_free_disk_mb = 86016
+min_free_disk_mb = 81920
 CONFIG
 expect_failure 'expected flat single-line TOML' \
   bash "$operation_script" build "$workdir/nested.toml"

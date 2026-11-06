@@ -16,7 +16,6 @@ Build the standard template with `task template-build-ubuntu-26-04`, using
 `task template-build-ubuntu-26-04-large`, using
 `qshell.sandbox.large.toml`. Both configs use this directory's Dockerfile and
 request 8 vCPUs and 8192 MiB of memory; release requires 20 GiB and 80 GiB available, respectively.
-Creation requests include 5% extra for filesystem overhead.
 
 Qshell applies the free-space setting only on creation. For a same-name
 rebuild, verify the available space in a fresh Sandbox before promotion. Neither tracked config

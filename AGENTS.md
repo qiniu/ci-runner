@@ -158,12 +158,12 @@ restore cached `/tmp` outputs. Each of the four per-Ubuntu source directories
 contains `qshell.sandbox.toml` and `qshell.sandbox.large.toml`; do not recreate
 separate `-large` directories or source links. Keep every qshell `path = ".."`.
 Ubuntu release smoke requires 20 GiB available on standard templates and
-80 GiB on large templates (`runnerd.min_free_disk_mb`). New template requests
-include 5% extra for filesystem overhead (`min_free_disk_mb`). Same-name
-rebuilds keep the existing disk setting. Publish and catalog checks use the
+80 GiB on large templates (`runnerd.min_free_disk_mb`). New templates request
+the release minimum via `min_free_disk_mb`. With qshell 2.20.0, same-name
+rebuilds use the team default for free space. Publish and catalog checks use the
 release minimum as a lower bound on total disk size. Verify available space
 in a fresh Sandbox before publication.
-Windows requires 50 GiB available on C: and requests 53,760 MiB on creation.
+Windows requires 50 GiB available on C: and requests 51,200 MiB on creation.
 Build tasks
 stage ignored archive chunks under
 `templates/common/.build/`; reuse verified chunks without replacing them so

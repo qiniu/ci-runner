@@ -14,8 +14,7 @@ dockerfile = "./Dockerfile"
 path = ".."
 cpu_count = 8
 memory_mb = 8192
-# Request 5% above the release minimum for filesystem overhead.
-min_free_disk_mb = 53760
+min_free_disk_mb = 51200
 ready_cmd = "ver"
 no_cache = false
 

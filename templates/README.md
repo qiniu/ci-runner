@@ -38,9 +38,9 @@ labels were end-to-end verified by
 on 2026-08-04 CST; every request completed and its Sandbox was cleaned.
 
 Ubuntu release smoke requires 20 GiB available on standard templates and
-80 GiB on large templates (`runnerd.min_free_disk_mb`). New template requests
-include 5% extra for filesystem overhead (`min_free_disk_mb`). Same-name
-rebuilds keep the existing disk setting. Publish and catalog checks use the
+80 GiB on large templates (`runnerd.min_free_disk_mb`). New templates request
+the release minimum via `min_free_disk_mb`. With qshell 2.20.0, same-name
+rebuilds use the team default for free space. Publish and catalog checks use the
 release minimum as a lower bound on total disk size. Verify available space
 in a fresh Sandbox before publication.
 

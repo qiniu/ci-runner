@@ -1269,7 +1269,7 @@ func TestRunnerTemplateQshellBuildUsesTemporaryConfigAndRequiresReady(t *testing
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(templateDir, "qshell.sandbox.toml")
-	const trackedConfig = "name = \"fixture-template\"\nmin_free_disk_mb = 21504\nrunnerd.min_free_disk_mb = 20480\n"
+	const trackedConfig = "name = \"fixture-template\"\nmin_free_disk_mb = 20480\nrunnerd.min_free_disk_mb = 20480\n"
 	if err := os.WriteFile(configPath, []byte(trackedConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1404,7 +1404,7 @@ func TestRunnerTemplateQshellPublicationUsesResolvedTemplateID(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(templateDir, "qshell.sandbox.large.toml"),
-		[]byte("name = \"fixture-template\"\nmin_free_disk_mb = 21504\nrunnerd.min_free_disk_mb = 20480\n"),
+		[]byte("name = \"fixture-template\"\nmin_free_disk_mb = 20480\nrunnerd.min_free_disk_mb = 20480\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)

@@ -169,11 +169,10 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   if [[ "$image_key" == *-large ]]; then
     expected_mib=81920
   fi
-  requested_mib=$((expected_mib * 105 / 100))
   test "$(template_disk_mib "$config_path" runnerd.min_free_disk_mb)" = "$expected_mib" ||
     fail "$image_key must provide $expected_mib MiB free at release"
-  test "$(template_disk_mib "$config_path" min_free_disk_mb)" = "$requested_mib" ||
-    fail "$image_key must request $requested_mib MiB free on creation"
+  test "$(template_disk_mib "$config_path" min_free_disk_mb)" = "$expected_mib" ||
+    fail "$image_key must request $expected_mib MiB free on creation"
 
   base_reference="$(
     awk '

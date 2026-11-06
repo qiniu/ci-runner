@@ -22,7 +22,7 @@ large workflow 矩阵；catalog 和生产证据保留在
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 
 Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
-qshell 新建模板时通过 `min_free_disk_mb` 额外请求 5%，用于文件系统开销。同名重建沿用已有磁盘设置。
+qshell 新建模板时通过 `min_free_disk_mb` 请求对应的验收值。qshell 2.20.0 同名重建时使用团队默认空闲空间。
 发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
 
 每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`

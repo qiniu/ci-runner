@@ -21,7 +21,7 @@
 ## 资源规格说明
 
 标准模板提供 8 vCPU 和 8 GiB 内存，Ubuntu 的 `-large` 变体与对应标准模板使用相同的软件。
-表格列出发布前实测的可用空间下限。新建模板时会向 Sandbox provider 额外请求 5%，已有模板的可用空间可能更少。
+新建模板时按表中的下限向 Sandbox provider 请求可用空间，发布前会实测验收。已有模板的可用空间可能更少。
 在 Ubuntu 上用 `df -h /` 查看当前可用空间，在 Windows 上用 PowerShell 执行 `(Get-PSDrive C).Free`。
 
 `ubuntu-latest-large` 是指向同一个 Ubuntu 24.04 large 物理模板的逻辑标签，不会新增物理镜像。

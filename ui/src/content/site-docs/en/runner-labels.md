@@ -22,8 +22,8 @@ Use a supported Qiniu label pair from the table below to select a Sandbox templa
 
 The standard templates provide 8 vCPU and 8 GiB of memory. Ubuntu `-large`
 variants use the same software as the corresponding standard template.
-The table shows the available-space target checked before publication. New builds
-request an additional 5% from the Sandbox provider. Older templates can have less space. Check `df -h /` on
+New templates request the available space shown in the table from the Sandbox provider.
+Release checks verify the available space before publication. Older templates can have less space. Check `df -h /` on
 Ubuntu or `(Get-PSDrive C).Free` in PowerShell for the space available to a job.
 
 `ubuntu-latest-large` is a logical label for the same physical template as

@@ -428,7 +428,7 @@ review 和合并由人工完成。
 
 模板源码验证要求 Node.js 24，模板构建要求 qshell 2.20.0 或更高版本。
 Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
-qshell 新建模板时通过 `min_free_disk_mb` 额外请求 5%，用于文件系统开销。同名重建沿用已有磁盘设置。
+qshell 新建模板时通过 `min_free_disk_mb` 请求对应的验收值。qshell 2.20.0 同名重建时使用团队默认空闲空间。
 发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
 2.337.0 基线已完成双区域、8 模板重建、catalog、标准
 workflow 与 large workflow 门槛，证据保留在
