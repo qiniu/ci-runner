@@ -176,7 +176,7 @@ jobs:
       - run: cd ui && bun install --frozen-lockfile && bun run build
       - name: Verify schema, catalog, deployments, and migrations on SQL backends
         run: |
-          go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
+          go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|PostgresPoolBudget|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
           go test ./internal/server -run 'Test(PlatformSpecRevisionPostgres|ConcurrentPostgresStartup)SQLBackends' -count=1 -v
 
   ui-production-smoke:

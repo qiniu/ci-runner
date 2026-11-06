@@ -11,6 +11,27 @@ import (
 	"github.com/qiniu/ci-runner/internal/config"
 )
 
+func TestPostgresPoolBudgetSQLBackends(t *testing.T) {
+	dsn := isolatedPostgresDSN(t)
+	for _, limit := range []int{0, 1, 4} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			store := NewWithOptions(Options{Backend: BackendPostgres, DatabaseDSN: dsn, PostgresMaxOpenConns: limit}).(*DBStore)
+			db, err := store.open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeTestDB(t, db)
+			pool, err := db.DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := pool.Stats().MaxOpenConnections; got != limit {
+				t.Fatalf("got %d, want %d", got, limit)
+			}
+		})
+	}
+}
+
 func TestPostgresObfuscatedPasswordSQLBackends(t *testing.T) {
 	for _, mode := range []string{"password", "whole DSN"} {
 		t.Run(mode, func(t *testing.T) {

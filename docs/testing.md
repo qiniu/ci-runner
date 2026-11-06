@@ -1250,8 +1250,10 @@ Run the PostgreSQL checks against a dedicated `_test` database:
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+For a PostgreSQL deployment, set `database.postgres_max_open_connections` to cap the application pool per process. A missing or zero value leaves the pool unbounded. Budget the sum of the caps for all simultaneously running processes, including rollout overlap, plus reserved connections, other clients and maintenance headroom, within PostgreSQL’s `max_connections`. Size the cap in preproduction using real request concurrency and database latency. Requests can wait for a free connection when the pool is full.
 
 On PostgreSQL, concurrent startups serialize schema checks, migrations and backfills in a database-wide transaction. A waiting process sees the preceding commit. Killing a migrator rolls back that transaction, and PostgreSQL releases the lock. A paused client is limited by the shorter of its configured idle-in-transaction timeout and 60 seconds. Plan larger migrations in a separate release window because DDL locks last until commit.
 

@@ -1139,8 +1139,10 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+可通过 `database.postgres_max_open_connections` 设置每个 runnerd 进程的 PostgreSQL 连接上限。省略或设为 0 时连接池无上限。预算应包含所有同时在线进程的上限之和（包括发布时重叠的副本）、预留连接、其他客户端和运维余量，总数须在 PG 的 `max_connections` 内。连接池满后，请求会等待空闲连接；在预生产按真实请求并发量和数据库延迟确定上限。
 
 PostgreSQL 上的并发启动会在数据库级事务内串行执行结构检查、迁移和回填。等待进程可以看到前一个迁移已提交的结果。迁移进程退出后，PostgreSQL 回滚事务并释放锁；客户端暂停时，空闲事务超时取运维配置与 60 秒中的较短值。DDL 锁会持续到事务提交，较大的迁移应安排独立发布窗口。
 

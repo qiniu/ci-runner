@@ -4,12 +4,47 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gopkg.in/yaml.v3"
 )
+
+func TestLoadFilePostgresPoolBudget(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		limit   int
+		invalid bool
+	}{{"postgres", 0, false}, {"postgres", 4, false}, {"postgres", -1, true}, {"sqlite", 4, true}, {"mysql", 4, true}} {
+		t.Run(fmt.Sprintf("%s/%d", tc.backend, tc.limit), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "runnerd.yaml")
+			data := fmt.Sprintf(`database: {backend: %s, dsn: fixture, postgres_max_open_connections: %d}
+auth: {session_secret: fixture, encryption_key: fixture}
+github: {token: fixture, webhook_secret: fixture, oauth: {client_id: fixture, client_secret: fixture}}
+sandbox: {regions: [{id: local, label: Local, sandbox_api_url: "https://sandbox.example.test"}]}
+`, tc.backend, tc.limit)
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFile(path)
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), "database.postgres_max_open_connections") {
+					t.Fatalf("expected pool limit validation, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.PostgresMaxOpenConns != tc.limit {
+				t.Fatalf("got %d, want %d", cfg.PostgresMaxOpenConns, tc.limit)
+			}
+		})
+	}
+}
 
 func TestParsePostgresDSNPasswordFormats(t *testing.T) {
 	password := "spaces 'quotes' \\ :/@?&= 中文"

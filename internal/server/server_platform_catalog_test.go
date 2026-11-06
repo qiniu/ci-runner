@@ -270,7 +270,7 @@ func TestConcurrentPostgresStartupSQLBackends(t *testing.T) {
 		done := make(chan error, nodes)
 		for range nodes {
 			go func() {
-				store := state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn, MigrateOnStart: true})
+				store := state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn, PostgresMaxOpenConns: 1, MigrateOnStart: true})
 				<-start
 				done <- store.Ensure()
 			}()

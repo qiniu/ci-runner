@@ -176,6 +176,7 @@ func (s *DBStore) open() (*gorm.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+		pool.SetMaxOpenConns(s.opts.PostgresMaxOpenConns)
 		db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), cfg)
 		if err != nil {
 			pool.Close()
