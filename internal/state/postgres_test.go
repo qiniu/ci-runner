@@ -11,6 +11,37 @@ import (
 	"github.com/qiniu/ci-runner/internal/config"
 )
 
+// Separate connections enter startup together on both an empty and a populated
+// schema. The first case used to fail with duplicate pg_type entries.
+func TestConcurrentPostgresStartupSQLBackends(t *testing.T) {
+	dsn := isolatedPostgresDSN(t)
+	const nodes = 3
+	for _, phase := range []string{"cold", "restart"} {
+		start := make(chan struct{})
+		done := make(chan error, nodes)
+		for range nodes {
+			go func() {
+				store := NewWithOptions(Options{Backend: BackendPostgres, DatabaseDSN: dsn, PostgresMaxOpenConns: 1, MigrateOnStart: true}).(*DBStore)
+				<-start
+				db, err := store.dbOrEnsure()
+				if err == nil {
+					t.Cleanup(func() { closeTestDB(t, db) })
+				}
+				done <- err
+			}()
+		}
+		close(start)
+		for range nodes {
+			if err := <-done; err != nil {
+				t.Errorf("%s startup: %v", phase, err)
+			}
+		}
+		if t.Failed() {
+			t.FailNow()
+		}
+	}
+}
+
 func TestPostgresPoolBudgetSQLBackends(t *testing.T) {
 	dsn := isolatedPostgresDSN(t)
 	for _, limit := range []int{0, 1, 4} {

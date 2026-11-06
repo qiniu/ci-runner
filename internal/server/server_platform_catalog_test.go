@@ -256,33 +256,3 @@ func catalogServerTestDSN(t *testing.T) string {
 	}
 	return dsn + " search_path=" + schema
 }
-
-// Separate connections enter startup together on both an empty and a populated
-// schema. The first case used to fail with duplicate pg_type entries.
-func TestConcurrentPostgresStartupSQLBackends(t *testing.T) {
-	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
-		t.Skip("requires dedicated PostgreSQL test database")
-	}
-	dsn := catalogServerTestDSN(t)
-	const nodes = 3
-	for _, phase := range []string{"cold", "restart"} {
-		start := make(chan struct{})
-		done := make(chan error, nodes)
-		for range nodes {
-			go func() {
-				store := state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn, PostgresMaxOpenConns: 1, MigrateOnStart: true})
-				<-start
-				done <- store.Ensure()
-			}()
-		}
-		close(start)
-		for range nodes {
-			if err := <-done; err != nil {
-				t.Errorf("%s startup: %v", phase, err)
-			}
-		}
-		if t.Failed() {
-			t.FailNow()
-		}
-	}
-}
