@@ -391,6 +391,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if st.Status != state.StatusQueued || st.Version != claim.Version || st.LeaseOwner != workerID {
 		s.logger.Info("runner start skipped after queue claim changed", "id", id, "status", st.Status, "state_version", st.Version, "claim_version", claim.Version, "lease_owner", st.LeaseOwner, "worker", workerID)
 		unlock()
+		s.store.AppendLog(id, "control.log", fmt.Appendf(nil, "runner start skipped after queue claim changed: status=%s claim_version=%d state_version=%d\n", st.Status, claim.Version, st.Version))
 		return
 	}
 	if !req.CreatedAt.IsZero() {
@@ -489,7 +490,9 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if err := s.persistSandboxServiceSnapshot(id, sandboxConfig); err != nil {
 		timings.record("sandbox_snapshot", snapshotStartedAt)
 		if errors.Is(err, errForkSponsorshipAtCapacity) || errors.Is(err, errForkSponsorshipPolicyChanged) {
-			s.deferCreatingRequest(id, workerID, 5*time.Second)
+			// WriteQueuedClaim committed creating at the version following the claim.
+			st.Version++
+			s.deferCreatingRequest(st, 5*time.Second)
 			s.signalQueue()
 			return
 		}
@@ -2176,15 +2179,18 @@ func (s *Server) deferQueuedRequest(claim state.RunnerState, delay time.Duration
 	}
 }
 
-func (s *Server) deferCreatingRequest(id, workerID string, delay time.Duration) {
+func (s *Server) deferCreatingRequest(attempt state.RunnerState, delay time.Duration) {
+	id := attempt.ID
 	unlock := s.lockRunner(id)
 	defer unlock()
 	st, err := s.store.ReadState(id)
 	if err != nil {
-		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
-		return
+		// A transient read failure need not strand this request until recovery.
+		// WriteState can only requeue an unchanged, committed creating version.
+		s.logger.Warn("read state for sponsored queue defer", "id", id, "error", err)
+		st = attempt
 	}
-	if st.Status != state.StatusCreating || st.LeaseOwner != workerID || st.SandboxID != "" {
+	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || !st.LastAttemptAt.Equal(attempt.LastAttemptAt) || st.SandboxID != "" {
 		return
 	}
 	st.Status = state.StatusQueued
