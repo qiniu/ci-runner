@@ -15,7 +15,7 @@ import (
 )
 
 func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
-	for _, change := range []string{"authorized", "completed", "sandbox replaced", "repository changed", "revoked", "token rejected", "GitHub unavailable"} {
+	for _, change := range []string{"authorized", "completed", "sandbox replaced", "attempt replaced", "repository changed", "revoked", "token rejected", "GitHub unavailable"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			var changed atomic.Bool
@@ -102,6 +102,8 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 				st.Status = state.StatusCompleted
 			case "sandbox replaced":
 				st.SandboxID = "replacement-sandbox"
+			case "attempt replaced":
+				st.LastAttemptAt = st.LastAttemptAt.Add(time.Second)
 			case "repository changed":
 				st.RepositoryFullName = "hubot/other"
 			}
@@ -112,7 +114,7 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 			srv.invalidateUserRepositoryAccess(account.ID)
 			wait := 45 * time.Second
 			switch change {
-			case "completed", "sandbox replaced", "repository changed":
+			case "completed", "sandbox replaced", "attempt replaced", "repository changed":
 				wait = 15 * time.Second
 			case "authorized":
 				wait = 35 * time.Second
@@ -152,5 +154,105 @@ func TestUserRunnerTerminalRevalidatesAttachedSession(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunnerTerminalBelongsToOpeningAccountAndAttempt(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveActiveInstallationFixture(w, r, 987) {
+			return
+		}
+		if r.URL.Path == "/user/installations/987/repositories" {
+			fmt.Fprint(w, `{"repositories":[{"id":42,"full_name":"hubot/project"}]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer gh.Close()
+	store := state.New(t.TempDir())
+	fake := &fakeSandbox{}
+	srv := newTestServer(t, store, gh.URL, fake)
+	srv.Close()
+	srv.loopCtx = t.Context()
+	srv.terminals = newTerminalHub(nil)
+	defer srv.terminals.Close()
+	for _, subject := range []string{"hubot-id", "peer-id"} {
+		account, _, err := store.EnsureAccountForOAuthIdentity(state.OAuthIdentity{OAuthProvider: "github", OAuthSubject: subject, OAuthLogin: subject}, "user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "fixture-token")
+		if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987, AccountLogin: "hubot", AccountType: "Organization"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, st, err := store.CreateRequest(state.RunnerRequest{ID: "terminal-owner", GitHubInstallationID: 987, RepositoryFullName: "hubot/project", RunnerName: "test-runner"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Status, st.SandboxID = state.StatusRunning, "same-sandbox"
+	st.LastAttemptAt = time.Now().UTC()
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	call := func(subject, method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		req := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
+		req.AddCookie(testSessionCookie(subject, subject, "user"))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+	path := "/user/runner_requests/" + st.ID + "/terminal"
+	created := call("hubot-id", http.MethodPost, path, `{}`)
+	var response struct {
+		ID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &response); err != nil || created.Code != 201 || response.ID == "" {
+		t.Fatal("create terminal", created.Code, err)
+	}
+	session := path + "/" + response.ID
+	// Both accounts can see this Job. Possessing its session ID must not
+	// let a colleague read, write, resize, or close the opening user's PTY.
+	for _, op := range []struct{ method, suffix, body string }{
+		{http.MethodGet, "/events", ""},
+		{http.MethodPost, "/input", `{"data":"peer"}`},
+		{http.MethodPost, "/resize", `{"cols":80,"rows":24}`},
+		{http.MethodDelete, "", ""},
+	} {
+		if rec := call("peer-id", op.method, session+op.suffix, op.body); rec.Code != http.StatusNotFound {
+			t.Fatalf("peer %s %s returned %d", op.method, op.suffix, rec.Code)
+		}
+	}
+	if rec := call("hubot-id", http.MethodPost, session+"/input", `{"data":"owner"}`); rec.Code != http.StatusAccepted || fake.terminal.isClosed() {
+		t.Fatal("owner lost shell", rec.Code)
+	}
+	current, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.LastAttemptAt = current.LastAttemptAt.Add(time.Second)
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	if rec := call("hubot-id", http.MethodPost, session+"/input", `{"data":"after replacement"}`); rec.Code != http.StatusNotFound {
+		t.Fatal("old session reached a later attempt", rec.Code)
+	}
+
+	// The provider may finish opening a PTY after the request has moved on.
+	fake.onTerminalOpen = func() {
+		current, err := store.ReadState(st.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current.LastAttemptAt = current.LastAttemptAt.Add(time.Second)
+		if err := store.WriteState(current); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec := call("hubot-id", http.MethodPost, path, `{}`); rec.Code != http.StatusConflict || !fake.terminal.isClosed() {
+		t.Fatal("stale PTY escaped open", rec.Code)
 	}
 }

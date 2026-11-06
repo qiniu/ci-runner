@@ -285,25 +285,30 @@ func (s *terminalSession) closeWatchers() {
 }
 
 func (s *Server) userRunnerState(w http.ResponseWriter, r *http.Request) (state.RunnerState, bool) {
+	st, _, ok := s.userRunnerStateAndAccount(w, r)
+	return st, ok
+}
+
+func (s *Server) userRunnerStateAndAccount(w http.ResponseWriter, r *http.Request) (state.RunnerState, int64, bool) {
 	_, account, ok := s.requireUserSession(w, r)
 	if !ok {
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "runner not found")
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	access, err := s.userAuthorizedRepositoryAccess(r.Context(), account.ID)
 	if err != nil {
 		s.writeUserRepositoryAuthorizationError(w, err)
-		return state.RunnerState{}, false
+		return state.RunnerState{}, 0, false
 	}
 	if hasRepositoryAccess(access, st.GitHubInstallationID, st.RepositoryFullName) {
-		return userVisibleRunnerState(st), true
+		return userVisibleRunnerState(st), account.ID, true
 	}
 	writeError(w, http.StatusNotFound, "runner not found")
-	return state.RunnerState{}, false
+	return state.RunnerState{}, 0, false
 }
 
 func (s *Server) handleUserGetRunner(w http.ResponseWriter, r *http.Request) {
@@ -531,11 +536,7 @@ func (s *Server) handleUserGetRunnerLog(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	_, account, ok := s.requireUserSession(w, r)
+	st, accountID, ok := s.userRunnerStateAndAccount(w, r)
 	if !ok {
 		return
 	}
@@ -581,15 +582,26 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	current, currentAccount, authorized := s.userRunnerStateAndAccount(w, r)
+	if !authorized || currentAccount != accountID || r.Context().Err() != nil || terminalCtx.Err() != nil || !sameRunnerTerminal(st, current, accountID) {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = terminal.Close(closeCtx)
+		if authorized {
+			writeError(w, http.StatusConflict, "runner changed while connecting terminal")
+		}
+		return
+	}
 	sessionMu.Lock()
-	session = s.terminals.Add(st.ID, st.SandboxID, terminal)
+	session = s.terminals.Add(runnerTerminalKey(st, accountID), st.SandboxID, terminal)
 	s.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
 	for _, data := range pending {
 		session.append(data)
 	}
 	pending = nil
 	sessionMu.Unlock()
-	go s.watchRunnerTerminal(terminalCtx, st, account.ID, session.id)
+	go s.watchRunnerTerminal(terminalCtx, st, accountID, session.id)
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session_id": session.id,
 		"pid":        terminal.PID(),
@@ -615,8 +627,7 @@ func (s *Server) watchRunnerTerminal(ctx context.Context, expected state.RunnerS
 				return
 			}
 			current, err := s.store.ReadState(expected.ID)
-			if err != nil || !runnerTerminalAvailable(current) || current.SandboxID != expected.SandboxID ||
-				current.GitHubInstallationID != expected.GitHubInstallationID || current.RepositoryFullName != expected.RepositoryFullName {
+			if err != nil || !sameRunnerTerminal(expected, current, accountID) {
 				return
 			}
 			if time.Now().Before(nextAccessCheck) {
@@ -634,11 +645,7 @@ func (s *Server) watchRunnerTerminal(ctx context.Context, expected state.RunnerS
 }
 
 func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -739,11 +746,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 }
 
 func (s *Server) handleUserRunnerTerminalInput(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -766,11 +769,7 @@ func (s *Server) sendTerminalInput(w http.ResponseWriter, r *http.Request, sessi
 }
 
 func (s *Server) handleUserRunnerTerminalResize(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	session, ok := s.authorizedTerminalSession(w, r, st, true)
+	session, ok := s.authorizedTerminalSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -793,11 +792,7 @@ func (s *Server) resizeTerminalSession(w http.ResponseWriter, r *http.Request, s
 }
 
 func (s *Server) handleUserCloseRunnerTerminal(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.userRunnerState(w, r)
-	if !ok {
-		return
-	}
-	if _, ok := s.authorizedTerminalSession(w, r, st, false); !ok {
+	if _, ok := s.authorizedTerminalSession(w, r, false); !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -809,10 +804,25 @@ func (s *Server) handleUserCloseRunnerTerminal(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) authorizedTerminalSession(w http.ResponseWriter, r *http.Request, st state.RunnerState, requireAvailable bool) (*terminalSession, bool) {
+func sameRunnerTerminal(expected, current state.RunnerState, accountID int64) bool {
+	return runnerTerminalAvailable(current) && current.SandboxID == expected.SandboxID &&
+		runnerTerminalKey(current, accountID) == runnerTerminalKey(expected, accountID)
+}
+
+// Bind to the persisted attempt timestamp, also available on older requests.
+func runnerTerminalKey(st state.RunnerState, accountID int64) string {
+	return fmt.Sprintf("account:%d:runner:%q:attempt:%s:installation:%d:repository:%q",
+		accountID, st.ID, st.LastAttemptAt.UTC().Format(time.RFC3339Nano), st.GitHubInstallationID, st.RepositoryFullName)
+}
+
+func (s *Server) authorizedTerminalSession(w http.ResponseWriter, r *http.Request, requireAvailable bool) (*terminalSession, bool) {
+	st, accountID, ok := s.userRunnerStateAndAccount(w, r)
+	if !ok {
+		return nil, false
+	}
 	sessionID := r.PathValue("sessionID")
 	session, ok := s.terminals.Get(sessionID)
-	if !ok || session.requestID != st.ID || session.sandboxID != st.SandboxID {
+	if !ok || session.requestID != runnerTerminalKey(st, accountID) || session.sandboxID != st.SandboxID {
 		writeError(w, http.StatusNotFound, "terminal session not found")
 		return nil, false
 	}

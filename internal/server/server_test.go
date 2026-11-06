@@ -60,6 +60,7 @@ type fakeSandbox struct {
 	commandContext     context.Context
 	repositoryURL      string
 	runnerGroup        string
+	onTerminalOpen     func()
 	terminal           *fakeTerminalSession
 	diagnosticResult   sandboxrunner.NetworkDiagnosticResult
 	diagnosticErr      error
@@ -254,6 +255,9 @@ func (f *fakeSandbox) StartTerminal(ctx context.Context, sandboxID string, size 
 	f.mu.Unlock()
 	if onData != nil {
 		onData([]byte("terminal ready\n"))
+	}
+	if f.onTerminalOpen != nil {
+		f.onTerminalOpen()
 	}
 	return terminal, nil
 }
