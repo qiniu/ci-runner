@@ -263,7 +263,7 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			s.logger.Error("read mismatched completed state", "id", st.ID, "error", readErr)
 			continue
 		}
-		if current.Status != state.StatusCompleted || current.WorkflowJobID == 0 || current.AssignedJobID == 0 || current.WorkflowJobID == current.AssignedJobID {
+		if current.ManualStopRequested || current.Status != state.StatusCompleted || current.WorkflowJobID == 0 || current.AssignedJobID == 0 || current.WorkflowJobID == current.AssignedJobID {
 			unlock()
 			continue
 		}
