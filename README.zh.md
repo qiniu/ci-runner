@@ -111,7 +111,7 @@ Jobs 提供部署历史入口，并可按选中 Job 的固定提交创建部署�
 要点：
 
 - 相对路径的 `database.dsn` 和 `github.app.private_key_file` 按配置文件所在目录解析。
-- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL。重启时保留排队请求的租约，由数据库时钟判断是否到期。worker 更新或释放排队请求时，必须匹配原领取版本和持有者。若 worker 领取后立即退出，接手须等待剩余租期（默认租期 300 秒），同时满足重试时间，随后由队列轮询领取。Runner 准入在同一数据库事务中检查配额并写入 creating，各节点须配置相同额度。两个 runnerd 进程共享 PostgreSQL 的队列接管和容量约束已通过验证。MySQL 仍需双进程验证，包括接管时服务端的 `innodb_lock_wait_timeout` 和空闲连接 `wait_timeout`。详见[后端测试说明](docs/zh/testing.md)。运行中任务恢复、Deploy 和终端的故障切换完成验收前，生产保持一个活动 runnerd。
+- 本地和单节点部署建议使用 SQLite。支持 PostgreSQL 和 MySQL。重启时保留排队请求的租约，由数据库时钟判断是否到期。worker 更新或释放排队请求时，必须匹配原领取版本和持有者。若 worker 领取后立即退出，接手须等待剩余租期（默认租期 300 秒），同时满足重试时间，随后由队列轮询领取。Runner 准入在同一数据库事务中检查配额并写入 creating，各节点须配置相同额度。两个 runnerd 进程共享 PostgreSQL 的队列接管和全局容量上限已通过验证。MySQL 仍需双进程验证，包括接管时服务端的 `innodb_lock_wait_timeout` 和空闲连接 `wait_timeout`。详见[后端测试说明](docs/zh/testing.md)。运行中任务恢复、Deploy 和终端的故障切换完成验收前，生产保持一个活动 runnerd。
 - 一次性 SQLite 到 PostgreSQL 迁移工具已退役，完成记录、历史手册及后续运维边界见[迁移退役记录](docs/zh/database-transfer-retirement.md)。
 - CI 会创建全新的 PostgreSQL 与 MySQL schema，并在已有 catalog 上重复执行迁移，再验证 policy-free matching。本地 opt-in 的真实方言命令见 [docs/zh/testing.md](docs/zh/testing.md)。
 - 已有 SQLite `runner_requests` 和 `runner_profiles` 表会在启动时补建缺失的 model columns 和 indexes，不会重建整张表，从而保留历史 runner 字段以及旧 profile rows 和 indexes。创建缺失索引不会重写 rows，但大数据库可能出现短暂的启动 I/O 和锁等待；迁移与查询计划检查见 [docs/zh/testing.md](docs/zh/testing.md)。

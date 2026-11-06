@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
@@ -14,9 +15,45 @@ import subprocess
 import tempfile
 import time
 import uuid
+from urllib.parse import unquote, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-DSN = os.environ["RUNNERD_POSTGRES_TEST_DSN"]
+def psql_connection(dsn):
+    """Keep libpq passwords out of argv, preserving URI and keyword DSNs."""
+    password = None
+    if dsn.startswith(("postgres://", "postgresql://")):
+        uri = urlsplit(dsn)
+        userinfo, at, hosts = uri.netloc.rpartition("@")
+        user, colon, encoded = userinfo.partition(":")
+        if colon:
+            password = unquote(encoded)
+        query = []
+        for item in uri.query.split("&"):
+            key, _, value = item.partition("=")
+            if unquote(key) == "password":
+                password = unquote(value)
+            else:
+                query.append(item)
+        return urlunsplit(uri._replace(netloc=user + at + hosts, query="&".join(query))), password
+
+    # libpq keyword values support single quotes and backslash-escaped bytes.
+    # Preserve each non-password option verbatim, including its quoting.
+    item = re.compile(r"""\s*([^\s=]+)\s*=\s*('(?:\\.|[^'\\])*'|(?:\\.|[^\s\\])*)(?=\s|$)""", re.DOTALL)
+    parts = []
+    pos = 0
+    while pos < len(dsn) and dsn[pos:].strip():
+        match = item.match(dsn, pos)
+        if not match:
+            raise ValueError("invalid PostgreSQL test connection string")
+        key, value = match.groups()
+        if key == "password":
+            if value.startswith("'"):
+                value = value[1:-1]
+            password = re.sub(r"\\(.)", r"\1", value, flags=re.DOTALL)
+        else:
+            parts.append(match.group())
+        pos = match.end()
+    return "".join(parts).lstrip(), password
 
 
 def wait_for(description, condition, timeout=20, interval=0.05):
@@ -29,7 +66,7 @@ def wait_for(description, condition, timeout=20, interval=0.05):
 
 
 def sql(env, query):
-    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           input=query, env=env, text=True, stdout=subprocess.PIPE)
     if proc.returncode:
         raise RuntimeError("fixture SQL failed")
@@ -38,7 +75,7 @@ def sql(env, query):
 
 @contextlib.contextmanager
 def hold_lock(env, statement):
-    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           env=env, text=True) as psql:
         psql.stdin.write(f"BEGIN; SET LOCAL lock_timeout='10s'; {statement}; SELECT 'locked';\n")
@@ -59,7 +96,7 @@ def node(binary, directory, name, env, worker=None):
     config = directory / (name + ".json")
     config.write_text(json.dumps({
         "server": {"http_addr": f"127.0.0.1:{port}"},
-        "database": {"backend": "postgres", "dsn": DSN},
+        "database": {"backend": "postgres", "dsn": env["RUNNERD_POSTGRES_TEST_DSN"]},
         "auth": {"session_secret": "fixture-session", "encryption_key": "fixture-key"},
         "sandbox": {"regions": [{"id": "local", "label": "Test", "sandbox_api_url": "http://127.0.0.1:1"}]},
         "github": {"token": "fixture", "webhook_secret": "fixture",
@@ -287,6 +324,13 @@ def main():
     parser.add_argument("binary", type=Path)
     parser.add_argument("--full-ttl", action="store_true", help="wait the full 300s in the crash scenario")
     args = parser.parse_args()
+    dsn = os.environ.get("RUNNERD_POSTGRES_TEST_DSN")
+    if not dsn:
+        parser.error("set RUNNERD_POSTGRES_TEST_DSN to a dedicated PostgreSQL *_test database")
+    safe_dsn, password = psql_connection(dsn)
+    os.environ["RUNNERD_POSTGRES_TEST_DSN"] = safe_dsn
+    if password is not None:
+        os.environ["PGPASSWORD"] = password
     if not sql(os.environ, "SELECT current_database()").endswith("_test"):
         raise RuntimeError("a dedicated database ending in _test is required")
     for scenario in ["paused", "crashed", "cluster capacity", "disable spec", "admission crash"]:
