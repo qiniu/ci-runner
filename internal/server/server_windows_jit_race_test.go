@@ -126,8 +126,8 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 				service.oldErr = errors.New("temporary network error")
 			}
 			srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, service)
-			// Let retryOrFail make the request immediately runnable so the test
-			// can exercise the production worker claim path below.
+			// Let the next worker claim the retry as soon as the database clock
+			// reaches the scheduled time.
 			srv.cfg.RetryBaseDelay = 0
 			srv.cfg.RetryMaxDelay = 0
 			if lateResult == "cleanup failure" {
@@ -164,19 +164,34 @@ func TestWindowsJITSupersededSandboxStartPreservesReplacement(t *testing.T) {
 			jobCompleted.Store(true)
 			// Exercise the real worker claim, which advances LastAttemptAt
 			// before the replacement enters the Windows creation lock.
-			claimedReq, _, claimed, err := store.ClaimNextRunnable("new-worker", time.Minute)
-			if err != nil || !claimed || claimedReq.ID != requestID {
-				t.Fatalf("worker claim failed: claimed=%t req=%+v err=%v", claimed, claimedReq, err)
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			var replacement state.RunnerState
+			for {
+				req, claim, claimed, err := store.ClaimNextRunnable("new-worker", time.Minute)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if claimed {
+					if req.ID != requestID {
+						t.Fatalf("claimed request %q, want %q", req.ID, requestID)
+					}
+					replacement = claim
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("replacement retry never became runnable")
+				case <-ticker.C:
+				}
 			}
 			newDone := make(chan struct{})
 			go func() {
 				defer close(newDone)
-				srv.startClaimedRunner(ctx, queuedRunnerForTest(t, srv.store, requestID, "new-worker"))
+				srv.startClaimedRunner(ctx, replacement)
 			}()
 			// Observe the second caller waiting on the provisioning owner before
 			// releasing the old Sandbox result; scheduling cannot hide the race.
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
 		waiting:
 			for {
 				srv.runnerLocksMu.Lock()
