@@ -6644,6 +6644,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 			w.Write([]byte(`{"id":1001,"name":"original job","status":"completed","conclusion":"cancelled"}`))
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"total_count":0,"runners":[]}`))
+			return
+		}
 		t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
 	}))
 	defer ghServer.Close()
@@ -6670,6 +6674,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		t.Fatal(err)
 	}
 
+	before, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeSandbox{}
 	srv := newTestServer(t, store, ghServer.URL, fake)
 	srv.Close()
@@ -6689,6 +6697,18 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("recovery stopped sandbox assigned to another job %d times", fake.stoppedCount())
+	}
+	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+2 {
+		t.Fatalf("completed Job result and reconnect were not both committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+2)
+	}
+
+	fake.lastRecoverInput().OnExit(sandboxrunner.ExitResult{}, nil)
+	got, err = store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatalf("recovered exit watcher did not finish its attempt: %#v", got)
 	}
 }
 
@@ -8437,6 +8457,66 @@ func TestSweeperStopsIdleRunnerThatNeverAcceptedJob(t *testing.T) {
 	}
 	if got.TerminationSource != state.TerminationSourceIdleCleanup {
 		t.Fatalf("idle cleanup termination source = %q, want %q", got.TerminationSource, state.TerminationSourceIdleCleanup)
+	}
+}
+
+// GitHub can answer a busy/idle query after another worker has replaced
+// the attempt. Neither answer may act on the replacement.
+func TestSweeperDiscardsSupersededIdleObservation(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			dir := t.TempDir()
+			store, peer := state.New(dir), state.New(dir)
+			if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true}
+				store = state.NewWithOptions(opts)
+				opts.MigrateOnStart = false
+				peer = state.NewWithOptions(opts)
+			}
+			const id = "idle-observation"
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/orgs/o/actions/runners" {
+					t.Errorf("unexpected GitHub operation %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				st, err := peer.ReadState(id)
+				if err == nil {
+					st.SandboxID, st.ProcessPID = "replacement", 222
+					st.RunningAt = time.Now().UTC()
+					err = peer.WriteState(st)
+				}
+				if err != nil {
+					t.Error(err)
+					http.Error(w, "state setup failed", http.StatusInternalServerError)
+					return
+				}
+				fmt.Fprintf(w, `{"runners":[{"id":99,"name":"observed","status":"online","busy":%t}]}`, busy)
+			}))
+			defer api.Close()
+			fake := &fakeSandbox{}
+			srv := New(config.Config{SandboxTimeout: time.Hour, RunnerIdleTimeout: time.Minute}, store, github.NewClient(api.URL, api.Client()), fake, nil)
+			t.Cleanup(srv.Close)
+			_, st, err := store.CreateRequest(state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerGroup: "default", RunnerName: "observed"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status, st.SandboxID, st.ProcessPID = state.StatusRunning, "original", 111
+			st.RunningAt = time.Now().Add(-10 * time.Minute).UTC()
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			srv.sweepOnce(t.Context())
+			got, err := store.ReadState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != state.StatusRunning || got.SandboxID != "replacement" || got.ProcessPID != 222 ||
+				got.AssignedJobName != "" || got.TerminationSource != "" || fake.stoppedCount() != 0 {
+				t.Fatalf("late busy=%v changed replacement: status=%s sandbox=%s pid=%d assignment=%q source=%q stops=%d",
+					busy, got.Status, got.SandboxID, got.ProcessPID, got.AssignedJobName, got.TerminationSource, fake.stoppedCount())
+			}
+		})
 	}
 }
 

@@ -865,6 +865,10 @@ func resolveRunnerTemplate(ctx context.Context, service sandboxrunner.Service, p
 }
 
 func (s *Server) markRunnerJobStarted(id string) {
+	s.markRunnerJobStartedIfVersion(id, nil)
+}
+
+func (s *Server) markRunnerJobStartedIfVersion(id string, expectedVersion *int64) {
 	unlock := s.lockRunner(id)
 	defer unlock()
 
@@ -873,13 +877,21 @@ func (s *Server) markRunnerJobStarted(id string) {
 		s.logger.Error("read runner state for job started marker", "id", id, "error", err)
 		return
 	}
+	if expectedVersion != nil && st.Version != *expectedVersion {
+		return
+	}
 	if st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || st.Status == state.StatusCompleted || st.Status == state.StatusStopping {
 		return
 	}
 	st.AssignedJobName = runnerJobStartedMarker
 	if err := s.store.WriteState(st); err != nil {
-		s.logger.Error("write runner job started marker", "id", id, "error", err)
+		if !errors.Is(err, state.ErrConflict) {
+			s.logger.Error("write runner job started marker", "id", id, "error", err)
+		}
 		return
+	}
+	if expectedVersion != nil {
+		s.store.AppendLog(id, "control.log", []byte("sweeper kept runner because github reports it is running a job\n"))
 	}
 	s.logger.Info("runner accepted a job", "id", id)
 	s.store.AppendLog(id, "control.log", []byte("runner accepted a job\n"))
@@ -1281,7 +1293,7 @@ func (s *Server) recoverRunner(ctx context.Context, id string) error {
 		return nil
 	case state.StatusStopping:
 		unlock()
-		_, _, err := s.stopRunner(ctx, id, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
+		_, _, err := s.stopRunnerIfVersion(ctx, id, &st.Version, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
 		return err
 	case state.StatusCreating, state.StatusRunning:
 		stateVersion := st.Version
@@ -1301,7 +1313,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		hasJob = false
 	}
 	if hasJob && strings.EqualFold(strings.TrimSpace(job.Status), "completed") {
-		latest, _, err := s.stopRunner(ctx, st.ID, job, state.TerminationSourceRecoveryCleanup)
+		latest, _, err := s.stopRunnerIfVersion(ctx, st.ID, &st.Version, job, state.TerminationSourceRecoveryCleanup)
 		if err != nil {
 			return err
 		}
@@ -1505,17 +1517,17 @@ func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stat
 	return nil
 }
 
-func (s *Server) stopIfExists(ctx context.Context, id string, job github.WorkflowJob, source string) {
-	if _, err := s.store.ReadState(id); err != nil {
-		s.logger.Info("stop skipped because runner state does not exist", "id", id)
-		return
-	}
-	if _, _, err := s.stopRunner(ctx, id, job, source); err != nil {
-		s.logger.Error("stop runner", "id", id, "error", err)
+func (s *Server) stopObservedRunner(ctx context.Context, st state.RunnerState, source string) {
+	if _, _, err := s.stopRunnerIfVersion(ctx, st.ID, &st.Version, github.WorkflowJob{}, source); err != nil {
+		s.logger.Error("stop observed runner", "id", st.ID, "error", err)
 	}
 }
 
 func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJob, source string) (state.RunnerState, bool, error) {
+	return s.stopRunnerIfVersion(ctx, id, nil, job, source)
+}
+
+func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVersion *int64, job github.WorkflowJob, source string) (state.RunnerState, bool, error) {
 	var timings runnerTimings
 	unlock := s.lockRunner(id)
 	defer func() {
@@ -1528,6 +1540,10 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 		s.logger.Error("read runner state for stop", "id", id, "error", err)
 		return state.RunnerState{}, false, err
 	}
+	if expectedVersion != nil && st.Version != *expectedVersion {
+		// Discard a stale observation, including any follow-up recovery work.
+		return state.RunnerState{}, false, nil
+	}
 	resultChanged := retainWorkflowJobResult(&st, job, time.Now().UTC())
 	s.logger.Info("runner stop requested", "id", id, "status", st.Status, "sandbox_id", st.SandboxID, "pid", st.ProcessPID, "job_id", job.ID)
 	if workflowJobStopConflictsWithAssignment(st, job) {
@@ -1535,6 +1551,7 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 			if err := s.store.WriteState(st); err != nil {
 				return state.RunnerState{}, false, fmt.Errorf("write completed github job result: %w", err)
 			}
+			st.Version++
 		}
 		s.logger.Warn(
 			"runner stop deferred because runner ownership is unresolved or different",
@@ -1589,6 +1606,9 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	markRunnerCleanupStarted(&st, stopStartedAt)
 	if err := s.store.WriteState(st); err != nil {
 		return state.RunnerState{}, false, fmt.Errorf("write stopping state: %w", err)
+	}
+	if source == state.TerminationSourceIdleCleanup {
+		s.store.AppendLog(id, "control.log", []byte("sweeper stopping idle runner that never accepted a job\n"))
 	}
 	s.logger.Info("runner marked stopping", "id", id, "sandbox_id", st.SandboxID, "pid", st.ProcessPID)
 	st.Version++
@@ -1761,10 +1781,6 @@ func (s *Server) stopRunner(ctx context.Context, id string, job github.WorkflowJ
 	return st, true, nil
 }
 
-func (s *Server) failAndStopRunner(ctx context.Context, id, stage, reason, message string) {
-	s.failAndStopRunnerVersion(ctx, id, 0, stage, reason, message)
-}
-
 func (s *Server) failAndStopRunnerVersion(ctx context.Context, id string, expectedVersion int64, stage, reason, message string) {
 	unlock := s.lockRunner(id)
 	defer unlock()
@@ -1774,7 +1790,7 @@ func (s *Server) failAndStopRunnerVersion(ctx context.Context, id string, expect
 		s.logger.Error("read runner state for forced stop", "id", id, "error", err)
 		return
 	}
-	if expectedVersion != 0 && st.Version != expectedVersion {
+	if st.Version != expectedVersion {
 		return
 	}
 	if st.Status == state.StatusCompleted || st.Status == state.StatusFailed {
@@ -2130,7 +2146,7 @@ func (s *Server) retryOrFail(st state.RunnerState, stage string, err error) {
 		s.logger.Error("read state for retry/fail", "id", st.ID, "error", readErr)
 		return
 	}
-	if current.Status == state.StatusCompleted || current.Status == state.StatusFailed {
+	if current.Version != st.Version || current.Status != state.StatusCreating {
 		return
 	}
 	result := s.applyFailure(&current, stage, err, true)
