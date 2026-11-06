@@ -141,6 +141,33 @@ func assertAdmissionState(t *testing.T, store state.Store, id, status string) st
 }
 
 // The admission checks and creating write now share a database transaction.
+type unavailableEnqueueStore struct{ state.Store }
+
+func (s unavailableEnqueueStore) WithRunnerEnqueue(context.Context, func(state.Store) error) error {
+	return errors.New("catalog guard unavailable")
+}
+
+func TestDuplicateWorkflowJobDoesNotAcquireCatalogGuard(t *testing.T) {
+	srv, store, _ := admissionTestFixture(t, 1, 1)
+	job := github.WorkflowJob{ID: 123, Labels: []string{"self-hosted", "custom"}}
+	want, created, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil)
+	if err != nil || !created {
+		t.Fatalf("first delivery: created=%v err=%v", created, err)
+	}
+	srv.store = unavailableEnqueueStore{store}
+	got, created, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil)
+	if err != nil || created || got.ID != want.ID {
+		t.Fatalf("duplicate: id=%q created=%v err=%v", got.ID, created, err)
+	}
+	got.LastErrorCode = workflowJobWaitCode
+	if err := store.WriteState(got); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.enqueueWorkflowJob(t.Context(), "o/r", 0, "test", job, nil); err == nil {
+		t.Fatal("waiting job skipped current admission checks")
+	}
+}
+
 type failedRunnerAdmissionStore struct {
 	state.Store
 	stage string
