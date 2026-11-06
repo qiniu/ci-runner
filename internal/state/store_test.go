@@ -3556,6 +3556,103 @@ func testForkSponsorshipApprovalDeleteSerializationSQLBackend(t *testing.T, stor
 	}
 }
 
+// Exercise the same duplicate deliveries under InnoDB's repeatable-read
+// snapshot and CLIENT_FOUND_ROWS as well as PostgreSQL's conflict path.
+func testConcurrentSQLRunnerEnqueue(t *testing.T, store *DBStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	const id = "simultaneous-delivery"
+	defer func() {
+		db, err := store.dbOrEnsure()
+		if err == nil {
+			err = db.Delete(&runnerRequestRecord{}, "id = ?", id).Error
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+	err := store.WithRunnerAdmission(ctx, func(Store) error {
+		const deliveries = 3
+		entered := make(chan struct{}, deliveries)
+		write := make(chan struct{})
+		type result struct {
+			created bool
+			state   RunnerState
+			err     error
+		}
+		results := make(chan result, deliveries)
+		for i := range deliveries {
+			go func() {
+				var r result
+				r.err = store.WithRunnerEnqueue(ctx, func(tx Store) error {
+					if _, err := tx.ListProfiles(); err != nil {
+						return err
+					}
+					entered <- struct{}{}
+					select {
+					case <-write:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					var err error
+					r.created, r.state, err = tx.CreateRequest(RunnerRequest{ID: id, RunnerName: fmt.Sprintf("runner-%d", i)}, nil)
+					return err
+				})
+				results <- r
+			}()
+		}
+		for range deliveries {
+			select {
+			case <-entered:
+			case r := <-results:
+				return fmt.Errorf("enqueue failed before sharing the guard: %w", r.err)
+			case <-ctx.Done():
+				return fmt.Errorf("enqueue waited for another enqueue or worker: %w", ctx.Err())
+			}
+		}
+		close(write)
+		names := make(map[string]bool)
+		created := 0
+		for range deliveries {
+			r := <-results
+			if r.err != nil {
+				return r.err
+			}
+			if r.created {
+				created++
+			}
+			names[r.state.RunnerName] = true
+		}
+		if created != 1 || len(names) != 1 {
+			return fmt.Errorf("duplicate deliveries created %d requests and saw names %v", created, names)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A catalog writer must wait for active enqueues, even without a worker
+	// holding the capacity row. Bound the wait on the actual SQL connection.
+	err = store.WithRunnerEnqueue(ctx, func(Store) error {
+		writerCtx, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer stop()
+		err := store.WithRunnerCatalogMutation(writerCtx, func(Store) error {
+			return errors.New("catalog writer did not wait for enqueue")
+		})
+		if writerCtx.Err() == nil {
+			return fmt.Errorf("catalog writer completed before its deadline: %v", err)
+		}
+		if err == nil {
+			return errors.New("timed-out writer was admitted")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFreshSchemaSQLBackends(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("set RUNNERD_CATALOG_BACKEND_TESTS=1 with dedicated Postgres and MySQL test databases")
@@ -3622,6 +3719,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				}
 			}
 			testQueuedClaimOwnership(t, migrated)
+			testConcurrentSQLRunnerEnqueue(t, migrated)
 			testRunnerAdmissionRollback(t, migrated)
 			testRunningWatch(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{

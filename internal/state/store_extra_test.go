@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func TestWriteStateCompletedWithoutCleanupLeavesStoppingTimeUnset(t *testing.T) {
@@ -354,6 +357,14 @@ func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
 	}
 }
 
+func TestMySQLQueueTimeWithoutDSNLocation(t *testing.T) {
+	db := &gorm.DB{Config: &gorm.Config{Dialector: gormmysql.New(gormmysql.Config{})}}
+	expr := queueTime(db, time.Minute)
+	if len(expr.Vars) != 1 || expr.Vars[0] != time.Minute.Microseconds() || !strings.Contains(expr.SQL, "UTC_TIMESTAMP(3)") {
+		t.Fatalf("expected a one-minute UTC database deadline, got %+v", expr)
+	}
+}
+
 func TestQueuedClaimOwnership(t *testing.T) {
 	testQueuedClaimOwnership(t, New(t.TempDir()).(*DBStore))
 }
@@ -364,16 +375,16 @@ func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
 	if _, _, err := store.CreateRequest(RunnerRequest{ID: id}, nil); err != nil {
 		t.Fatal(err)
 	}
-	claim := func() RunnerState {
+	claim := func(stage string) RunnerState {
 		t.Helper()
 		// The same worker name can be reused by a later process.
 		_, st, ok, err := store.ClaimNextRunnable("worker", time.Minute)
 		if err != nil || !ok || st.ID != id {
-			t.Fatalf("claim: id=%q ok=%v err=%v", st.ID, ok, err)
+			t.Fatalf("%s claim: id=%q ok=%v err=%v", stage, st.ID, ok, err)
 		}
 		return st
 	}
-	old := claim()
+	old := claim("initial")
 	if delta := time.Until(old.LeaseExpiresAt); delta <= 0 || delta > 2*time.Minute {
 		t.Fatalf("one-minute lease has unexpected deadline %v", old.LeaseExpiresAt)
 	}
@@ -400,7 +411,7 @@ func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
 		}
 	}
 	rejectOldWrites()
-	current := claim()
+	current := claim("takeover")
 	rejectOldWrites()
 	if err := store.ReleaseQueuedClaim(old); err != nil {
 		t.Fatal(err)
@@ -426,7 +437,7 @@ func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
 	if err := store.WriteState(delayed); err != nil {
 		t.Fatal(err)
 	}
-	current = claim()
+	current = claim("zero-delay")
 	current.Status = StatusCreating
 	if err := store.WriteQueuedClaim(current, current.LeaseOwner); err != nil {
 		t.Fatalf("current claim could not start after deferral: %v", err)

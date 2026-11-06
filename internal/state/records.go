@@ -212,8 +212,8 @@ type runnerEventRecord struct {
 
 func (runnerEventRecord) TableName() string { return "runner_events" }
 
-// One shared row serializes runner admission and spec changes inside their
-// short database transactions. In-flight capacity lives in runner_requests.
+// Fixed rows guard capacity updates and catalog edits. In-flight capacity
+// lives in runner_requests.
 type runnerAdmissionGuardRecord struct {
 	ID int `gorm:"primaryKey;autoIncrement:false"`
 }
