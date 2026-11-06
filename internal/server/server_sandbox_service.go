@@ -231,7 +231,7 @@ func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snap
 	current.SponsorSourceRepositoryID = snapshot.SponsorSourceRepositoryID
 	current.SponsorSourceRepositoryFullName = snapshot.SponsorSourceRepositoryFullName
 	current.SponsorAuthorizationReason = snapshot.SponsorAuthorizationReason
-	if err := tx.WriteState(current); err != nil {
+	if err := writeWatchObservation(tx, current, attempt.WatchToken); err != nil {
 		return fmt.Errorf("write sandbox config snapshot: %w", err)
 	}
 	return nil

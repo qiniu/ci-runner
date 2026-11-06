@@ -23,8 +23,19 @@ func (s *Server) runnerWatchTTL() time.Duration {
 	return 5 * time.Minute
 }
 
-// Renew only while this process has an attached observer. Cancellation stops
-// local observation; another node can attach after the database lease expires.
+func (s *Server) requireRunnerWatch(ctx context.Context, id, token string) error {
+	ok, err := s.store.RenewRunnerWatch(ctx, id, token, s.runnerWatchTTL())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return state.ErrConflict
+	}
+	return nil
+}
+
+// Keep the creation operation or attached observer alive until it returns or
+// this process loses the database lease.
 func (s *Server) renewRunnerWatch(ctx context.Context, cancel context.CancelFunc, id, token string) {
 	ttl := s.runnerWatchTTL()
 	ticker := time.NewTicker(ttl / 3)
@@ -35,7 +46,7 @@ func (s *Server) renewRunnerWatch(ctx context.Context, cancel context.CancelFunc
 			return
 		case <-ticker.C:
 			renewCtx, done := context.WithTimeout(ctx, ttl/3)
-			ok, err := s.store.RenewRunningWatch(renewCtx, id, token, ttl)
+			ok, err := s.store.RenewRunnerWatch(renewCtx, id, token, ttl)
 			done()
 			if !ok || err != nil {
 				if err != nil && !errors.Is(err, context.Canceled) {
@@ -48,14 +59,14 @@ func (s *Server) renewRunnerWatch(ctx context.Context, cancel context.CancelFunc
 	}
 }
 
-func (s *Server) writeWatchObservation(st state.RunnerState, token string) error {
+func writeWatchObservation(store state.Store, st state.RunnerState, token string) error {
 	if token == "" {
-		return s.store.WriteState(st)
+		return store.WriteState(st)
 	}
-	return s.store.WriteWatchedState(st, token)
+	return store.WriteWatchedState(st, token)
 }
 
-// Filter by database time. ClaimRunningWatch rechecks status and version after
+// Filter by database time. ClaimRunnerWatch rechecks status and version after
 // this scan, so simultaneous ticks and startup recovery can share the work.
 func (s *Server) runnerWatchLoop(ctx context.Context) {
 	defer s.loopWG.Done()
@@ -72,18 +83,18 @@ func (s *Server) runnerWatchLoop(ctx context.Context) {
 }
 
 func (s *Server) recoverExpiredRunnerWatches(ctx context.Context) {
-	ids, err := s.store.ListExpiredRunningWatches(ctx, maxConcurrentRecoveries)
+	rows, err := s.store.ListExpiredRunnerWatches(ctx, maxConcurrentRecoveries)
 	if err != nil {
 		s.logger.Error("list expired runner watches", "error", err)
 		return
 	}
 	var recoveries sync.WaitGroup
-	for _, id := range ids {
+	for _, row := range rows {
 		recoveries.Go(func() {
 			recoverCtx, cancel := context.WithTimeout(ctx, min(s.runnerWatchTTL(), 30*time.Second))
 			defer cancel()
-			if err := s.recoverRunnerInState(recoverCtx, id, state.StatusRunning); err != nil && ctx.Err() == nil {
-				s.logger.Warn("recover expired runner watch", "id", id, "error", err)
+			if err := s.recoverRunnerInState(recoverCtx, row.ID, row.Status); err != nil && ctx.Err() == nil {
+				s.logger.Warn("recover expired runner watch", "id", row.ID, "error", err)
 			}
 		})
 	}

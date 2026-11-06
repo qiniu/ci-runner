@@ -27,6 +27,8 @@ const maxRunnerRequestRepositoryAccessQueryParameters = 900
 // Sandbox credential columns are omitted intentionally and remain empty in
 // list-derived RunnerState values; mutation paths re-read the full record.
 var runnerRequestListSelectColumns = []string{
+	"watch_token",
+	"sandbox_create_dispatched",
 	"id",
 	"workflow_job_id",
 	"github_installation_id",
@@ -306,16 +308,17 @@ func (s *DBStore) writeState(st RunnerState, claimOwner, watchToken string, watc
 	if claimOwner != "" {
 		query = liveQueuedClaim(query, claimOwner)
 	}
-	if watchTTL > 0 {
-		// A new watcher may be installed by the creating CAS. Reattaching a
-		// running process requires the recovery claim acquired before remote I/O.
-		query = query.Where("(status = ? OR (status = ? AND watch_token = ? AND watch_expires_at > ?))", StatusCreating, StatusRunning, watchToken, queueTime(db, 0))
-		updates["watch_token"], updates["watch_expires_at"] = watchToken, queueTime(db, watchTTL)
-	} else if watchToken != "" {
-		query = query.Where("status = ? AND watch_token = ? AND watch_expires_at > ?", StatusRunning, watchToken, queueTime(db, 0))
+	if watchToken != "" && claimOwner == "" {
+		query = query.Where("status IN ? AND watch_token = ? AND watch_expires_at > ?", []string{StatusCreating, StatusRunning}, watchToken, queueTime(db, 0))
 	}
-	if st.Status != StatusRunning {
+	if watchTTL > 0 {
+		updates["watch_token"], updates["watch_expires_at"] = watchToken, queueTime(db, watchTTL)
+	}
+	if st.Status != StatusCreating && st.Status != StatusRunning {
 		updates["watch_token"], updates["watch_expires_at"] = nil, nil
+	}
+	if st.Status == StatusQueued {
+		updates["sandbox_create_dispatched"] = false
 	}
 	result := query.Updates(updates)
 	if result.Error != nil {
@@ -980,6 +983,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		}
 		record.Status = StatusQueued
 		record.ProvisionAttemptID = ""
+		record.SandboxCreateDispatched = false
 		record.Error = ""
 		record.FailureStage = ""
 		record.FailureReason = ""
@@ -1018,6 +1022,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
+				"sandbox_create_dispatched":           false,
 				"status":                              record.Status,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,

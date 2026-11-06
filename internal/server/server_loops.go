@@ -139,7 +139,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 	for _, st := range states {
 		switch st.Status {
 		case state.StatusCreating:
-			if !st.CreatingAt.IsZero() && now.Sub(st.CreatingAt) > s.cfg.SandboxCreateTimeout {
+			if st.WatchToken == "" && !st.SandboxCreateDispatched && !st.CreatingAt.IsZero() && now.Sub(st.CreatingAt) > s.cfg.SandboxCreateTimeout {
 				s.logger.Info("sweeper detected create timeout", "id", st.ID, "creating_at", st.CreatingAt)
 				s.retryOrFail(st, "sweeper_create_timeout", fmt.Errorf("runner create timed out"))
 			}

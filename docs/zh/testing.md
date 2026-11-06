@@ -853,9 +853,11 @@ Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精
 空闲 Runner sweeper 使用额外的 `idle_cleanup` 终止来源，避免把从未接受 Job 的 Runner 成功清理误标成失败清理。
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），只要 Sandbox 和 GitHub Runner 注册都清理成功，请求就不记为完成或失败，而是按有限次数安排 `runner_exited_without_job` 重试；下次启动会先复查原 Job 再创建 Sandbox，重试耗尽后明确失败。
 
-`TestLateStartFailureAfterPeerAdoption` 使用两个服务进程和本地 Sandbox 替身。第二个进程先接管 Sandbox，第一个进程随后收到迟到的启动错误。测试检查数据库中的创建尝试、版本、Sandbox ID、PID 和重试次数，覆盖 SQLite 和 CI 的 PostgreSQL。
+`TestLateStartFailureAfterPeerAdoption` 在 SQLite 和 PostgreSQL 上运行独立服务进程及本地 Sandbox 替身。测试先在创建者健康时触发另一进程启动恢复和超时扫描，再分别制造创建响应迟到、服务端受理后杀死创建者两种故障。首次查询为空，下一次查回 Sandbox，验证沿用原尝试、Sandbox ID、PID 和重试次数。PostgreSQL CI 对这条回归启用竞态检测。
 
-运行中 Runner 的监听权保存在数据库。写入 running 状态、Sandbox ID 和 PID 的同时设置监听令牌及到期时间。连接存活时每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本号和时间戳。启动时跳过有效监听；后台每五秒按数据库时间扫描，一轮最多接管四条过期记录，使用新令牌重连原 Sandbox 和 PID。监听回调须持有有效令牌才能写忙碌状态或开始清理。创建中、停止中、Deploy 和终端完成故障切换验收后再按发布计划扩容。
+创建和运行阶段共用数据库租约。准入时写入令牌，worker 每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本和时间戳。后台每五秒按数据库时间扫描，每轮最多接管四条过期记录。已发出的创建还没有 Sandbox ID 时，`sandbox_create_outcome_unknown` 表示保留原尝试及配额等待对账。元数据列表为空或本地超时均不足以证明服务端拒绝创建；长期未决时应与服务端核对。运行中任务按原 Sandbox/PID 重连，退出回调须持有有效监听权才能启动清理。生产扩容仍需另行验收，升级时应排空旧版本写入者。
+
+对长期未决的创建，运维可在 PostgreSQL 的 `runner_requests` 表按请求 ID 读取 `id, status, provision_attempt_id, sandbox_id, watch_expires_at, last_error_code`，再到该尝试保存的 Sandbox 端点核对 `app=e2b-github-runner`、`request_id` 和 `provision_attempt_id` 三项元数据。停止请求会等待查回资源或收到明确的创建拒绝。
 
 Sandbox 启动后若接管写入失败，worker 保留进程句柄并重试当前创建尝试的数据库操作。若提交成功但响应丢失，使用已保存的 Sandbox、PID 和监听令牌确认归属。监听在本地取消时，SDK 可能返回退出码 -1 且 Go error 为空；此时任务继续运行，等待接管。只有成功取得清理权的监听才记录 GitHub 忙碌查询错误。
 

@@ -103,6 +103,8 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		UpdatedAt:                       record.UpdatedAt,
 		CreatedAt:                       record.QueuedAt,
 		ProvisionAttemptID:              record.ProvisionAttemptID,
+		WatchToken:                      record.WatchToken,
+		SandboxCreateDispatched:         record.SandboxCreateDispatched,
 		LastAttemptAt:                   pointerToTime(record.LastAttemptAt),
 		NextRetryAt:                     pointerToTime(record.NextRetryAt),
 		CreatingAt:                      pointerToTime(record.CreatingAt),

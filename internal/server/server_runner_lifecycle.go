@@ -427,6 +427,11 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		s.signalQueue()
 		return
 	}
+	watchToken := st.WatchToken
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	go s.renewRunnerWatch(watchCtx, cancelWatch, id, watchToken)
+	ctx = watchCtx
 	if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
 		attemptAt := st.LastAttemptAt
 		windowsAttempt = &attemptAt
@@ -512,7 +517,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			if jitAdopted {
 				return
 			}
-			cleanupErr := s.cleanupWindowsJIT(req, *windowsAttempt, jitRunnerID)
+			cleanupErr := s.cleanupWindowsJIT(req, st, jitRunnerID)
 			if cleanupErr != nil {
 				s.retainWindowsJITCleanup(id, *windowsAttempt)
 				return
@@ -520,7 +525,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			jitAdopted = true
 		}
 		defer cleanupJIT()
-		jit, err := s.prepareWindowsJIT(ctx, req, *windowsAttempt)
+		jit, err := s.prepareWindowsJIT(ctx, req, st)
 		if errors.Is(err, errRunnerCreationSuperseded) {
 			jitAdopted = true // No JIT request was sent by this stale start.
 			return
@@ -550,9 +555,6 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	s.logger.Info("starting sandbox runner", "id", id, "runner_name", req.RunnerName)
 	s.store.AppendLog(id, "control.log", []byte("starting sandbox runner\n"))
 	provisionID := st.ProvisionAttemptID
-	watchToken := rand.Text()
-	watchCtx, cancelWatch := context.WithCancel(ctx)
-	defer cancelWatch()
 	exitCh := make(chan struct{})
 	exitWatchAttempt := make(chan runnerAttemptIdentity, 1)
 	startStage := "sandbox_start"
@@ -571,6 +573,12 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		requireDocker := profile.TemplateSource == state.TemplateSourcePublic && platform != sandboxrunner.PlatformWindows
 		input := sandboxrunner.StartInput{
 			ProvisionAttemptID: st.ProvisionAttemptID,
+			RecordSandbox: func(ctx context.Context, sandboxID string) error {
+				return s.store.RecordSandboxCreateResult(ctx, st, sandboxID)
+			},
+			CheckOwnership: func(ctx context.Context) error {
+				return s.requireRunnerWatch(ctx, id, watchToken)
+			},
 			Platform:           platform,
 			RequestID:          req.ID,
 			RunnerName:         req.RunnerName,
@@ -632,11 +640,31 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		}
 		timings.record("cache_credentials", cacheCredentialsStartedAt)
 
+		if err := s.store.DispatchSandboxCreate(createCtx, id, watchToken, provisionID); err != nil {
+			return sandboxrunner.StartResult{}, err
+		}
 		return sandboxService.StartRunner(createCtx, input)
 	}()
 	timings.record("sandbox_start", sandboxStartStartedAt)
 	if err != nil {
 		exitWatchAttempt <- runnerAttemptIdentity{}
+		if errors.Is(err, sandboxrunner.ErrCreateOutcomeUnknown) {
+			if result.SandboxID != "" {
+				if recordErr := s.recordLateCreateResult(ctx, st, result.SandboxID); recordErr != nil && !errors.Is(recordErr, state.ErrConflict) {
+					s.logger.Warn("record Sandbox ID after interrupted creation", "id", id, "error", recordErr)
+				}
+			}
+			jitAdopted = true // The exact registration may be in use by the Sandbox.
+			s.store.AppendLog(id, "control.log", []byte("Sandbox creation outcome unknown; waiting to reconcile this attempt\n"))
+			return
+		}
+		if startStage == "sandbox_start" && !errors.Is(err, state.ErrConflict) {
+			// If a stop overtook a definitive rejection, there is no Sandbox
+			// to wait for. The stop owner reconciles the GitHub registration.
+			if recordErr := s.recordLateCreateResult(ctx, st, ""); recordErr != nil && !errors.Is(recordErr, state.ErrConflict) {
+				s.logger.Warn("record definitive Sandbox create rejection", "id", id, "error", recordErr)
+			}
+		}
 		if cleanupJIT != nil {
 			cleanupJIT()
 		}
@@ -675,16 +703,36 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		timings.record("running_state_read", runningStateReadStartedAt)
 		if err == nil {
 			switch {
+			case current.Status == state.StatusStopping && current.ProvisionAttemptID == provisionID && current.SandboxCreateDispatched:
+				exitWatchAttempt <- runnerAttemptIdentity{}
+				jitAdopted = true
+				unlock()
+				// The stop may have observed an empty provider list while creation was in flight.
+				if current.SandboxID == "" {
+					if err := s.recordLateCreateResult(ctx, st, result.SandboxID); err != nil {
+						return // The stopping reconciler will also look up the exact attempt.
+					}
+					current.Version++
+				}
+				finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxSingleRecoveryTimeout)
+				s.stopObservedRunner(finishCtx, current, current.TerminationSource)
+				cancel()
+				return
 			case current.Status == state.StatusRunning && current.SandboxID == result.SandboxID && current.ProcessPID == result.PID:
 				// The write may have committed even though its response was lost.
 				var ownsWatch bool
-				ownsWatch, err = s.store.RenewRunningWatch(ctx, id, watchToken, s.runnerWatchTTL())
+				ownsWatch, err = s.store.RenewRunnerWatch(ctx, id, watchToken, s.runnerWatchTTL())
 				if err == nil && !ownsWatch {
 					unlock()
 					exitWatchAttempt <- runnerAttemptIdentity{}
 					jitAdopted = true
 					return
 				}
+			case current.Status == state.StatusCreating && current.ProvisionAttemptID == provisionID && current.WatchToken != watchToken:
+				unlock()
+				exitWatchAttempt <- runnerAttemptIdentity{}
+				jitAdopted = true // The new owner reconciles the same resource.
+				return
 			case current.Status != state.StatusCreating || current.ProvisionAttemptID != provisionID ||
 				(windowsAttempt != nil && !current.LastAttemptAt.Equal(*windowsAttempt)):
 				unlock()
@@ -717,7 +765,6 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		}
 	}
 	jitAdopted = true
-	go s.renewRunnerWatch(watchCtx, cancelWatch, id, watchToken)
 	exitWatchAttempt <- runnerAttemptIdentity{provisionID: provisionID, watchToken: watchToken, sandboxID: result.SandboxID, processPID: result.PID}
 	s.logger.Info("sandbox runner started", "id", id, "sandbox_id", result.SandboxID, "pid", result.PID)
 	s.store.AppendLog(id, "control.log", []byte(fmt.Sprintf("sandbox runner started sandbox_id=%s pid=%d\n", result.SandboxID, result.PID)))
@@ -750,7 +797,7 @@ func (s *Server) completeWithoutSandbox(st state.RunnerState, job github.Workflo
 	st.LeaseOwner = ""
 	st.LeaseExpiresAt = time.Time{}
 	st.NextRetryAt = time.Time{}
-	if err := s.store.WriteState(st); err != nil {
+	if err := writeWatchObservation(s.store, st, st.WatchToken); err != nil {
 		return fmt.Errorf("write skipped runner state: %w", err)
 	}
 	s.logger.Info("runner skipped before sandbox start", "id", id, "job_id", job.ID, "job_status", job.Status, "job_conclusion", job.Conclusion, "reason", reason)
@@ -883,11 +930,7 @@ func (s *Server) markRunnerJobStarted(id string, expectedVersion *int64, provisi
 		return
 	}
 	st.AssignedJobName = runnerJobStartedMarker
-	if st.Status == state.StatusCreating {
-		// Output can arrive before the creating-to-running adoption CAS.
-		watchToken = ""
-	}
-	if err := s.writeWatchObservation(st, watchToken); err != nil {
+	if err := writeWatchObservation(s.store, st, watchToken); err != nil {
 		if !errors.Is(err, state.ErrConflict) {
 			s.logger.Error("write runner job started marker", "id", id, "error", err)
 		}
@@ -914,8 +957,16 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 // fresh creation under the same worker name. Only the admitted attempt can
 // change its creating record. WriteState also checks the version read here.
 func sameCreatingAttempt(current, attempt state.RunnerState) bool {
-	return current.Status == state.StatusCreating && current.ProvisionAttemptID == attempt.ProvisionAttemptID &&
+	return current.Status == state.StatusCreating && current.WatchToken == attempt.WatchToken && current.ProvisionAttemptID == attempt.ProvisionAttemptID &&
 		current.LeaseOwner == attempt.LeaseOwner && current.LastAttemptAt.Equal(attempt.LastAttemptAt)
+}
+
+// The provider may return after cancellation. Give its evidence a bounded
+// opportunity to reach the database even if the original request has ended.
+func (s *Server) recordLateCreateResult(ctx context.Context, attempt state.RunnerState, sandboxID string) error {
+	checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.store.RecordSandboxCreateResult(checkpointCtx, attempt, sandboxID)
 }
 
 func (s *Server) failStart(attempt state.RunnerState, stage string, failure error) {
@@ -931,7 +982,7 @@ func (s *Server) failStart(attempt state.RunnerState, stage string, failure erro
 		return
 	}
 	result := s.applyFailure(&current, stage, failure, true)
-	if err := s.store.WriteState(current); err != nil {
+	if err := writeWatchObservation(s.store, current, attempt.WatchToken); err != nil {
 		s.logger.Error("write failed state", "id", attempt.ID, "stage", stage, "cause", failure, "error", err)
 		return
 	}
@@ -979,7 +1030,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 	}
 	if attempt.watchToken != "" {
 		checkCtx, cancel := context.WithTimeout(context.Background(), s.runnerWatchTTL()/3)
-		live, err := s.store.RenewRunningWatch(checkCtx, id, attempt.watchToken, s.runnerWatchTTL())
+		live, err := s.store.RenewRunnerWatch(checkCtx, id, attempt.watchToken, s.runnerWatchTTL())
 		cancel()
 		if !live || err != nil {
 			unlock()
@@ -1030,7 +1081,7 @@ func (s *Server) runnerExitedForAttempt(id string, attempt runnerAttemptIdentity
 			if st.AssignedJobName == "" {
 				st.AssignedJobName = runnerJobStartedMarker
 			}
-			if writeErr := s.writeWatchObservation(st, attempt.watchToken); writeErr != nil {
+			if writeErr := writeWatchObservation(s.store, st, attempt.watchToken); writeErr != nil {
 				s.logger.Warn("discarded busy runner observation", "id", id, "error", writeErr)
 				unlock()
 				return
@@ -1285,7 +1336,7 @@ func markRunnerCleanupStarted(st *state.RunnerState, startedAt time.Time) {
 
 func (s *Server) writeRunnerCleanupStart(id string, st *state.RunnerState, startedAt time.Time, watchToken string) error {
 	markRunnerCleanupStarted(st, startedAt)
-	if err := s.writeWatchObservation(*st, watchToken); err != nil {
+	if err := writeWatchObservation(s.store, *st, watchToken); err != nil {
 		if watchToken != "" && errors.Is(err, state.ErrConflict) {
 			return err
 		}
@@ -1320,13 +1371,14 @@ func (s *Server) recoverRunnerInState(ctx context.Context, id, requiredStatus st
 		return nil
 	}
 	token := rand.Text()
-	if st.Status == state.StatusRunning {
-		claimed, err := s.store.ClaimRunningWatch(ctx, st, token, s.runnerWatchTTL())
+	if st.Status == state.StatusRunning || st.Status == state.StatusCreating {
+		claimed, err := s.store.ClaimRunnerWatch(ctx, st, token, s.runnerWatchTTL())
 		if err != nil || !claimed {
 			unlock()
 			return err
 		}
 		st.Version++
+		st.WatchToken = token
 	}
 	s.logger.Info("recovering runner after restart", "id", id, "status", st.Status, "sandbox_id", st.SandboxID)
 	s.store.AppendLog(id, "control.log", []byte("recovering runner after service restart\n"))
@@ -1352,12 +1404,13 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 			cancelWatch()
 		}
 	}()
-	claimedRunning := st.Status == state.StatusRunning
-	if claimedRunning {
-		// A slow remote reconnect must not outlive an unrenewed recovery claim.
-		go s.renewRunnerWatch(watchCtx, cancelWatch, st.ID, watchToken)
-	}
+	ctx, cancelRemote := context.WithCancel(ctx)
+	defer cancelRemote()
+	go s.renewRunnerWatch(watchCtx, func() { cancelRemote(); cancelWatch() }, st.ID, watchToken)
 
+	if st.Status == state.StatusCreating && st.FailureReason == interruptedCreateCleanup && st.SandboxID != "" {
+		return s.cleanupInterruptedCreation(ctx, st)
+	}
 	job, hasJob, err := s.workflowJobForRecovery(ctx, st)
 	if err != nil {
 		s.store.AppendLog(st.ID, "control.log", []byte("workflow job status check during recovery failed; continuing sandbox reconnect\n"))
@@ -1378,7 +1431,8 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	}
 
 	timeout := s.remainingSandboxTimeout(st, time.Now().UTC())
-	if timeout <= 0 {
+	expiredUnknownCreate := timeout <= 0 && st.Status == state.StatusCreating && st.SandboxCreateDispatched && st.SandboxID == ""
+	if timeout <= 0 && !expiredUnknownCreate {
 		s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout during recovery")
 		return nil
 	}
@@ -1389,6 +1443,18 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	sandboxService, err := s.sandboxServiceForRunnerRequest(ctx, req)
 	if err != nil {
 		return fmt.Errorf("resolve sandbox service for recovery: %w", err)
+	}
+	if expiredUnknownCreate {
+		box, err := sandboxService.FindRunnerSandbox(ctx, st.ID, st.ProvisionAttemptID)
+		if err != nil {
+			return fmt.Errorf("locate dispatched Sandbox after timeout: %w", err)
+		}
+		st.SandboxID = box
+		if err := s.store.WriteWatchedState(st, watchToken); err != nil {
+			return err
+		}
+		s.failAndStopRunnerVersion(ctx, st.ID, st.Version+1, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout during recovery")
+		return nil
 	}
 	// Keep this gate buffered and signal it exactly once after RecoverRunner
 	// returns: false on error or a deferred version-guard decision on success.
@@ -1417,6 +1483,16 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 			return nil
 		}
 		if st.Status == state.StatusCreating {
+			if st.SandboxCreateDispatched && st.SandboxID == "" && errors.Is(err, sandboxrunner.ErrSandboxNotFound) {
+				if st.LastErrorCode != "sandbox_create_outcome_unknown" {
+					st.LastErrorCode = "sandbox_create_outcome_unknown"
+					st.LastErrorMessage = "Awaiting provider confirmation for the dispatched Sandbox creation"
+					if writeErr := s.store.WriteWatchedState(st, watchToken); writeErr != nil {
+						return writeErr
+					}
+				}
+				return fmt.Errorf("dispatched Sandbox creation still awaiting provider evidence: %w", err)
+			}
 			switch {
 			case errors.Is(err, sandboxrunner.ErrSandboxNotFound) && (!hasJob || job.Status == "queued" || isWorkflowJobWaiting(job.Status)):
 				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
@@ -1424,13 +1500,15 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 				s.failAndStopRunnerVersion(ctx, st.ID, stateVersion, "recovery", "sandbox_not_found", "runner sandbox no longer exists after interrupted creation")
 				return nil
 			case errors.Is(err, sandboxrunner.ErrRunnerNotFound) && result.SandboxID != "":
-				stopErr := s.stopSandboxWithTimeout(ctx, st.ID, result.SandboxID, 0)
-				if stopErr != nil && !isSandboxGone(stopErr) {
-					s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("cleanup interrupted runner creation failed\n"))
-					return fmt.Errorf("stop sandbox without runner before requeue: %w", stopErr)
+				// Persist the exact cleanup target before deleting it. Once this
+				// decision commits, a later recovery must finish it rather than adopt.
+				st.SandboxID = result.SandboxID
+				st.FailureStage, st.FailureReason = "recovery", interruptedCreateCleanup
+				if err := s.store.WriteWatchedState(st, watchToken); err != nil {
+					return err
 				}
-				s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("stopped sandbox without runner process after restart\n"))
-				return s.requeueInterruptedCreation(ctx, st.ID, stateVersion)
+				st.Version++
+				return s.cleanupInterruptedCreation(ctx, st)
 			}
 		}
 		// A running request must reconnect to its persisted PID. If that exact
@@ -1488,9 +1566,6 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		return fmt.Errorf("write recovered runner state: %w", err)
 	}
 	keepWatch = true
-	if !claimedRunning {
-		go s.renewRunnerWatch(watchCtx, cancelWatch, st.ID, watchToken)
-	}
 	acceptExitWatch = runnerAttemptIdentity{provisionID: st.ProvisionAttemptID, watchToken: watchToken, sandboxID: result.SandboxID, processPID: result.PID}
 	s.logger.Info("runner reconnected after restart", "id", st.ID, "sandbox_id", result.SandboxID, "pid", result.PID)
 	s.store.AppendLog(st.ID, "control.log", []byte(fmt.Sprintf("runner reconnected after restart sandbox_id=%s pid=%d\n", result.SandboxID, result.PID)))
@@ -1524,6 +1599,17 @@ func (s *Server) remainingSandboxTimeout(st state.RunnerState, now time.Time) ti
 	}
 	remaining := s.cfg.SandboxTimeout - now.Sub(startedAt)
 	return min(remaining, s.cfg.SandboxTimeout)
+}
+
+const interruptedCreateCleanup = "interrupted_create_cleanup"
+
+func (s *Server) cleanupInterruptedCreation(ctx context.Context, st state.RunnerState) error {
+	err := s.stopSandboxWithTimeout(ctx, st.ID, st.SandboxID, 0)
+	if err != nil && !isSandboxGone(err) {
+		return fmt.Errorf("stop interrupted Sandbox before retry: %w", err)
+	}
+	s.store.AppendStagedLog(st.ID, "control.log", runnerEventStageSandboxCleanup, []byte("stopped sandbox without runner process after restart\n"))
+	return s.requeueInterruptedCreation(ctx, st.ID, st.Version)
 }
 
 func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
@@ -1567,7 +1653,7 @@ func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stat
 	st.StoppingAt = time.Time{}
 	clearRunnerEnvironmentSnapshot(&st)
 	clearSandboxServiceSnapshot(&st)
-	if err := s.store.WriteState(st); err != nil {
+	if err := writeWatchObservation(s.store, st, st.WatchToken); err != nil {
 		return fmt.Errorf("requeue interrupted runner creation: %w", err)
 	}
 	s.logger.Info("interrupted runner creation requeued after restart", "id", id)
@@ -1671,6 +1757,46 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 	}
 	s.logger.Info("runner marked stopping", "id", id, "sandbox_id", st.SandboxID, "pid", st.ProcessPID)
 	st.Version++
+	if st.SandboxCreateDispatched && st.SandboxID == "" {
+		req, err := s.store.ReadRequest(id)
+		if err != nil {
+			return st, false, err
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, s.cfg.SandboxStopTimeout)
+		defer cancel()
+		service, err := s.sandboxServiceForRunnerRequest(lookupCtx, req)
+		if err != nil {
+			return st, false, err
+		}
+		box, err := service.FindRunnerSandbox(lookupCtx, id, st.ProvisionAttemptID)
+		if errors.Is(err, sandboxrunner.ErrSandboxNotFound) {
+			st.LastErrorCode = "sandbox_create_outcome_unknown"
+			st.LastErrorMessage = "Stop is waiting for the dispatched Sandbox creation"
+			st.NextRetryAt = time.Now().UTC().Add(s.runnerWatchTTL())
+			if err := s.store.WriteState(st); err != nil {
+				return st, false, err
+			}
+			st.Version++
+			return st, false, nil
+		}
+		if err != nil {
+			return st, false, err
+		}
+		if err := s.store.RecordSandboxCreateResult(ctx, st, box); err != nil {
+			return st, false, err
+		}
+		st.SandboxID = box
+		// Recording the ID is a conditional write independent of this stop.
+		// Reload before acting if another owner advanced the row.
+		current, err := s.store.ReadState(id)
+		if err != nil {
+			return st, false, err
+		}
+		if current.Status != state.StatusStopping || current.ProvisionAttemptID != st.ProvisionAttemptID || current.SandboxID != box {
+			return current, false, nil
+		}
+		st = current
+	}
 	if st.SandboxID != "" {
 		s.store.AppendStagedLog(id, "control.log", runnerEventStageSandboxCleanup, []byte(fmt.Sprintf("sandbox stop requested sandbox_id=%s pid=%d\n", st.SandboxID, st.ProcessPID)))
 		if err := s.stopSandboxWithTimeout(ctx, id, st.SandboxID, st.ProcessPID); err != nil {
@@ -2262,7 +2388,7 @@ func (s *Server) deferCreatingRequest(attempt state.RunnerState, delay time.Dura
 	st.ScheduleQueuedRetry(delay)
 	clearRunnerEnvironmentSnapshot(&st)
 	clearSandboxServiceSnapshot(&st)
-	if err := s.store.WriteState(st); err != nil {
+	if err := writeWatchObservation(s.store, st, st.WatchToken); err != nil {
 		s.logger.Error("defer sponsored runner request", "id", id, "error", err)
 	}
 }
@@ -2563,6 +2689,7 @@ func (s *Server) retainWindowsJITCleanup(id string, _ time.Time) {
 
 // The caller holds the request lock through cleanup and persistence.
 func (s *Server) writeWindowsJITCleanupPending(current *state.RunnerState) error {
+	token := current.WatchToken
 	markRunnerCleanupStarted(current, time.Now().UTC())
 	setTerminationSource(current, state.TerminationSourceFailureCleanup)
 	current.FailureStage = "cleanup"
@@ -2571,7 +2698,7 @@ func (s *Server) writeWindowsJITCleanupPending(current *state.RunnerState) error
 	current.LeaseOwner = ""
 	current.LeaseExpiresAt = time.Time{}
 	current.NextRetryAt = time.Now().UTC().Add(s.retryDelay(1))
-	if err := s.store.WriteState(*current); err != nil {
+	if err := writeWatchObservation(s.store, *current, token); err != nil {
 		return err
 	}
 	s.store.AppendStagedLog(current.ID, "control.log", runnerEventStageGitHubRunnerCleanup, []byte("JIT Runner cleanup pending; recovery will reconcile registration\n"))
@@ -2582,40 +2709,57 @@ var errRunnerCreationSuperseded = errors.New("runner creation attempt superseded
 
 // Serialize bounded registration API calls with cancellation/requeue. Long
 // Sandbox provisioning remains outside the lifecycle lock.
-func (s *Server) prepareWindowsJIT(ctx context.Context, req state.RunnerRequest, attemptAt time.Time) (github.RunnerJITConfig, error) {
+func (s *Server) prepareWindowsJIT(ctx context.Context, req state.RunnerRequest, attempt state.RunnerState) (github.RunnerJITConfig, error) {
 	unlock := s.lockRunner(req.ID)
 	defer unlock()
 	current, err := s.store.ReadState(req.ID)
 	if err != nil {
 		return github.RunnerJITConfig{}, err
 	}
-	if current.Status != state.StatusCreating || !current.LastAttemptAt.Equal(attemptAt) {
+	if !sameCreatingAttempt(current, attempt) {
 		return github.RunnerJITConfig{}, errRunnerCreationSuperseded
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	if attempt.WatchToken != "" {
+		if err := s.requireRunnerWatch(ctx, req.ID, attempt.WatchToken); err != nil {
+			return github.RunnerJITConfig{}, err
+		}
+	}
 	// Reconcile an interrupted attempt before reusing its unique name.
 	if err := s.cleanupGitHubRunner(ctx, current); err != nil {
 		return github.RunnerJITConfig{}, err
 	}
+	if attempt.WatchToken != "" {
+		if err := s.requireRunnerWatch(ctx, req.ID, attempt.WatchToken); err != nil {
+			return github.RunnerJITConfig{}, err
+		}
+	}
 	return s.gh.CreateRunnerJITConfig(ctx, req.RepositoryFullName, req.RunnerGroup, req.RunnerName, req.Labels)
 }
 
-func (s *Server) cleanupWindowsJIT(req state.RunnerRequest, attemptAt time.Time, runnerID int64) error {
+func (s *Server) cleanupWindowsJIT(req state.RunnerRequest, attempt state.RunnerState, runnerID int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.SandboxStopTimeout)
 	defer cancel()
-	if runnerID > 0 {
-		return s.gh.RemoveRunner(ctx, req.RepositoryFullName, req.RunnerGroup, runnerID)
-	}
-	// A lost response provides no ID. Never let a stale attempt delete a
-	// replacement by name; keep the check and API call under the same lock.
 	unlock := s.lockRunner(req.ID)
 	defer unlock()
 	current, err := s.store.ReadState(req.ID)
 	if err != nil {
 		return err
 	}
-	if !current.LastAttemptAt.Equal(attemptAt) {
+	if current.ProvisionAttemptID == attempt.ProvisionAttemptID && (current.Status == state.StatusRunning || current.Status == state.StatusStopping || (current.Status == state.StatusCreating && current.WatchToken != attempt.WatchToken)) {
+		return nil
+	}
+	if current.Status == state.StatusCreating && current.ProvisionAttemptID == attempt.ProvisionAttemptID && attempt.WatchToken != "" {
+		if err := s.requireRunnerWatch(ctx, req.ID, attempt.WatchToken); err != nil {
+			return err
+		}
+	}
+	if runnerID > 0 {
+		return s.gh.RemoveRunner(ctx, req.RepositoryFullName, req.RunnerGroup, runnerID)
+	}
+	// A lost JIT response can be reconciled by name only for its own attempt.
+	if current.ProvisionAttemptID != attempt.ProvisionAttemptID || !current.LastAttemptAt.Equal(attempt.LastAttemptAt) {
 		return nil
 	}
 	_, err = s.gh.RemoveRunnerByName(ctx, req.RepositoryFullName, req.RunnerGroup, req.RunnerName)

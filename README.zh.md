@@ -264,7 +264,7 @@ runnerd 处理 `queued`、`in_progress` 和 `completed` 动作。对于 `workflo
 
 启动前 REST 查询返回 `waiting`、`pending` 或 `requested` 时，请求保留排队状态，按指数退避复查且延迟有上限，不占用 Runner 资源或 lease。`in_progress` 只监测已有执行，不重复创建 Runner。后续 queued 投递可唤醒等待请求；没有新 webhook 也会自动复查。审批及并发等待超时由 GitHub 控制；未知状态或查询失败使用已配置的有限重试次数，耗尽后明确失败，不记为成功完成。HTTP 429 和 GitHub secondary rate limit 即使耗尽该次数也保持排队并按有上限的退避重试，限流解除后自动恢复。历史误标记录的定向恢复见[测试与排查指南](docs/zh/testing.md#等待中的-workflow-job)。
 
-runnerd 只将 GitHub Job 查询结果、Sandbox 凭据快照和启动失败写入发起操作的那次创建记录。恢复流程已接管 Sandbox 后，原节点收到的启动错误会被丢弃，任务继续运行并保留重试次数。
+准入事务会同时授予 worker 创建租约。runnerd 在调用 Sandbox 前记录本次创建已发出，收到服务返回的 Sandbox ID 后立即入库。如果节点在保存 ID 前退出，接管节点会按原尝试标识查回。首次查不到时，任务保留在创建状态并继续占用配额，等待服务端确认。此时收到的停止请求也会等待资源查回并清理。确认上一次创建结果后才能开始新的尝试。
 
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener 而 `run.sh` 仍返回 0，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），runnerd 不把请求记为完成或失败，而是按同样的有限退避重试；重试前会先复查 Job 再创建 Sandbox。
 

@@ -179,10 +179,10 @@ func TestWindowsJITStaleAttemptCannotMutateReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, _ := store.ReadRequest(old.ID)
-	if _, err := srv.prepareWindowsJIT(t.Context(), req, old.LastAttemptAt); !errors.Is(err, errRunnerCreationSuperseded) {
+	if _, err := srv.prepareWindowsJIT(t.Context(), req, old); !errors.Is(err, errRunnerCreationSuperseded) {
 		t.Fatalf("stale registration: %v", err)
 	}
-	if err := srv.cleanupWindowsJIT(req, old.LastAttemptAt, 0); err != nil {
+	if err := srv.cleanupWindowsJIT(req, old, 0); err != nil {
 		t.Fatal(err)
 	}
 	srv.retainWindowsJITCleanup(old.ID, old.LastAttemptAt)
@@ -218,7 +218,7 @@ func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
 	}
 	req, _ := store.ReadRequest(st.ID)
 	done := make(chan error, 1)
-	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st.LastAttemptAt); done <- err }()
+	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st); done <- err }()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
@@ -264,7 +264,7 @@ func (s *windowsTimestampPrecisionStore) WriteState(st state.RunnerState) error 
 	return s.Store.WriteState(st)
 }
 
-func (s *windowsTimestampPrecisionStore) WriteQueuedClaim(st state.RunnerState, owner string) error {
+func (s *windowsTimestampPrecisionStore) BeginRunnerCreation(st state.RunnerState, ttl time.Duration) error {
 	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
-	return s.Store.WriteQueuedClaim(st, owner)
+	return s.Store.BeginRunnerCreation(st, ttl)
 }

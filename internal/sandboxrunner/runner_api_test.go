@@ -48,6 +48,39 @@ func TestCreateRunnerSandboxTagsProvisionAttempt(t *testing.T) {
 	}
 }
 
+func TestRunnerCreateOutcomeEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		unknown bool
+	}{
+		{"rejected", http.StatusBadRequest, `{"message":"invalid template"}`, false},
+		{"ambiguous", http.StatusConflict, `{"message":"create is in progress"}`, true},
+		{"checkpoint before readiness", http.StatusCreated, `{"sandboxID":"accepted","templateID":"test","envdAccessToken":"fixture"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("unexpected provider call %s", r.Method)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer api.Close()
+			var saved string
+			got, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "request", ProvisionAttemptID: "attempt", TemplateID: "test", RecordSandbox: func(_ context.Context, id string) error { saved = id; return errors.New("lost checkpoint reply") }})
+			if err == nil || errors.Is(err, ErrCreateOutcomeUnknown) != tc.unknown {
+				t.Fatalf("unexpected outcome: %v", err)
+			}
+			if tc.status == http.StatusCreated && (saved != "accepted" || got.SandboxID != saved) {
+				t.Fatal("lost confirmed Sandbox identity")
+			}
+		})
+	}
+}
+
 func TestFindRunnerSandboxByProvisionAttempt(t *testing.T) {
 	const legacy = `{"sandboxID":"historical","metadata":{"app":"e2b-github-runner","request_id":"job"}}`
 	const current = `{"sandboxID":"current","metadata":{"app":"e2b-github-runner","request_id":"job","provision_attempt_id":"attempt-2"}}`
@@ -74,7 +107,7 @@ func TestFindRunnerSandboxByProvisionAttempt(t *testing.T) {
 				fmt.Fprint(w, tc.response)
 			}))
 			defer ts.Close()
-			id, err := newTestService(t, ts).findRunnerSandbox(t.Context(), "job", tc.attempt)
+			id, err := newTestService(t, ts).FindRunnerSandbox(t.Context(), "job", tc.attempt)
 			if id != tc.want || errors.Is(err, ErrSandboxNotFound) != tc.notFound ||
 				(err != nil && !errors.Is(err, ErrSandboxNotFound)) != tc.ambiguous {
 				t.Fatalf("lookup returned id=%q err=%v", id, err)

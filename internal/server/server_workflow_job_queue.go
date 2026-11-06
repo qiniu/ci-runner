@@ -62,7 +62,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			st.NextRetryAt = time.Time{}
 			st.Error, st.FailureStage, st.FailureReason = "", "", ""
 			st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
-			if err := s.store.WriteState(st); err != nil {
+			if err := writeWatchObservation(s.store, st, attempt.WatchToken); err != nil {
 				return false, err
 			}
 		}
@@ -126,7 +126,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if st.Status == state.StatusQueued {
 		st.ScheduleQueuedRetry(retryDelay)
 	}
-	if err := s.store.WriteState(st); err != nil {
+	if err := writeWatchObservation(s.store, st, attempt.WatchToken); err != nil {
 		return false, err
 	}
 	if st.Status == state.StatusFailed {

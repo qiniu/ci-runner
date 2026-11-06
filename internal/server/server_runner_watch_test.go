@@ -146,7 +146,7 @@ func TestRunnerWatchDiscardsBusyCheckErrorAfterTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	const ttl = 200 * time.Millisecond
-	if ok, err := store.ClaimRunningWatch(t.Context(), st, "old", ttl); err != nil || !ok {
+	if ok, err := store.ClaimRunnerWatch(t.Context(), st, "old", ttl); err != nil || !ok {
 		t.Fatalf("initial watch claim: %v, %v", ok, err)
 	}
 	lookup, release := make(chan struct{}, 1), make(chan struct{})
@@ -172,7 +172,7 @@ func TestRunnerWatchDiscardsBusyCheckErrorAfterTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(4 * time.Second); ; {
-		ok, err := store.ClaimRunningWatch(t.Context(), current, "new", time.Minute)
+		ok, err := store.ClaimRunnerWatch(t.Context(), current, "new", time.Minute)
 		if err != nil || time.Now().After(deadline) {
 			t.Fatalf("watch takeover failed: %v", err)
 		}

@@ -3662,6 +3662,10 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 		t.Fatal(err)
 	}
 	st.Version++
+	if ok, err := store.ClaimRunnerWatch(t.Context(), st, "first", time.Minute); !ok || err != nil {
+		t.Fatalf("claim creating watch: %v, %v", ok, err)
+	}
+	st.Version++
 	st.Status, st.SandboxID, st.ProcessPID = StatusRunning, "sandbox", 42
 	if err := store.AdoptRunningWatch(st, "first", time.Minute); err != nil {
 		t.Fatal(err)
@@ -3670,10 +3674,10 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := store.ClaimRunningWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
+	if ok, err := store.ClaimRunnerWatch(t.Context(), observed, "second", time.Minute); ok || err != nil {
 		t.Fatalf("claimed healthy watch: %v, %v", ok, err)
 	}
-	if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
+	if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); !ok || err != nil {
 		t.Fatalf("renew: %v, %v", ok, err)
 	}
 	again, err := store.ReadState(st.ID)
@@ -3683,10 +3687,10 @@ func testRunningWatch(t *testing.T, store *DBStore) {
 	if err := db.Model(&runnerRequestRecord{}).Where("id = ?", st.ID).UpdateColumn("watch_expires_at", time.Unix(1, 0).UTC()).Error; err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := store.RenewRunningWatch(t.Context(), st.ID, "first", time.Minute); ok || err != nil {
+	if ok, err := store.RenewRunnerWatch(t.Context(), st.ID, "first", time.Minute); ok || err != nil {
 		t.Fatalf("revived expired watch: %v, %v", ok, err)
 	}
-	if ok, err := store.ClaimRunningWatch(t.Context(), observed, "second", time.Minute); !ok || err != nil {
+	if ok, err := store.ClaimRunnerWatch(t.Context(), observed, "second", time.Minute); !ok || err != nil {
 		t.Fatalf("takeover: %v, %v", ok, err)
 	}
 	latest, err := store.ReadState(st.ID)
@@ -3731,7 +3735,8 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	creating.Status = StatusCreating
 	creating.ProvisionAttemptID = "attempt-under-test"
 	injected := errors.New("rollback admission")
-	write := func(tx Store) error { return tx.WriteQueuedClaim(creating, claim.LeaseOwner) }
+	creating.WatchToken = "first"
+	write := func(tx Store) error { return tx.BeginRunnerCreation(creating, time.Minute) }
 	err = store.WithRunnerAdmission(t.Context(), func(tx Store) error {
 		if err := write(tx); err != nil {
 			return err
@@ -3759,12 +3764,33 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	if err != nil || current.ProvisionAttemptID != creating.ProvisionAttemptID {
 		t.Fatalf("persisted attempt = %q, err = %v", current.ProvisionAttemptID, err)
 	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "old", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong owner dispatched: %v", err)
+	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "first", creating.ProvisionAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DispatchSandboxCreate(t.Context(), id, "first", creating.ProvisionAttemptID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate dispatch: %v", err)
+	}
+	stale := creating
+	stale.WatchToken = "expired-owner"
+	if err := store.RecordSandboxCreateResult(t.Context(), stale, ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale rejection cleared dispatch: %v", err)
+	}
+	if err := store.RecordSandboxCreateResult(t.Context(), creating, "created"); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.ReadState(id)
+	if err != nil || !current.SandboxCreateDispatched || current.SandboxID != "created" {
+		t.Fatalf("missing create receipt: %v", err)
+	}
 	current.Status = StatusFailed
 	if err := store.WriteState(current); err != nil {
 		t.Fatal(err)
 	}
 	retried, err := store.RetryRequest(id, time.Now())
-	if err != nil || retried.ProvisionAttemptID != "" {
+	if err != nil || retried.ProvisionAttemptID != "" || retried.SandboxCreateDispatched {
 		t.Fatalf("retry retained attempt %q, err = %v", retried.ProvisionAttemptID, err)
 	}
 }
@@ -5233,7 +5259,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
-	if record.ProvisionAttemptID != "" {
+	if record.ProvisionAttemptID != "" || record.SandboxCreateDispatched {
 		t.Fatal("migration assigned a new attempt to historical state")
 	}
 	if !record.UpdatedAt.Equal(originalUpdatedAt) {
@@ -5243,6 +5269,7 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"provision_attempt_id",
 		"watch_token",
 		"watch_expires_at",
+		"sandbox_create_dispatched",
 		"github_job_name",
 		"github_job_status",
 		"github_job_conclusion",

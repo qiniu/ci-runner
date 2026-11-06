@@ -457,12 +457,12 @@ func (s *completionFailureStore) ReadState(id string) (state.RunnerState, error)
 	return s.Store.ReadState(id)
 }
 
-func (s *completionFailureStore) WriteState(st state.RunnerState) error {
+func (s *completionFailureStore) WriteWatchedState(st state.RunnerState, token string) error {
 	if s.failWrite && st.Status == state.StatusCompleted {
 		s.failWrite = false
 		return errors.New("temporary completion state write failure")
 	}
-	return s.Store.WriteState(st)
+	return s.Store.WriteWatchedState(st, token)
 }
 
 func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {

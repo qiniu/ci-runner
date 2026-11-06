@@ -177,6 +177,15 @@ func (f *fakeSandbox) StartRunner(ctx context.Context, input sandboxrunner.Start
 	return sandboxrunner.StartResult{SandboxID: "sb-" + input.RequestID, PID: 42}, nil
 }
 
+func (f *fakeSandbox) FindRunnerSandbox(context.Context, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id := f.recoverResult.SandboxID; id != "" {
+		return id, nil
+	}
+	return "", sandboxrunner.ErrSandboxNotFound
+}
+
 func (f *fakeSandbox) RecoverRunner(ctx context.Context, input sandboxrunner.RecoverInput) (sandboxrunner.StartResult, error) {
 	f.mu.Lock()
 	f.recovered++
@@ -6092,8 +6101,10 @@ func TestStopDuringCreateCleansStartedSandbox(t *testing.T) {
 		t.Fatalf("sandbox should not stop before creation returns, got %d stops", fake.stoppedCount())
 	}
 
+	assertAdmissionState(t, store, "manual-creating", state.StatusStopping)
 	close(block)
 	waitForStops(t, fake, 1)
+	waitForState(t, store, "manual-creating", state.StatusCompleted)
 	st, err := store.ReadState("manual-creating")
 	if err != nil {
 		t.Fatal(err)

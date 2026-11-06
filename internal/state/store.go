@@ -246,6 +246,8 @@ type RunnerState struct {
 	UpdatedAt                       time.Time `json:"updated_at"`
 	CreatedAt                       time.Time `json:"created_at"`
 	ProvisionAttemptID              string    `json:"-"`
+	WatchToken                      string    `json:"-"`
+	SandboxCreateDispatched         bool      `json:"-"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
 	queueRetryDelay                 *time.Duration
@@ -549,9 +551,12 @@ type SandboxServiceDefaultAudience struct {
 
 type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
-	ClaimRunningWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
-	RenewRunningWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
-	ListExpiredRunningWatches(ctx context.Context, limit int) ([]string, error)
+	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
+	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
+	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerState, error)
+	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
+	DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error
+	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
 	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error
 	WriteWatchedState(st RunnerState, token string) error
 	Ensure() error
