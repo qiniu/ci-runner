@@ -29,7 +29,7 @@ type runnerRequestRecord struct {
 	ProfileScopeID                  int64      `gorm:"column:profile_scope_id;index:idx_runner_requests_profile_scope_status,priority:3"`
 	RunnerGroup                     string     `gorm:"column:runner_group"`
 	RunnerName                      string     `gorm:"column:runner_name;not null"`
-	Status                          string     `gorm:"column:status;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_lease_expiry;index:idx_runner_requests_sponsor_inflight,priority:3"`
+	Status                          string     `gorm:"column:status;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_lease_expiry;index:idx_runner_requests_sponsor_inflight,priority:3;index:idx_runner_watch_expiry,priority:1"`
 	FailureStage                    string     `gorm:"column:failure_stage"`
 	FailureReason                   string     `gorm:"column:failure_reason"`
 	LastErrorCode                   string     `gorm:"column:last_error_code"`
@@ -57,6 +57,15 @@ type runnerRequestRecord struct {
 	Error                           string     `gorm:"column:error"`
 	GitHubPayloadJSON               string     `gorm:"column:github_payload_json;type:text"`
 	QueuedAt                        time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
+	WatchToken                      string     `gorm:"column:watch_token;size:64"`
+	WatchExpiresAt                  *time.Time `gorm:"column:watch_expires_at;index:idx_runner_watch_expiry,priority:2"`
+	JITRegistrationState            string     `gorm:"column:jit_registration_state;size:16"`
+	SandboxCreateDispatched         bool       `gorm:"column:sandbox_create_dispatched"`
+	ManualStopRequested             bool       `gorm:"column:manual_stop_requested"`
+	CleanupSandboxDone              bool       `gorm:"column:cleanup_sandbox_done"`
+	CleanupGitHubDone               bool       `gorm:"column:cleanup_github_done"`
+	CleanupGitHubRunnerID           int64      `gorm:"column:cleanup_github_runner_id"`
+	ProvisionAttemptID              string     `gorm:"column:provision_attempt_id;size:64"`
 	LastAttemptAt                   *time.Time `gorm:"column:last_attempt_at"`
 	NextRetryAt                     *time.Time `gorm:"column:next_retry_at;index:idx_runner_requests_status_retry_queue"`
 	CreatingAt                      *time.Time `gorm:"column:creating_at"`
@@ -203,6 +212,14 @@ type runnerEventRecord struct {
 }
 
 func (runnerEventRecord) TableName() string { return "runner_events" }
+
+// Fixed rows guard capacity updates and catalog edits. In-flight capacity
+// lives in runner_requests.
+type runnerAdmissionGuardRecord struct {
+	ID int `gorm:"primaryKey;autoIncrement:false"`
+}
+
+func (runnerAdmissionGuardRecord) TableName() string { return "runner_admission_guard" }
 
 type runnerProfileRecord struct {
 	TemplateSource      string    `gorm:"column:template_source;not null;default:''"`
