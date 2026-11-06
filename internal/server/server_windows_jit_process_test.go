@@ -37,6 +37,11 @@ func TestWindowsJITRegistrationProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Start the ownership clock after the child and its database are ready.
+		if ok, err := store.ClaimRunnerWatch(t.Context(), st, "original", time.Second); !ok || err != nil {
+			t.Fatal("original failed to claim", err)
+		}
+		st = assertAdmissionState(t, store, id, state.StatusCreating)
 		_, err = srv.prepareWindowsJIT(t.Context(), req, st)
 		if err != nil && os.Getenv("RUNNERD_TEST_JIT_MODE") != "reject" {
 			t.Fatal(err)
@@ -60,13 +65,6 @@ func TestWindowsJITRegistrationProcess(t *testing.T) {
 			st.LastAttemptAt = time.Now().UTC()
 			if err := store.WriteState(st); err != nil {
 				t.Fatal(err)
-			}
-			st, err = store.ReadState(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ok, err := store.ClaimRunnerWatch(t.Context(), st, "original", time.Second); !ok || err != nil {
-				t.Fatal("original failed to claim", err)
 			}
 			var registrationVisible, removed atomic.Bool
 			var posts, deletes atomic.Int32
