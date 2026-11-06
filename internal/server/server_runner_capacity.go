@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 			st.NextRetryAt = time.Time{}
 		}
 		st.Status = state.StatusCreating
+		st.ProvisionAttemptID = rand.Text()
 		if sandboxrunner.PlatformForLabels(req.Labels) == sandboxrunner.PlatformWindows {
 			attemptAt := time.Now().UTC().Truncate(time.Millisecond)
 			if !attemptAt.After(st.LastAttemptAt) {

@@ -744,6 +744,10 @@ func TestRunnerLifecycleManagedDefaultResolvesBeforeRegistration(t *testing.T) {
 	if len(inputs) != 1 || inputs[0].TemplateID != "scoped-template-id" {
 		t.Fatalf("StartRunner inputs = %#v, want resolved scoped template id", inputs)
 	}
+	running, err := baseStore.ReadState("managed-request")
+	if err != nil || running.ProvisionAttemptID == "" || inputs[0].ProvisionAttemptID != running.ProvisionAttemptID {
+		t.Fatalf("Sandbox start attempt %q differs from durable attempt %q (err=%v)", inputs[0].ProvisionAttemptID, running.ProvisionAttemptID, err)
+	}
 	if !inputs[0].RequireDocker {
 		t.Fatalf("managed StartRunner input does not require Docker: %#v", inputs[0])
 	}

@@ -245,6 +245,7 @@ type RunnerState struct {
 	RetryCount                      int       `json:"retry_count,omitempty"`
 	UpdatedAt                       time.Time `json:"updated_at"`
 	CreatedAt                       time.Time `json:"created_at"`
+	ProvisionAttemptID              string    `json:"-"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
 	CreatingAt                      time.Time `json:"creating_at,omitempty"`

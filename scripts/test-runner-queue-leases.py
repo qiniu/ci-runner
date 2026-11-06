@@ -158,12 +158,12 @@ def exercise_capacity(binary, directory, schema):
             sql(env, """INSERT INTO runner_profiles
                 (name,labels_json,template_id,max_concurrency,enabled,default_available,created_at,updated_at)
                 VALUES ('shared','["self-hosted"]','fixture',1,true,false,now(),now());
-                CREATE TABLE admissions (id text, worker text);
+                CREATE TABLE admissions (id text, worker text, attempt text NOT NULL CHECK (attempt <> ''));
                 CREATE FUNCTION record_admission() RETURNS trigger AS $$
                 BEGIN
                   IF OLD.status='queued' AND NEW.status='creating' THEN
                     PERFORM pg_sleep(0.5);
-                    INSERT INTO admissions VALUES (NEW.id, NEW.lease_owner);
+                    INSERT INTO admissions VALUES (NEW.id, NEW.lease_owner, NEW.provision_attempt_id);
                   END IF;
                   RETURN NEW;
                 END; $$ LANGUAGE plpgsql;
@@ -187,6 +187,7 @@ def exercise_capacity(binary, directory, schema):
                 UPDATE runner_requests SET next_retry_at=clock_timestamp() WHERE status='queued'""")
             wait_for("next job to use the released slot", lambda: sql(env,
                 "SELECT count(DISTINCT id) FROM admissions") == "2")
+            assert sql(env, "SELECT count(DISTINCT attempt) FROM admissions") == "2"
 
 
 def exercise_admission_crash(binary, directory, schema):
@@ -225,7 +226,8 @@ def exercise_admission_crash(binary, directory, schema):
             wait_for("A to lose its open transaction", lambda: sql(env, f"""SELECT count(*) FROM pg_stat_activity
                 WHERE application_name='{a_name}' AND xact_start IS NOT NULL""") == "0")
         assert sql(env, "SELECT count(*) FROM admissions") == "0"
-        assert sql(env, "SELECT status FROM runner_requests WHERE id='crash-admit'") == "queued"
+        assert sql(env, """SELECT status, COALESCE(provision_attempt_id, '') FROM runner_requests
+            WHERE id='crash-admit'""") == "queued|"
         sql(env, "UPDATE runner_requests SET lease_expires_at=clock_timestamp() WHERE id='crash-admit'")
         os.kill(b.pid, signal.SIGCONT)
         wait_for("B to reclaim and commit the rolled-back slot", lambda: sql(env,

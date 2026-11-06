@@ -561,6 +561,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		// Windows runners do not provide Docker.
 		requireDocker := profile.TemplateSource == state.TemplateSourcePublic && platform != sandboxrunner.PlatformWindows
 		input := sandboxrunner.StartInput{
+			ProvisionAttemptID: st.ProvisionAttemptID,
 			Platform:           platform,
 			RequestID:          req.ID,
 			RunnerName:         req.RunnerName,
@@ -1311,12 +1312,13 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 	// That prevents an attached OnExit watcher from owning rejected state.
 	exitWatchAccepted := make(chan runnerAttemptIdentity, 1)
 	result, err := sandboxService.RecoverRunner(ctx, sandboxrunner.RecoverInput{
-		Platform:       sandboxrunner.PlatformForLabels(req.Labels),
-		RequestID:      st.ID,
-		SandboxID:      st.SandboxID,
-		PID:            st.ProcessPID,
-		Timeout:        timeout,
-		CommandContext: s.loopCtx,
+		ProvisionAttemptID: st.ProvisionAttemptID,
+		Platform:           sandboxrunner.PlatformForLabels(req.Labels),
+		RequestID:          st.ID,
+		SandboxID:          st.SandboxID,
+		PID:                st.ProcessPID,
+		Timeout:            timeout,
+		CommandContext:     s.loopCtx,
 		OnExit: func(result sandboxrunner.ExitResult, err error) {
 			attempt := <-exitWatchAccepted
 			if attempt.specified() {

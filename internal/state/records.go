@@ -57,6 +57,7 @@ type runnerRequestRecord struct {
 	Error                           string     `gorm:"column:error"`
 	GitHubPayloadJSON               string     `gorm:"column:github_payload_json;type:text"`
 	QueuedAt                        time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
+	ProvisionAttemptID              string     `gorm:"column:provision_attempt_id;size:64"`
 	LastAttemptAt                   *time.Time `gorm:"column:last_attempt_at"`
 	NextRetryAt                     *time.Time `gorm:"column:next_retry_at;index:idx_runner_requests_status_retry_queue"`
 	CreatingAt                      *time.Time `gorm:"column:creating_at"`

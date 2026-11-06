@@ -3664,6 +3664,7 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	}
 	creating := claim
 	creating.Status = StatusCreating
+	creating.ProvisionAttemptID = "attempt-under-test"
 	injected := errors.New("rollback admission")
 	write := func(tx Store) error { return tx.WriteQueuedClaim(creating, claim.LeaseOwner) }
 	err = store.WithRunnerAdmission(t.Context(), func(tx Store) error {
@@ -3676,7 +3677,7 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 		t.Fatalf("expected injected error, got %v", err)
 	}
 	current, err := store.ReadState(id)
-	if err != nil || current.Status != StatusQueued || current.Version != claim.Version {
+	if err != nil || current.Status != StatusQueued || current.Version != claim.Version || current.ProvisionAttemptID != "" {
 		t.Fatalf("rollback: status=%s version=%d err=%v", current.Status, current.Version, err)
 	}
 	if err := store.WithRunnerAdmission(t.Context(), write); err != nil {
@@ -3689,6 +3690,19 @@ func testRunnerAdmissionRollback(t *testing.T, store *DBStore) {
 	if err != nil || count != 1 {
 		t.Fatalf("profile count = %d, err = %v", count, err)
 	}
+	current, err = store.ReadState(id)
+	if err != nil || current.ProvisionAttemptID != creating.ProvisionAttemptID {
+		t.Fatalf("persisted attempt = %q, err = %v", current.ProvisionAttemptID, err)
+	}
+	current.Status = StatusFailed
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := store.RetryRequest(id, time.Now())
+	if err != nil || retried.ProvisionAttemptID != "" {
+		t.Fatalf("retry retained attempt %q, err = %v", retried.ProvisionAttemptID, err)
+	}
+
 }
 
 func TestFreshSchemaIncludesScopedRunnerCatalog(t *testing.T) {
@@ -5155,10 +5169,14 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
+	if record.ProvisionAttemptID != "" {
+		t.Fatal("migration assigned a new attempt to historical state")
+	}
 	if !record.UpdatedAt.Equal(originalUpdatedAt) {
 		t.Fatalf("updated_at changed during migration: got %s want %s", record.UpdatedAt, originalUpdatedAt)
 	}
 	for _, column := range []string{
+		"provision_attempt_id",
 		"github_job_name",
 		"github_job_status",
 		"github_job_conclusion",

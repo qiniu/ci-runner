@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,62 @@ func newTestService(t *testing.T, ts *httptest.Server) *E2BService {
 		t.Fatalf("NewE2BService: %v", err)
 	}
 	return svc
+}
+
+func TestCreateRunnerSandboxTagsProvisionAttempt(t *testing.T) {
+	var called atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Metadata map[string]string `json:"metadata"`
+		}
+		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&body) != nil ||
+			body.Metadata["app"] != "e2b-github-runner" || body.Metadata["request_id"] != "job" ||
+			body.Metadata["provision_attempt_id"] != "attempt-2" {
+			t.Errorf("unexpected create metadata %v", body.Metadata)
+		}
+		called.Store(true)
+		http.Error(w, "fixture rejects creation", http.StatusBadRequest)
+	}))
+	defer api.Close()
+	_, err := newTestService(t, api).StartRunner(t.Context(), StartInput{RequestID: "job", ProvisionAttemptID: "attempt-2", TemplateID: "template"})
+	if !called.Load() || err == nil {
+		t.Fatalf("expected fixture to receive and reject create: called=%v err=%v", called.Load(), err)
+	}
+}
+
+func TestFindRunnerSandboxByProvisionAttempt(t *testing.T) {
+	const legacy = `{"sandboxID":"historical","metadata":{"app":"e2b-github-runner","request_id":"job"}}`
+	const current = `{"sandboxID":"current","metadata":{"app":"e2b-github-runner","request_id":"job","provision_attempt_id":"attempt-2"}}`
+	for _, tc := range []struct {
+		name, attempt, response, want string
+		notFound, ambiguous           bool
+	}{
+		{"missing metadata", "", `[{"sandboxID":"unverified"}]`, "", false, true},
+		{"current", "attempt-2", "[" + current + "]", "current", false, false},
+		{"absent", "attempt-2", "[]", "", true, false},
+		{"cannot verify", "attempt-2", "[" + legacy + "]", "", false, true},
+		{"duplicate external create", "attempt-2", "[" + current + "," + current + "]", "", false, true},
+		{"historical", "", "[" + current + "," + legacy + "]", "historical", false, false},
+		{"historical excludes retry", "", "[" + current + "]", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				filter, err := url.ParseQuery(r.URL.Query().Get("metadata"))
+				if err != nil || filter.Get("request_id") != "job" || filter.Get("app") != "e2b-github-runner" ||
+					filter.Has("provision_attempt_id") != (tc.attempt != "") || filter.Get("provision_attempt_id") != tc.attempt {
+					t.Errorf("incorrect sandbox filter: %v (%v)", filter, err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tc.response)
+			}))
+			defer ts.Close()
+			id, err := newTestService(t, ts).findRunnerSandbox(t.Context(), "job", tc.attempt)
+			if id != tc.want || errors.Is(err, ErrSandboxNotFound) != tc.notFound ||
+				(err != nil && !errors.Is(err, ErrSandboxNotFound)) != tc.ambiguous {
+				t.Fatalf("lookup returned id=%q err=%v", id, err)
+			}
+		})
+	}
 }
 
 func TestStopRunnerCapsLifetimeBeforeDelete(t *testing.T) {

@@ -6792,13 +6792,21 @@ func TestRecoverPromotesCreatingRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "interrupted-attempt"
 	st.CreatingAt = time.Now().UTC().Add(-time.Minute)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77}}
+	fake := &fakeSandbox{
+		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77},
+		recoverHook: func(input sandboxrunner.RecoverInput) {
+			if input.ProvisionAttemptID != "interrupted-attempt" || input.SandboxID != "" {
+				t.Errorf("unexpected recovery identity: attempt=%q sandbox=%q", input.ProvisionAttemptID, input.SandboxID)
+			}
+		},
+	}
 	srv := newTestServer(t, store, "http://example.test", fake)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)

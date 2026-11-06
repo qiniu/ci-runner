@@ -71,6 +71,7 @@ var runnerRequestListSelectColumns = []string{
 	"runner_exit_code",
 	"error",
 	"queued_at",
+	"provision_attempt_id",
 	"last_attempt_at",
 	"next_retry_at",
 	"creating_at",
@@ -241,6 +242,9 @@ func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 	}
 	now := time.Now().UTC()
 	st.UpdatedAt = now
+	if st.Status == StatusQueued {
+		st.ProvisionAttemptID = ""
+	}
 	applyStateTimestamps(&st, now)
 
 	updates := map[string]any{
@@ -284,6 +288,7 @@ func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 		"retry_count":                         st.RetryCount,
 		"updated_at":                          st.UpdatedAt,
 		"version":                             st.Version + 1,
+		"provision_attempt_id":                st.ProvisionAttemptID,
 		"last_attempt_at":                     zeroTimeToPointer(st.LastAttemptAt),
 		"next_retry_at":                       zeroTimeToPointer(st.NextRetryAt),
 		"creating_at":                         zeroTimeToPointer(st.CreatingAt),
@@ -960,6 +965,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			return ErrRetryNotAllowed
 		}
 		record.Status = StatusQueued
+		record.ProvisionAttemptID = ""
 		record.Error = ""
 		record.FailureStage = ""
 		record.FailureReason = ""
@@ -997,6 +1003,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		if err := tx.Model(&runnerRequestRecord{}).
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
+				"provision_attempt_id":                record.ProvisionAttemptID,
 				"status":                              record.Status,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,
