@@ -184,7 +184,7 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if err := store.WriteState(st); err != nil {
 					t.Fatal(err)
 				}
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -243,7 +243,7 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}
-				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); err != nil || start {
+				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st); err != nil || start {
 					t.Fatalf("terminal request must ignore a repeated lookup: start=%v err=%v", start, err)
 				}
 			}
@@ -301,7 +301,7 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 					if err := store.WriteState(st); err != nil {
 						t.Fatal(err)
 					}
-					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker")
+					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -398,7 +398,7 @@ func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
 		if err := base.WriteState(st); err != nil {
 			t.Fatal(err)
 		}
-		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "test-worker"); start || err != nil {
+		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st); start || err != nil {
 			t.Fatalf("unexpected start=%v err=%v", start, err)
 		}
 	}
@@ -446,16 +446,12 @@ func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
 
 type completionFailureStore struct {
 	state.Store
-	readCount int
-	failRead  bool
+	failRead  atomic.Bool
 	failWrite bool
 }
 
 func (s *completionFailureStore) ReadState(id string) (state.RunnerState, error) {
-	s.readCount++
-	// startClaimedRunner reads once, then the startup check reads before and after
-	// GitHub. Fail the final read inside completeWithoutSandbox only once.
-	if s.failRead && s.readCount == 4 {
+	if s.failRead.Swap(false) {
 		return state.RunnerState{}, errors.New("temporary completion state read failure")
 	}
 	return s.Store.ReadState(id)
@@ -472,7 +468,12 @@ func (s *completionFailureStore) WriteState(st state.RunnerState) error {
 func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 	for _, operation := range []string{"read", "write"} {
 		t.Run(operation, func(t *testing.T) {
+			var first atomic.Bool
+			injected := &completionFailureStore{failWrite: operation == "write"}
 			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if first.CompareAndSwap(false, true) {
+					injected.failRead.Store(operation == "read")
+				}
 				fmt.Fprint(w, `{"id":1001,"status":"completed","conclusion":"cancelled"}`)
 			}))
 			defer gh.Close()
@@ -482,10 +483,11 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 			srv.Close()
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
 			claim := queuedRunnerForTest(t, base, "1001", "test-worker")
-			srv.store = &completionFailureStore{Store: base, failRead: operation == "read", failWrite: operation == "write"}
+			injected.Store = base
+			srv.store = injected
 			srv.startClaimedRunner(context.Background(), claim)
 			st := queueTestState(t, base)
-			wantFailure := map[string]string{"read": "read runner state for skip", "write": "write skipped runner state"}[operation]
+			wantFailure := map[string]string{"read": "temporary completion state read failure", "write": "write skipped runner state"}[operation]
 			if !strings.Contains(st.LastErrorMessage, wantFailure) {
 				t.Fatalf("failure missed completion %s: %s", operation, st.LastErrorMessage)
 			}
@@ -513,7 +515,7 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 }
 
 func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
-	for _, status := range []string{"waiting", "queued", "completed", "lookup_error", "assignment_changed"} {
+	for _, status := range []string{"waiting", "queued", "completed", "lookup_error", "assignment_changed", "replaced"} {
 		t.Run(status, func(t *testing.T) {
 			lookup, resume := make(chan struct{}), make(chan struct{})
 			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -526,6 +528,8 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 				observed := status
 				if status == "assignment_changed" {
 					observed = "queued"
+				} else if status == "replaced" {
+					observed = "completed"
 				}
 				fmt.Fprintf(w, `{"id":1001,"status":%q}`, observed)
 			}))
@@ -535,22 +539,24 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 			srv.Close()
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
 			st := queueTestState(t, store)
-			st.Status, st.LeaseOwner = state.StatusCreating, "worker"
+			st.Status, st.LeaseOwner, st.ProvisionAttemptID = state.StatusCreating, "worker", "initial"
 			if err := store.WriteState(st); err != nil {
 				t.Fatal(err)
 			}
 			req, _ := store.ReadRequest("1001")
 			done := make(chan bool, 1)
-			go func() {
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, "worker")
+			go func(attempt state.RunnerState) {
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, attempt)
 				done <- start || err != nil
-			}()
+			}(st)
 			<-lookup
 			st = queueTestState(t, store)
 			st.Status = state.StatusCompleted
 			if status == "assignment_changed" {
 				st.Status = state.StatusCreating
 				st.AssignedJobID, st.AssignedJobName = 1001, "build"
+			} else if status == "replaced" {
+				st.Status, st.ProvisionAttemptID = state.StatusCreating, "replacement"
 			}
 			if err := store.WriteState(st); err != nil {
 				t.Fatal(err)
@@ -561,6 +567,10 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 			if status == "assignment_changed" {
 				if started || after.Status != state.StatusQueued || after.LeaseOwner != "" || after.NextRetryAt.IsZero() || after.AssignedJobID != 1001 {
 					t.Fatalf("stale assignment observation not deferred: %#v", after)
+				}
+			} else if status == "replaced" {
+				if started || after.Status != state.StatusCreating || after.Version != st.Version+1 || after.ProvisionAttemptID != "replacement" {
+					t.Fatal("stale Job lookup changed a replacement creation")
 				}
 			} else if started || after.Status != state.StatusCompleted {
 				t.Fatal("stale lookup advanced a completed request")

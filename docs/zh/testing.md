@@ -853,6 +853,8 @@ Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精
 空闲 Runner sweeper 使用额外的 `idle_cleanup` 终止来源，避免把从未接受 Job 的 Runner 成功清理误标成失败清理。
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），只要 Sandbox 和 GitHub Runner 注册都清理成功，请求就不记为完成或失败，而是按有限次数安排 `runner_exited_without_job` 重试；下次启动会先复查原 Job 再创建 Sandbox，重试耗尽后明确失败。
 
+`TestLateStartFailureAfterPeerAdoption` 使用两个服务进程和本地 Sandbox 替身。第二个进程先接管 Sandbox，第一个进程随后收到迟到的启动错误。测试检查数据库中的创建尝试、版本、Sandbox ID、PID 和重试次数，覆盖 SQLite 和 CI 的 PostgreSQL。
+
 运行中 Runner 的监听权保存在数据库。写入 running 状态、Sandbox ID 和 PID 的同时设置监听令牌及到期时间。连接存活时每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本号和时间戳。启动时跳过有效监听；后台每五秒按数据库时间扫描，一轮最多接管四条过期记录，使用新令牌重连原 Sandbox 和 PID。监听回调须持有有效令牌才能写忙碌状态或开始清理。创建中、停止中、Deploy 和终端完成故障切换验收后再按发布计划扩容。
 
 `TestRunnerWatchPostgresProcess` 使用两个独立 runnerd 服务进程、独立 PG 连接和本地 Sandbox 替身，覆盖健康续期、暂停超时、接管后旧回调到达，以及杀死第二个进程后原节点重新接管并完成任务。设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`，让 `RUNNERD_POSTGRES_TEST_DSN` 指向名称以 `_test` 结尾的专用数据库，再运行 `go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1`。

@@ -221,7 +221,7 @@ func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snap
 	if err != nil {
 		return fmt.Errorf("read state for sandbox config snapshot: %w", err)
 	}
-	if current.Status != state.StatusCreating || current.LeaseOwner != attempt.LeaseOwner || !current.LastAttemptAt.Equal(attempt.LastAttemptAt) {
+	if !sameCreatingAttempt(current, attempt) {
 		return errStaleSnapshotAttempt
 	}
 	current.SandboxAPIURL = snapshot.APIURL

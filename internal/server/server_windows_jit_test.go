@@ -186,7 +186,7 @@ func TestWindowsJITStaleAttemptCannotMutateReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.retainWindowsJITCleanup(old.ID, old.LastAttemptAt)
-	srv.failStartForAttempt(old.ID, old, "sandbox_start", errors.New("temporary failure"), &old.LastAttemptAt)
+	srv.failStart(old, "sandbox_start", errors.New("temporary failure"))
 	final, _ := store.ReadState(old.ID)
 	if calls.Load() != 0 || !final.LastAttemptAt.Equal(next.LastAttemptAt) || final.Status != state.StatusCreating || final.Error != "" {
 		t.Fatalf("stale attempt changed replacement: calls=%d status=%s", calls.Load(), final.Status)

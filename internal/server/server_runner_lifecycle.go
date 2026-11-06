@@ -400,7 +400,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 		return
 	}
 	var windowsAttempt *time.Time
-	failStart := func(stage string, err error) { s.failStartForAttempt(id, st, stage, err, windowsAttempt) }
+	failStart := func(stage string, err error) { s.failStart(st, stage, err) }
 	if st.Status != state.StatusQueued || st.Version != claim.Version || st.LeaseOwner != workerID {
 		unlock()
 		return
@@ -432,7 +432,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	}
 
 	jobCheckStartedAt := time.Now()
-	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, workerID)
+	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, st)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
 		failStart("github_job_status", err)
@@ -726,15 +726,8 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 }
 
 // completeWithoutSandbox is called with the request lock held, only for a terminal Job.
-func (s *Server) completeWithoutSandbox(id string, job github.WorkflowJob, reason string) error {
-	st, err := s.store.ReadState(id)
-	if err != nil {
-		return fmt.Errorf("read runner state for skip: %w", err)
-	}
-	if st.Status == state.StatusCompleted || st.Status == state.StatusStopping || st.Status == state.StatusRunning {
-		s.logger.Info("runner skip ignored because state already advanced", "id", id, "status", st.Status, "reason", reason)
-		return nil
-	}
+func (s *Server) completeWithoutSandbox(st state.RunnerState, job github.WorkflowJob, reason string) error {
+	id := st.ID
 	if shouldRecordAssignedJob(st, job) {
 		st.AssignedJobID = job.ID
 		st.AssignedJobName = job.Name
@@ -908,31 +901,32 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 	s.recordStartFailure(st, stage, failure, result)
 }
 
-func (s *Server) failStart(id string, st state.RunnerState, stage string, err error) {
-	s.failStartForAttempt(id, st, stage, err, nil)
+// A node can resume after another worker has adopted the Sandbox or begun a
+// fresh creation under the same worker name. Only the admitted attempt can
+// change its creating record. WriteState also checks the version read here.
+func sameCreatingAttempt(current, attempt state.RunnerState) bool {
+	return current.Status == state.StatusCreating && current.ProvisionAttemptID == attempt.ProvisionAttemptID &&
+		current.LeaseOwner == attempt.LeaseOwner && current.LastAttemptAt.Equal(attempt.LastAttemptAt)
 }
 
-func (s *Server) failStartForAttempt(id string, st state.RunnerState, stage string, err error, attemptAt *time.Time) {
-	unlock := s.lockRunner(id)
+func (s *Server) failStart(attempt state.RunnerState, stage string, failure error) {
+	unlock := s.lockRunner(attempt.ID)
 	defer unlock()
 
-	current, readErr := s.store.ReadState(id)
-	if attemptAt != nil && (readErr != nil || !current.LastAttemptAt.Equal(*attemptAt) || current.Status != state.StatusCreating) {
+	current, err := s.store.ReadState(attempt.ID)
+	if err != nil {
+		s.logger.Error("read runner before recording start failure", "id", attempt.ID, "error", err)
 		return
 	}
-	if readErr == nil {
-		if current.Status == state.StatusCompleted || current.Status == state.StatusStopping {
-			s.logger.Info("runner failure ignored because request is stopped", "id", id, "status", current.Status, "error", err)
-			return
-		}
-		st = current
-	}
-	result := s.applyFailure(&st, stage, err, true)
-	if writeErr := s.store.WriteState(st); writeErr != nil {
-		s.logger.Error("write failed state", "id", id, "error", writeErr)
+	if !sameCreatingAttempt(current, attempt) {
 		return
 	}
-	s.recordStartFailure(st, stage, err, result)
+	result := s.applyFailure(&current, stage, failure, true)
+	if err := s.store.WriteState(current); err != nil {
+		s.logger.Error("write failed state", "id", attempt.ID, "error", err)
+		return
+	}
+	s.recordStartFailure(current, stage, failure, result)
 }
 
 func (s *Server) recordStartFailure(st state.RunnerState, stage string, err error, result failureResult) {
@@ -2244,7 +2238,7 @@ func (s *Server) deferCreatingRequest(attempt state.RunnerState, nextAttempt tim
 		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
 		return
 	}
-	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || !st.LastAttemptAt.Equal(attempt.LastAttemptAt) || st.SandboxID != "" {
+	if !sameCreatingAttempt(st, attempt) || st.SandboxID != "" {
 		return
 	}
 	st.Status = state.StatusQueued
