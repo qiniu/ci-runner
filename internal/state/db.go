@@ -252,6 +252,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 			return fmt.Errorf("create runner request metrics index: %w", err)
 		}
 	}
+	if err := initializeRunnerAdmissionGuards(db); err != nil {
+		return err
+	}
 	return initializeStateBackfills(db)
 }
 

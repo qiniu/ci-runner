@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -140,6 +141,57 @@ func assertAdmissionState(t *testing.T, store state.Store, id, status string) st
 }
 
 // The admission checks and creating write now share a database transaction.
+type failedRunnerAdmissionStore struct {
+	state.Store
+	stage string
+}
+
+func (s *failedRunnerAdmissionStore) WithRunnerAdmission(ctx context.Context, fn func(state.Store) error) error {
+	if s.stage == "admission_lock_wait" {
+		return context.DeadlineExceeded
+	}
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return fn(&failedRunnerAdmissionStore{Store: tx, stage: s.stage})
+	})
+}
+
+func (s *failedRunnerAdmissionStore) GetProfile(name string) (state.RunnerProfile, error) {
+	return state.RunnerProfile{}, errors.New("invalid profile labels")
+}
+
+func TestRunnerAdmissionFailureDoesNotImmediatelyReclaim(t *testing.T) {
+	for _, stage := range []string{"admission_lock_wait", "profile_lookup"} {
+		t.Run(stage, func(t *testing.T) {
+			srv, base, _ := admissionTestFixture(t, 1, 1)
+			claim := queuedRunnerForTest(t, base, "a", "worker")
+			if err := base.ReleaseQueuedClaim(queuedRunnerForTest(t, base, "b", "worker")); err != nil {
+				t.Fatal(err)
+			}
+			srv.store = &failedRunnerAdmissionStore{Store: base, stage: stage}
+			srv.startClaimedRunner(t.Context(), claim)
+			st, err := base.ReadState("a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "admission_lock_wait" {
+				log, err := base.ReadLog("a", "control.log", 65536)
+				if err != nil || strings.Count(string(log), "stage=admission_lock_wait ") != 1 {
+					t.Fatalf("missing or repeated guard failure timing: %s, %v", log, err)
+				}
+				if st.Status != state.StatusQueued || st.LeaseOwner != "" || st.NextRetryAt.IsZero() || st.LastErrorCode != "runner_admission_unavailable" {
+					t.Fatalf("guard timeout did not defer the claim: %+v", st)
+				}
+			} else if st.Status != state.StatusFailed || st.FailureStage != stage {
+				t.Fatalf("invalid profile did not fail visibly: %+v", st)
+			}
+			req, _, ok, err := base.ClaimNextRunnable("next", time.Minute)
+			if err != nil || !ok || req.ID != "b" {
+				t.Fatalf("next worker did not reach the other job: id=%q ok=%v err=%v", req.ID, ok, err)
+			}
+		})
+	}
+}
+
 func TestRunnerAdmissionSharedLimits(t *testing.T) {
 	for _, tc := range []struct {
 		dimension       string
