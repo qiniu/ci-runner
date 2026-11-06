@@ -261,6 +261,20 @@ func (s *Server) createAndStart(w http.ResponseWriter, r *http.Request, req stat
 
 func (s *Server) enqueueWorkflowJob(ctx context.Context, repositoryFullName string, githubInstallationID int64, workflowRunName string, job github.WorkflowJob, payload []byte) (state.RunnerState, bool, error) {
 	id := strconv.FormatInt(job.ID, 10)
+	// Duplicate workflow_run and workflow_job deliveries normally need only
+	// the saved row. An actual waiting job still checks the current policy
+	// and exact scope before a delivery can shorten its retry deadline.
+	existing, err := s.store.ReadState(id)
+	if err != nil && !errors.Is(err, state.ErrNotFound) {
+		return state.RunnerState{}, false, err
+	}
+	if err == nil && existing.WorkflowJobID == job.ID && existing.RepositoryFullName == repositoryFullName &&
+		existing.GitHubInstallationID == githubInstallationID && (existing.Status != state.StatusQueued || existing.LastErrorCode != workflowJobWaitCode) {
+		if existing.ProfileName != "" && s.cfg.RepositoryAllowed(repositoryFullName) {
+			metrics.RecordWorkflowQueued(repositoryFullName, workflowRunName, job.Name, existing.ProfileName)
+		}
+		return existing, false, nil
+	}
 	req := state.RunnerRequest{
 		ID:                   id,
 		Source:               "github_webhook",
