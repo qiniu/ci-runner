@@ -20,7 +20,7 @@ from pathlib import Path
 path = Path(os.environ["FIXTURE"])
 args = sys.argv[1:]
 if args == ["version"]:
-    print("v2.20.0")
+    print("v2.21.0")
     sys.exit()
 with (path / "lock").open("a") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -37,11 +37,7 @@ with (path / "lock").open("a") as lock:
         if db["peak"] == 4:
             (path / "four-slots").touch()
         if mode != "lost-receipt":
-            if any(r["name"] == name for r in rows[:-1]):
-                print(f"Requesting new build for template {name}...")
-                print(f"New build requested (build ID: {build})")
-            else:
-                print(f"Template {name} created (build ID: {build})")
+            print(f"Template {name} ready for build (build ID: {build})")
             if mode == "upload-error":
                 print("Error: COPY upload failed", file=sys.stderr)
             else:
@@ -87,6 +83,8 @@ if args[:3] == ["sandbox", "template", "build"]:
             time.sleep(.05)
     else:
         time.sleep(.25)
+    if mode == "upload-error":
+        sys.exit(201)
 '''
 
 
@@ -213,6 +211,10 @@ class BatchTest(unittest.TestCase):
                 self.assertEqual(queries.read_text(), "")
                 receipts = list((self.repo / ".git").glob("template-build-batches/*/*.json"))
                 receipt = next(p for p in receipts if json.loads(p.read_text())["status"] == "requested")
+                saved = json.loads(receipt.read_text())
+                last_build = json.loads(self.remote.read_text())["builds"][-1]
+                self.assertEqual((saved["template"], saved["build"]),
+                                 (last_build["name"], last_build["id"]))
                 # Operator confirms the orphaned waiting build is inactive, then
                 # moves its receipt outside the directory to permit another try.
                 receipt.rename(self.repo / "orphaned-receipt.json")

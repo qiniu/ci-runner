@@ -1278,7 +1278,7 @@ func TestRunnerTemplateQshellBuildUsesTemporaryConfigAndRequiresReady(t *testing
 	writeExecutable(t, qshellPath, `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = version ]; then
-  printf 'v2.20.0\n'
+  printf 'v2.21.0\n'
   exit 0
 fi
 if [ "$*" = 'sandbox template list --format json' ]; then
@@ -1357,7 +1357,7 @@ func TestRunnerTemplateQshellResolvesRelativeTemplateFromScriptCheckout(t *testi
 	writeExecutable(t, qshellPath, `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = version ]; then
-  printf 'v2.20.0\n'
+  printf 'v2.21.0\n'
   exit 0
 fi
 if [ "$*" = 'sandbox template list --format json' ]; then

@@ -95,7 +95,7 @@ def submit(config):
         for line in proc.stdout:
             line = line.rstrip()
             print(f"[{path.stem}] {line}", flush=True)
-            created = re.fullmatch(rf"Template ({ID}) created \(build ID: ({ID})\)", line)
+            created = re.fullmatch(rf"Template ({ID}) (?:created|ready for build) \(build ID: ({ID})\)", line)
             rebuilding = re.fullmatch(rf"Requesting new build for template ({ID})\.\.\.", line)
             rebuilt = re.fullmatch(rf"New build requested \(build ID: ({ID})\)", line)
             started = re.fullmatch(rf"Build started\. Use 'qshell sandbox template builds ({ID}) ({ID})' to check status\.", line)

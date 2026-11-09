@@ -426,9 +426,9 @@ review 和合并由人工完成。
 双区域推广，在版本化发布记录中保留真实 Job 证据。完整启用、资产校验、no-op、失败
 恢复与验收边界见[公共 Runner 模板](docs/zh/default-runner-templates.md#自动创建-runner-基线更新-pr)。
 
-模板源码验证要求 Node.js 24，模板构建要求 qshell 2.20.0 或更高版本。
+模板源码验证要求 Node.js 24，模板构建要求 qshell 2.21.0 或更高版本。
 Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
-qshell 新建模板时通过 `min_free_disk_mb` 请求对应的验收值。qshell 2.20.0 同名重建时使用团队默认空闲空间。
+qshell 2.21.0 每次构建都通过 `min_free_disk_mb` 请求对应的验收值，同名重建也会应用该参数。
 发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
 2.337.0 基线已完成双区域、8 模板重建、catalog、标准
 workflow 与 large workflow 门槛，证据保留在

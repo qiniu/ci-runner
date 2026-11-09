@@ -203,10 +203,10 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   pair before starting another rebuild. If exact status queries remain
   unavailable, retain the last qshell error instead of describing the build as
   active.
-- Template builds require qshell 2.20.0 or newer. The release minimums are 20 GiB
+- Template builds require qshell 2.21.0 or newer. The release minimums are 20 GiB
   free for standard Ubuntu, 80 GiB for large, and 50 GiB for Windows.
-  On creation, `min_free_disk_mb` requests the release minimum. With qshell 2.20.0,
-  same-name rebuilds use the team default for free space. Check the rebuilt ID before promotion. Publish and
+  Every build requests the release minimum through `min_free_disk_mb`,
+  including same-name rebuilds. Check the rebuilt ID before promotion. Publish and
   catalog checks use `runnerd.min_free_disk_mb` as a total-size lower bound.
   Regional Ubuntu smoke verifies both the root disk size and available space.
 - `task template-build-all` builds eight Ubuntu templates with default concurrency 4.

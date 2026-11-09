@@ -10,7 +10,7 @@ cat >"$workdir/qshell" <<'EOF'
 set -euo pipefail
 case "$*" in
   version)
-    printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.20.0}"
+    printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.21.0}"
     ;;
   'sandbox template list --format json')
     if [ -n "${MOCK_TEMPLATE_LIST_JSON:-}" ]; then
@@ -114,8 +114,10 @@ operation_script="$repository_root/scripts/run-runner-template-operation.sh"
 export QINIU_SANDBOX_API_URL=https://sandbox.invalid QINIU_API_KEY=fixture
 export QSHELL="$workdir/qshell"
 export MOCK_DISK=22222
-expect_failure 'qshell >= 2.20.0 is required' \
-  env MOCK_QSHELL_VERSION=2.19.13 bash "$operation_script" build "$large_template_config"
+for old_version in 2.19.13 2.20.0 2.20.1; do
+  expect_failure 'qshell >= 2.21.0 is required' \
+    env MOCK_QSHELL_VERSION="$old_version" bash "$operation_script" build "$large_template_config"
+done
 BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config" >"$workdir/output"
 grep -Fq 'Template ID: existing-template-id' "$workdir/output"
 grep -Fq 'Status: ready' "$workdir/output"

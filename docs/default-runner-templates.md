@@ -25,9 +25,9 @@ catalog and production evidence are retained in
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 
 Ubuntu release smoke requires 20 GiB available on standard templates and
-80 GiB on large templates (`runnerd.min_free_disk_mb`). New templates request
-the release minimum via `min_free_disk_mb`. With qshell 2.20.0, same-name
-rebuilds use the team default for free space. Publish and catalog checks use the
+80 GiB on large templates (`runnerd.min_free_disk_mb`). Qshell 2.21.0 applies
+`min_free_disk_mb` on every build, including same-name rebuilds, using
+the configured release minimum. Publish and catalog checks use the
 release minimum as a lower bound on total disk size. Verify available space
 in a fresh Sandbox before publication.
 
@@ -36,7 +36,7 @@ Each standard source directory also contains a
 reuse the same Dockerfile and scripts while using distinct physical template
 names. The large variants are documented
 operator-configured Runner Specs: operators create and enable them in Admin, using either a stable public name or an explicit physical template ID. Public directory inclusion additionally requires a verified public template (name or physical ID) and explicit catalog display.
-[Qshell v2.20.0 template build options](https://github.com/qiniu/qshell/blob/v2.20.0/docs/sandbox_template_build.md).
+[Qshell v2.21.0 template build options](https://github.com/qiniu/qshell/blob/v2.21.0/docs/sandbox_template_build.md).
 
 All eight qshell configurations across the four source directories use
 `templates/` as the build context. The
@@ -233,7 +233,7 @@ dependency, but workflows must not rely on it.
 
 ## Requirements
 
-- `qiniu/qshell` 2.20.0 or newer;
+- `qiniu/qshell` 2.21.0 or newer;
 - Node.js 24, plus `task`, `jq`, `curl`, `sha256sum`, and `split` on the
   build host;
 - a `QINIU_API_KEY` for the selected Sandbox region;
@@ -247,8 +247,11 @@ task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 
 Every remote target fails closed when either credential variable is empty.
 The tracked standard and large TOML files contain stable names and resource
-settings only; qshell builds from temporary copies of the selected files so
-region-specific template IDs are never committed.
+settings; qshell builds from temporary copies of the selected files.
+In qshell 2.21.0, `template_id` selects a base template, like `from_template`.
+For older local configs, remove any self-referencing `template_id` written
+by qshell and retain `name` as the target. Windows uses
+`from_template = "windows11"` as its base.
 
 ## Build and verify one region
 
@@ -341,8 +344,9 @@ build as `pending`; if it remains `waiting`, apply the same inspection procedure
 Confirmed failed builds are retried without querying their old build again.
 A successful batch still requires the separate regional smoke and publication steps.
 
-If an existing template falls short of the free-space target, arrange sufficient
-capacity with the provider before rebuilding the same name and ID. Once
+If an existing template falls short of the free-space target, rebuild it by name
+with qshell 2.21.0 to apply its configured request. Contact the provider if quota
+limits reject the request. Once
 qshell reports `Status: ready`, verify the total disk and use release smoke
 on that ID to check available space before publishing.
 

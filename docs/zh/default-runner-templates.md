@@ -22,13 +22,13 @@ large workflow 矩阵；catalog 和生产证据保留在
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 
 Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
-qshell 新建模板时通过 `min_free_disk_mb` 请求对应的验收值。qshell 2.20.0 同名重建时使用团队默认空闲空间。
+qshell 2.21.0 每次构建都通过 `min_free_disk_mb` 请求对应的验收值，同名重建也会应用该参数。
 发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
 
 每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`
 变体使用。标准和 large 配置复用同一份 Dockerfile 与脚本，但使用不同的物理模板
 名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式物理 ID。进入公共目录还要求经过校验的公共模板（名称或物理 ID）和明确开启目录展示。
-[qshell v2.20.0 模板构建参数](https://github.com/qiniu/qshell/blob/v2.20.0/docs/sandbox_template_build.md)。
+[qshell v2.21.0 模板构建参数](https://github.com/qiniu/qshell/blob/v2.21.0/docs/sandbox_template_build.md)。
 
 4 个源码目录中的 8 份 qshell 配置均以 `templates/` 为构建上下文。Dockerfile 从
 `templates/common/` 复制共用的安装函数和辅助脚本；各标准模板仍保留对应
@@ -191,7 +191,7 @@ Runner、用于 installer 验证的固定版本 Pester，以及 Runner 文件系
 
 ## 环境要求
 
-- `qiniu/qshell` 2.20.0 或更高版本；
+- `qiniu/qshell` 2.21.0 或更高版本；
 - 构建机器上的 Node.js 24、`task`、`jq`、`curl`、`sha256sum` 和 `split`；
 - 当前 Sandbox 区域的 `QINIU_API_KEY`；
 - 指向当前区域端点的 `QINIU_SANDBOX_API_URL`。
@@ -203,8 +203,10 @@ task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 ```
 
 任一凭据变量为空时，所有远端任务都会直接失败。仓库中的标准与 large TOML 文件
-只保存稳定名称和资源设置；构建任务让 qshell 使用所选文件的临时副本，因此不会
-提交区域相关的 template ID。
+保存稳定名称和资源设置，构建任务让 qshell 使用所选文件的临时副本。
+qshell 2.21.0 中，`template_id` 与 `from_template` 都用于选择底模板。
+迁移旧的本地配置时，删除旧版 qshell 回写、指向模板自身的 `template_id`，
+通过 `name` 指定目标模板。Windows 继续使用 `from_template = "windows11"` 作为底模板。
 
 ## 在单个区域构建与验证
 
@@ -276,7 +278,8 @@ task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
 已确认失败的构建会直接重试，无需再次查询旧 Build。
 批次成功后仍须单独运行区域 smoke 并按流程发布。
 
-如果已有模板的可用空间不足，先与 provider 确认可分配容量，再按原名称和 ID 重建。
+如果已有模板的可用空间不足，使用 qshell 2.21.0 按原名称重建，应用配置中的空闲空间请求。
+如果请求因配额限制被拒绝，再与 provider 确认可分配容量。
 qshell 报告 `Status: ready` 后，核对总容量，并在该 ID 上运行 release smoke 确认可用空间，再发布。
 
 Dockerfile 会按需将 `bootstrap`、`platform`、`node`、`toolchain` 和

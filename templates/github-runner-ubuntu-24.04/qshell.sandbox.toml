@@ -1,7 +1,7 @@
 # GitHub runner Ubuntu 24.04 Qiniu sandbox template.
 #
 # This tracked file is the stable build input. Use Taskfile build targets so
-# qshell writes any generated template_id only to a temporary copy:
+# qshell reads a temporary copy selected by the build task:
 #   task template-build-ubuntu-24-04
 #
 # Prefer a stable name over a committed environment-specific template_id.

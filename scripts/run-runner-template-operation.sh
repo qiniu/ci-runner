@@ -35,7 +35,7 @@ test -n "$qshell_version" || {
 }
 minimum_qshell_version=2.19.10
 if [ "$operation" = build ]; then
-  minimum_qshell_version=2.20.0
+  minimum_qshell_version=2.21.0
 fi
 if ! awk -v actual="$qshell_version" -v minimum="$minimum_qshell_version" '
   BEGIN {

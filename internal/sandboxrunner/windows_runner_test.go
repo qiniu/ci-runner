@@ -355,7 +355,7 @@ func TestWindowsTemplateBuildUsesQshellOnWindows11Template(t *testing.T) {
 	fakeQshell := filepath.Join(root, "qshell")
 	writeExecutable(t, fakeQshell, `#!/usr/bin/env bash
 if [ "$1" = version ]; then
-  echo v2.20.0
+  echo v2.21.0
   exit 0
 fi
 { pwd; printf '%s\n' "$@"; } >"`+argsFile+`"

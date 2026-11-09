@@ -4,7 +4,7 @@ This 8-vCPU, 8192-MiB Windows 11 x64 template is built with qshell on top of
 the provider's `windows11` template. Windows Sandbox templates cannot start from
 a Docker image, so `qshell.sandbox.toml` sets `from_template = "windows11"` and
 qshell ignores the Dockerfile `FROM` line. Windows requires 50 GiB free on C: at release.
-New templates request 51,200 MiB. With qshell 2.20.0, same-name rebuilds use the team default for free space.
+Every build requests 51,200 MiB, including same-name rebuilds with qshell 2.21.0.
 The Windows preview has a separate acceptance step. Check the system drive in a fresh Windows Sandbox before promotion:
 
 ```powershell
