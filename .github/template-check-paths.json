@@ -8,6 +8,7 @@
     "scripts/check-runner-template-matrix.sh",
     "scripts/test-runner-template-disk.sh",
     "scripts/build-template-batch.py",
+    "scripts/build-windows-template.sh",
     "scripts/test-template-batch.py",
     "scripts/lib/runner-template-disk.sh",
     "scripts/test-prepare-runner-archive.sh",

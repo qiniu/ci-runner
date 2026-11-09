@@ -27,7 +27,7 @@ workflow 触发路径与 job 输入一致。
 重试前检查实际失败步骤，不静默忽略失败。
 
 本地使用 `task docker-check` 和 `task template-check-all`；完整模板检查需要
-Node.js 24、Docker 和网络。静态检查通过不代表真实构建或运行通过。
+Unix 主机、Node.js 24、Python 3.11+、Docker 和网络。静态检查通过不代表真实构建或运行通过。
 Tag 触发的 `Release` 继续使用 `Dockerfile.release` 构建并发布服务镜像；
 各区域 Sandbox 模板构建和发布仍遵循独立验收。Runner 升级 PR 必须取得两个
 workflow 对应当前 head 的证据，包括维护自动化需要显式调度的情况。

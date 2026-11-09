@@ -325,12 +325,21 @@ each name and endpoint in this clone's Git common directory, shared across
 its worktrees. Each endpoint allows one batch controller at a time. Coordinate
 single-template commands and builds from other clones separately.
 
-If a status query fails or the wait expires (default 3600 seconds per build,
-configurable via the `BUILD_WAIT_SECONDS` environment variable), rerun the same
-batch. If interrupted before qshell returns IDs, the next run reports the
-receipt path and stops. Inspect the regional build history. Only after ruling
-out an active build, move that receipt aside and rerun. A successful batch
-still requires the separate regional smoke and publication steps.
+Status queries retry transient errors within the wait deadline (default 3600
+seconds per build, configurable via the `BUILD_WAIT_SECONDS` environment variable).
+A response with mismatched IDs stops the batch immediately. After a query deadline
+expires, rerun the same batch.
+
+If qshell fails or is interrupted before reporting both IDs or confirming
+`Build started`, the batch stops and reports the receipt path for inspection.
+A build registered without that confirmation is recorded as `requested`;
+reruns report it immediately. Check the regional build history and resolve any
+active or waiting attempt before moving its receipt **outside the receipts
+directory** and rerunning. Renaming it to another `*.json` within that directory
+still includes it in reconciliation. Older receipts may record a never-started
+build as `pending`; if it remains `waiting`, apply the same inspection procedure.
+Confirmed failed builds are retried without querying their old build again.
+A successful batch still requires the separate regional smoke and publication steps.
 
 If an existing template falls short of the free-space target, arrange sufficient
 capacity with the provider before rebuilding the same name and ID. Once

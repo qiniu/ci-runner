@@ -95,8 +95,6 @@ def submit(config):
         for line in proc.stdout:
             line = line.rstrip()
             print(f"[{path.stem}] {line}", flush=True)
-            if "build" in record:
-                continue
             created = re.fullmatch(rf"Template ({ID}) created \(build ID: ({ID})\)", line)
             rebuilding = re.fullmatch(rf"Requesting new build for template ({ID})\.\.\.", line)
             rebuilt = re.fullmatch(rf"New build requested \(build ID: ({ID})\)", line)
@@ -109,8 +107,12 @@ def submit(config):
                 build = rebuilt[1]
             else:
                 continue
-            record.update(template=template, build=build, status="pending")
+            if "build" in record and (template, build) != (record["template"], record["build"]):
+                raise RuntimeError(f"build IDs changed during submission; inspect {path}")
+            record.update(template=template, build=build, status="pending" if started else "requested")
             save(path, record)
+    if record["status"] != "pending":
+        raise RuntimeError(f"build start not confirmed; inspect {path} and the provider before retrying")
     return proc.returncode
 
 
@@ -134,25 +136,42 @@ async def command(*args, capture=False, timeout=None, **kwargs):
             raise RuntimeError(f"{Path(args[0]).name} timed out after {timeout}s") from error
         raise
     if proc.returncode:
-        raise RuntimeError(f"{Path(args[0]).name} exited {proc.returncode}")
+        detail = output.decode(errors="replace").strip()[-1000:] if output else ""
+        raise RuntimeError(f"{Path(args[0]).name} exited {proc.returncode}: {detail}")
     return output.decode(errors="replace") if capture else ""
 
 
 async def terminal(name, record):
     deadline = time.monotonic() + int(os.environ.get("BUILD_WAIT_SECONDS", "3600"))
+    status = "unavailable"
+    last_error = ""
     while True:
-        output = await command(QSHELL, "sandbox", "template", "builds", record["template"],
-                               record["build"], capture=True, timeout=30)
-        match = re.match(rf"Template ID:\s*({ID})\s+Build ID:\s*({ID})\s+Status:\s*(\w+)\b", output)
-        if not match or match.groups()[:2] != (record["template"], record["build"]):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        match = None
+        last_error = ""
+        try:
+            output = await command(QSHELL, "sandbox", "template", "builds", record["template"],
+                                   record["build"], capture=True, stderr=subprocess.STDOUT,
+                                   timeout=min(30, remaining))
+            match = re.match(rf"Template ID:\s*({ID})\s+Build ID:\s*({ID})\s+Status:\s*(\w+)\b", output)
+            if not match:
+                last_error = output.strip()[-1000:] or "empty status response"
+        except (OSError, RuntimeError) as error:
+            last_error = str(error)
+        if match and match.groups()[:2] != (record["template"], record["build"]):
             raise RuntimeError(f"unconfirmed response for build {record['build']}")
-        status = match[3].lower()
+        status = match[3].lower() if match else "unavailable"
         if status in SUCCESS | FAILED:
             return status
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"build {record['build']} is still {status}; rerun to resume")
+            break
         print(f"[{name}] {record['build']} {status}", flush=True)
         await asyncio.sleep(min(15, max(0, deadline - time.monotonic())))
+    if last_error:
+        raise RuntimeError(f"could not query build {record['build']}: {last_error}; rerun to resume")
+    raise RuntimeError(f"build {record['build']} is still {status}; rerun to resume")
 
 
 async def run_batch(state, lock_fd, jobs, batch, limit):
@@ -166,10 +185,12 @@ async def run_batch(state, lock_fd, jobs, batch, limit):
             name = path.stem
             record = json.loads(path.read_text())
             same = name in inputs and record["batch"] == batch and record["inputs"] == inputs[name]
-            if record["status"] in SUCCESS | FAILED and not same:
+            if record["status"] in FAILED or (record["status"] in SUCCESS and not same):
                 return
             if "build" not in record:
                 raise RuntimeError(f"{path}: submission outcome unknown; inspect the provider before clearing this receipt")
+            if record["status"] == "requested":
+                raise RuntimeError(f"{path}: build {record['build']} start not confirmed; inspect the provider before clearing this receipt")
             status = await terminal(name, record)
             record["status"] = status
             save(path, record)

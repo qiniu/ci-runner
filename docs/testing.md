@@ -31,7 +31,7 @@ registry failure, not proof of a source regression. Inspect the actual failed
 step before retrying; no failure is silently ignored.
 
 For local checks, use `task docker-check` and `task template-check-all` (Node.js
-24, Docker and network required for the full template gate). A green static
+24, Python 3.11+, Docker and network required for the full template gate on a Unix host). A green static
 check does not prove a real build or runtime. Tag-triggered `Release` still
 builds/publishes service images with `Dockerfile.release`; regional Sandbox
 template builds and promotion retain their existing separate acceptance gates.

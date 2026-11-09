@@ -4,7 +4,7 @@
 
 Qiniu 维护 8 个用于 GitHub Actions 的 Linux x64 Sandbox 物理模板：4 个标准
 镜像（Ubuntu Slim、Ubuntu 22.04、Ubuntu 24.04，以及处于预览阶段的 Ubuntu
-26.04）和 4 个磁盘容量下限为 80 GiB 的 `-large` 变体。`ubuntu-latest` 是
+26.04）和 4 个发布时可用空间下限为 80 GiB 的 `-large` 变体。`ubuntu-latest` 是
 Runner catalog 中指向 Ubuntu 24.04 的逻辑映射，不是第 9 个镜像。
 
 4 个标准物理模板已于 2026-08-03 在两个受支持的 Sandbox 区域完成发布、catalog
@@ -265,8 +265,15 @@ task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
 默认批次标签为 `default`。每个区域端点和模板名保留最近一次尝试，记录位于该 clone 的 Git 公共目录，多个 worktree 共享。
 同一端点同时只运行一个批处理进程。单模板命令及其他 clone 的构建需由操作人员协调。
 
-状态查询失败或等待超时，可重跑相同批次。单次等待默认 3600 秒，支持通过环境变量 `BUILD_WAIT_SECONDS` 调整。
-如果中断时 qshell 尚未返回 ID，续跑会停止并显示记录路径。先核对区域构建历史，确认没有在途构建后再移走对应记录并重跑。
+状态查询遇到短暂错误时会在等待期限内重试，默认 3600 秒，可通过环境变量 `BUILD_WAIT_SECONDS` 调整。
+查询响应中的 ID 不匹配时立即停止批次；查询超时后可重跑同一批次。
+
+如果 qshell 失败或中断，尚未返回两个 ID，或尚未确认 `Build started`，批次会停止并显示记录路径。
+已登记但尚未确认启动的构建记为 `requested`，续跑时立即提示核查。
+先核对区域构建历史，处理完活动或等待中的尝试后，将对应记录**移出记录目录**再重跑。
+在同一目录内改名为其他 `*.json` 仍会被读取。旧记录可能将尚未启动的构建记为 `pending`；
+如果它持续处于 `waiting`，按同样步骤核查处理。
+已确认失败的构建会直接重试，无需再次查询旧 Build。
 批次成功后仍须单独运行区域 smoke 并按流程发布。
 
 如果已有模板的可用空间不足，先与 provider 确认可分配容量，再按原名称和 ID 重建。
