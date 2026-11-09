@@ -27,7 +27,7 @@ workflow 触发路径与 job 输入一致。
 重试前检查实际失败步骤，不静默忽略失败。
 
 本地使用 `task docker-check` 和 `task template-check-all`；完整模板检查需要
-Node.js 24、Docker 和网络。静态检查通过不代表真实构建或运行通过。
+Unix 主机、Node.js 24、Python 3.11+、Docker 和网络。静态检查通过不代表真实构建或运行通过。
 Tag 触发的 `Release` 继续使用 `Dockerfile.release` 构建并发布服务镜像；
 各区域 Sandbox 模板构建和发布仍遵循独立验收。Runner 升级 PR 必须取得两个
 workflow 对应当前 head 的证据，包括维护自动化需要显式调度的情况。
@@ -709,8 +709,7 @@ curl -fsS -b "$COOKIE_JAR" \
   scoped Sandbox endpoint 中，managed stable name 恰好对应 1 个公共的
   具有非零有效默认 BuildID 的模板；覆盖最新重建失败但默认构建仍可用的情况。
 - sandbox 创建失败：确认账户/组织 Preferences 或已启用的 admin default 具有与 template 和本地环境匹配的完整 Sandbox service 配置；Runner detail 会显示实际选择的来源。
-- `template-smoke` 报告运行时根磁盘容量不足：检查新建 Sandbox 的根磁盘容量是否
-  达到所选 TOML 中的 `disk_size_mb`。确认 provider 团队的 `DiskMb` 后，按
+- 磁盘 smoke 失败时，分别检查 Sandbox 根磁盘总容量和 runner 的可用空间。确认区域分配后，按
   [同名原地重建步骤](default-runner-templates.md)处理并重新执行 smoke。
 - 模板 conformance 或 release smoke 的 `stdout.raw`、临时目录提前消失：确认只由主 shell
   执行清理。Bash watchdog 在启动时被终止，可能调用继承的 EXIT trap；子 shell 不应删除

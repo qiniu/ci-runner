@@ -37,24 +37,20 @@ labels were end-to-end verified by
 [GitHub Actions run 30858489153](https://github.com/miclle/qiniu-ci-runner-test/actions/runs/30858489153)
 on 2026-08-04 CST; every request completed and its Sandbox was cleaned.
 
-The four standard `qshell.sandbox.toml` files set
-`disk_size_mb = 20480`, a 20-GiB minimum root disk size. The provider may
-report a larger total. Qshell does not send the setting on a same-name rebuild.
-After the provider team's `DiskMb` is adjusted, the build
-helper rebuilds the existing name and ID without checking its stale total.
-Publish, catalog, and release-smoke gates require the reported or runtime root
-disk size to meet the configured lower bound.
+Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). Qshell 2.21.0 applies
+`min_free_disk_mb` on every build, including same-name rebuilds, using
+the configured release minimum. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
 
-Each of the four source directories contains a standard
-`qshell.sandbox.toml` and a large `qshell.sandbox.large.toml`. Both configs
-reuse the same Dockerfile and scripts while naming distinct provider templates.
-The large configs set `disk_size_mb = 81920`, an 80-GiB minimum root disk
-size when creating a new template. The final total may exceed 81,920 MiB.
-The provider team's `DiskMb` must be at
-least 81,920 MiB before rebuilding an existing name. Qshell does not send the
-field on a same-name rebuild, so the build helper allows the in-place rebuild
-without checking the stale total. Publish and catalog checks enforce the
-total-size lower bound after the rebuild. All four large variants completed
+Each Ubuntu source directory contains a standard `qshell.sandbox.toml` and
+a `qshell.sandbox.large.toml`. They share a Dockerfile and use distinct names.
+If an existing template falls short, rebuild it by name with qshell 2.21.0
+to apply the configured free-space request. Verify both total and available
+space on the rebuilt ID. Contact the provider if quota limits reject the request.
+
+All four large variants completed
 the two-region catalog and production workflow gates for Runner 2.337.0; the
 evidence is retained in [Issue #93](https://github.com/qiniu/ci-runner/issues/93).
 
@@ -91,8 +87,8 @@ timed-out runs require diagnosis rather than a replacement dispatch.
 The manual `Actions Runner Update` workflow only verifies a proposal. It has no
 schedule and cannot push branches, create PRs or dispatch Check. Neither source
 maintenance entrypoint receives Sandbox credentials or builds/publishes templates.
-After merge, an operator performs the two-region build, publication, catalog
-checks and real Sandbox smoke locally with the existing Task targets, retaining
+After merge, an operator performs the two-region builds, real Sandbox smoke, publication and catalog
+checks locally with the existing Task targets, retaining
 production Job evidence in a versioned promotion record. Confirm Fenno's
 repository access, timezone and single-task execution before switching schedules;
 see [activation and acceptance](../docs/default-runner-templates.md#activation-and-acceptance).
@@ -122,8 +118,7 @@ The contract has no compatibility percentage. Every upstream item is either
 specific Qiniu Sandbox limitation.
 
 The earlier standard public-template build allocation exposed a roughly
-22,222-MiB root disk; the new standard request is 20,480 MiB. The complete
-GitHub-hosted runner image exceeds either allocation. The three
+22,222-MiB root disk. The complete GitHub-hosted runner image exceeded that allocation. The three
 versioned templates therefore guarantee the pinned Ubuntu Slim-compatible
 core on the requested Ubuntu release, plus Apache, Podman, Buildah, Skopeo,
 Ninja, pinned Pester for build-time validation, and the Qiniu runner contract.
@@ -227,7 +222,7 @@ Sandbox conformance runs it in the actual Qiniu template runtime.
 ## Build and verification
 
 Qiniu Sandbox templates are officially built and published with
-`qiniu/qshell` 2.19.13 or newer.
+`qiniu/qshell` 2.21.0 or newer.
 The source validation commands require Node.js 24.
 Docker builds are local conformance inputs only: a successful Docker build does
 not create, rebuild, or publish a Qiniu Sandbox template.
@@ -247,11 +242,11 @@ task template-build-ubuntu-22-04-large
 task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 task template-conformance-local
-task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<published-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<template-id-from-ready-build>
 ```
 
-`template-build-all` runs the eight build targets sequentially and stops at the
-first failure. Use an individual target when rebuilding only one template.
+`template-build-all` runs the eight Ubuntu builds with default concurrency 4.
+Add `INCLUDE_WINDOWS=1` for Windows. See the [batch and resume procedure](../docs/default-runner-templates.md) for release batches and recovery.
 
 The formal template gate is a qshell build reaching terminal `Status: ready`,
 or the exact Template ID and Build ID reaching `ready` or `uploaded` during the
@@ -298,7 +293,7 @@ than restarting the whole archive. The platform installer runs in the same
 layer as reassembly instead of depending on a cached oversized archive.
 Release smoke checks the OS, architecture, the exact common-pinned Actions
 Runner version, persisted runtime template name/version metadata, outbound
-HTTPS, runtime root disk size against the selected TOML's `disk_size_mb`, the exact Cloudflare resolver configuration,
+HTTPS, total and available root disk space, the exact Cloudflare resolver configuration,
 Docker, a runner-owned writable NVM home, writable work/tool-cache paths, and
 cleanup. Full
 per-inventory runtime conformance and local Docker builds remain optional
@@ -328,10 +323,11 @@ Each `template-build-*` target must:
 3. run `qshell sandbox template build --wait --config <temporary-file>`; and
 4. remove the temporary file on exit.
 
-The temporary copy is required because a first Qiniu template creation writes
-the resulting `template_id` into the configuration file. The tracked
-standard and large TOML files remain stable, reviewable inputs and must not
-receive that environment-specific identifier.
+The helper uses a temporary copy of the selected build configuration.
+Qshell 2.21.0 uses `name` to identify the target and `template_id` or
+`from_template` to select its base. When migrating an older local config,
+remove any self-referencing `template_id` written by qshell. Keep the Windows
+`from_template = "windows11"` base selection.
 
 The underlying Task 7 gates can also be run directly:
 

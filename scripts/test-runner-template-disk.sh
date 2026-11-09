@@ -10,7 +10,7 @@ cat >"$workdir/qshell" <<'EOF'
 set -euo pipefail
 case "$*" in
   version)
-    printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.19.13}"
+    printf 'v%s\n' "${MOCK_QSHELL_VERSION:-2.21.0}"
     ;;
   'sandbox template list --format json')
     if [ -n "${MOCK_TEMPLATE_LIST_JSON:-}" ]; then
@@ -34,10 +34,14 @@ case "$*" in
     echo 'Build Logs:'
     echo '  fixture build log'
     ;;
+  'sandbox template unpublish existing-template-id -y')
+    echo 'Template fixture unpublished'
+    ;;
   'sandbox template publish existing-template-id -y')
     echo 'Template fixture published'
     ;;
   sandbox\ template\ build\ --wait\ --config\ *)
+    grep -Fxq 'min_free_disk_mb = 81920' "${*: -1}"
     grep -Fq 'name = "github-runner-ubuntu-24-04-large"' "${*: -1}"
     echo 'Template ID: existing-template-id'
     echo 'Build ID: fixture-build-id'
@@ -56,6 +60,10 @@ case "$*" in
       lsblk() { printf '%s\n' "${MOCK_DISK_BYTES:-$((MOCK_DISK_MIB * 1048576))}"; }
       export -f findmnt lsblk
       bash -c "PATH=/usr/bin:/bin; $command"
+    elif [[ "$command" == *'df -B1 --output=avail /'* ]]; then
+      df() { printf 'Avail\n %s\n' "${MOCK_AVAILABLE_BYTES:-85899345920}"; }
+      export -f df
+      bash -c "$command"
     else
       echo '__QINIU_RUNNER_CONFORMANCE_REMOTE_STARTED__'
     fi
@@ -106,8 +114,10 @@ operation_script="$repository_root/scripts/run-runner-template-operation.sh"
 export QINIU_SANDBOX_API_URL=https://sandbox.invalid QINIU_API_KEY=fixture
 export QSHELL="$workdir/qshell"
 export MOCK_DISK=22222
-expect_failure 'qshell >= 2.19.13 is required' \
-  env MOCK_QSHELL_VERSION=2.19.12 bash "$operation_script" build "$large_template_config"
+for old_version in 2.19.13 2.20.0 2.20.1; do
+  expect_failure 'qshell >= 2.21.0 is required' \
+    env MOCK_QSHELL_VERSION="$old_version" bash "$operation_script" build "$large_template_config"
+done
 BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config" >"$workdir/output"
 grep -Fq 'Template ID: existing-template-id' "$workdir/output"
 grep -Fq 'Status: ready' "$workdir/output"
@@ -129,7 +139,7 @@ expect_failure 'Error: fixture exact-build query failed' \
   TEMPLATE_BUILD_RECONCILE_TIMEOUT_SECONDS=0 \
   BASH_ENV="$workdir/bash-env" bash "$operation_script" build "$large_template_config"
 grep -Fq 'could not query template build fixture-build-id after 0s of reconciliation' "$workdir/output"
-expect_failure 'total disk size 22222 MiB is below disk_size_mb 81920 MiB' \
+expect_failure 'total disk size 22222 MiB is below the total disk minimum 81920 MiB' \
   bash "$operation_script" publish "$large_template_config"
 
 MOCK_DISK=83662 bash "$operation_script" publish "$large_template_config" >"$workdir/output"
@@ -144,19 +154,38 @@ expect_failure 'is duplicated in the service catalog' \
 
 MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=22222 \
   bash "$operation_script" publish "$standard_template_config" >"$workdir/output"
-expect_failure 'total disk size 19000 MiB is below disk_size_mb 20480 MiB' \
+expect_failure 'total disk size 19000 MiB is below the total disk minimum 20480 MiB' \
   env MOCK_ALIAS=github-runner-ubuntu-24-04 MOCK_DISK=19000 bash "$operation_script" publish "$standard_template_config"
 
 mkdir "$workdir/missing-disk" "$workdir/invalid-disk"
-sed '/^disk_size_mb[[:space:]]*=/d' "$standard_template_config" \
+sed '/^runnerd\.min_free_disk_mb[[:space:]]*=/d' "$standard_template_config" \
   >"$workdir/missing-disk/fixture.toml"
-sed 's/^disk_size_mb[[:space:]]*=.*/disk_size_mb = "20480"/' \
+sed 's/^runnerd\.min_free_disk_mb[[:space:]]*=.*/runnerd.min_free_disk_mb = "20480"/' \
   "$standard_template_config" \
   >"$workdir/invalid-disk/fixture.toml"
-expect_failure 'template config has no valid disk_size_mb' \
+expect_failure 'template config has no valid runnerd.min_free_disk_mb' \
   bash "$operation_script" publish "$workdir/missing-disk/fixture.toml"
-expect_failure 'template config has no valid disk_size_mb' \
+expect_failure 'template config has no valid runnerd.min_free_disk_mb' \
   bash "$operation_script" publish "$workdir/invalid-disk/fixture.toml"
+
+sed '/^min_free_disk_mb[[:space:]]*=/d' "$large_template_config" >"$workdir/missing-disk/fixture.toml"
+expect_failure 'template config has no valid min_free_disk_mb' \
+  bash "$operation_script" build "$workdir/missing-disk/fixture.toml"
+
+# A disk key inside a TOML table would be ignored by qshell on create.
+cat >"$workdir/nested.toml" <<'CONFIG'
+name = "github-runner-ubuntu-24-04-large"
+runnerd.min_free_disk_mb = 81920
+[release]
+min_free_disk_mb = 81920
+CONFIG
+expect_failure 'expected flat single-line TOML' \
+  bash "$operation_script" build "$workdir/nested.toml"
+
+# Removing an existing publication depends only on its unique name and ID.
+printf 'name = "github-runner-ubuntu-24-04-large"\ndisk_size_mb = 81920\n' >"$workdir/legacy.toml"
+bash "$operation_script" unpublish "$workdir/legacy.toml" >"$workdir/output"
+grep -Fq 'Template fixture unpublished' "$workdir/output"
 
 write_catalog() {
   local standard_disk="$1"
@@ -175,10 +204,10 @@ export PATH="$workdir:$PATH"
 write_catalog 22222 81920
 bash "$repository_root/scripts/check-default-template-catalog.sh" >"$workdir/output"
 write_catalog 22222 22222
-expect_failure 'total disk size 22222 MiB is below disk_size_mb 81920 MiB' \
+expect_failure 'total disk size 22222 MiB is below the total disk minimum 81920 MiB' \
   bash "$repository_root/scripts/check-default-template-catalog.sh"
 write_catalog 19000 83662
-expect_failure 'total disk size 19000 MiB is below disk_size_mb 20480 MiB' \
+expect_failure 'total disk size 19000 MiB is below the total disk minimum 20480 MiB' \
   bash "$repository_root/scripts/check-default-template-catalog.sh"
 write_catalog 22222 83662
 bash "$repository_root/scripts/check-default-template-catalog.sh" >"$workdir/output"
@@ -212,6 +241,10 @@ MOCK_DISK_MIB=81919 RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-low-smoke" \
   expect_failure 'conformance failed: ubuntu-24.04-large / Release smoke / runtime root disk size' \
   bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04-large sb-fixture
 
+MOCK_DISK_MIB=90000 MOCK_AVAILABLE_BYTES=$((81920 * 1048576 - 1)) RUNNER_SMOKE_OUTPUT_DIR="$workdir/large-low-smoke" \
+  expect_failure 'conformance failed: ubuntu-24.04-large / Release smoke / available root disk space' \
+  bash "$repository_root/scripts/smoke-runner-template.sh" ubuntu-24.04-large sb-fixture
+
 # The checked-in compatibility manifest has no large-specific entry; retain
 # its existing fallback when no augmented smoke manifest is supplied.
 bash "$repository_root/scripts/run-runner-image-conformance.sh" \
@@ -220,4 +253,4 @@ bash "$repository_root/scripts/run-runner-image-conformance.sh" \
 jq -e '.passed == true and (.results | any(.name == "runtime root disk size") | not)' \
   "$workdir/large-fallback.json" >/dev/null
 
-echo 'standard/large template total-disk and qshell version gates passed'
+echo 'standard/large template total disk, available space, and qshell version gates passed'

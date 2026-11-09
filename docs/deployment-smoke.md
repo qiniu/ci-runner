@@ -17,7 +17,7 @@ Use this checklist before treating a runnerd deployment as ready for real GitHub
   and smoke-tested in both supported regions according to
   [Public Runner Templates](default-runner-templates.md). The four large
   templates must pass the same gate, including the runtime root-disk
-  `disk_size_mb` lower bound, before their development specs are used;
+  total and free-space minimums, before their development specs are used;
   do not deploy enabled managed defaults before the applicable gate passes.
 - An admin account bootstrapped by running `runnerd --bootstrap-admin github:<github-user-id>` (sets the admin and exits; run before starting the service).
 

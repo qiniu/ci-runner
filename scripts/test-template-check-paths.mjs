@@ -45,6 +45,7 @@ const cases = [
   ["common template helper", ["templates/common/scripts/curl"], ["source", "dockerfiles"]],
   ["Runner upgrade", ["templates/common/actions-runner.env", "templates/runner-images-compatibility.json", "templates/github-runner-windows-11/template.env"], ["source", "compatibility", "dockerfiles"]],
   ["template documentation and configuration", ["templates/README.md", "templates/github-runner-ubuntu-22.04/qshell.sandbox.toml"], ["source"]],
+  ["Windows build helper", ["scripts/build-windows-template.sh"], ["source"]],
   ["Windows template", ["templates/github-runner-windows-11/Dockerfile"], ["source"]],
   ["archive test dependency", ["scripts/prepare-runner-archive.sh"], ["source"]],
   ["disk test dependency", ["scripts/run-runner-image-conformance.sh"], ["source"]],

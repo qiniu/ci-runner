@@ -35,7 +35,7 @@ test -n "$qshell_version" || {
 }
 minimum_qshell_version=2.19.10
 if [ "$operation" = build ]; then
-  minimum_qshell_version=2.19.13
+  minimum_qshell_version=2.21.0
 fi
 if ! awk -v actual="$qshell_version" -v minimum="$minimum_qshell_version" '
   BEGIN {
@@ -89,7 +89,7 @@ check_template_disk() {
     return 1
   fi
   if [ "$disk_size" -lt "$expected_size" ]; then
-    echo "template $template_name total disk size $disk_size MiB is below disk_size_mb $expected_size MiB" >&2
+    echo "template $template_name total disk size $disk_size MiB is below the total disk minimum $expected_size MiB" >&2
     return 1
   fi
 }
@@ -159,11 +159,15 @@ reconcile_build_status() {
   done
 }
 
-expected_disk_size="$(sed -nE 's/^[[:space:]]*disk_size_mb[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$template_config" | head -n 1)"
-test -n "$expected_disk_size" || {
-  echo "template config has no valid disk_size_mb: $template_config" >&2
-  exit 65
-}
+source "$script_root/scripts/lib/runner-template-disk.sh"
+if [ "$operation" = build ]; then
+  requested_free_mib="$(template_disk_mib "$template_config" min_free_disk_mb)"
+  required_free_mib="$(template_disk_mib "$template_config" runnerd.min_free_disk_mb)"
+  if ((requested_free_mib < required_free_mib)); then
+    echo "free-space request is below the release minimum in $template_config" >&2
+    exit 65
+  fi
+fi
 template_name="$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$template_config" | head -n 1)"
 test -n "$template_name" || {
   echo "template config has no name: $template_config" >&2
@@ -191,12 +195,19 @@ case "$operation" in
       tmp_config="$(mktemp .qshell-sandbox.XXXXXX)"
       trap 'rm -f "$tmp_config"' EXIT
       cp "$template_config" "$tmp_config"
+      if [ -n "${TEMPLATE_BATCH_RECEIPT:-}" ]; then
+        python3 "$script_root/scripts/build-template-batch.py" --submit "$tmp_config"
+        exit $?
+      fi
       build_args=(sandbox template build --wait --config "$tmp_config")
       if [ -n "$build_name" ]; then
         build_args+=(--name "$build_name")
       fi
       "$qshell_bin" "${build_args[@]}" 2>&1 | tee "$output_file"
     ) || build_command_status=$?
+    if [ -n "${TEMPLATE_BATCH_RECEIPT:-}" ]; then
+      exit "$build_command_status"
+    fi
     if ! grep -Eq '^Status:[[:space:]]+ready[[:space:]]*$' "$output_file"; then
       template_id="$(sed -nE 's/^Template ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
       build_id="$(sed -nE 's/^Build ID:[[:space:]]+([^[:space:]]+).*/\1/p' "$output_file" | tail -n 1)"
@@ -212,6 +223,9 @@ case "$operation" in
       echo "BUILD_NAME is only valid for build" >&2
       exit 64
     }
+    if [ "$operation" = publish ]; then
+      expected_disk_size="$(template_disk_mib "$template_config" runnerd.min_free_disk_mb)"
+    fi
     template_record="$(resolve_template_record "$template_name")"
     template_id="$(jq -r '.TemplateID // empty' <<<"$template_record")"
     test -n "$template_id" || {

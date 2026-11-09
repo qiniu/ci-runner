@@ -402,8 +402,8 @@ task release-check # 验证发布构建
 
 修改 Python/pipx 安装方式时，运行 `task template-python-test`，通过 Docker 和网络验证
 pipx 与 apt 管理的 Python 包相互隔离。
-先运行 `task template-check-all`，再通过 `task template-build-all` 串行构建全部
-8 个模板，或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
+先运行 `task template-check-all`，再通过 `task template-build-all` 默认以 4 并发构建
+8 个 Ubuntu 模板（加 `INCLUDE_WINDOWS=1` 包含 Windows），或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
 Sandbox 构建。发布与
 远程构建超时后的缓存续跑、发布与 smoke 命令见
 [公共 Runner 模板](docs/zh/default-runner-templates.md)。公共安装代码和
@@ -426,13 +426,11 @@ review 和合并由人工完成。
 双区域推广，在版本化发布记录中保留真实 Job 证据。完整启用、资产校验、no-op、失败
 恢复与验收边界见[公共 Runner 模板](docs/zh/default-runner-templates.md#自动创建-runner-基线更新-pr)。
 
-模板源码验证要求 Node.js 24，模板构建要求 qshell 2.19.13 或更高版本。标准配置为
-新模板请求 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，
-实际总容量可以更大。qshell 在同名 rebuild 时不会发送该配置。先调整 provider 团队的 `DiskMb`，构建任务会保留现有名称和 ID
-并原地重建，不会用重建前的旧总容量拦截构建。发布与 catalog 检查仍要求重建后的
-总容量达到配置下界；总容量较大本身不能说明配置不符。
-发布 smoke 会读取对应 TOML，并要求运行时根磁盘容量达到其中的
-`disk_size_mb` 下限。2.337.0 基线已完成双区域、8 模板重建、catalog、标准
+模板源码验证要求 Node.js 24，模板构建要求 qshell 2.21.0 或更高版本。
+Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
+qshell 2.21.0 每次构建都通过 `min_free_disk_mb` 请求对应的验收值，同名重建也会应用该参数。
+发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
+2.337.0 基线已完成双区域、8 模板重建、catalog、标准
 workflow 与 large workflow 门槛，证据保留在
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 
