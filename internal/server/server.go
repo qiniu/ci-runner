@@ -73,11 +73,6 @@ type Server struct {
 
 	networkDiagnosticMu       sync.Mutex
 	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
-
-	userRepositoryAccessMu    sync.Mutex
-	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
-	userRepositoryAccessEpoch map[int64]uint64
-	userRepositoryAccessGroup singleflight.Group
 }
 
 // runnerRequestLock serializes lifecycle mutations for one request. refs keeps
@@ -103,13 +98,6 @@ type cachedDiagnosticJob struct {
 	job        github.WorkflowJob
 	observedAt time.Time
 	expiresAt  time.Time
-}
-
-type cachedUserRepositoryAccess struct {
-	access       []state.GitHubInstallationRepositoryAccess
-	refreshAfter time.Time
-	expiresAt    time.Time
-	refreshing   bool
 }
 
 type manualCreateRequest struct {
@@ -208,8 +196,6 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		workflowRunCache:          map[string]cachedWorkflowRun{},
 		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
 		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
-		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
-		userRepositoryAccessEpoch: map[int64]uint64{},
 	}
 	hostname, _ := os.Hostname()
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())

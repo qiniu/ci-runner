@@ -154,7 +154,8 @@ func TestSuspendedInstallationDeniesJobsAndDeploymentAccess(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer api.Close()
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, api.URL, &fakeSandbox{})
 	srv.Close()
 	srv.loopCtx = context.Background()
@@ -182,11 +183,7 @@ func TestSuspendedInstallationDeniesJobsAndDeploymentAccess(t *testing.T) {
 	}
 	suspended.Store(true)
 	// Advance only this authorization entry past its real hard-expiry boundary.
-	srv.userRepositoryAccessMu.Lock()
-	entry := srv.userRepositoryAccessCache[account.ID]
-	entry.expiresAt = time.Now().Add(-time.Second)
-	srv.userRepositoryAccessCache[account.ID] = entry
-	srv.userRepositoryAccessMu.Unlock()
+	ageAccessSnapshot(t, dir, account.ID, true)
 	for _, path := range []string{"/user/deployments", "/user/runner_requests"} {
 		rec := deploymentAuthCall(srv, "GET", path, "")
 		if rec.Code != 200 || (path == "/user/deployments" && !strings.Contains(rec.Body.String(), `"total":0`)) || (path == "/user/runner_requests" && strings.TrimSpace(rec.Body.String()) != "[]") {
@@ -216,7 +213,7 @@ func TestSuspendedInstallationDeniesJobsAndDeploymentAccess(t *testing.T) {
 		t.Fatal("suspended installation reached checkout")
 	}
 	suspended.Store(false)
-	srv.invalidateUserRepositoryAccess(account.ID)
+	ageAccessSnapshot(t, dir, account.ID, true)
 	if rec := deploymentAuthCall(srv, "GET", "/user/deployments/"+d.ID, ""); rec.Code != 200 {
 		t.Fatalf("restored: %d %s", rec.Code, rec.Body.String())
 	}
@@ -247,7 +244,8 @@ func TestDeploymentsShareJobsRepositoryAuthorization(t *testing.T) {
 		fmt.Fprint(w, `{"repositories":[{"id":42,"full_name":"acme/project"}]}`)
 	}))
 	defer api.Close()
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, api.URL, &fakeSandbox{})
 	srv.Close()
 	srv.loopCtx = context.Background()
@@ -366,7 +364,7 @@ func TestDeploymentsShareJobsRepositoryAuthorization(t *testing.T) {
 	if _, err := srv.deploymentSource(context.Background(), queued); err == nil {
 		t.Fatal("worker accepted revoked repository access")
 	}
-	srv.invalidateUserRepositoryAccess(account.ID)
+	ageAccessSnapshot(t, dir, account.ID, true)
 	for _, path := range []string{"/user/deployment-repositories", "/user/deployments", "/user/deployments/shared-0", "/user/deployments/shared-0/events", "/user/deployments/shared-0/revisions", "/user/deployments/shared-0/pull-request"} {
 		if rec := deploymentAuthCall(srv, "GET", path, ""); rec.Code != 403 || !strings.Contains(rec.Body.String(), "REAUTH_REQUIRED") {
 			t.Fatalf("revoked OAuth %d %s", rec.Code, rec.Body.String())
@@ -375,7 +373,6 @@ func TestDeploymentsShareJobsRepositoryAuthorization(t *testing.T) {
 	if err := store.DeleteAccountSecret(state.AccountScopeTypeAccount, account.ID, state.AccountSecretTypeGitHubOAuthToken); err != nil {
 		t.Fatal(err)
 	}
-	srv.invalidateUserRepositoryAccess(account.ID)
 	for _, path := range []string{"/user/deployment-repositories", "/user/deployments/shared-0"} {
 		if rec := deploymentAuthCall(srv, "GET", path, ""); rec.Code != 403 {
 			t.Fatalf("missing OAuth %d", rec.Code)

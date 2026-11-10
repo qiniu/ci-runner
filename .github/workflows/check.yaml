@@ -177,7 +177,7 @@ jobs:
       - name: Verify schema, catalog, deployments, and migrations on SQL backends
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|PostgresPoolBudget|ConcurrentPostgresStartup|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
-          go test ./internal/server -run 'TestPlatformSpecRevisionPostgresSQLBackends' -count=1 -v
+          go test ./internal/server -run 'Test(PlatformSpecRevision|SharedRepositoryAccess)PostgresSQLBackends' -count=1 -v
 
   ui-production-smoke:
     runs-on: ubuntu-latest

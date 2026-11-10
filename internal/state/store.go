@@ -602,6 +602,10 @@ type IdentityStore interface {
 }
 
 type GitHubInstallationStore interface {
+	ReadRepositoryAccessSnapshot(ctx context.Context, accountID int64) (RepositoryAccessSnapshot, error)
+	RequestRepositoryAccessRefresh(ctx context.Context, accountID int64) error
+	ClaimRepositoryAccessRefresh(ctx context.Context, accountID int64) (string, error)
+	FinishRepositoryAccessRefresh(ctx context.Context, accountID int64, claim string, result RepositoryAccessResult) error
 	ListGitHubInstallations(accountID int64) ([]GitHubInstallation, error)
 	ListGitHubInstallationAccounts() ([]GitHubInstallationAccount, error)
 	GitHubInstallationAccountForInstallation(installationID int64) (GitHubInstallationAccount, error)

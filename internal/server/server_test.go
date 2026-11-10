@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -1312,7 +1313,7 @@ func TestUserRunnerAuthorizationCachesNoInstallations(t *testing.T) {
 	if len(access) != 0 {
 		t.Fatalf("expected no repository access, got %#v", access)
 	}
-	cached, ok := srv.cachedUserRepositoryAccess(account.ID)
+	cached, ok := readTestAccessSnapshot(t, store, account.ID)
 	if !ok || len(cached) != 0 {
 		t.Fatalf("expected empty repository access to be cached, cached=%#v ok=%v", cached, ok)
 	}
@@ -1407,7 +1408,8 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 	}))
 	defer ghServer.Close()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1430,12 +1432,7 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 	if !hasRepositoryAccess(access, 987, "o/old") {
 		t.Fatalf("unexpected initial access: %#v", access)
 	}
-	srv.userRepositoryAccessMu.Lock()
-	cached := srv.userRepositoryAccessCache[account.ID]
-	cached.refreshAfter = time.Now().Add(-time.Second)
-	cached.expiresAt = time.Now().Add(time.Minute)
-	srv.userRepositoryAccessCache[account.ID] = cached
-	srv.userRepositoryAccessMu.Unlock()
+	ageAccessSnapshot(t, dir, account.ID, false)
 
 	for range 2 {
 		access, err = srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
@@ -1461,7 +1458,7 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		access, ok := srv.cachedUserRepositoryAccess(account.ID)
+		access, ok := readTestAccessSnapshot(t, store, account.ID)
 		if ok && hasRepositoryAccess(access, 987, "o/new") {
 			break
 		}
@@ -1475,6 +1472,8 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(t *testing.T) {
 	var calls int
 	rejected := make(chan struct{})
+	releaseRejection := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseRejection) })
 	var rejectOnce sync.Once
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {
@@ -1486,13 +1485,16 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 			w.Write([]byte(`{"repositories":[{"full_name":"o/r"}]}`))
 			return
 		}
+		<-releaseRejection
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"Bad credentials"}`))
 		rejectOnce.Do(func() { close(rejected) })
 	}))
 	defer ghServer.Close()
+	defer release()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1510,16 +1512,13 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
-	srv.userRepositoryAccessMu.Lock()
-	cached := srv.userRepositoryAccessCache[account.ID]
-	cached.refreshAfter = time.Now().Add(-time.Second)
-	srv.userRepositoryAccessCache[account.ID] = cached
-	srv.userRepositoryAccessMu.Unlock()
+	ageAccessSnapshot(t, dir, account.ID, false)
 
 	access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 	if err != nil || !hasRepositoryAccess(access, 987, "o/r") {
 		t.Fatalf("valid cache should be returned before rejection completes: access=%#v err=%v", access, err)
 	}
+	release()
 	select {
 	case <-rejected:
 	case <-time.After(time.Second):
@@ -1527,7 +1526,7 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		if _, ok := srv.cachedUserRepositoryAccess(account.ID); !ok {
+		if _, ok := readTestAccessSnapshot(t, store, account.ID); !ok {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1577,7 +1576,8 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 	defer ghServer.Close()
 	defer releaseRefresh()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1595,9 +1595,10 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
+	ageAccessSnapshot(t, dir, account.ID, true)
 	staleResult := make(chan error, 1)
 	go func() {
-		_, err := srv.refreshUserRepositoryAccess(t.Context(), account.ID)
+		_, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		staleResult <- err
 	}()
 	select {
@@ -1606,14 +1607,15 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 		t.Fatal("stale background refresh did not start")
 	}
 
-	srv.invalidateUserRepositoryAccess(account.ID)
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "replacement-user-token")
 	type accessResult struct {
 		access []state.GitHubInstallationRepositoryAccess
 		err    error
 	}
+	peer := newTestServer(t, state.New(dir), ghServer.URL, &fakeSandbox{})
 	result := make(chan accessResult, 1)
 	go func() {
-		access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		access, err := peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		result <- accessResult{access: access, err: err}
 	}()
 	select {
@@ -1629,7 +1631,7 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		access, ok := srv.cachedUserRepositoryAccess(account.ID)
+		access, ok := readTestAccessSnapshot(t, store, account.ID)
 		if ok && hasRepositoryAccess(access, 987, "o/new") && !hasRepositoryAccess(access, 987, "o/stale") {
 			break
 		}
@@ -1681,7 +1683,8 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	defer ghServer.Close()
 	defer releaseRefresh()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
 	if err != nil {
@@ -1698,9 +1701,10 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
+	ageAccessSnapshot(t, dir, account.ID, true)
 	staleResult := make(chan error, 1)
 	go func() {
-		_, err := srv.refreshUserRepositoryAccess(t.Context(), account.ID)
+		_, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		staleResult <- err
 	}()
 	select {
@@ -1709,14 +1713,15 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 		t.Fatal("stale background refresh did not start")
 	}
 
-	srv.invalidateUserRepositoryAccess(account.ID)
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "replacement-user-token")
 	type accessResult struct {
 		access []state.GitHubInstallationRepositoryAccess
 		err    error
 	}
+	peer := newTestServer(t, state.New(dir), ghServer.URL, &fakeSandbox{})
 	result := make(chan accessResult, 1)
 	go func() {
-		access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		access, err := peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		result <- accessResult{access: access, err: err}
 	}()
 	select {
@@ -1732,9 +1737,67 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	if err := <-staleResult; err == nil {
 		t.Fatal("expected stale refresh rejection")
 	}
-	access, ok := srv.cachedUserRepositoryAccess(account.ID)
+	access, ok := readTestAccessSnapshot(t, store, account.ID)
 	if !ok || !hasRepositoryAccess(access, 987, "o/new") {
 		t.Fatalf("rejected stale refresh invalidated the new epoch cache: %#v", access)
+	}
+}
+
+func TestUserRunnerAuthorizationSharesRefreshTimeout(t *testing.T) {
+	started := make(chan struct{})
+	var lookups atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/installations" {
+			t.Errorf("unexpected GitHub endpoint %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if lookups.Add(1) > 1 {
+			http.Error(w, "duplicate lookup", http.StatusServiceUnavailable)
+			return
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer api.Close()
+
+	dir := t.TempDir()
+	store := state.New(dir)
+	owner := newTestServer(t, store, api.URL, &fakeSandbox{})
+	peer := newTestServer(t, state.New(dir), api.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987}); err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, owner.cfg.AuthEncryptionKey.Value(), "user-token")
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := owner.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cold refresh did not start")
+	}
+	_, err = peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+	var shared *repositoryAccessFailure
+	if !errors.As(err, &shared) || shared.code != state.AccessRefreshUnavailable {
+		t.Errorf("waiter error = %v, want shared unavailable result", err)
+	}
+	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("owner error = %v, want GitHub refresh timeout", err)
+	}
+	if got := lookups.Load(); got != 1 {
+		t.Errorf("GitHub lookups = %d, want 1", got)
+	}
+	result, err := store.ReadRepositoryAccessSnapshot(t.Context(), account.ID)
+	if err != nil || result.Valid || result.Refreshing || result.RefreshDue || result.Failure != state.AccessRefreshUnavailable {
+		t.Fatalf("shared timeout cooldown = %+v, error = %v", result, err)
 	}
 }
 
@@ -1809,26 +1872,25 @@ func TestUserRunnerAuthorizationSharedRefreshSurvivesCallerCancellation(t *testi
 	}
 }
 
-func TestUserRunnerAuthorizationCacheIsBounded(t *testing.T) {
-	srv := &Server{userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{}}
-	for accountID := int64(1); accountID <= 513; accountID++ {
-		srv.cacheUserRepositoryAccess(accountID, []state.GitHubInstallationRepositoryAccess{
-			{InstallationID: accountID, Repositories: []string{"o/r"}},
-		})
+func readTestAccessSnapshot(t *testing.T, store state.Store, accountID int64) ([]state.GitHubInstallationRepositoryAccess, bool) {
+	t.Helper()
+	snapshot, err := store.ReadRepositoryAccessSnapshot(t.Context(), accountID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := len(srv.userRepositoryAccessCache); got > 512 {
-		t.Fatalf("expected bounded repository access cache, got %d entries", got)
-	}
+	return snapshot.Access, snapshot.Valid
 }
 
-func TestEvictOneUserRepositoryAccess(t *testing.T) {
-	cache := map[int64]cachedUserRepositoryAccess{
-		1: {},
-		2: {},
+func ageAccessSnapshot(t *testing.T, dir string, accountID int64, expire bool) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "runnerd.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	evictOneUserRepositoryAccess(cache)
-	if len(cache) != 1 {
-		t.Fatalf("expected exactly one cache entry to be evicted, got %d", len(cache))
+	defer db.Close()
+	_, err = db.Exec("UPDATE repository_access_snapshots SET refresh_after = 0, expires_at = CASE WHEN ? THEN 0 ELSE expires_at END WHERE account_id = ?", expire, accountID)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
