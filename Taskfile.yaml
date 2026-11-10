@@ -263,6 +263,7 @@ tasks:
       - task: template-runner-update-test
       - bash scripts/check-runner-template-matrix.sh
       - bash scripts/test-runner-template-disk.sh
+      - python3 scripts/test-template-batch.py
       - bash scripts/test-prepare-runner-archive.sh
       - bash scripts/check-runner-image-compatibility.sh
       - for: [github-runner-ubuntu-slim, github-runner-ubuntu-22.04, github-runner-ubuntu-24.04, github-runner-ubuntu-26.04]
@@ -306,16 +307,14 @@ tasks:
       - QSHELL="{{.QSHELL}}" scripts/build-windows-template.sh templates/github-runner-windows-11
 
   template-build-all:
-    desc: Build all eight public templates sequentially with qshell and wait until ready
+    desc: Build or resume the regional Ubuntu batch, optionally including Windows
+    env:
+      QSHELL: '{{.QSHELL}}'
+      INCLUDE_WINDOWS: '{{.INCLUDE_WINDOWS | default "0"}}'
+      BUILD_CONCURRENCY: '{{.BUILD_CONCURRENCY | default "4"}}'
+      BUILD_BATCH: '{{.BUILD_BATCH | default "default"}}'
     cmds:
-      - task: template-build-ubuntu-slim
-      - task: template-build-ubuntu-22-04
-      - task: template-build-ubuntu-24-04
-      - task: template-build-ubuntu-26-04
-      - task: template-build-ubuntu-slim-large
-      - task: template-build-ubuntu-22-04-large
-      - task: template-build-ubuntu-24-04-large
-      - task: template-build-ubuntu-26-04-large
+      - python3 scripts/build-template-batch.py
 
   template-build-ubuntu-slim:
     desc: Build the Ubuntu Slim template with qshell and wait until ready

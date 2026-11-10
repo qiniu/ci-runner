@@ -212,7 +212,6 @@ func (s *Server) handleUserSaveGitHubInstallation(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.invalidateUserRepositoryAccess(account.ID)
 	clearCookie(w, githubAppSetupStateCookieName, "/", requestIsSecure(r))
 	s.recordAudit("github:"+session.Subject, "github_app.configure", "github_installation", strconv.FormatInt(installation.InstallationID, 10), map[string]any{
 		"account_login": installation.AccountLogin,
@@ -238,7 +237,6 @@ func (s *Server) handleUserDeleteGitHubInstallation(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.invalidateUserRepositoryAccess(account.ID)
 	s.recordAudit("github:"+session.Subject, "github_app.delete", "github_installation", strconv.FormatInt(id, 10), nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -271,7 +269,6 @@ func (s *Server) handleUserSyncGitHubInstallations(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer s.invalidateUserRepositoryAccess(account.ID)
 	remoteIDs := make(map[int64]struct{}, len(remoteInstallations))
 	synced := make([]state.GitHubInstallation, 0, len(remoteInstallations))
 	for _, remote := range remoteInstallations {

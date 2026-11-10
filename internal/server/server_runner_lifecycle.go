@@ -400,6 +400,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if st.Status != state.StatusQueued || st.Version != claim.Version || st.LeaseOwner != workerID {
 		s.logger.Info("runner start skipped after queue claim changed", "id", id, "status", st.Status, "state_version", st.Version, "claim_version", claim.Version, "lease_owner", st.LeaseOwner, "worker", workerID)
 		unlock()
+		s.store.AppendLog(id, "control.log", fmt.Appendf(nil, "runner start skipped after queue claim changed: status=%s claim_version=%d state_version=%d\n", st.Status, claim.Version, st.Version))
 		return
 	}
 	if !req.CreatedAt.IsZero() {
@@ -410,6 +411,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	unlock()
 	if err != nil {
 		if errors.Is(err, state.ErrConflict) {
+			s.logger.Info("runner admission skipped after claim changed", "id", id, "stage", stage, "claim_version", claim.Version, "worker", workerID)
 			return
 		}
 		var syntax *json.SyntaxError
@@ -436,7 +438,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	ctx = watchCtx
 
 	jobCheckStartedAt := time.Now()
-	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, st)
+	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, &st)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
 		failStart("github_job_status", err)
@@ -915,7 +917,7 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 	st := claim
 	result := s.applyFailure(&st, stage, failure, true)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
-		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "cause", failure, "error", err)
+		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "claim_owner", claim.LeaseOwner, "claim_version", claim.Version, "cause", failure, "error", err)
 		return
 	}
 	s.recordStartFailure(st, stage, failure, result)
@@ -2501,8 +2503,10 @@ func (s *Server) deferCreatingRequest(attempt state.RunnerState, delay time.Dura
 	defer unlock()
 	st, err := s.store.ReadState(id)
 	if err != nil {
-		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
-		return
+		// A transient read failure need not strand this request until recovery.
+		// WriteState can only requeue an unchanged, committed creating version.
+		s.logger.Warn("read state for sponsored queue defer", "id", id, "error", err)
+		st = attempt
 	}
 	if !sameCreatingAttempt(st, attempt) || st.SandboxID != "" {
 		return
@@ -2621,13 +2625,6 @@ func profileForRunnerRequest(store state.Store, req state.RunnerRequest) (state.
 		}, nil
 	}
 	return state.RunnerProfile{}, state.ErrNotFound
-}
-
-func inFlightForRunnerProfile(store state.Store, req state.RunnerRequest, name string) (int, error) {
-	if req.ProfileSource == "" || req.ProfileSource == "global" || req.ProfileScopeType == "" || req.ProfileScopeID <= 0 {
-		return store.InFlightCountForProfile(name)
-	}
-	return store.InFlightCountForProfileScope(req.ProfileSource, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, name)
 }
 
 func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []string) error {

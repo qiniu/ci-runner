@@ -1853,6 +1853,38 @@ func TestDiagnosticsVariablesUseCurrentProcessWithoutPprofDiscovery(t *testing.T
 	}
 }
 
+type runnerSpecGuardErrorStore struct {
+	state.Store
+	err error
+}
+
+func (s runnerSpecGuardErrorStore) WithRunnerCatalogMutation(context.Context, func(state.Store) error) error {
+	return s.err
+}
+
+func TestAdminRunnerSpecMapsGuardFailures(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		err    error
+		status int
+	}{
+		{http.MethodPatch, context.DeadlineExceeded, http.StatusServiceUnavailable},
+		{http.MethodDelete, fmt.Errorf("private database error: %w", context.Canceled), http.StatusServiceUnavailable},
+		{http.MethodDelete, errors.New("private database error"), http.StatusInternalServerError},
+	} {
+		store := state.New(t.TempDir())
+		srv := newTestServer(t, store, "", &fakeSandbox{})
+		srv.store = runnerSpecGuardErrorStore{Store: store, err: tc.err}
+		req := adminRequest(tc.method, "/runner_specs/default", strings.NewReader(`{"enabled":false}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != tc.status || strings.Contains(rec.Body.String(), "private database error") {
+			t.Fatalf("%s error %v: status=%d body=%s", tc.method, tc.err, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 type auditFailingStore struct {
 	state.Store
 }

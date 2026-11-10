@@ -299,6 +299,20 @@ type oauthIdentityRecord struct {
 
 func (oauthIdentityRecord) TableName() string { return "oauth_identities" }
 
+// One row per account. Times are Unix milliseconds from the database clock.
+type repositoryAccessSnapshotRecord struct {
+	AccountID    int64 `gorm:"primaryKey;autoIncrement:false"`
+	AccessJSON   []byte
+	RefreshAfter int64
+	ExpiresAt    int64
+	RefreshToken string `gorm:"size:64"`
+	LeaseUntil   int64
+	Failure      string `gorm:"size:32"`
+	RetryAfter   string `gorm:"size:64"`
+}
+
+func (repositoryAccessSnapshotRecord) TableName() string { return "repository_access_snapshots" }
+
 type githubInstallationRecord struct {
 	ID              int64         `gorm:"column:id;primaryKey;autoIncrement"`
 	AccountID       int64         `gorm:"column:account_id;not null;uniqueIndex:idx_github_installations_account_installation;index:idx_github_installations_account"`

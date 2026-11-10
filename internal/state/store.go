@@ -269,7 +269,7 @@ type RunnerState struct {
 	CleanupGitHubRunnerID           int64     `json:"-"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
-	queueRetryDelay                 *time.Duration
+	queueRetry                      *queuedRetry
 	CreatingAt                      time.Time `json:"creating_at,omitempty"`
 	RunningAt                       time.Time `json:"running_at,omitempty"`
 	StoppingAt                      time.Time `json:"stopping_at,omitempty"`
@@ -280,12 +280,17 @@ type RunnerState struct {
 	Version                         int64     `json:"version"`
 }
 
-// ScheduleQueuedRetry makes the next queued-state write derive the deadline from
+type queuedRetry struct {
+	version int64
+	delay   time.Duration
+}
+
+// ScheduleQueuedRetry makes a queued-state write at this version derive its deadline from
 // the database clock. A state read from storage retains its absolute deadline
 // across unrelated writes, including writes after a process restart.
 func (st *RunnerState) ScheduleQueuedRetry(delay time.Duration) {
 	st.NextRetryAt = time.Time{}
-	st.queueRetryDelay = &delay
+	st.queueRetry = &queuedRetry{version: st.Version, delay: delay}
 }
 
 // RunnerRequestListOptions controls admin Runner request filtering and pagination.
@@ -607,6 +612,7 @@ type RunnerRequestStore interface {
 	ListStatesForGitHubInstallationRepositories(access []GitHubInstallationRepositoryAccess, limit, offset int) ([]RunnerState, int64, error)
 	ActiveCount() (int, error)
 	InFlightCount() (int, error)
+	RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error)
 	InFlightCountForRepositoryOwner(owner string) (int, error)
 	InFlightCountForRepository(repositoryFullName string) (int, error)
 	ActiveCountForProfile(name string) (int, error)
@@ -615,8 +621,6 @@ type RunnerRequestStore interface {
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
 	WriteQueuedClaim(st RunnerState, owner string) error
-	// ReleaseQueuedClaim is best-effort: an expired or superseded claim is already released for its caller.
-	ReleaseQueuedClaim(claim RunnerState) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
 	AppendStagedLog(id, name, stage string, data []byte)
@@ -627,6 +631,7 @@ type RunnerRequestStore interface {
 
 type RunnerCatalogStore interface {
 	ListProfiles() ([]RunnerProfile, error)
+	ListProfilesContext(ctx context.Context) ([]RunnerProfile, error)
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
@@ -653,6 +658,10 @@ type IdentityStore interface {
 }
 
 type GitHubInstallationStore interface {
+	ReadRepositoryAccessSnapshot(ctx context.Context, accountID int64) (RepositoryAccessSnapshot, error)
+	RequestRepositoryAccessRefresh(ctx context.Context, accountID int64) error
+	ClaimRepositoryAccessRefresh(ctx context.Context, accountID int64) (string, error)
+	FinishRepositoryAccessRefresh(ctx context.Context, accountID int64, claim string, result RepositoryAccessResult) error
 	ListGitHubInstallations(accountID int64) ([]GitHubInstallation, error)
 	ListGitHubInstallationAccounts() ([]GitHubInstallationAccount, error)
 	GitHubInstallationAccountForInstallation(installationID int64) (GitHubInstallationAccount, error)
@@ -737,6 +746,14 @@ type DeploymentStore interface {
 	ListDeploymentEventsAfter(id string, afterID int64, limit int) ([]DeploymentEvent, bool, error)
 }
 
+// RunnerCapacityCounts describes the same active population across admission limits.
+type RunnerCapacityCounts struct {
+	Global     int `gorm:"column:global_count"`
+	Profile    int
+	Account    int
+	Repository int
+}
+
 type Store interface {
 	RunnerRequestStore
 	RunnerCatalogStore
@@ -751,7 +768,8 @@ type Store interface {
 }
 
 type Options struct {
-	Backend        string
-	DatabaseDSN    string
-	MigrateOnStart bool
+	Backend              string
+	DatabaseDSN          string
+	MigrateOnStart       bool
+	PostgresMaxOpenConns int
 }

@@ -271,7 +271,7 @@ func (s *DBStore) UpsertGitHubInstallation(installation GitHubInstallation) (Git
 				return err
 			}
 		}
-		return nil
+		return invalidateRepositoryAccess(tx, installation.AccountID)
 	}); err != nil {
 		return GitHubInstallation{}, err
 	}
@@ -289,14 +289,16 @@ func (s *DBStore) DeleteGitHubInstallation(accountID, id int64) error {
 	if accountID <= 0 || id <= 0 {
 		return ErrNotFound
 	}
-	result := db.Where("account_id = ? AND id = ?", accountID, id).Delete(&githubInstallationRecord{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("account_id = ? AND id = ?", accountID, id).Delete(&githubInstallationRecord{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return invalidateRepositoryAccess(tx, accountID)
+	})
 }
 
 func repositoriesForGitHubInstallations(db *gorm.DB, records []githubInstallationRecord) (map[int64][]string, error) {

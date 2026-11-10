@@ -7,16 +7,74 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
-DSN = os.environ["RUNNERD_POSTGRES_TEST_DSN"]
+def psql_connection(dsn):
+    """Keep libpq passwords out of argv, preserving URI and keyword DSNs.
+
+    >>> psql_connection("postgres:///runnerd_test")
+    ('postgres:///runnerd_test', None)
+    >>> psql_connection("postgresql:///db?host=/tmp&password=x%23y")
+    ('postgresql:///db?host=/tmp', 'x#y')
+    >>> psql_connection("postgresql://ci:x#y?z@[::1],db/db")
+    ('postgresql://ci@[::1],db/db', 'x#y?z')
+    >>> psql_connection("postgres://ci:old@db/db?password=new&sslmode=require")
+    ('postgres://ci@db/db?sslmode=require', 'new')
+    >>> psql_connection("user=ci password='x y' host=/tmp")
+    ('user=ci host=/tmp', 'x y')
+    """
+    password = None
+    if dsn.startswith(("postgres://", "postgresql://")):
+        scheme, _, rest = dsn.partition("://")
+        # libpq looks for userinfo before the first slash. A raw ? or #
+        # before the @ can belong to the password.
+        credentials = re.match(r"([^/@]*)@", rest)
+        if credentials:
+            user, colon, encoded = credentials.group(1).partition(":")
+            if colon:
+                password = unquote(encoded)
+            rest = user + "@" + rest[credentials.end():]
+        address, _, query = rest.partition("?")
+        options = []
+        for item in query.split("&") if query else []:
+            key, _, value = item.partition("=")
+            if unquote(key) == "password":
+                password = unquote(value)
+            else:
+                options.append(item)
+        safe = scheme + "://" + address
+        if options:
+            safe += "?" + "&".join(options)
+        return safe, password
+
+    # libpq keyword values support single quotes and backslash-escaped bytes.
+    # Preserve each non-password option verbatim, including its quoting.
+    item = re.compile(r"""\s*([^\s=]+)\s*=\s*('(?:\\.|[^'\\])*'|(?:\\.|[^\s\\])*)(?=\s|$)""", re.DOTALL)
+    parts = []
+    pos = 0
+    while pos < len(dsn) and dsn[pos:].strip():
+        match = item.match(dsn, pos)
+        if not match:
+            raise ValueError("invalid PostgreSQL test connection string")
+        key, value = match.groups()
+        if key == "password":
+            if value.startswith("'"):
+                value = value[1:-1]
+            password = re.sub(r"\\(.)", r"\1", value, flags=re.DOTALL)
+        else:
+            parts.append(match.group())
+        pos = match.end()
+    return "".join(parts).lstrip(), password
 
 
 def wait_for(description, condition, timeout=20, interval=0.05):
@@ -29,7 +87,7 @@ def wait_for(description, condition, timeout=20, interval=0.05):
 
 
 def sql(env, query):
-    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    proc = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           input=query, env=env, text=True, stdout=subprocess.PIPE)
     if proc.returncode:
         raise RuntimeError("fixture SQL failed")
@@ -38,7 +96,7 @@ def sql(env, query):
 
 @contextlib.contextmanager
 def hold_lock(env, statement):
-    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", DSN],
+    with subprocess.Popen(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-d", env["RUNNERD_POSTGRES_TEST_DSN"]],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           env=env, text=True) as psql:
         psql.stdin.write(f"BEGIN; SET LOCAL lock_timeout='10s'; {statement}; SELECT 'locked';\n")
@@ -59,7 +117,7 @@ def node(binary, directory, name, env, worker=None):
     config = directory / (name + ".json")
     config.write_text(json.dumps({
         "server": {"http_addr": f"127.0.0.1:{port}"},
-        "database": {"backend": "postgres", "dsn": DSN},
+        "database": {"backend": "postgres", "dsn": env["RUNNERD_POSTGRES_TEST_DSN"]},
         "auth": {"session_secret": "fixture-session", "encryption_key": "fixture-key"},
         "sandbox": {"regions": [{"id": "local", "label": "Test", "sandbox_api_url": "http://127.0.0.1:1"}]},
         "github": {"token": "fixture", "webhook_secret": "fixture",
@@ -282,27 +340,59 @@ def exercise_disable(binary, directory, schema):
         assert sql(env, "SELECT creating_at IS NULL FROM runner_requests WHERE id='spec-race'") == "t"
 
 
+@contextlib.contextmanager
+def fixture_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        try:
+            yield directory
+        except Exception:
+            # Surface lifecycle evidence without dumping DSNs, raw SQL errors,
+            # config files or provider responses into CI output.
+            fields = ("time", "level", "msg", "id", "status", "worker", "lease_owner",
+                      "claim_owner", "claim_version", "state_version", "stage", "decision")
+            for log in sorted(directory.glob("*.log")):
+                print(f"--- {log.name}: last runnerd events ---", file=sys.stderr)
+                with log.open("rb") as stream:
+                    stream.seek(max(0, log.stat().st_size - 16384))
+                    for line in stream.read().splitlines()[-20:]:
+                        try:
+                            event = json.loads(line)
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                        if isinstance(event, dict):
+                            print(json.dumps({k: str(event[k])[:200] for k in fields if k in event}), file=sys.stderr)
+            raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
     parser.add_argument("--full-ttl", action="store_true", help="wait the full 300s in the crash scenario")
     args = parser.parse_args()
+    dsn = os.environ.get("RUNNERD_POSTGRES_TEST_DSN")
+    if not dsn:
+        parser.error("set RUNNERD_POSTGRES_TEST_DSN to a dedicated PostgreSQL *_test database")
+    safe_dsn, password = psql_connection(dsn)
+    os.environ["RUNNERD_POSTGRES_TEST_DSN"] = safe_dsn
+    if password is not None:
+        os.environ["PGPASSWORD"] = password
     if not sql(os.environ, "SELECT current_database()").endswith("_test"):
         raise RuntimeError("a dedicated database ending in _test is required")
     for scenario in ["paused", "crashed", "cluster capacity", "disable spec", "admission crash"]:
         schema = "queue_" + uuid.uuid4().hex
         sql(os.environ, f"CREATE SCHEMA {schema}")
         try:
-            with tempfile.TemporaryDirectory() as tmp:
+            with fixture_directory() as directory:
                 if scenario == "admission crash":
-                    exercise_admission_crash(args.binary.resolve(), Path(tmp), schema)
+                    exercise_admission_crash(args.binary.resolve(), directory, schema)
                 elif scenario == "disable spec":
-                    exercise_disable(args.binary.resolve(), Path(tmp), schema)
+                    exercise_disable(args.binary.resolve(), directory, schema)
                 elif scenario == "cluster capacity":
-                    exercise_capacity(args.binary.resolve(), Path(tmp), schema)
+                    exercise_capacity(args.binary.resolve(), directory, schema)
                 else:
                     crash = scenario == "crashed"
-                    exercise(args.binary.resolve(), Path(tmp), schema, crash, args.full_ttl and crash)
+                    exercise(args.binary.resolve(), directory, schema, crash, args.full_ttl and crash)
             print("PASS:", scenario, flush=True)
         finally:
             sql(os.environ, f"DROP SCHEMA {schema} CASCADE")

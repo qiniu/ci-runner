@@ -289,79 +289,38 @@ func TestInFlightCountForRunnerAccountAndRepository(t *testing.T) {
 	}
 }
 
-// ---------- ReleaseLease ----------
-
-func TestReleaseLeaseClears(t *testing.T) {
-	store := New(t.TempDir())
-
-	if _, _, err := store.CreateRequest(RunnerRequest{
-		ID: "lease-test", Source: "test", Labels: []string{"sl"}, RunnerName: "e2b-lease-test",
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	_, claim, claimed, err := store.ClaimNextRunnable("worker-A", 30*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !claimed {
-		t.Fatal("expected claim to succeed")
-	}
-
-	if err := store.ReleaseQueuedClaim(claim); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ReadState("lease-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.LeaseOwner != "" {
-		t.Errorf("expected empty lease owner after release, got %q", got.LeaseOwner)
-	}
-	if !got.LeaseExpiresAt.IsZero() {
-		t.Errorf("expected zero lease expiry after release, got %v", got.LeaseExpiresAt)
-	}
-}
-
-func TestReleaseLeaseDoesNotClearOtherWorkerLease(t *testing.T) {
-	store := New(t.TempDir())
-
-	if _, _, err := store.CreateRequest(RunnerRequest{
-		ID: "lease-other", Source: "test", Labels: []string{"sl"}, RunnerName: "e2b-lease-other",
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	_, claim, claimed, err := store.ClaimNextRunnable("worker-A", 30*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !claimed {
-		t.Fatal("expected initial claim to succeed")
-	}
-
-	// worker-B tries to release worker-A's lease — should be a no-op
-	claim.LeaseOwner = "worker-B"
-	if err := store.ReleaseQueuedClaim(claim); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ReadState("lease-other")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Lease should still be held by worker-A
-	if got.LeaseOwner != "worker-A" {
-		t.Errorf("expected lease still owned by worker-A after wrong-worker release, got %q", got.LeaseOwner)
-	}
-}
-
 func TestMySQLQueueTimeWithoutDSNLocation(t *testing.T) {
 	db := &gorm.DB{Config: &gorm.Config{Dialector: gormmysql.New(gormmysql.Config{})}}
 	expr := queueTime(db, time.Minute)
 	if len(expr.Vars) != 1 || expr.Vars[0] != time.Minute.Microseconds() || !strings.Contains(expr.SQL, "UTC_TIMESTAMP(3)") {
 		t.Fatalf("expected a one-minute UTC database deadline, got %+v", expr)
+	}
+}
+
+func TestQueuedRetryIntentOnlyAppliesToScheduledVersion(t *testing.T) {
+	store := New(t.TempDir())
+	_, st, err := store.CreateRequest(RunnerRequest{ID: "retry-intent"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.ScheduleQueuedRetry(time.Hour)
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.ReadState(st.ID)
+	if err != nil || saved.NextRetryAt.IsZero() {
+		t.Fatalf("initial retry missing: %v", err)
+	}
+	// A caller reusing its original struct must be able to explicitly clear
+	// the deadline on the next version without rearming the previous intent.
+	st.Version = saved.Version
+	st.NextRetryAt = time.Time{}
+	if err := store.WriteState(st); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = store.ReadState(st.ID)
+	if err != nil || !saved.NextRetryAt.IsZero() {
+		t.Fatalf("old retry rearmed: %v, %v", saved.NextRetryAt, err)
 	}
 }
 
@@ -413,11 +372,16 @@ func testQueuedClaimOwnership(t *testing.T, store *DBStore) {
 	rejectOldWrites()
 	current := claim("takeover")
 	rejectOldWrites()
-	if err := store.ReleaseQueuedClaim(old); err != nil {
-		t.Fatal(err)
+	staleOwner := old.LeaseOwner
+	old.LeaseOwner, old.LeaseExpiresAt = "", time.Time{}
+	if err := store.WriteQueuedClaim(old, staleOwner); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale claim released its replacement: %v", err)
 	}
 	owner := current.LeaseOwner
 	current.LeaseOwner, current.LeaseExpiresAt = "", time.Time{}
+	if err := store.WriteQueuedClaim(current, "other-worker"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("another worker released the current claim: %v", err)
+	}
 	current.ScheduleQueuedRetry(time.Minute)
 	if err := store.WriteQueuedClaim(current, owner); err != nil {
 		t.Fatalf("current claim could not defer after stale release: %v", err)

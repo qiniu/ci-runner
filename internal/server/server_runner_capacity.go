@@ -64,8 +64,12 @@ func (s *Server) admitQueuedRunner(ctx context.Context, req state.RunnerRequest,
 	if err != nil && stage == "admission_lock_wait" {
 		timings.record(stage, started)
 	}
-	if err != nil && stage == "" {
-		stage = "admission_commit"
+	if stage == "" {
+		if err != nil {
+			stage = "admission_commit"
+		} else {
+			st.Version++ // WriteQueuedClaim committed the creating row.
+		}
 	}
 	return profile, stage, err
 }
@@ -76,24 +80,28 @@ func (s *Server) runnerCapacityLimit(tx state.Store, req state.RunnerRequest, pr
 	if !found {
 		owner = ""
 	}
+	req.ProfileName = profile.Name
+	started := time.Now()
+	counts, err := tx.RunnerCapacityCounts(req)
+	timings.record("capacity_count", started)
+	if err != nil {
+		return "capacity_count", err
+	}
 	for _, check := range []struct {
 		stage string
 		limit int
-		count func() (int, error)
+		count int
 	}{
-		{"global_capacity_check", s.cfg.MaxConcurrentRunners, tx.InFlightCount},
-		{"profile_capacity_check", profile.MaxConcurrency, func() (int, error) { return inFlightForRunnerProfile(tx, req, profile.Name) }},
-		{"account_capacity_check", s.cfg.RunnerAccountConcurrency[owner], func() (int, error) { return tx.InFlightCountForRepositoryOwner(owner) }},
-		{"repository_capacity_check", s.cfg.RunnerRepositoryConcurrency[repository], func() (int, error) { return tx.InFlightCountForRepository(repository) }},
+		{"global_capacity_check", s.cfg.MaxConcurrentRunners, counts.Global},
+		{"profile_capacity_check", profile.MaxConcurrency, counts.Profile},
+		{"account_capacity_check", s.cfg.RunnerAccountConcurrency[owner], counts.Account},
+		{"repository_capacity_check", s.cfg.RunnerRepositoryConcurrency[repository], counts.Repository},
 	} {
 		if check.limit <= 0 && check.stage != "global_capacity_check" {
 			continue
 		}
-		started := time.Now()
-		count, err := check.count()
-		timings.record(check.stage, started)
-		if err != nil || count >= check.limit {
-			return check.stage, err
+		if check.count >= check.limit {
+			return check.stage, nil
 		}
 	}
 	return "", nil
