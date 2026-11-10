@@ -171,6 +171,22 @@ func (s *DBStore) RecordJITRegistrationResult(ctx context.Context, attempt Runne
 		Where("cleanup_github_runner_id IS NULL OR cleanup_github_runner_id = 0")
 	updates := map[string]any{"version": gorm.Expr("version + 1")}
 	if runnerID == 0 {
+		// Rejection evidence may arrive after a peer owns cleanup. Retain its
+		// safe classification in the same CAS so a recovery decision cannot
+		// observe rejected without the corresponding retry policy.
+		if attempt.LastErrorCode != "" {
+			retryable := false
+			switch attempt.LastErrorCode {
+			case "auth_error", "github_registration":
+			case "http_retryable_status", "http_rate_limited", "github_secondary_rate_limit":
+				retryable = true
+			default:
+				return ErrConflict
+			}
+			updates["last_error_code"] = attempt.LastErrorCode
+			updates["last_error_retryable"] = retryable
+			updates["last_error_message"] = "Windows JIT registration rejected"
+		}
 		updates["jit_registration_state"] = JITRejected
 		updates["cleanup_github_done"] = true
 	} else {

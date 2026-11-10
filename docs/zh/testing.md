@@ -912,7 +912,7 @@ UCRT64 PATH 解析，并在重建后重新测量磁盘剩余空间。
 
 Windows 要求 `RUNNERD_E2E_JIT_CONFIG`、与其绑定的 `RUNNERD_E2E_RUNNER_NAME` 和精确标签；通过 GitHub 仓库级或组织级 `generate-jitconfig` API 创建，指定 Runner group ID 和 `work_folder: ..\work`。配置必须保密，不得打印。仅提供注册令牌时启动会失败。启动文件在 listener 启动前清空；这不构成对当前 Runner 自身凭据或同用户进程内存的隔离。
 
-Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。
+Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。迟到的明确 JIT 拒绝会与安全错误分类原子持久化，即使清理已被其他节点接管。恢复沿用创建节点的重试预算和退避策略，限流在预算耗尽后仍延后重试；重新排队时清除上一次尝试的终止证据，人工停止或原 Job 已完成时不再重排。
 
 `internal/sandboxrunner` 中的 `TestWindowsRunnerE2E` 会在真实 Windows Sandbox 上依次执行
 `StartRunner`、`RecoverRunner`、一个真实 GitHub Actions job 和 `StopRunner`。只有设置

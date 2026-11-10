@@ -3880,6 +3880,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				testAdmissionDuringPostgresCatalogWait(t, migrated)
 			}
 			testRunnerAdmissionRollback(t, migrated)
+			testJITRejectionReceipt(t, migrated)
 			testRunningWatch(t, migrated)
 			testCleanupRecoveryDoesNotStarveExpiredWatches(t, migrated)
 			testRunnerCapacityCounts(t, migrated)
