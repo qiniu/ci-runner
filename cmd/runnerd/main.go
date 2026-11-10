@@ -43,9 +43,10 @@ func main() {
 		os.Exit(1)
 	}
 	store := state.NewWithOptions(state.Options{
-		Backend:        cfg.StateBackend,
-		DatabaseDSN:    cfg.StateDatabaseDSN.Value(),
-		MigrateOnStart: true,
+		Backend:              cfg.StateBackend,
+		DatabaseDSN:          cfg.StateDatabaseDSN.Value(),
+		PostgresMaxOpenConns: cfg.PostgresMaxOpenConns,
+		MigrateOnStart:       true,
 	})
 	if err := initializeStateStore(store, logger); err != nil {
 		logger.Error("initialize state store", "error", err)

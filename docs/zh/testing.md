@@ -1138,7 +1138,26 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+可通过 `database.postgres_max_open_connections` 设置每个 runnerd 进程的 PostgreSQL 连接上限。省略或设为 0 时连接池无上限。预算应包含所有同时在线进程的上限之和（包括发布时重叠的副本）、预留连接、其他客户端和运维余量，总数须在 PG 的 `max_connections` 内。连接池满后，请求会等待空闲连接；在预生产按真实请求并发量和数据库延迟确定上限。
+
+PostgreSQL 上的并发启动在数据库级事务内串行执行结构检查、迁移和回填。等待进程可以看到前一个事务提交的结果。客户端暂停、事务处于空闲状态时，超时取 PG 配置与 60 秒中的较短值。正在等 DDL 锁的语句属于活动查询，可能持续等待，直到 PG 的 `lock_timeout` 或 `statement_timeout` 触发，或阻塞事务结束。迁移之前拿到的锁会持有到事务结束，后来的读请求也可能排在等待中的 DDL 后面。
+
+较大的结构变更应先在接近生产的数据库副本上演练。为执行升级的 runnerd 在 DSN 中设置唯一的 `application_name`，按维护窗口选取有限的 `lock_timeout`。DSN 参数会作用于该进程的所有数据库连接，包括启动后的业务查询。以下示例使用 `runnerd-upgrade-1` 作为名称，需在目标数据库中用有权查看这些会话的角色执行。
+
+```sql
+SELECT a.pid, a.state, a.wait_event, pg_blocking_pids(a.pid) AS blockers,
+       l.locktype, l.mode, l.granted, l.relation::regclass AS relation
+FROM pg_stat_activity AS a
+JOIN pg_locks AS l ON l.pid = a.pid
+WHERE a.datname = current_database()
+  AND a.application_name = 'runnerd-upgrade-1'
+  AND l.locktype IN ('relation', 'advisory')
+ORDER BY a.pid, l.granted, l.locktype, relation;
+```
+
+启动因锁超时失败时，PG 会回滚同一事务里已执行的 DDL。如果 runnerd 在等待锁时被强制退出，对应的 PG 后端可能仍在运行并继续阻塞其他连接。启动旧版或重试前，先确认已退出进程的 PG 后端及其持锁均已消失。查询列出的阻塞会话应与数据库运维人员一起核实。
 
 这些测试使用隔离 schema，保留 PG 启动、密码混淆、时区与规格版本校验覆盖；不执行生产数据库清理。历史流程和后续运维边界见[迁移退役记录](database-transfer-retirement.md)。
