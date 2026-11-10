@@ -314,7 +314,7 @@ Expected result:
   from Workflow output after restart; it must not replace existing evidence with
   empty probe output or attach metadata from an older attempt.
 - The GitHub Actions job continues without returning to the queue or losing its runner.
-- A queued request with a lease owned by the previous process becomes eligible for the new worker.
+- For a queued request held by the previous process, verify that the next worker claims it on a poll after both the lease and any retry deadline have expired on the database clock. The default lease is 300 seconds.
 - A temporary GitHub or sandbox status lookup failure is logged without stopping the existing sandbox.
 
 ## 7. Cleanup

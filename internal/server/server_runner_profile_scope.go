@@ -9,16 +9,16 @@ import (
 // runnerProfileScopeForInstallation maps a webhook installation to a local
 // account scope for personal installations or an installation scope for
 // organizations. Unknown installations deliberately fall back to global.
-func (s *Server) runnerProfileScopeForInstallation(installationID int64) (state.RunnerProfileScope, bool, error) {
+func runnerProfileScopeForInstallation(store state.Store, installationID int64) (state.RunnerProfileScope, bool, error) {
 	if installationID <= 0 {
 		return state.RunnerProfileScope{}, false, nil
 	}
-	if accountID, ok, err := s.store.AccountScopeForPersonalGitHubInstallation(installationID); err != nil {
+	if accountID, ok, err := store.AccountScopeForPersonalGitHubInstallation(installationID); err != nil {
 		return state.RunnerProfileScope{}, false, err
 	} else if ok && accountID > 0 {
 		return state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: accountID}, true, nil
 	}
-	owner, err := s.store.GetGitHubInstallationOwner(installationID)
+	owner, err := store.GetGitHubInstallationOwner(installationID)
 	if err != nil {
 		if !errors.Is(err, state.ErrNotFound) {
 			return state.RunnerProfileScope{}, false, err

@@ -179,6 +179,12 @@ jobs:
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|PostgresPoolBudget|ConcurrentPostgresStartup|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
           go test ./internal/server -run 'Test(PlatformSpecRevision|SharedRepositoryAccess)PostgresSQLBackends' -count=1 -v
 
+      - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
+        run: |
+          go build -o "$RUNNER_TEMP/runnerd" ./cmd/runnerd
+          python3 -B -m doctest scripts/test-runner-queue-leases.py
+          python3 scripts/test-runner-queue-leases.py "$RUNNER_TEMP/runnerd"
+
   ui-production-smoke:
     runs-on: ubuntu-latest
     steps:

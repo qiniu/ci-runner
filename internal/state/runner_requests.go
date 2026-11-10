@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -70,6 +71,7 @@ var runnerRequestListSelectColumns = []string{
 	"runner_exit_code",
 	"error",
 	"queued_at",
+	"provision_attempt_id",
 	"last_attempt_at",
 	"next_retry_at",
 	"creating_at",
@@ -177,25 +179,43 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if req.JobID != 0 {
 		record.WorkflowJobID = &req.JobID
 	}
-	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
-	if result.Error != nil {
+	// MySQL CLIENT_FOUND_ROWS reports a no-op duplicate upsert as one
+	// affected row. A plain insert distinguishes an actual creation.
+	insert, lookup := db, db
+	if db.Dialector.Name() == BackendMySQL {
+		// A normal consistent read after a duplicate can see an older
+		// REPEATABLE READ snapshot. Read the winning row under a shared lock.
+		lookup = db.Clauses(clause.Locking{Strength: "SHARE"}).Session(&gorm.Session{})
+	} else {
+		insert = db.Clauses(clause.OnConflict{DoNothing: true})
+	}
+	result := insert.Create(&record)
+	if result.Error == nil && result.RowsAffected > 0 {
+		return true, recordToState(record), nil
+	}
+	if result.Error != nil && !isDuplicatedKeyError(db, result.Error) {
 		return false, RunnerState{}, result.Error
 	}
-	if result.RowsAffected == 0 {
-		st, err := s.ReadState(req.ID)
-		if errors.Is(err, ErrNotFound) && req.JobID != 0 {
-			var conflicting runnerRequestRecord
-			conflictErr := db.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
-			if conflictErr == nil {
-				return false, recordToState(conflicting), ErrConflict
-			}
-			if !errors.Is(conflictErr, gorm.ErrRecordNotFound) {
-				return false, RunnerState{}, conflictErr
-			}
-		}
-		return false, st, err
+
+	var existing runnerRequestRecord
+	err = lookup.First(&existing, "id = ?", req.ID).Error
+	if err == nil {
+		return false, recordToState(existing), nil
 	}
-	return true, recordToState(record), nil
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, RunnerState{}, err
+	}
+	if req.JobID != 0 {
+		var conflicting runnerRequestRecord
+		err = lookup.First(&conflicting, "workflow_job_id = ?", req.JobID).Error
+		if err == nil {
+			return false, recordToState(conflicting), ErrConflict
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, RunnerState{}, err
+		}
+	}
+	return false, RunnerState{}, ErrNotFound
 }
 
 func (s *DBStore) ReadRequest(id string) (RunnerRequest, error) {
@@ -218,6 +238,18 @@ func (s *DBStore) ReadState(id string) (RunnerState, error) {
 }
 
 func (s *DBStore) WriteState(st RunnerState) error {
+	return s.writeState(st, "")
+}
+
+// WriteQueuedClaim consumes the exact version obtained by ClaimNextRunnable.
+func (s *DBStore) WriteQueuedClaim(st RunnerState, owner string) error {
+	if owner == "" {
+		return ErrConflict
+	}
+	return s.writeState(st, owner)
+}
+
+func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
@@ -228,6 +260,9 @@ func (s *DBStore) WriteState(st RunnerState) error {
 	}
 	now := time.Now().UTC()
 	st.UpdatedAt = now
+	if st.Status == StatusQueued {
+		st.ProvisionAttemptID = ""
+	}
 	applyStateTimestamps(&st, now)
 
 	updates := map[string]any{
@@ -271,6 +306,7 @@ func (s *DBStore) WriteState(st RunnerState) error {
 		"retry_count":                         st.RetryCount,
 		"updated_at":                          st.UpdatedAt,
 		"version":                             st.Version + 1,
+		"provision_attempt_id":                st.ProvisionAttemptID,
 		"last_attempt_at":                     zeroTimeToPointer(st.LastAttemptAt),
 		"next_retry_at":                       zeroTimeToPointer(st.NextRetryAt),
 		"creating_at":                         zeroTimeToPointer(st.CreatingAt),
@@ -281,9 +317,14 @@ func (s *DBStore) WriteState(st RunnerState) error {
 		"lease_owner":                         st.LeaseOwner,
 		"lease_expires_at":                    zeroTimeToPointer(st.LeaseExpiresAt),
 	}
-	result := db.Model(&runnerRequestRecord{}).
-		Where("id = ? AND version = ?", st.ID, st.Version).
-		Updates(updates)
+	if st.Status == StatusQueued && st.queueRetry != nil && st.queueRetry.version == st.Version {
+		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
+	}
+	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
+	if claimOwner != "" {
+		query = liveQueuedClaim(query, claimOwner)
+	}
+	result := query.Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -762,6 +803,41 @@ func (s *DBStore) ActiveCount() (int, error) {
 	return int(count), nil
 }
 
+// RunnerCapacityCounts reads all capacity dimensions in one database round trip.
+// Call it inside WithRunnerAdmission when using the result to admit a runner.
+func (s *DBStore) RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error) {
+	var counts RunnerCapacityCounts
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return counts, err
+	}
+	profileCondition := "profile_source IN ?"
+	profileArgs := []any{[]string{"", "global"}}
+	if req.ProfileSource != "" && req.ProfileSource != "global" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
+		scope := RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}
+		if err := ValidateRunnerProfileScope(scope); err != nil {
+			return counts, err
+		}
+		profileCondition = "profile_source = ? AND profile_scope_type = ? AND profile_scope_id = ?"
+		profileArgs = []any{req.ProfileSource, scope.Type, scope.ID}
+	}
+	repository := strings.ToLower(strings.TrimSpace(req.RepositoryFullName))
+	owner, _, found := strings.Cut(repository, "/")
+	if !found {
+		owner = ""
+	}
+	owner = strings.TrimSpace(owner)
+	ownerPattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(owner) + "/%"
+	query := "COUNT(*) AS global_count, COUNT(CASE WHEN profile_name = ? AND " + profileCondition + " THEN 1 END) AS profile, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) LIKE ? ESCAPE '!' THEN 1 END) AS account, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) = ? THEN 1 END) AS repository"
+	args := append([]any{strings.TrimSpace(req.ProfileName)}, profileArgs...)
+	args = append(args, owner, ownerPattern, repository, repository)
+	err = db.Model(&runnerRequestRecord{}).Select(query, args...).
+		Where("status IN ?", []string{StatusCreating, StatusRunning, StatusStopping}).Scan(&counts).Error
+	return counts, err
+}
+
 func (s *DBStore) InFlightCount() (int, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
@@ -822,7 +898,7 @@ func (s *DBStore) InFlightCountForProfile(name string) (int, error) {
 	return s.countStatesForProfileSource(name, []string{"", "global"}, []string{StatusCreating, StatusRunning, StatusStopping})
 }
 
-func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error) {
+func (s *DBStore) ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return RunnerRequest{}, RunnerState{}, false, err
@@ -831,14 +907,17 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 	if workerID == "" {
 		return RunnerRequest{}, RunnerState{}, false, fmt.Errorf("worker id is required")
 	}
-	leaseExpiresAt := now.UTC().Add(leaseTTL)
+	if leaseTTL <= 0 {
+		return RunnerRequest{}, RunnerState{}, false, fmt.Errorf("positive lease TTL is required")
+	}
+	now, expires := queueTime(db, 0), queueTime(db, leaseTTL)
 	var claimed runnerRequestRecord
 	err = db.Transaction(func(tx *gorm.DB) error {
 		var candidate runnerRequestRecord
 		if err := tx.
 			Where("status = ?", StatusQueued).
-			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now.UTC()).
-			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now.UTC()).
+			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
+			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now).
 			// A deferred request rejoins at its next eligibility time instead of
 			// repeatedly jumping ahead of newer requests by its original age.
 			Order("COALESCE(next_retry_at, queued_at) ASC").
@@ -847,14 +926,15 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 			return err
 		}
 		result := tx.Model(&runnerRequestRecord{}).
-			Where("id = ?", candidate.ID).
+			Where("id = ? AND version = ?", candidate.ID, candidate.Version).
+			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
 			Where("status = ?", StatusQueued).
-			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now.UTC()).
+			Where("(lease_expires_at IS NULL OR lease_expires_at <= ?)", now).
 			Updates(map[string]any{
 				"lease_owner":      workerID,
-				"lease_expires_at": leaseExpiresAt,
-				"last_attempt_at":  now.UTC(),
-				"updated_at":       now.UTC(),
+				"lease_expires_at": expires,
+				"last_attempt_at":  now,
+				"updated_at":       now,
 				"version":          candidate.Version + 1,
 			})
 		if result.Error != nil {
@@ -884,17 +964,34 @@ func (s *DBStore) ClaimNextRunnable(workerID string, now time.Time, leaseTTL tim
 	return req, recordToState(claimed), true, nil
 }
 
-func (s *DBStore) ReleaseLease(id, workerID string) error {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return err
+// Evaluate ownership against database time at the conditional write. SQLite
+// stores UTC timestamps as text; MySQL DATETIME uses the driver's DSN location.
+func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
+	switch db.Dialector.Name() {
+	case BackendPostgres:
+		return gorm.Expr("clock_timestamp() + ? * interval '1 microsecond'", after.Microseconds())
+	case BackendMySQL:
+		// MySQL time zone tables are optional. Use the database for elapsed
+		// time and the driver's location only to encode its DATETIME value.
+		// Match the DATETIME(3) columns so a zero-delay retry cannot round
+		// forward to the next millisecond when the deadline is stored.
+		// UTC is also the driver default when no DSN location is available.
+		location := time.UTC
+		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil && dialector.DSNConfig != nil && dialector.DSNConfig.Loc != nil {
+			location = dialector.DSNConfig.Loc
+		}
+		_, offset := time.Now().Add(after).In(location).Zone()
+		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
+	case BackendSQLite:
+		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
+	default:
+		// DBStore.open validates the backend before a queue query can run.
+		panic(fmt.Sprintf("unsupported queue clock dialect: %s", db.Dialector.Name()))
 	}
-	return db.Model(&runnerRequestRecord{}).
-		Where("id = ? AND lease_owner = ?", sanitizeID(id), strings.TrimSpace(workerID)).
-		Updates(map[string]any{
-			"lease_owner":      "",
-			"lease_expires_at": nil,
-		}).Error
+}
+
+func liveQueuedClaim(query *gorm.DB, owner string) *gorm.DB {
+	return query.Where("status = ? AND lease_owner = ? AND lease_expires_at > ?", StatusQueued, owner, queueTime(query, 0))
 }
 
 func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
@@ -919,6 +1016,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			return ErrRetryNotAllowed
 		}
 		record.Status = StatusQueued
+		record.ProvisionAttemptID = ""
 		record.Error = ""
 		record.FailureStage = ""
 		record.FailureReason = ""
@@ -956,6 +1054,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		if err := tx.Model(&runnerRequestRecord{}).
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
+				"provision_attempt_id":                record.ProvisionAttemptID,
 				"status":                              record.Status,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -20,6 +21,15 @@ type startupTimingStore struct {
 	initialRead      atomic.Bool
 	afterInitialRead func()
 	capacityStage    string
+}
+
+func (s *startupTimingStore) WithRunnerAdmission(ctx context.Context, mutation func(state.Store) error) error {
+	if err := s.before("admission_lock_wait"); err != nil {
+		return err
+	}
+	return s.Store.WithRunnerAdmission(ctx, func(tx state.Store) error {
+		return mutation(&startupTimingStore{Store: tx, before: s.before, capacityStage: s.capacityStage})
+	})
 }
 
 func (s *startupTimingStore) ReadRequest(id string) (state.RunnerRequest, error) {
@@ -54,24 +64,18 @@ func (s *startupTimingStore) GetProfile(name string) (state.RunnerProfile, error
 	return s.Store.GetProfile(name)
 }
 
-func (s *startupTimingStore) InFlightCount() (int, error) {
-	if err := s.before("global_capacity_check"); err != nil {
-		return 0, err
+func (s *startupTimingStore) RunnerCapacityCounts(req state.RunnerRequest) (state.RunnerCapacityCounts, error) {
+	if err := s.before("capacity_count"); err != nil {
+		return state.RunnerCapacityCounts{}, err
 	}
+	counts, err := s.Store.RunnerCapacityCounts(req)
 	if s.capacityStage == "global_capacity_check" {
-		return 10, nil
-	}
-	return s.Store.InFlightCount()
-}
-
-func (s *startupTimingStore) InFlightCountForProfile(name string) (int, error) {
-	if err := s.before("profile_capacity_check"); err != nil {
-		return 0, err
+		counts.Global = 10
 	}
 	if s.capacityStage == "profile_capacity_check" {
-		return 10, nil
+		counts.Profile = 10
 	}
-	return s.Store.InFlightCountForProfile(name)
+	return counts, err
 }
 
 func newStartupTimingFixture(t *testing.T) (*Server, *startupTimingStore, chan string) {
@@ -132,7 +136,7 @@ func parseStartupTimings(t *testing.T, batch string) map[string]startupTimingSam
 }
 
 func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
-	for _, stage := range []string{"request_read", "initial_state_read", "profile_lookup", "global_capacity_check", "profile_capacity_check", "running_state_read"} {
+	for _, stage := range []string{"request_read", "initial_state_read", "profile_lookup", "capacity_count", "running_state_read"} {
 		for _, fail := range []bool{false, true} {
 			// An unreadable request deliberately retains the existing no-event behavior.
 			if stage == "request_read" && fail {
@@ -140,6 +144,7 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%s/error_%t", stage, fail), func(t *testing.T) {
 				srv, store, batches := newStartupTimingFixture(t)
+				claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
 				var injected atomic.Bool
 				var entered, released time.Time
 				store.before = func(operation string) error {
@@ -155,7 +160,7 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 					return nil
 				}
 				done := make(chan struct{})
-				go func() { srv.startRunner(t.Context(), "timing-start", "test-worker"); close(done) }()
+				go func() { srv.startClaimedRunner(t.Context(), claim); close(done) }()
 				var batch string
 				select {
 				case batch = <-batches:
@@ -210,20 +215,26 @@ func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
 
 func TestRunnerStartupRecordsAdmissionWaitBeforeProfileLookup(t *testing.T) {
 	srv, store, batches := newStartupTimingFixture(t)
-	read := make(chan struct{})
-	store.afterInitialRead = func() { close(read) }
-	srv.admissionMu.Lock()
+	claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
+	entered, release := make(chan struct{}), make(chan struct{})
+	store.before = func(stage string) error {
+		if stage == "admission_lock_wait" {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
 	done := make(chan struct{})
-	go func() { srv.startRunner(t.Context(), "timing-start", "test-worker"); close(done) }()
+	go func() { srv.startClaimedRunner(t.Context(), claim); close(done) }()
 	select {
-	case <-read:
+	case <-entered:
 	case <-time.After(5 * time.Second):
-		srv.admissionMu.Unlock()
-		t.Fatal("initial read did not finish")
+		close(release)
+		t.Fatal("admission did not begin")
 	}
 	time.Sleep(50 * time.Millisecond)
 	released := time.Now()
-	srv.admissionMu.Unlock()
+	close(release)
 	var batch string
 	select {
 	case batch = <-batches:
@@ -251,8 +262,9 @@ func TestRunnerStartupSkipsTimingsWhenCapacityDefers(t *testing.T) {
 	for _, stage := range []string{"global_capacity_check", "profile_capacity_check"} {
 		t.Run(stage, func(t *testing.T) {
 			srv, store, batches := newStartupTimingFixture(t)
+			claim := queuedRunnerForTest(t, store.Store, "timing-start", "test-worker")
 			store.capacityStage = stage
-			srv.startRunner(t.Context(), "timing-start", "test-worker")
+			srv.startClaimedRunner(t.Context(), claim)
 			select {
 			case batch := <-batches:
 				t.Fatalf("capacity-only deferral appended timing events: %s", batch)

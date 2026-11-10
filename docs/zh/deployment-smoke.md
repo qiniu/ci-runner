@@ -296,7 +296,7 @@ run 不能替代对实际部署的 webhook secret 与 GitHub webhook 配置是�
   输出重建缺失的 Job 前标记证据；空探测结果不能覆盖已有证据，也不能附加来自旧
   attempt 的元数据。
 - GitHub Actions job 持续运行，不会重新排队或丢失 runner。
-- 由旧进程持有 lease 的 `queued` 请求能够被新 worker 继续处理。
+- 对于由旧进程持有租约的 `queued` 请求，确认数据库时钟已越过租约到期时间和已设定的重试时间，然后观察新 worker 在后续轮询中领取。默认租期为 300 秒。
 - GitHub 或沙箱状态查询暂时失败时只记录错误，不会停止已有沙箱。
 
 ## 7. Cleanup

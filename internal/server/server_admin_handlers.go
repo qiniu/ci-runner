@@ -95,6 +95,7 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "repository is not allowed")
 		return
 	}
+	var profileUpdatedAt time.Time
 	profileName := strings.TrimSpace(input.ProfileName)
 	runnerGroup := ""
 	if profileName == "" {
@@ -103,7 +104,7 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "labels are required when runner_spec_name is not provided")
 			return
 		}
-		match, err := s.matchProfileForAdmission(repositoryFullName, 0, labels)
+		match, err := matchProfileForAdmission(s.store, repositoryFullName, 0, labels)
 		if err != nil {
 			s.logger.Error("match manual runner profile", "id", id, "repository", repositoryFullName, "labels", labels, "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -114,6 +115,7 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "no matching profile")
 			return
 		}
+		profileUpdatedAt = match.Profile.UpdatedAt
 		profileName = match.Profile.Name
 		runnerGroup = match.Profile.RunnerGroup
 		labels = append([]string(nil), match.Profile.Labels...)
@@ -129,6 +131,7 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		profileUpdatedAt = profile.UpdatedAt
 		runnerGroup = profile.RunnerGroup
 		if len(labels) == 0 {
 			labels = append([]string(nil), profile.Labels...)
@@ -148,7 +151,7 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		RunnerName:         "e2b-" + id,
 	}
 	s.logger.Info("manual runner create requested", "id", id, "repository", repositoryFullName, "profile", profileName, "labels", labels)
-	s.createAndStart(w, r, req, nil)
+	s.createAndStart(w, r, req, profileUpdatedAt)
 }
 
 func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
@@ -497,8 +500,7 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile state.RunnerProfile
-	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("admin_api", "profile.create", "runner_profile", strings.TrimSpace(requestedProfile.Name), requestedProfile, func(tx state.Store) error {
+	err = s.applyRunnerMutationWithAudit(r.Context(), "admin_api", "profile.create", "runner_profile", strings.TrimSpace(requestedProfile.Name), requestedProfile, func(tx state.Store) error {
 		if expectedUpdatedAt != nil && profileExecutionChanged(existing, requestedProfile) {
 			count, countErr := tx.ActiveCountForProfile(requestedProfile.Name)
 			if countErr != nil {
@@ -511,13 +513,8 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		profile, err = tx.UpsertProfileIfUnchanged(requestedProfile, expectedUpdatedAt)
 		return err
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Info("profile create rejected", "name", input.Name, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.writeRunnerSpecMutationError(w, input.Name, err)
 		return
 	}
 	s.logger.Info("profile created", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
@@ -624,8 +621,7 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile state.RunnerProfile
-	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
+	err = s.applyRunnerMutationWithAudit(r.Context(), "admin_api", "profile.update", "runner_profile", current.Name, current, func(tx state.Store) error {
 		if profileExecutionChanged(previous, current) {
 			count, countErr := tx.ActiveCountForProfile(current.Name)
 			if countErr != nil {
@@ -638,13 +634,8 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		profile, err = tx.UpsertProfileIfUnchanged(current, &current.UpdatedAt)
 		return err
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Info("profile update rejected", "name", current.Name, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.writeRunnerSpecMutationError(w, current.Name, err)
 		return
 	}
 	s.logger.Info("profile updated", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
@@ -697,8 +688,7 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	profileExists := err == nil
-	s.admissionMu.Lock()
-	err = s.applyMutationWithAudit("admin_api", "profile.delete", "runner_profile", name, map[string]any{"status": "deleted"}, func(tx state.Store) error {
+	err = s.applyRunnerMutationWithAudit(r.Context(), "admin_api", "profile.delete", "runner_profile", name, map[string]any{"status": "deleted"}, func(tx state.Store) error {
 		count, countErr := tx.ActiveCountForProfile(name)
 		if countErr != nil {
 			return countErr
@@ -718,13 +708,8 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		return tx.DeleteProfile(name)
 	})
-	s.admissionMu.Unlock()
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("delete profile", "name", name, "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.logger.Info("profile deleted", "name", name)
@@ -741,7 +726,7 @@ func (s *Server) handleMatchProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid match payload")
 		return
 	}
-	match, err := s.matchProfileForAdmission(input.RepositoryFullName, 0, input.Labels)
+	match, err := matchProfileForAdmission(s.store, input.RepositoryFullName, 0, input.Labels)
 	if err != nil {
 		s.logger.Error("match profile request failed", "repository", input.RepositoryFullName, "labels", input.Labels, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())

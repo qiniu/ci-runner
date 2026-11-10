@@ -6813,7 +6813,7 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedAfterJobStartedMarker(t 
 	}
 }
 
-func TestRecoverRequeuesQueuedRunner(t *testing.T) {
+func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	store := state.New(t.TempDir())
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:         "recover-queued",
@@ -6824,6 +6824,7 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st.NextRetryAt = time.Now().UTC().Add(30 * time.Second)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
@@ -6839,8 +6840,8 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected queued request with cleared lease, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) || !got.NextRetryAt.Equal(st.NextRetryAt) {
+		t.Fatalf("expected queued request with original lease and retry deadline, got %#v", got)
 	}
 	if fake.recoveredCount() != 0 || fake.stoppedCount() != 0 {
 		t.Fatalf("queued recovery touched sandbox: recovered=%d stopped=%d", fake.recoveredCount(), fake.stoppedCount())
@@ -6859,13 +6860,21 @@ func TestRecoverPromotesCreatingRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "interrupted-attempt"
 	st.CreatingAt = time.Now().UTC().Add(-time.Minute)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77}}
+	fake := &fakeSandbox{
+		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77},
+		recoverHook: func(input sandboxrunner.RecoverInput) {
+			if input.ProvisionAttemptID != "interrupted-attempt" || input.SandboxID != "" {
+				t.Errorf("unexpected recovery identity: attempt=%q sandbox=%q", input.ProvisionAttemptID, input.SandboxID)
+			}
+		},
+	}
 	srv := newTestServer(t, store, "http://example.test", fake)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
@@ -7172,18 +7181,18 @@ func TestRecoverMissingRunningSandboxDoesNotOverwriteConcurrentStateChange(t *te
 
 func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	store := state.New(t.TempDir())
-	_, queued, err := store.CreateRequest(state.RunnerRequest{
-		ID:         "recover-queued-after-error",
+	_, healthy, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "recover-healthy-neighbor",
 		Source:     "test",
 		Labels:     []string{"self-hosted"},
-		RunnerName: "e2b-recover-queued-after-error",
+		RunnerName: "e2b-recover-healthy-neighbor",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	queued.LeaseOwner = "old-worker"
-	queued.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
-	if err := store.WriteState(queued); err != nil {
+	healthy.Status, healthy.SandboxID, healthy.ProcessPID = state.StatusRunning, "sb-healthy", 41
+	healthy.LastErrorCode = "temporary_network_error"
+	if err := store.WriteState(healthy); err != nil {
 		t.Fatal(err)
 	}
 	_, running, err := store.CreateRequest(state.RunnerRequest{
@@ -7209,12 +7218,12 @@ func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected aggregated recovery error")
 	}
-	got, err := store.ReadState(queued.ID)
+	got, err := store.ReadState(healthy.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected later queued request to be recovered, got %#v", got)
+	if got.Status != state.StatusRunning || got.ProcessPID != healthy.ProcessPID || got.LastErrorCode != "" || fake.recoveredCount() != 2 {
+		t.Fatalf("healthy runner was not reconnected alongside failing runner: pid=%d calls=%d", got.ProcessPID, fake.recoveredCount())
 	}
 }
 
@@ -9399,14 +9408,42 @@ type blockingRunnerSpecMutationStore struct {
 	once    sync.Once
 }
 
-func (s *blockingRunnerSpecMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
-	s.once.Do(func() { close(s.started) })
-	<-s.proceed
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+func (s *blockingRunnerSpecMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error {
+		s.once.Do(func() { close(s.started) })
+		<-s.proceed
+		return mutation(tx)
+	})
+}
+
+// Use a separate pool and SQLite connection, so the guard must exclude a
+// second database writer rather than simply using up the only connection.
+func assertDatabaseGuardHeld(t *testing.T, probe state.Store, release chan struct{}) {
+	t.Helper()
+	started, result := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		result <- probe.WithRunnerAdmission(t.Context(), func(state.Store) error { return nil })
+	}()
+	<-started
+	select {
+	case err := <-result:
+		close(release)
+		t.Fatalf("independent writer escaped the held guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("independent writer could not proceed after release: %v", err)
+	}
 }
 
 func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
-	baseStore := state.New(t.TempDir())
+	dir := t.TempDir()
+	baseStore, probe := state.New(dir), state.New(dir)
+	if err := probe.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 	store := &blockingRunnerSpecMutationStore{Store: baseStore, started: make(chan struct{}), proceed: make(chan struct{})}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	req := adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(`{"enabled":false}`))
@@ -9419,17 +9456,10 @@ func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
 	}()
 
 	<-store.started
-	mutationCouldInterleave := srv.admissionMu.TryLock()
-	if mutationCouldInterleave {
-		srv.admissionMu.Unlock()
-	}
-	close(store.proceed)
+	assertDatabaseGuardHeld(t, probe, store.proceed)
 	recorder := <-done
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if mutationCouldInterleave {
-		t.Fatal("admin Runner Spec mutation did not hold the admission serialization lock")
 	}
 }
 
@@ -9520,15 +9550,52 @@ type activeRequestBeforeMutationStore struct {
 	once    sync.Once
 }
 
-func (s *activeRequestBeforeMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
+func (s *activeRequestBeforeMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
 	var createErr error
 	s.once.Do(func() {
 		_, _, createErr = s.Store.CreateRequest(s.request, nil)
 	})
 	if createErr != nil {
-		return state.AuditEvent{}, createErr
+		return createErr
 	}
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+	return s.Store.WithRunnerCatalogMutation(ctx, mutation)
+}
+
+func TestUserRunnerSpecMutationMasksGuardErrors(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	srv := newTestServer(t, baseStore, "", &fakeSandbox{})
+	account, _, err := baseStore.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: account.ID}
+	profile, err := baseStore.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{
+		ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom-guard",
+		WorkflowLabels: []string{"qiniu", "custom-guard"}, TemplateID: "template", Enabled: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("/user/runner-specs/%s?expected_updated_at=%s", profile.Name, url.QueryEscape(profile.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	for _, tc := range []struct {
+		method  string
+		cause   error
+		status  int
+		message string
+	}{
+		{http.MethodPatch, fmt.Errorf("private database error: %w", context.DeadlineExceeded), http.StatusServiceUnavailable, "runner_spec_mutation_unavailable"},
+		{http.MethodDelete, errors.New("private database error"), http.StatusInternalServerError, "failed to persist Runner Spec change"},
+	} {
+		srv.store = runnerSpecGuardErrorStore{Store: baseStore, err: tc.cause}
+		body := fmt.Sprintf(`{"enabled":false,"expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		req := httptest.NewRequest(tc.method, target, strings.NewReader(body))
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.message) || strings.Contains(rec.Body.String(), "private database error") {
+			t.Fatalf("%s status=%d body=%s", tc.method, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestUserDeleteRunnerSpecRechecksActiveRequestsInsideMutation(t *testing.T) {
@@ -9620,11 +9687,11 @@ func TestProfileAtCapacityUsesGlobalCountAcrossScopes(t *testing.T) {
 		}
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
-	inFlight, err := srv.inFlightForRunnerProfile(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
+	counts, err := srv.store.RunnerCapacityCounts(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inFlight < profile.MaxConcurrency {
+	if counts.Profile < profile.MaxConcurrency {
 		t.Fatal("global profile capacity must include in-flight requests from other scopes")
 	}
 }
