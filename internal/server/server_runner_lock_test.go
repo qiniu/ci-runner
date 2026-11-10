@@ -20,8 +20,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 	fake := &fakeSandbox{stopBlock: stopBlock, stopStarted: make(chan struct{}, 1)}
 	ghServer := httptest.NewServer(githubRunnerAPI(t))
 	defer ghServer.Close()
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	const cleanupID = "probe-37"
 	const targetID = "118521076552"
@@ -63,7 +62,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 
 	targetDone := make(chan struct{})
 	go func() {
-		srv.appendRunnerStdout(targetID, []byte("Running job: target\n"))
+		srv.appendRunnerStdout(targetID, "", "", []byte("Running job: target\n"))
 		close(targetDone)
 	}()
 	select {

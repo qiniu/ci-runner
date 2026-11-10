@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
 )
@@ -35,6 +36,7 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 			cleanupUnavailable.Store(scenario == "cleanup failure")
 			var removed atomic.Bool
 			var registered atomic.Bool
+			var attemptLabels []string
 			var posts atomic.Int64
 			ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -45,13 +47,22 @@ func TestWindowsLifecycleUsesJITAndCleansUnadoptedRegistration(t *testing.T) {
 						return
 					}
 					if registered.Load() {
-						_, _ = w.Write([]byte(`{"runners":[{"id":71,"name":"e2b-win-jit"}]}`))
+						var labels []github.RunnerLabel
+						for _, name := range attemptLabels {
+							labels = append(labels, github.RunnerLabel{Name: name})
+						}
+						_ = json.NewEncoder(w).Encode(map[string]any{"runners": []github.Runner{{ID: 71, Name: "e2b-win-jit", Labels: labels}}})
 					} else {
 						_, _ = w.Write([]byte(`{"runners":[]}`))
 					}
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners/downloads":
 					_, _ = w.Write([]byte(`[{"os":"win","architecture":"x64","filename":"actions-runner-win-x64-2.337.0.zip","download_url":"https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip","sha256_checksum":"1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc"}]`))
 				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/actions/runners/generate-jitconfig":
+					var in struct{ Labels []string }
+					if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+						t.Error(err)
+					}
+					attemptLabels = in.Labels
 					posts.Add(1)
 					if scenario == "rate limited" {
 						w.WriteHeader(http.StatusTooManyRequests)
@@ -167,87 +178,50 @@ func TestWindowsJITStaleAttemptCannotMutateReplacement(t *testing.T) {
 	createLifecycleRequest(t, store, "stale-jit", "windows", 0)
 	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, &lifecycleSandboxService{})
 	old, _ := store.ReadState("stale-jit")
-	old.Status = state.StatusCreating
+	old.Status, old.ProvisionAttemptID = state.StatusCreating, "old-attempt"
 	old.LastAttemptAt = time.Now().UTC()
 	if err := store.WriteState(old); err != nil {
 		t.Fatal(err)
 	}
-	old, _ = store.ReadState(old.ID)
+	claim := func(token string) state.RunnerState {
+		t.Helper()
+		st, err := store.ReadState(old.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := store.ClaimRunnerWatch(t.Context(), st, token, time.Minute); !ok || err != nil {
+			t.Fatal("watch claim failed", err)
+		}
+		st, err = store.ReadState(old.ID)
+		if err != nil || st.WatchToken != token {
+			t.Fatal("missing live watch", err)
+		}
+		return st
+	}
+	old = claim("old-watch")
 	next := old
+	next.Status = state.StatusQueued
+	if err := store.WriteState(next); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.ReadState(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.Status, next.ProvisionAttemptID = state.StatusCreating, "new-attempt"
 	next.LastAttemptAt = old.LastAttemptAt.Add(time.Second)
 	if err := store.WriteState(next); err != nil {
 		t.Fatal(err)
 	}
+	next = claim("replacement-watch")
 	req, _ := store.ReadRequest(old.ID)
-	if _, err := srv.prepareWindowsJIT(t.Context(), req, old.LastAttemptAt); !errors.Is(err, errRunnerCreationSuperseded) {
+	if _, err := srv.prepareWindowsJIT(t.Context(), req, old); !errors.Is(err, errRunnerCreationSuperseded) {
 		t.Fatalf("stale registration: %v", err)
 	}
-	if err := srv.cleanupWindowsJIT(req, old.LastAttemptAt, 0); err != nil {
-		t.Fatal(err)
-	}
-	srv.retainWindowsJITCleanup(old.ID, old.LastAttemptAt)
-	srv.failStartForAttempt(old.ID, old, "sandbox_start", errors.New("temporary failure"), &old.LastAttemptAt)
+	srv.failStart(old, "sandbox_start", errors.New("temporary failure"))
 	final, _ := store.ReadState(old.ID)
-	if calls.Load() != 0 || !final.LastAttemptAt.Equal(next.LastAttemptAt) || final.Status != state.StatusCreating || final.Error != "" {
+	if calls.Load() != 0 || final.WatchToken != next.WatchToken || !final.LastAttemptAt.Equal(next.LastAttemptAt) || final.Status != state.StatusCreating || final.Error != "" {
 		t.Fatalf("stale attempt changed replacement: calls=%d status=%s", calls.Load(), final.Status)
-	}
-}
-
-func TestWindowsJITRegistrationSerializesCancellation(t *testing.T) {
-	entered, release := make(chan struct{}), make(chan struct{})
-	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`{"runners":[]}`))
-			return
-		}
-		close(entered)
-		<-release
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"runner":{"id":71,"name":"e2b-race-jit"},"encoded_jit_config":"` + jitTestConfig(t, "e2b-race-jit", "71") + `"}`))
-	}))
-	defer ghServer.Close()
-	store := state.New(t.TempDir())
-	upsertLifecycleProfile(t, store, state.RunnerProfile{Name: "windows", Labels: []string{"self-hosted", "windows"}, Enabled: true, TemplateID: "win", MaxConcurrency: 1})
-	createLifecycleRequest(t, store, "race-jit", "windows", 0)
-	srv := newRunnerLifecycleTestServer(t, store, ghServer.URL, &lifecycleSandboxService{})
-	st, _ := store.ReadState("race-jit")
-	st.Status = state.StatusCreating
-	st.LastAttemptAt = time.Now().UTC()
-	if err := store.WriteState(st); err != nil {
-		t.Fatal(err)
-	}
-	req, _ := store.ReadRequest(st.ID)
-	done := make(chan error, 1)
-	go func() { _, err := srv.prepareWindowsJIT(t.Context(), req, st.LastAttemptAt); done <- err }()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("JIT registration request did not start")
-	}
-	// A competing lifecycle mutation must use this same lock. Release POST,
-	// then confirm it can finish without leaving a later registration in flight.
-	cancelled := make(chan struct{})
-	go func() {
-		unlock := srv.lockRunner(st.ID)
-		defer unlock()
-		current, _ := store.ReadState(st.ID)
-		current.Status = state.StatusCompleted
-		_ = store.WriteState(current)
-		close(cancelled)
-	}()
-	select {
-	case <-cancelled:
-		t.Fatal("cancellation mutation completed before JIT preparation returned")
-	case <-time.After(10 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	<-cancelled
-	final, _ := store.ReadState(st.ID)
-	if final.Status != state.StatusCompleted {
-		t.Fatal("cancellation lost")
 	}
 }
 
@@ -264,7 +238,7 @@ func (s *windowsTimestampPrecisionStore) WriteState(st state.RunnerState) error 
 	return s.Store.WriteState(st)
 }
 
-func (s *windowsTimestampPrecisionStore) WriteQueuedClaim(st state.RunnerState, owner string) error {
+func (s *windowsTimestampPrecisionStore) BeginRunnerCreation(st state.RunnerState, ttl time.Duration) error {
 	st.LastAttemptAt = st.LastAttemptAt.Truncate(time.Millisecond)
-	return s.Store.WriteQueuedClaim(st, owner)
+	return s.Store.BeginRunnerCreation(st, ttl)
 }

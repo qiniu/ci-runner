@@ -37,11 +37,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if err != nil {
 		return false, err
 	}
-	if before.Status != state.StatusCreating || before.LeaseOwner != attempt.LeaseOwner || before.ProvisionAttemptID != attempt.ProvisionAttemptID {
-		return false, nil
-	}
-	// Historical rows only carry the attempt timestamp and owner.
-	if attempt.ProvisionAttemptID == "" && !before.LastAttemptAt.Equal(attempt.LastAttemptAt) {
+	if !sameCreatingAttempt(before, *attempt) {
 		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
@@ -56,7 +52,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return false, err
 	}
 	// A webhook, retry or stop may have advanced the request during the lookup.
-	if st.Status != state.StatusCreating || st.LeaseOwner != attempt.LeaseOwner || st.ProvisionAttemptID != attempt.ProvisionAttemptID || st.SandboxID != "" || st.ProcessPID != 0 || !st.LastAttemptAt.Equal(before.LastAttemptAt) || !st.CreatingAt.Equal(before.CreatingAt) {
+	if !sameCreatingAttempt(st, *attempt) || st.SandboxID != "" || st.ProcessPID != 0 || !st.CreatingAt.Equal(before.CreatingAt) {
 		return false, nil
 	}
 	stale := st.Version != before.Version || (attempt.ProvisionAttemptID != "" && before.Version != attempt.Version)
@@ -68,7 +64,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			st.NextRetryAt = time.Time{}
 			st.Error, st.FailureStage, st.FailureReason = "", "", ""
 			st.LastErrorCode, st.LastErrorMessage, st.LastErrorRetryable = "", "", false
-			if err := s.store.WriteState(st); err != nil {
+			if err := writeWatchObservation(s.store, st, attempt.WatchToken); err != nil {
 				return false, err
 			}
 			st.Version++
@@ -81,7 +77,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return true, nil
 	}
 	if !stale && lookupErr == nil && job.Status == "completed" {
-		return false, s.completeWithoutSandbox(req.ID, job, "workflow job is completed/"+job.Conclusion)
+		return false, s.completeWithoutSandbox(st, job, "workflow job is completed/"+job.Conclusion)
 	}
 	// GitHub owns approval/concurrency timeouts. Keep recognized nonterminal
 	// states recoverable until GitHub reports queued or completed, at a capped
@@ -136,7 +132,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if st.Status == state.StatusQueued {
 		st.ScheduleQueuedRetry(retryDelay)
 	}
-	if err := s.store.WriteState(st); err != nil {
+	if err := writeWatchObservation(s.store, st, attempt.WatchToken); err != nil {
 		return false, err
 	}
 	if st.Status == state.StatusFailed {

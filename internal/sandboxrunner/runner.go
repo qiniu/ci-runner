@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -52,6 +53,8 @@ func (p Platform) runnerApplicationOS() string {
 }
 
 type StartInput struct {
+	RecordSandbox       func(context.Context, string) error
+	CheckOwnership      func(context.Context) error
 	ProvisionAttemptID  string
 	Platform            Platform
 	RequestID           string
@@ -82,6 +85,9 @@ type StartInput struct {
 type RunnerApplication = runnerapplication.Application
 
 type StartResult struct {
+	// BootstrapOperation identifies a failed post-create operation while the
+	// Sandbox still requires reconciliation. It contains only a local stage name.
+	BootstrapOperation string
 	SandboxID          string
 	PID                uint32
 	ResolvedTemplateID string
@@ -247,6 +253,7 @@ type TerminalSession interface {
 }
 
 type Service interface {
+	FindRunnerSandbox(ctx context.Context, requestID, attemptID string) (string, error)
 	ValidateTemplate(ctx context.Context, templateID string) error
 	StartRunner(ctx context.Context, input StartInput) (StartResult, error)
 	RecoverRunner(ctx context.Context, input RecoverInput) (StartResult, error)
@@ -259,6 +266,7 @@ var (
 	ErrTemplateNotFound             = errors.New("template not found")
 	ErrTemplateNotReady             = errors.New("template is not ready")
 	ErrTemplateStateUnavailable     = errors.New("template default build state cannot be confirmed")
+	ErrCreateOutcomeUnknown         = errors.New("sandbox creation outcome unknown")
 	ErrSandboxNotFound              = errors.New("sandbox not found")
 	ErrRunnerNotFound               = errors.New("runner process not found")
 	ErrRunnerApplicationMissing     = errors.New("github runner applications contain no application")
@@ -268,11 +276,12 @@ var (
 )
 
 type E2BService struct {
-	client            *qnsandbox.Client
-	deploymentFactory *deployruntime.Factory
-	apiKey            string
-	endpoint          string
-	httpClient        *http.Client
+	client             *qnsandbox.Client
+	runnerCreateClient *qnsandbox.Client
+	deploymentFactory  *deployruntime.Factory
+	apiKey             string
+	endpoint           string
+	httpClient         *http.Client
 }
 
 const runnerBootstrapUser = "root"
@@ -323,11 +332,19 @@ func NewE2BService(apiKey, endpoint string, httpClient *http.Client) (*E2BServic
 	if err != nil {
 		return nil, err
 	}
+	// A later rejection cannot disprove that an earlier POST created a Sandbox.
+	// Runner recovery reconciles the original provision attempt after an uncertain result.
+	createConfig := *cfg
+	createConfig.RetryMax = new(int)
+	runnerCreateClient, err := qnsandbox.NewClient(&createConfig)
+	if err != nil {
+		return nil, err
+	}
 	factory, err := deployruntime.NewFactory(apiKey, endpoint, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	return &E2BService{client: client, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
+	return &E2BService{client: client, runnerCreateClient: runnerCreateClient, deploymentFactory: factory, apiKey: apiKey, endpoint: endpoint, httpClient: httpClient}, nil
 }
 
 // CreateDeploymentRuntime allocates a Sandbox runtime for deployd. It uses a
@@ -596,6 +613,20 @@ func sandboxAlias(alias *string) string {
 	return *alias
 }
 
+// The SDK wraps failures from the post-create access-token lookup. Only a
+// direct response to the create request can establish a definitive rejection.
+func sandboxCreateRejected(err error) bool {
+	rejection, ok := err.(*qnsandbox.APIError)
+	if !ok {
+		return false
+	}
+	if strings.Contains(strings.ToLower(rejection.Message), "failed to place sandbox") {
+		return true
+	}
+	status := rejection.StatusCode
+	return status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusConflict
+}
+
 func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartResult, error) {
 	// An empty manifest skips preflight, so resolved applications without one
 	// for this platform must fail before a Sandbox exists.
@@ -616,15 +647,43 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		metadata[sandboxAttemptKey] = input.ProvisionAttemptID
 		idempotencyKey = "runnerd-" + input.ProvisionAttemptID
 	}
-	sb, _, err := s.client.CreateAndWait(ctx, qnsandbox.CreateParams{
+	// net/http can also replay a POST with an Idempotency-Key on a reused
+	// connection. Count connection assignments before each transport attempt so
+	// even an early rejection on a replay cannot release the original request.
+	var attempts atomic.Int32
+	createCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { attempts.Add(1) },
+	})
+	sb, err := s.runnerCreateClient.Create(createCtx, qnsandbox.CreateParams{
 		TemplateID:          input.TemplateID,
 		Timeout:             &timeout,
 		AllowInternetAccess: &allowInternet,
 		Metadata:            &metadata,
 		IdempotencyKey:      idempotencyKey,
-	}, qnsandbox.WithPollInterval(500*time.Millisecond))
+	})
 	if err != nil {
-		return StartResult{}, err
+		if attempts.Load() == 1 && sandboxCreateRejected(err) {
+			return StartResult{}, err
+		}
+		return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
+	}
+	if input.RecordSandbox != nil {
+		if err := input.RecordSandbox(ctx, sb.ID()); err != nil {
+			return StartResult{SandboxID: sb.ID()}, fmt.Errorf("%w: record created Sandbox: %w", ErrCreateOutcomeUnknown, err)
+		}
+	}
+	bootstrapFailure := func(operation string, err error) (StartResult, error) {
+		return StartResult{SandboxID: sb.ID(), BootstrapOperation: operation}, fmt.Errorf("%w: %s: %w", ErrCreateOutcomeUnknown, operation, err)
+	}
+	if _, err := s.client.WaitForReady(ctx, sb.ID(), qnsandbox.WithPollInterval(500*time.Millisecond)); err != nil {
+		return bootstrapFailure("wait for Sandbox readiness", err)
+	}
+	// Once create succeeds, recovery must reconcile the resource. A process
+	// which lost ownership during bootstrap must never kill an adopted Sandbox.
+	if input.CheckOwnership != nil {
+		if err := input.CheckOwnership(ctx); err != nil {
+			return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
+		}
 	}
 	runtimeEnvironment := readRuntimeEnvironment(ctx, sb, input.Platform)
 
@@ -635,12 +694,16 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		scriptPath, script, cmd = "/tmp/start-github-runner.sh", startScript(input, sb.ID()), "chmod +x /tmp/start-github-runner.sh && /tmp/start-github-runner.sh"
 	}
 	if _, err := sb.Files().Write(ctx, scriptPath, []byte(script)); err != nil {
-		_ = sb.Kill(ctx)
-		return StartResult{}, fmt.Errorf("write runner script: %w", err)
+		return bootstrapFailure("write runner script", err)
 	}
 	commandCtx := input.CommandContext
 	if commandCtx == nil {
 		commandCtx = context.Background()
+	}
+	if input.CheckOwnership != nil {
+		if err := input.CheckOwnership(ctx); err != nil {
+			return StartResult{}, fmt.Errorf("%w: %w", ErrCreateOutcomeUnknown, err)
+		}
 	}
 	effectiveVersion := &effectiveRunnerVersionCapture{}
 	handle, err := sb.Commands().Start(
@@ -656,13 +719,11 @@ func (s *E2BService) StartRunner(ctx context.Context, input StartInput) (StartRe
 		qnsandbox.WithOnStderr(input.OnStderr),
 	)
 	if err != nil {
-		_ = sb.Kill(ctx)
-		return StartResult{}, fmt.Errorf("start runner command: %w", err)
+		return bootstrapFailure("start runner command", err)
 	}
 	pid, err := handle.WaitPID(ctx)
 	if err != nil {
-		_ = sb.Kill(ctx)
-		return StartResult{}, fmt.Errorf("wait runner pid: %w", err)
+		return bootstrapFailure("wait runner pid", err)
 	}
 	if input.OnExit != nil {
 		go func() {
@@ -693,7 +754,7 @@ func (s *E2BService) RecoverRunner(ctx context.Context, input RecoverInput) (Sta
 	sandboxID := strings.TrimSpace(input.SandboxID)
 	if sandboxID == "" {
 		var err error
-		sandboxID, err = s.findRunnerSandbox(ctx, input.RequestID, input.ProvisionAttemptID)
+		sandboxID, err = s.FindRunnerSandbox(ctx, input.RequestID, input.ProvisionAttemptID)
 		if err != nil {
 			return StartResult{}, err
 		}
@@ -1123,7 +1184,7 @@ func parseWindowsRuntimeEnvironment(output string) runtimeEnvironment {
 	return environment
 }
 
-func (s *E2BService) findRunnerSandbox(ctx context.Context, requestID, attemptID string) (string, error) {
+func (s *E2BService) FindRunnerSandbox(ctx context.Context, requestID, attemptID string) (string, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return "", ErrSandboxNotFound

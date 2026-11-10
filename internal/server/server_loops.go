@@ -16,11 +16,12 @@ const workflowJobLookupTimeout = 5 * time.Second
 func (s *Server) startBackgroundLoops() {
 	s.startOnce.Do(func() {
 		s.logger.Info("starting background loops", "worker_id", s.workerID, "max_concurrent_runners", s.cfg.MaxConcurrentRunners)
-		loopCount := 4
+		loopCount := 5
 		s.loopWG.Add(loopCount)
 		go s.workerLoop(s.loopCtx)
 		go s.sweeperLoop(s.loopCtx)
 		go s.reconcilerLoop(s.loopCtx)
+		go s.runnerWatchLoop(s.loopCtx)
 		go s.deploymentLoop(s.loopCtx)
 	})
 }
@@ -138,14 +139,14 @@ func (s *Server) sweepOnce(ctx context.Context) {
 	for _, st := range states {
 		switch st.Status {
 		case state.StatusCreating:
-			if !st.CreatingAt.IsZero() && now.Sub(st.CreatingAt) > s.cfg.SandboxCreateTimeout {
+			if st.WatchToken == "" && !st.SandboxCreateDispatched && !st.CreatingAt.IsZero() && now.Sub(st.CreatingAt) > s.cfg.SandboxCreateTimeout {
 				s.logger.Info("sweeper detected create timeout", "id", st.ID, "creating_at", st.CreatingAt)
 				s.retryOrFail(st, "sweeper_create_timeout", fmt.Errorf("runner create timed out"))
 			}
 		case state.StatusRunning:
 			if !st.RunningAt.IsZero() && now.Sub(st.RunningAt) > s.cfg.SandboxTimeout {
 				s.logger.Info("sweeper stopping timed out runner", "id", st.ID, "sandbox_id", st.SandboxID, "running_at", st.RunningAt)
-				s.failAndStopRunner(ctx, st.ID, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout")
+				s.failAndStopRunnerVersion(ctx, st.ID, st.Version, "sandbox_timeout", "timeout", "runner exceeded sandbox timeout")
 				stoppedRunning[st.ID] = struct{}{}
 				continue
 			}
@@ -155,7 +156,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 			}
 			if !st.StoppingAt.IsZero() && now.Sub(st.StoppingAt) > s.cfg.SandboxStopTimeout {
 				s.logger.Info("sweeper retrying timed out stop", "id", st.ID, "sandbox_id", st.SandboxID, "stopping_at", st.StoppingAt)
-				s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
+				s.stopObservedRunner(ctx, st, state.TerminationSourceRecoveryCleanup)
 			}
 		}
 	}
@@ -183,12 +184,10 @@ func (s *Server) sweepOnce(ctx context.Context) {
 			s.store.AppendLog(st.ID, "control.log", []byte("sweeper skipped idle stop because github runner status could not be verified: "+err.Error()+"\n"))
 		} else if busy {
 			s.logger.Info("sweeper keeping idle-timed-out runner because github reports it is busy", "id", st.ID, "runner_name", st.RunnerName)
-			s.store.AppendLog(st.ID, "control.log", []byte("sweeper kept runner because github reports it is running a job\n"))
-			s.markRunnerJobStarted(st.ID)
+			s.markRunnerJobStarted(st.ID, &st.Version, "", "")
 		} else {
 			s.logger.Info("sweeper stopping idle runner", "id", st.ID, "sandbox_id", st.SandboxID, "running_at", st.RunningAt, "idle_timeout", s.cfg.RunnerIdleTimeout)
-			s.store.AppendLog(st.ID, "control.log", []byte("sweeper stopping idle runner that never accepted a job\n"))
-			s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceIdleCleanup)
+			s.stopObservedRunner(ctx, st, state.TerminationSourceIdleCleanup)
 		}
 	}
 }
@@ -239,7 +238,7 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 			}
 			if !st.StoppingAt.IsZero() && time.Since(st.StoppingAt) > s.cfg.SandboxStopTimeout {
 				s.logger.Info("reconciler retrying timed out stop", "id", st.ID, "sandbox_id", st.SandboxID, "stopping_at", st.StoppingAt)
-				s.stopIfExists(ctx, st.ID, github.WorkflowJob{}, state.TerminationSourceRecoveryCleanup)
+				s.stopObservedRunner(ctx, st, state.TerminationSourceRecoveryCleanup)
 			}
 		}
 	}
@@ -264,7 +263,7 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			s.logger.Error("read mismatched completed state", "id", st.ID, "error", readErr)
 			continue
 		}
-		if current.Status != state.StatusCompleted || current.WorkflowJobID == 0 || current.AssignedJobID == 0 || current.WorkflowJobID == current.AssignedJobID {
+		if current.ManualStopRequested || current.Status != state.StatusCompleted || current.WorkflowJobID == 0 || current.AssignedJobID == 0 || current.WorkflowJobID == current.AssignedJobID {
 			unlock()
 			continue
 		}
@@ -282,13 +281,13 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 			s.logger.Error("read mismatched completed state after workflow job check", "id", current.ID, "error", readErr)
 			continue
 		}
-		if latest.Status != state.StatusCompleted || latest.WorkflowJobID != current.WorkflowJobID || latest.AssignedJobID != current.AssignedJobID {
+		if latest.Version != current.Version || latest.Status != state.StatusCompleted || latest.WorkflowJobID != current.WorkflowJobID || latest.AssignedJobID != current.AssignedJobID {
 			unlock()
 			continue
 		}
 		var timings runnerTimings
 		requeueStartedAt := time.Now()
-		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued)
+		requeued, next, requeueErr := s.requeueMismatchedWorkflowJob(latest, observed, queued, s.store.WriteState)
 		timings.record("requeue", requeueStartedAt)
 		unlock()
 		timings.flush(s, st.ID)
@@ -303,12 +302,12 @@ func (s *Server) reconcileMismatchedCompletedJobs(ctx context.Context) {
 	}
 }
 
-func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed github.WorkflowJob, queued bool) (bool, state.RunnerState, error) {
+func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed github.WorkflowJob, queued bool, write func(state.RunnerState) error) (bool, state.RunnerState, error) {
 	if !queued {
 		next := st
 		next.AssignedJobID = 0
 		next.AssignedJobName = ""
-		if err := s.store.WriteState(next); err != nil {
+		if err := write(next); err != nil {
 			return false, state.RunnerState{}, fmt.Errorf("write mismatched workflow job inspection: %w", err)
 		}
 		// Keep the returned state aligned with WriteState's CAS-persisted version.
@@ -349,7 +348,7 @@ func (s *Server) requeueMismatchedWorkflowJob(st state.RunnerState, observed git
 	next.GitHubJobRunnerName = ""
 	next.GitHubJobObservedAt = time.Time{}
 	clearSandboxServiceSnapshot(&next)
-	if err := s.store.WriteState(next); err != nil {
+	if err := write(next); err != nil {
 		return false, state.RunnerState{}, fmt.Errorf("write mismatched workflow job requeue: %w", err)
 	}
 	// Keep the returned state aligned with WriteState's CAS-persisted version.

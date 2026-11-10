@@ -1209,6 +1209,10 @@ func (s *lifecycleSandboxService) StartRunner(_ context.Context, input sandboxru
 	}, nil
 }
 
+func (s *lifecycleSandboxService) FindRunnerSandbox(context.Context, string, string) (string, error) {
+	return "", sandboxrunner.ErrSandboxNotFound
+}
+
 func (s *lifecycleSandboxService) RecoverRunner(_ context.Context, input sandboxrunner.RecoverInput) (sandboxrunner.StartResult, error) {
 	return sandboxrunner.StartResult{SandboxID: input.SandboxID, PID: input.PID}, nil
 }

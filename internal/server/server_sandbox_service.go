@@ -228,7 +228,7 @@ func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snap
 	if err != nil {
 		return fmt.Errorf("read state for sandbox config snapshot: %w", err)
 	}
-	if current.Status != state.StatusCreating || current.LeaseOwner != attempt.LeaseOwner || !current.LastAttemptAt.Equal(attempt.LastAttemptAt) {
+	if !sameCreatingAttempt(current, attempt) {
 		return fmt.Errorf("%w: expected owner=%q attempt=%s, current status=%s owner=%q attempt=%s",
 			errStaleSnapshotAttempt, attempt.LeaseOwner, attempt.LastAttemptAt.UTC().Format(time.RFC3339Nano),
 			current.Status, current.LeaseOwner, current.LastAttemptAt.UTC().Format(time.RFC3339Nano))
@@ -240,7 +240,7 @@ func writeSandboxServiceSnapshot(tx state.Store, attempt state.RunnerState, snap
 	current.SponsorSourceRepositoryID = snapshot.SponsorSourceRepositoryID
 	current.SponsorSourceRepositoryFullName = snapshot.SponsorSourceRepositoryFullName
 	current.SponsorAuthorizationReason = snapshot.SponsorAuthorizationReason
-	if err := tx.WriteState(current); err != nil {
+	if err := writeWatchObservation(tx, current, attempt.WatchToken); err != nil {
 		return fmt.Errorf("write sandbox config snapshot: %w", err)
 	}
 	return nil

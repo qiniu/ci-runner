@@ -179,6 +179,15 @@ func (f *fakeSandbox) StartRunner(ctx context.Context, input sandboxrunner.Start
 	return sandboxrunner.StartResult{SandboxID: "sb-" + input.RequestID, PID: 42}, nil
 }
 
+func (f *fakeSandbox) FindRunnerSandbox(context.Context, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id := f.recoverResult.SandboxID; id != "" {
+		return id, nil
+	}
+	return "", sandboxrunner.ErrSandboxNotFound
+}
+
 func (f *fakeSandbox) RecoverRunner(ctx context.Context, input sandboxrunner.RecoverInput) (sandboxrunner.StartResult, error) {
 	f.mu.Lock()
 	f.recovered++
@@ -5772,8 +5781,7 @@ func TestOriginalWorkflowJobCompletionKeepsRunnerAfterJobStartedMarker(t *testin
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5858,8 +5866,7 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5932,8 +5939,7 @@ func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -6159,8 +6165,10 @@ func TestStopDuringCreateCleansStartedSandbox(t *testing.T) {
 		t.Fatalf("sandbox should not stop before creation returns, got %d stops", fake.stoppedCount())
 	}
 
+	assertAdmissionState(t, store, "manual-creating", state.StatusStopping)
 	close(block)
 	waitForStops(t, fake, 1)
+	waitForState(t, store, "manual-creating", state.StatusCompleted)
 	st, err := store.ReadState("manual-creating")
 	if err != nil {
 		t.Fatal(err)
@@ -6593,9 +6601,8 @@ func TestRecoverStopsRunnerPastSandboxTimeout(t *testing.T) {
 	}
 
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, "http://example.test", fake)
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	srv.cfg.SandboxTimeout = time.Hour
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6687,8 +6694,7 @@ func TestRecoverCleansUpCompletedWorkflowJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6709,6 +6715,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001" {
 			w.Write([]byte(`{"id":1001,"name":"original job","status":"completed","conclusion":"cancelled"}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"total_count":0,"runners":[]}`))
 			return
 		}
 		t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
@@ -6737,9 +6747,12 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		t.Fatal(err)
 	}
 
+	before, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeSandbox{}
 	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6756,6 +6769,18 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("recovery stopped sandbox assigned to another job %d times", fake.stoppedCount())
+	}
+	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+3 {
+		t.Fatalf("watch claim, completed Job result and reconnect were not all committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+3)
+	}
+
+	fake.lastRecoverInput().OnExit(sandboxrunner.ExitResult{}, nil)
+	got, err = store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatalf("recovered exit watcher did not finish its attempt: %#v", got)
 	}
 }
 
@@ -6967,8 +6992,7 @@ func TestRecoverFailsCreatingRunnerWithInProgressJobWhenSandboxIsAbsent(t *testi
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -7001,8 +7025,7 @@ func TestRecoverStopsDiscoveredSandboxWithoutRunnerBeforeRequeue(t *testing.T) {
 		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-without-runner"},
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -7038,8 +7061,7 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 		stopErr:       errors.New("temporary sandbox cleanup failure"),
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected sandbox cleanup error")
 	}
@@ -7047,8 +7069,8 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusCreating {
-		t.Fatalf("expected failed cleanup to preserve creating state, got %#v", got)
+	if got.Status != state.StatusStopping || got.FailureReason != interruptedCreateCleanup || got.NextRetryAt.IsZero() {
+		t.Fatalf("expected failed cleanup to retain stop intent and retry, got %#v", got)
 	}
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected one sandbox cleanup attempt, got %d", fake.stoppedCount())
@@ -7115,8 +7137,7 @@ func TestRecoverFailsRunningRunnerWhenSandboxIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -8516,6 +8537,66 @@ func TestSweeperStopsIdleRunnerThatNeverAcceptedJob(t *testing.T) {
 	}
 }
 
+// GitHub can answer a busy/idle query after another worker has replaced
+// the attempt. Neither answer may act on the replacement.
+func TestSweeperDiscardsSupersededIdleObservation(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			dir := t.TempDir()
+			store, peer := state.New(dir), state.New(dir)
+			if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true}
+				store = state.NewWithOptions(opts)
+				opts.MigrateOnStart = false
+				peer = state.NewWithOptions(opts)
+			}
+			const id = "idle-observation"
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/orgs/o/actions/runners" {
+					t.Errorf("unexpected GitHub operation %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				st, err := peer.ReadState(id)
+				if err == nil {
+					st.SandboxID, st.ProcessPID = "replacement", 222
+					st.RunningAt = time.Now().UTC()
+					err = peer.WriteState(st)
+				}
+				if err != nil {
+					t.Error(err)
+					http.Error(w, "state setup failed", http.StatusInternalServerError)
+					return
+				}
+				fmt.Fprintf(w, `{"runners":[{"id":99,"name":"observed","status":"online","busy":%t}]}`, busy)
+			}))
+			defer api.Close()
+			fake := &fakeSandbox{}
+			srv := New(config.Config{SandboxTimeout: time.Hour, RunnerIdleTimeout: time.Minute}, store, github.NewClient(api.URL, api.Client()), fake, nil)
+			t.Cleanup(srv.Close)
+			_, st, err := store.CreateRequest(state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerGroup: "default", RunnerName: "observed"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status, st.SandboxID, st.ProcessPID = state.StatusRunning, "original", 111
+			st.RunningAt = time.Now().Add(-10 * time.Minute).UTC()
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			srv.sweepOnce(t.Context())
+			got, err := store.ReadState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != state.StatusRunning || got.SandboxID != "replacement" || got.ProcessPID != 222 ||
+				got.AssignedJobName != "" || got.TerminationSource != "" || fake.stoppedCount() != 0 {
+				t.Fatalf("late busy=%v changed replacement: status=%s sandbox=%s pid=%d assignment=%q source=%q stops=%d",
+					busy, got.Status, got.SandboxID, got.ProcessPID, got.AssignedJobName, got.TerminationSource, fake.stoppedCount())
+			}
+		})
+	}
+}
+
 func TestSweeperIdleRunnerRespectsWorkflowJobState(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -8928,6 +9009,13 @@ func newTestServer(t *testing.T, store state.Store, ghURL string, fake *fakeSand
 
 func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
 	t.Helper()
+	srv := newTestServerWithoutLoops(t, store, ghURL, fake, limit)
+	srv.Start()
+	return srv
+}
+
+func newTestServerWithoutLoops(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
+	t.Helper()
 	cfg := config.Config{
 		StateDir:                "./var/runner_requests",
 		StateBackend:            "sqlite",
@@ -8970,7 +9058,6 @@ func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake 
 	}
 	gh := github.NewClient(ghURL, http.DefaultClient)
 	srv := New(cfg, store, gh, fake, nil)
-	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }

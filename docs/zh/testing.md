@@ -182,9 +182,9 @@ RUNNERD_POSTGRES_TEST_DSN='postgres://localhost/runnerd_test?sslmode=disable' \
   python3 scripts/test-runner-queue-leases.py ./bin/runnerd --full-ttl
 ```
 
-新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，非空标识用于构造 Sandbox 创建请求的幂等键 `runnerd-<provision_attempt_id>`，并写入可查询的尝试元数据。历史记录的尝试标识为空时，不发送幂等键，因此恢复这些记录时不具备基于尝试键的创建去重保证。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。出现多个候选、无法验证精确查询结果或资源列表读取失败时，发现流程返回错误，启动恢复保留 creating 状态。在此阶段，现有巡检仍可能在创建超时后将请求重新排队。重新准入时生成新的标识。
+新 Runner 在进入 creating 的事务中保存随机的 `provision_attempt_id`，非空标识用于构造 Sandbox 创建请求的幂等键 `runnerd-<provision_attempt_id>`，并写入可查询的尝试元数据。历史记录的尝试标识为空时，不发送幂等键，因此恢复这些记录时不具备基于尝试键的创建去重保证。恢复时优先使用已保存的 Sandbox ID；尚未保存 ID 时按请求和本次尝试的元数据查找。历史记录只接管同一请求下未带尝试标记的资源。出现多个候选、无法验证精确查询结果或资源列表读取失败时，发现流程返回错误，启动恢复保留 creating 状态。创建请求已发出时，若查到多个候选、列表为空或只发生本地创建超时，系统会保留该尝试及其配额，直到服务商确认结果。元数据精确匹配后，恢复流程先保存 Sandbox ID，再尝试重连。重新准入时生成新的标识。
 
-启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，创建过程中未找到沙箱时会重新排队，而 GitHub job 已进入 `in_progress` 的缺失创建会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
+启动门禁测试必须确认恢复完成前只有 `/healthz` 可访问。`TestRecover*` 用例必须确认最多恢复四个请求，每个 worker 会根据剩余启动恢复总预算和剩余 worker 波次确定单请求超时，父 context 预算耗尽时不再投递，取消会报告每个被跳过的请求，queued 请求保留原有租约与重试时间，creating/running 请求会重连且不停止沙箱，并发 state version 变化优先于成功或失败的旧重连结果，已超时沙箱不重连而是停止，旧记录的创建中断且找不到沙箱时可重新排队，已发出创建请求且资源尚未确认时则保留容量，GitHub job 已进入 `in_progress` 的旧记录找不到沙箱时会显式失败，GitHub 任务已完成时仍会进入清理流程，并且单个请求重连失败不会阻断其他请求恢复。
 
 ## 2. 配置 GitHub 鉴权
 
@@ -865,6 +865,30 @@ Runner 请求页面支持用用户可见的 Runner Name 或内部 Request ID 精
 空闲 Runner sweeper 使用额外的 `idle_cleanup` 终止来源，避免把从未接受 Job 的 Runner 成功清理误标成失败清理。
 Runner 进程在接受任何 Job 之前结束时（例如 GitHub 终止了 listener，或 Sandbox 输出流中断且 GitHub 显示 Runner 空闲），只要 Sandbox 和 GitHub Runner 注册都清理成功，请求就不记为完成或失败，而是按有限次数安排 `runner_exited_without_job` 重试；下次启动会先复查原 Job 再创建 Sandbox，重试耗尽后明确失败。
 
+Runner 创建关闭 SDK 的 Create 自动重试。若 HTTP 传输层在复用连接上重放 POST，后续拒绝仍按结果未知处理，由同一创建尝试继续对账。`TestRunnerDoesNotRetryAmbiguousCreate` 和 `TestRunnerCreateRejectionAfterConnectionLossIsUnknown` 分别覆盖这两个边界。
+
+Sandbox 已创建而 Runner 启动失败时，恢复流程先尝试重连。确认该 Sandbox 已消失或已完成清理后，确定性错误终止请求；瞬时错误或原失败原因缺失时，消耗重试额度并按数据库时钟退避。保存的诊断仅含操作名称与失败分类。
+
+`TestLateStartFailureAfterPeerAdoption` 在 SQLite 和 PostgreSQL 上运行独立服务进程及本地 Sandbox 替身。测试先在创建者健康时触发另一进程启动恢复和超时扫描，再分别制造创建响应迟到、服务端受理后杀死创建者两种故障。首次查询为空，下一次查回 Sandbox，验证沿用原尝试、Sandbox ID、PID 和重试次数。PostgreSQL CI 对这条回归启用竞态检测。
+
+恢复时，元数据匹配后会在重连前保存确切的 Sandbox ID。`TestReconciledBootstrapFailureRespectsRetryBudget` 覆盖随后 Connect 返回 404 的情况，验证缺失进程会消耗重试预算。`TestWindowsJITRecoveryCleansRegistrationBeforeRequeue` 验证 GitHub 清理暂时失败时会保留确定性的启动失败，待 JIT 身份清理完成后再结束请求。
+
+`TestRunnerCleanupProcess` 让子进程停在 Sandbox 停止调用内，同时让另一节点启动恢复。随后在 GitHub 删除期间暂停或杀死子进程，接手节点跳过已确认的 Sandbox 步骤，继续删除同一数字 ID，并保留首次停止来源与并发到达的退出码。测试替身对重复删除返回 404，若再次按名称查询则会返回另一条注册。使用与创建测试相同的专用 PostgreSQL 环境即可复现。
+
+杀死清理进程的用例还会在无接单进程退出时向另一节点发送人工停止。接管后保留首次终止来源和退出码，并让请求保持终态。显式重试会清除这次人工停止意图。
+
+排查 stopping 请求时可查看 `watch_expires_at`、`next_retry_at`、`cleanup_sandbox_done`、`cleanup_github_runner_id` 和 `cleanup_github_done`。缺少回执表示接管节点可能对原资源重发调用，新的尝试会清空这些记录。升级期间保留一个写入节点，预生产演练和生产扩容条件见 #601。
+
+创建和运行阶段共用数据库租约。准入时写入令牌，worker 每隔 `worker.lease_ttl_seconds` 的三分之一续期，默认租期 300 秒。续期保留业务版本和时间戳。后台每五秒按数据库时间扫描，每轮最多接管四条过期记录。已发出的创建还没有 Sandbox ID 时，`sandbox_create_outcome_unknown` 表示保留原尝试及配额等待对账。元数据列表为空或本地超时均不足以证明服务端拒绝创建；长期未决时应与服务端核对。运行中任务按原 Sandbox/PID 重连，退出回调须持有有效监听权才能启动清理。生产扩容仍需另行验收，升级时应排空旧版本写入者。
+
+对长期未决的创建，运维可在 PostgreSQL 的 `runner_requests` 表按请求 ID 读取 `id, status, provision_attempt_id, sandbox_id, watch_expires_at, last_error_code`，再到该尝试保存的 Sandbox 端点核对 `app=e2b-github-runner`、`request_id` 和 `provision_attempt_id` 三项元数据。停止请求会等待查回资源或收到明确的创建拒绝。
+
+Sandbox 启动后若接管写入失败，worker 保留进程句柄并重试当前创建尝试的数据库操作。若提交成功但响应丢失，使用已保存的 Sandbox、PID 和监听令牌确认归属。监听在本地取消时，SDK 可能返回退出码 -1 且 Go error 为空；此时任务继续运行，等待接管。只有成功取得清理权的监听才记录 GitHub 忙碌查询错误。
+
+`TestCleanupRecoveryDoesNotStarveExpiredWatches` 在 SQLite、PostgreSQL 和 MySQL 上验证：持续清理失败的任务不会占满每批恢复名额，使其他过期运行任务无法接管。释放清理权时保留数据库当前时间作为过期时间，不再将记录放回过期时间为空的队列；各数据库统一优先处理尚未领取的记录，再处理较早过期的任务。释放操作不改变业务版本、生命周期时间或已安排的重试时间。
+
+`TestRunnerWatchPostgresProcess` 使用两个独立 runnerd 服务进程、独立 PG 连接和本地 Sandbox 替身，覆盖健康续期、暂停超时、接管后旧回调到达，以及杀死第二个进程后原节点重新接管并完成任务。设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`，让 `RUNNERD_POSTGRES_TEST_DSN` 指向名称以 `_test` 结尾的专用数据库，再运行 `go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1`。
+
 每个已接受的进程退出 watcher 都绑定到本次执行的 Sandbox ID 和 PID。若匹配的进程结果在 Webhook、管理员操作或恢复路径已经完成清理或安排清理重试后到达，runnerd 只补写此前缺失的退出码和 `runner_exit` 事件，不改变首次终止来源，也不重复清理。旧尝试的延迟回调只要有任一身份值不再匹配就会被忽略。
 
 Release C 在 matcher 切换完成后移除了临时 catalog migration readiness API 与界面。已退役的 Runner Group 和 Policy API 返回 `404`，当前 state、server 和 UI 行为都不依赖这些已移除模型。
@@ -888,7 +912,7 @@ UCRT64 PATH 解析，并在重建后重新测量磁盘剩余空间。
 
 Windows 要求 `RUNNERD_E2E_JIT_CONFIG`、与其绑定的 `RUNNERD_E2E_RUNNER_NAME` 和精确标签；通过 GitHub 仓库级或组织级 `generate-jitconfig` API 创建，指定 Runner group ID 和 `work_folder: ..\work`。配置必须保密，不得打印。仅提供注册令牌时启动会失败。启动文件在 listener 启动前清空；这不构成对当前 Runner 自身凭据或同用户进程内存的隔离。
 
-Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。
+Windows 创建中断后的恢复会先删除预创建的 JIT Runner，再重新排队，避免下一次 Job 检查直接结束请求而跳过清理。删除失败时持久化为 stopping，由正常清理循环重试。回归测试覆盖 Sandbox 缺失、进程缺失，以及清理失败后通过 sweeper 完成清理。迟到的明确 JIT 拒绝会与安全错误分类原子持久化，即使清理已被其他节点接管。恢复沿用创建节点的重试预算和退避策略，限流在预算耗尽后仍延后重试；重新排队时清除上一次尝试的终止证据，人工停止或原 Job 已完成时不再重排。
 
 `internal/sandboxrunner` 中的 `TestWindowsRunnerE2E` 会在真实 Windows Sandbox 上依次执行
 `StartRunner`、`RecoverRunner`、一个真实 GitHub Actions job 和 `StopRunner`。只有设置

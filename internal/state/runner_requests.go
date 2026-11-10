@@ -27,6 +27,9 @@ const maxRunnerRequestRepositoryAccessQueryParameters = 900
 // Sandbox credential columns are omitted intentionally and remain empty in
 // list-derived RunnerState values; mutation paths re-read the full record.
 var runnerRequestListSelectColumns = []string{
+	"watch_token",
+	"jit_registration_state",
+	"sandbox_create_dispatched",
 	"id",
 	"workflow_job_id",
 	"github_installation_id",
@@ -139,7 +142,12 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 	if status == StatusFailed {
 		failedAt = &now
 	}
+	jitState := ""
+	if labelsMatch([]string{"windows"}, req.Labels) {
+		jitState = JITUnsent
+	}
 	record := runnerRequestRecord{
+		JITRegistrationState:            jitState,
 		ID:                              req.ID,
 		Source:                          req.Source,
 		GitHubInstallationID:            req.GitHubInstallationID,
@@ -238,7 +246,7 @@ func (s *DBStore) ReadState(id string) (RunnerState, error) {
 }
 
 func (s *DBStore) WriteState(st RunnerState) error {
-	return s.writeState(st, "")
+	return s.writeState(st, stateWriteLease{})
 }
 
 // WriteQueuedClaim consumes the exact version obtained by ClaimNextRunnable.
@@ -246,13 +254,23 @@ func (s *DBStore) WriteQueuedClaim(st RunnerState, owner string) error {
 	if owner == "" {
 		return ErrConflict
 	}
-	return s.writeState(st, owner)
+	return s.writeState(st, stateWriteLease{queueOwner: owner})
 }
 
-func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
+type stateWriteLease struct {
+	ctx                                context.Context
+	queueOwner, currentToken, newToken string
+	ttl                                time.Duration
+	beginCleanup, cleanupWrite         bool
+}
+
+func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 	db, err := s.dbOrEnsure()
 	if err != nil {
 		return err
+	}
+	if lease.ctx != nil {
+		db = db.WithContext(lease.ctx)
 	}
 	st.ID = sanitizeID(st.ID)
 	if st.ID == "" {
@@ -321,8 +339,49 @@ func (s *DBStore) writeState(st RunnerState, claimOwner string) error {
 		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
 	}
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
-	if claimOwner != "" {
-		query = liveQueuedClaim(query, claimOwner)
+	if lease.queueOwner != "" {
+		query = liveQueuedClaim(query, lease.queueOwner)
+	}
+	if lease.currentToken != "" {
+		if lease.cleanupWrite {
+			query = query.Where("status = ?", StatusStopping)
+		} else {
+			query = query.Where("status IN ?", []string{StatusCreating, StatusRunning})
+		}
+		query = query.Where("watch_token = ? AND watch_expires_at > ?", lease.currentToken, queueTime(db, 0))
+	}
+	if lease.beginCleanup {
+		// A stop preempts a live creator or watcher. Once stopping, only an
+		// unowned or expired cleanup can be taken over, even with a fresh version.
+		query = query.Where("status <> ? OR watch_expires_at IS NULL OR watch_expires_at <= ?", StatusStopping, queueTime(db, 0))
+	}
+	if lease.queueOwner != "" && lease.newToken != "" && st.JITRegistrationState == JITUnsent {
+		updates["jit_registration_state"] = JITUnsent
+	}
+	if lease.newToken != "" {
+		updates["watch_token"], updates["watch_expires_at"] = lease.newToken, queueTime(db, lease.ttl)
+	} else if st.Status != StatusCreating && st.Status != StatusRunning && st.Status != StatusStopping {
+		updates["watch_token"], updates["watch_expires_at"] = nil, nil
+	} else if st.Status == StatusStopping && lease.currentToken != "" && !lease.cleanupWrite {
+		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
+		updates["watch_token"], updates["watch_expires_at"] = nil, nil
+	}
+	if lease.currentToken != "" && st.Status == StatusCreating && st.CleanupSandboxDone {
+		// The active creator confirmed its exact Sandbox is already gone.
+		updates["cleanup_sandbox_done"] = true
+	}
+	if st.ManualStopRequested {
+		updates["manual_stop_requested"] = true
+	}
+	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
+		updates["sandbox_create_dispatched"] = false
+	}
+	if st.Status == StatusQueued {
+		updates["manual_stop_requested"] = false
+		if st.JITRegistrationState != "" {
+			updates["jit_registration_state"] = JITUnsent
+		}
+		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
 	}
 	result := query.Updates(updates)
 	if result.Error != nil {
@@ -387,6 +446,7 @@ func (s *DBStore) ListMismatchedCompletedStates(limit int) ([]RunnerState, error
 		Where("status = ?", StatusCompleted).
 		Where("workflow_job_id IS NOT NULL AND workflow_job_id != 0").
 		Where("assigned_job_id != 0 AND assigned_job_id != workflow_job_id").
+		Where("manual_stop_requested IS NULL OR manual_stop_requested = ?", false).
 		Order("updated_at DESC").
 		Limit(limit).
 		Find(&records).Error; err != nil {
@@ -1017,6 +1077,12 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		}
 		record.Status = StatusQueued
 		record.ProvisionAttemptID = ""
+		if record.JITRegistrationState != "" {
+			record.JITRegistrationState = JITUnsent
+		}
+		record.SandboxCreateDispatched = false
+		record.ManualStopRequested = false
+		record.CleanupSandboxDone, record.CleanupGitHubDone, record.CleanupGitHubRunnerID = false, false, 0
 		record.Error = ""
 		record.FailureStage = ""
 		record.FailureReason = ""
@@ -1055,6 +1121,12 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
+				"jit_registration_state":              record.JITRegistrationState,
+				"sandbox_create_dispatched":           false,
+				"manual_stop_requested":               false,
+				"cleanup_sandbox_done":                false,
+				"cleanup_github_done":                 false,
+				"cleanup_github_runner_id":            0,
 				"status":                              record.Status,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,

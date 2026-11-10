@@ -39,16 +39,15 @@ type Server struct {
 	deploymentWorker *deploymentworker.Worker
 	startedAt        time.Time
 
-	runnerLocksMu        sync.Mutex
-	runnerLocks          map[string]*runnerRequestLock
-	windowsCreationLocks map[string]*runnerRequestLock
-	queueNotify          chan struct{}
-	deploymentNotify     chan struct{}
-	startOnce            sync.Once
-	workerID             string
-	loopCtx              context.Context
-	loopCancel           context.CancelFunc
-	loopWG               sync.WaitGroup
+	runnerLocksMu    sync.Mutex
+	runnerLocks      map[string]*runnerRequestLock
+	queueNotify      chan struct{}
+	deploymentNotify chan struct{}
+	startOnce        sync.Once
+	workerID         string
+	loopCtx          context.Context
+	loopCancel       context.CancelFunc
+	loopWG           sync.WaitGroup
 
 	recoveryMetricsDeferred atomic.Int32
 	waitingMetricsDirty     atomic.Bool
