@@ -575,6 +575,7 @@ type RunnerRequestStore interface {
 	ListStatesForGitHubInstallationRepositories(access []GitHubInstallationRepositoryAccess, limit, offset int) ([]RunnerState, int64, error)
 	ActiveCount() (int, error)
 	InFlightCount() (int, error)
+	RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error)
 	InFlightCountForRepositoryOwner(owner string) (int, error)
 	InFlightCountForRepository(repositoryFullName string) (int, error)
 	ActiveCountForProfile(name string) (int, error)
@@ -593,6 +594,7 @@ type RunnerRequestStore interface {
 
 type RunnerCatalogStore interface {
 	ListProfiles() ([]RunnerProfile, error)
+	ListProfilesContext(ctx context.Context) ([]RunnerProfile, error)
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
@@ -619,6 +621,10 @@ type IdentityStore interface {
 }
 
 type GitHubInstallationStore interface {
+	ReadRepositoryAccessSnapshot(ctx context.Context, accountID int64) (RepositoryAccessSnapshot, error)
+	RequestRepositoryAccessRefresh(ctx context.Context, accountID int64) error
+	ClaimRepositoryAccessRefresh(ctx context.Context, accountID int64) (string, error)
+	FinishRepositoryAccessRefresh(ctx context.Context, accountID int64, claim string, result RepositoryAccessResult) error
 	ListGitHubInstallations(accountID int64) ([]GitHubInstallation, error)
 	ListGitHubInstallationAccounts() ([]GitHubInstallationAccount, error)
 	GitHubInstallationAccountForInstallation(installationID int64) (GitHubInstallationAccount, error)
@@ -703,6 +709,14 @@ type DeploymentStore interface {
 	ListDeploymentEventsAfter(id string, afterID int64, limit int) ([]DeploymentEvent, bool, error)
 }
 
+// RunnerCapacityCounts describes the same active population across admission limits.
+type RunnerCapacityCounts struct {
+	Global     int `gorm:"column:global_count"`
+	Profile    int
+	Account    int
+	Repository int
+}
+
 type Store interface {
 	RunnerRequestStore
 	RunnerCatalogStore
@@ -717,7 +731,8 @@ type Store interface {
 }
 
 type Options struct {
-	Backend        string
-	DatabaseDSN    string
-	MigrateOnStart bool
+	Backend              string
+	DatabaseDSN          string
+	MigrateOnStart       bool
+	PostgresMaxOpenConns int
 }

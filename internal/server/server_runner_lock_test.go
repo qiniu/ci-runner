@@ -320,7 +320,7 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 				t.Fatalf("initial lock timing includes request read: %q, read at %v", firstLine, firstRead)
 			}
 			if enabled {
-				for _, stage := range []string{"request_read", "initial_state_read", "admission_lock_wait", "profile_lookup", "global_capacity_check", "profile_capacity_check", "creating_state_persist", "github_runner_applications", "sandbox_start", "running_lock_wait", "running_state_read", "running_state_persist"} {
+				for _, stage := range []string{"request_read", "initial_state_read", "admission_lock_wait", "profile_lookup", "capacity_count", "creating_state_persist", "github_runner_applications", "sandbox_start", "running_lock_wait", "running_state_read", "running_state_persist"} {
 					if !strings.Contains(batch, "stage="+stage+" ") {
 						t.Errorf("missing startup timing %q: %s", stage, batch)
 					}

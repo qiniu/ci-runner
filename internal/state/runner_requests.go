@@ -803,6 +803,41 @@ func (s *DBStore) ActiveCount() (int, error) {
 	return int(count), nil
 }
 
+// RunnerCapacityCounts reads all capacity dimensions in one database round trip.
+// Call it inside WithRunnerAdmission when using the result to admit a runner.
+func (s *DBStore) RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error) {
+	var counts RunnerCapacityCounts
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return counts, err
+	}
+	profileCondition := "profile_source IN ?"
+	profileArgs := []any{[]string{"", "global"}}
+	if req.ProfileSource != "" && req.ProfileSource != "global" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
+		scope := RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}
+		if err := ValidateRunnerProfileScope(scope); err != nil {
+			return counts, err
+		}
+		profileCondition = "profile_source = ? AND profile_scope_type = ? AND profile_scope_id = ?"
+		profileArgs = []any{req.ProfileSource, scope.Type, scope.ID}
+	}
+	repository := strings.ToLower(strings.TrimSpace(req.RepositoryFullName))
+	owner, _, found := strings.Cut(repository, "/")
+	if !found {
+		owner = ""
+	}
+	owner = strings.TrimSpace(owner)
+	ownerPattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(owner) + "/%"
+	query := "COUNT(*) AS global_count, COUNT(CASE WHEN profile_name = ? AND " + profileCondition + " THEN 1 END) AS profile, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) LIKE ? ESCAPE '!' THEN 1 END) AS account, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) = ? THEN 1 END) AS repository"
+	args := append([]any{strings.TrimSpace(req.ProfileName)}, profileArgs...)
+	args = append(args, owner, ownerPattern, repository, repository)
+	err = db.Model(&runnerRequestRecord{}).Select(query, args...).
+		Where("status IN ?", []string{StatusCreating, StatusRunning, StatusStopping}).Scan(&counts).Error
+	return counts, err
+}
+
 func (s *DBStore) InFlightCount() (int, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {

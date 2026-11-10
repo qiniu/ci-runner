@@ -240,6 +240,7 @@ func TestRunnerAdmissionSharedLimits(t *testing.T) {
 		independent     bool
 	}{
 		{"global", 1, 0, nil, "other/r", false},
+		{"unlimited", 10, 0, nil, "o/r", true},
 		{"profile", 10, 1, nil, "other/r", false},
 		{"profile", 10, 1, []int64{1, 1}, "other/r", false},
 		{"profile", 10, 1, []int64{1, 2}, "other/r", true},

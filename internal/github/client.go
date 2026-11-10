@@ -105,6 +105,13 @@ func RateLimitRetryAfter(err error) (string, bool) {
 	return retryAfter, retryAfter != ""
 }
 
+const installationRouteTTL = 30 * time.Second
+
+type installationRoute struct {
+	id        int64
+	expiresAt time.Time
+}
+
 type appAuthenticator struct {
 	baseURL              string
 	staticInstallationID int64
@@ -112,7 +119,8 @@ type appAuthenticator struct {
 	appHTTP              *http.Client
 	appTransport         *ghinstallation.AppsTransport
 	mu                   sync.Mutex
-	installationByRepo   map[string]int64
+	installationByRepo   map[string]installationRoute
+	nextRoutePrune       time.Time
 	transports           map[int64]*ghinstallation.Transport
 }
 
@@ -671,7 +679,7 @@ func NewAppClient(baseURL string, auth AppAuth, httpClient *http.Client) (*Clien
 		httpClient:           &cloned,
 		appHTTP:              &appHTTP,
 		appTransport:         appTransport,
-		installationByRepo:   map[string]int64{},
+		installationByRepo:   map[string]installationRoute{},
 		transports:           map[int64]*ghinstallation.Transport{},
 	}
 	return client, nil
@@ -1487,10 +1495,13 @@ func (a *appAuthenticator) installationID(ctx context.Context, repositoryFullNam
 	if repositoryFullName == "" {
 		return 0, fmt.Errorf("repository full name is required for dynamic GitHub App installation")
 	}
+	// Measure freshness from lookup start so delayed responses cannot extend the route's lifetime.
+	started := time.Now()
+	key := strings.ToLower(repositoryFullName)
 	a.mu.Lock()
-	if installationID := a.installationByRepo[repositoryFullName]; installationID != 0 {
+	if route := a.installationByRepo[key]; started.Before(route.expiresAt) {
 		a.mu.Unlock()
-		return installationID, nil
+		return route.id, nil
 	}
 	a.mu.Unlock()
 
@@ -1518,12 +1529,27 @@ func (a *appAuthenticator) installationID(ctx context.Context, repositoryFullNam
 	if err := json.Unmarshal(body, &out); err != nil {
 		return 0, err
 	}
-	if out.ID == 0 {
+	if out.ID <= 0 {
 		return 0, fmt.Errorf("github repository installation response missing id")
 	}
 	a.mu.Lock()
-	a.installationByRepo[repositoryFullName] = out.ID
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	if !now.Before(a.nextRoutePrune) {
+		for repo, route := range a.installationByRepo {
+			if !now.Before(route.expiresAt) {
+				delete(a.installationByRepo, repo)
+			}
+		}
+		a.nextRoutePrune = now.Add(installationRouteTTL)
+	}
+	expires := started.Add(installationRouteTTL)
+	if current := a.installationByRepo[key]; current.expiresAt.After(expires) && now.Before(current.expiresAt) {
+		return current.id, nil
+	}
+	if now.Before(expires) {
+		a.installationByRepo[key] = installationRoute{id: out.ID, expiresAt: expires}
+	}
 	return out.ID, nil
 }
 

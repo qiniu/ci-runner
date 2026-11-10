@@ -3835,6 +3835,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeTestDB(t, migratedDB)
+			testRepositoryAccessRefreshOwnership(t, migrated)
 			for _, table := range sqlBackendTestTables() {
 				if table == "runner_groups" || table == "runner_group_specs" || table == "repository_policies" {
 					if migratedDB.Migrator().HasTable(table) {
@@ -3867,6 +3868,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 				testAdmissionDuringPostgresCatalogWait(t, migrated)
 			}
 			testRunnerAdmissionRollback(t, migrated)
+			testRunnerCapacityCounts(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},
 				RequiredLabels: []string{"fresh-default"}, TemplateID: "fresh-template",
@@ -4384,6 +4386,7 @@ func sqlBackendTestTables() []string {
 		"oauth_identities",
 		"github_installations",
 		"github_installation_owners",
+		"repository_access_snapshots",
 		"account_secrets",
 		"account_preferences",
 		"sandbox_service_default_audiences",
@@ -5705,4 +5708,84 @@ func TestMigrateSQLiteRunnerRequestSnapshot(t *testing.T) {
 		t.Fatalf("second migration changed runner request data: first=%#v second=%#v", afterFirstStart, afterSecondStart)
 	}
 	t.Logf("runner request migration counts: before=%#v after=%#v", before, afterSecondStart)
+}
+
+func TestRunnerCapacityCounts(t *testing.T) {
+	store := New(t.TempDir())
+	if err := store.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	db := store.(*DBStore)
+	counts, err := db.RunnerCapacityCounts(RunnerRequest{ProfileName: "shared"})
+	if err != nil || counts != (RunnerCapacityCounts{}) {
+		t.Fatalf("empty capacity: %+v, %v", counts, err)
+	}
+	testRunnerCapacityCounts(t, db)
+}
+
+func testRunnerCapacityCounts(t *testing.T, store *DBStore) {
+	t.Helper()
+	for i, status := range []string{StatusCreating, StatusRunning, StatusStopping, StatusQueued, StatusFailed, StatusCompleted} {
+		for j, source := range []string{"", "global", "scoped_custom"} {
+			for k, repository := range []string{"Org/Repo", "Org/other", "org_extra/repo", "org%/repo", "org_/repo", "org!/repo", ""} {
+				req := RunnerRequest{
+					ID: fmt.Sprintf("capacity-count-%d-%d-%d", i, j, k), RepositoryFullName: repository,
+					ProfileName: "shared", ProfileSource: source, ProfileScopeType: RunnerProfileScopeAccount, ProfileScopeID: int64(k%2 + 1),
+				}
+				if k == 4 {
+					req.ProfileScopeType = RunnerProfileScopeGitHubInstallation
+				}
+				_, st, err := store.CreateRequest(req, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st.Status = status
+				if err := store.WriteState(st); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	defer store.db.Where("id LIKE ?", "capacity-count-%").Delete(&runnerRequestRecord{})
+	for _, source := range []string{"", "global", "scoped_custom"} {
+		for _, scopeID := range []int64{0, 1, 2, 9} {
+			for _, repository := range []string{" ORG/REPO ", " org /repo ", "org/other", "org%/repo", "org_/repo", "org!/repo", "noslash", "", "/repo"} {
+				req := RunnerRequest{
+					RepositoryFullName: repository, ProfileName: " shared ", ProfileSource: source,
+					ProfileScopeType: RunnerProfileScopeAccount, ProfileScopeID: scopeID,
+				}
+				counts, err := store.RunnerCapacityCounts(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				global, err := store.InFlightCount()
+				if err != nil {
+					t.Fatal(err)
+				}
+				profile, err := store.InFlightCountForProfile(req.ProfileName)
+				if source == "scoped_custom" && scopeID > 0 {
+					profile, err = store.InFlightCountForProfileScope(source, RunnerProfileScope{Type: req.ProfileScopeType, ID: scopeID}, req.ProfileName)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner, _, found := strings.Cut(strings.ToLower(strings.TrimSpace(repository)), "/")
+				if !found {
+					owner = ""
+				}
+				account, err := store.InFlightCountForRepositoryOwner(owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				repo, err := store.InFlightCountForRepository(repository)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := RunnerCapacityCounts{Global: global, Profile: profile, Account: account, Repository: repo}
+				if counts != want {
+					t.Fatalf("capacity source=%q scope=%d repo=%q: got %+v want %+v", source, scopeID, repository, counts, want)
+				}
+			}
+		}
+	}
 }

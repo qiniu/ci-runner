@@ -2290,13 +2290,6 @@ func profileForRunnerRequest(store state.Store, req state.RunnerRequest) (state.
 	return state.RunnerProfile{}, state.ErrNotFound
 }
 
-func inFlightForRunnerProfile(store state.Store, req state.RunnerRequest, name string) (int, error) {
-	if req.ProfileSource == "" || req.ProfileSource == "global" || req.ProfileScopeType == "" || req.ProfileScopeID <= 0 {
-		return store.InFlightCountForProfile(name)
-	}
-	return store.InFlightCountForProfileScope(req.ProfileSource, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, name)
-}
-
 func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []string) error {
 	if !profile.Enabled {
 		return fmt.Errorf("profile %q is disabled", profile.Name)

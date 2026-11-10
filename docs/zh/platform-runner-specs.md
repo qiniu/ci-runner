@@ -23,7 +23,7 @@
 
 目录展示不改变执行行为：名称引用沿用预装 Runner、Docker 就绪要求及原有组织策略赞助；固定 ID 沿用注册前官方 Runner 检查／更新、尽力配置 Docker、不使用赞助，即使它指向公共模板。两类均保留官方自动更新，不新增准备、Docker 或赞助开关。
 
-`/runner-specs` 展示启用且开启目录展示的规格，包括通过验证的公共模板固定 ID 规格。`/user/runner-specs` 保留名称引用的 `platform_public` 和 ID 引用的 `platform_custom` 来源，两者均可展示，同时返回 scope 自有 `scoped_custom` 条目；未开启展示的平台规格被省略。只有 scope 自定义条目返回物理 ID 和 GitHub Runner Group；全局 ID 条目省略模板详情，不编造稳定名称。匿名 `GET /api/public/runner-templates` 保留仅汇总稳定名称的契约，不包含只有 ID 的规格，只返回已启用、开启展示的名称引用及其 workflow labels。每进程缓存 60 秒并合并并发加载，Admin 成功保存／删除后使当前进程缓存失效；浏览器仍可缓存 60 秒。Provider 目录保持独立且受凭据约束。Large 规格可直接使用现有公共模板 ID 明确开启受保护目录展示，名称本身不会自动触发展示。
+`/runner-specs` 展示启用且开启目录展示的规格，包括通过验证的公共模板固定 ID 规格。`/user/runner-specs` 保留名称引用的 `platform_public` 和 ID 引用的 `platform_custom` 来源，两者均可展示，同时返回 scope 自有 `scoped_custom` 条目；未开启展示的平台规格被省略。只有 scope 自定义条目返回物理 ID 和 GitHub Runner Group；全局 ID 条目省略模板详情，不编造稳定名称。匿名 `GET /api/public/runner-templates` 保留仅汇总稳定名称的契约，不包含只有 ID 的规格，只返回已启用、开启展示的名称引用及其 workflow labels。重叠的源站请求共享一次数据库查询，查询完成后的新请求会重新读取目录，浏览器和代理可缓存成功响应 60 秒。Provider 目录保持独立且受凭据约束。Large 规格可直接使用现有公共模板 ID 明确开启受保护目录展示，名称本身不会自动触发展示。
 
 ## GitHub Runner 组
 

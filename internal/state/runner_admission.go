@@ -75,7 +75,9 @@ func (s *DBStore) withRunnerGuards(ctx context.Context, ids []int, strength stri
 			}
 		}
 		if tx.Dialector.Name() == BackendSQLite {
-			// SQLite has no shared row lock. Reserve its writer before reading.
+			// SQLite has no shared row lock. Reserve its database-wide writer
+			// before reading; ids and strength apply only to PostgreSQL/MySQL.
+			// The same write reservation serializes all three guard entry points.
 			if err := tx.Model(&runnerAdmissionGuardRecord{}).Where("id = ?", runnerCapacityGuard).UpdateColumn("id", runnerCapacityGuard).Error; err != nil {
 				return err
 			}

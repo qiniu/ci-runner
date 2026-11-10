@@ -14,6 +14,8 @@ database:
   dsn: ./var/runnerd.db
   # Standalone Postgres example (does not migrate existing SQLite data):
   # backend: postgres
+  # Optional per-process connection ceiling. Zero uses the unbounded driver default.
+  # postgres_max_open_connections: 12
   # dsn: postgres://runner:secret@postgres.example:5432/runnerd?sslmode=require
   # One-time database transfer tooling is retired. Historical procedures and
   # retained startup guards: docs/database-transfer-retirement.md.

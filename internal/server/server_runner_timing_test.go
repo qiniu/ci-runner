@@ -64,24 +64,18 @@ func (s *startupTimingStore) GetProfile(name string) (state.RunnerProfile, error
 	return s.Store.GetProfile(name)
 }
 
-func (s *startupTimingStore) InFlightCount() (int, error) {
-	if err := s.before("global_capacity_check"); err != nil {
-		return 0, err
+func (s *startupTimingStore) RunnerCapacityCounts(req state.RunnerRequest) (state.RunnerCapacityCounts, error) {
+	if err := s.before("capacity_count"); err != nil {
+		return state.RunnerCapacityCounts{}, err
 	}
+	counts, err := s.Store.RunnerCapacityCounts(req)
 	if s.capacityStage == "global_capacity_check" {
-		return 10, nil
-	}
-	return s.Store.InFlightCount()
-}
-
-func (s *startupTimingStore) InFlightCountForProfile(name string) (int, error) {
-	if err := s.before("profile_capacity_check"); err != nil {
-		return 0, err
+		counts.Global = 10
 	}
 	if s.capacityStage == "profile_capacity_check" {
-		return 10, nil
+		counts.Profile = 10
 	}
-	return s.Store.InFlightCountForProfile(name)
+	return counts, err
 }
 
 func newStartupTimingFixture(t *testing.T) (*Server, *startupTimingStore, chan string) {
@@ -142,7 +136,7 @@ func parseStartupTimings(t *testing.T, batch string) map[string]startupTimingSam
 }
 
 func TestRunnerStartupAttributesStoreDelays(t *testing.T) {
-	for _, stage := range []string{"request_read", "initial_state_read", "profile_lookup", "global_capacity_check", "profile_capacity_check", "running_state_read"} {
+	for _, stage := range []string{"request_read", "initial_state_read", "profile_lookup", "capacity_count", "running_state_read"} {
 		for _, fail := range []bool{false, true} {
 			// An unreadable request deliberately retains the existing no-event behavior.
 			if stage == "request_read" && fail {
