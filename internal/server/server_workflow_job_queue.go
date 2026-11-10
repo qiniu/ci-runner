@@ -27,7 +27,9 @@ func isWorkflowJobWaiting(status string) bool {
 	return false
 }
 
-func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, attempt state.RunnerState) (bool, error) {
+// On a successful startup decision, attempt retains the last state this worker
+// confirmed or committed, including cleared waiting evidence and its version.
+func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.RunnerRequest, attempt *state.RunnerState) (bool, error) {
 	if req.JobID == 0 {
 		return true, nil
 	}
@@ -35,7 +37,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	if err != nil {
 		return false, err
 	}
-	if !sameCreatingAttempt(before, attempt) {
+	if !sameCreatingAttempt(before, *attempt) {
 		return false, nil
 	}
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
@@ -50,10 +52,10 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		return false, err
 	}
 	// A webhook, retry or stop may have advanced the request during the lookup.
-	if !sameCreatingAttempt(st, attempt) || st.SandboxID != "" || st.ProcessPID != 0 || !st.CreatingAt.Equal(before.CreatingAt) {
+	if !sameCreatingAttempt(st, *attempt) || st.SandboxID != "" || st.ProcessPID != 0 || !st.CreatingAt.Equal(before.CreatingAt) {
 		return false, nil
 	}
-	stale := st.Version != before.Version
+	stale := st.Version != before.Version || (attempt.ProvisionAttemptID != "" && before.Version != attempt.Version)
 	if lookupErr == nil && job.ID != req.JobID {
 		lookupErr = fmt.Errorf("workflow job lookup returned a different job")
 	}
@@ -65,6 +67,10 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 			if err := writeWatchObservation(s.store, st, attempt.WatchToken); err != nil {
 				return false, err
 			}
+			st.Version++
+		}
+		if before.Version == attempt.Version {
+			*attempt = st
 		}
 		s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "decision", "start")
 		s.store.AppendLog(req.ID, "control.log", []byte("workflow job observed_status=queued decision=start\n"))
@@ -133,8 +139,14 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 		metrics.RecordCreate(st.ProfileName, 0, "failed")
 		metrics.RecordWorkflowFailure(st.RepositoryFullName, "unknown", workflowJobName(st, job), st.ProfileName, st.FailureStage, st.FailureReason)
 	}
-	s.logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code, "retry_delay", retryDelay)
-	s.store.AppendLog(req.ID, "control.log", []byte(fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s retry_delay=%s\n", job.Status, job.RunnerName, st.Status, code, retryDelay)))
+	logger := s.logger
+	detail := fmt.Sprintf("workflow job observed_status=%q runner_name=%q decision=%s reason=%s", job.Status, job.RunnerName, st.Status, code)
+	if st.Status == state.StatusQueued {
+		logger = logger.With("retry_delay", retryDelay)
+		detail += " retry_delay=" + retryDelay.String()
+	}
+	logger.Info("workflow job startup decision", "id", req.ID, "job_status", job.Status, "runner_name", job.RunnerName, "decision", st.Status, "reason", code)
+	s.store.AppendLog(req.ID, "control.log", []byte(detail+"\n"))
 	s.signalQueue()
 	if st.Status == state.StatusFailed {
 		s.refreshMetrics()

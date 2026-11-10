@@ -57,7 +57,9 @@ func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]Ru
 	var rows []RunnerWatchCandidate
 	err = db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("status IN ? OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?))", []string{StatusCreating, StatusRunning}, StatusStopping, queueTime(db, 0)).
 		Where("watch_expires_at IS NULL OR watch_expires_at <= ?", queueTime(db, 0)).
-		Order("watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error
+		// Unclaimed legacy rows come first on every dialect. Released cleanup
+		// attempts retain an expired timestamp and rotate behind older work.
+		Order("CASE WHEN watch_expires_at IS NULL THEN 0 ELSE 1 END, watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error
 	return rows, err
 }
 
@@ -169,6 +171,22 @@ func (s *DBStore) RecordJITRegistrationResult(ctx context.Context, attempt Runne
 		Where("cleanup_github_runner_id IS NULL OR cleanup_github_runner_id = 0")
 	updates := map[string]any{"version": gorm.Expr("version + 1")}
 	if runnerID == 0 {
+		// Rejection evidence may arrive after a peer owns cleanup. Retain its
+		// safe classification in the same CAS so a recovery decision cannot
+		// observe rejected without the corresponding retry policy.
+		if attempt.LastErrorCode != "" {
+			retryable := false
+			switch attempt.LastErrorCode {
+			case "auth_error", "github_registration":
+			case "http_retryable_status", "http_rate_limited", "github_secondary_rate_limit":
+				retryable = true
+			default:
+				return ErrConflict
+			}
+			updates["last_error_code"] = attempt.LastErrorCode
+			updates["last_error_retryable"] = retryable
+			updates["last_error_message"] = "Windows JIT registration rejected"
+		}
 		updates["jit_registration_state"] = JITRejected
 		updates["cleanup_github_done"] = true
 	} else {
@@ -199,7 +217,10 @@ func (s *DBStore) ReleaseRunnerCleanup(ctx context.Context, id, token string) er
 		return err
 	}
 	return db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("id = ? AND status = ? AND watch_token = ?", id, StatusStopping, token).
-		UpdateColumns(map[string]any{"watch_token": nil, "watch_expires_at": nil}).Error
+		// Keep this immediately claimable while moving it behind untouched or
+		// older expired watches. Clearing the expiry lets repeated lookup errors
+		// monopolize every bounded recovery scan on NULL-first SQL dialects.
+		UpdateColumns(map[string]any{"watch_token": nil, "watch_expires_at": queueTime(db, 0)}).Error
 }
 
 // Checkpoints do not bump the business version. Concurrent exit/job evidence

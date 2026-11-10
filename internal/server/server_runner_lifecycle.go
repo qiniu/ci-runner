@@ -400,6 +400,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	if st.Status != state.StatusQueued || st.Version != claim.Version || st.LeaseOwner != workerID {
 		s.logger.Info("runner start skipped after queue claim changed", "id", id, "status", st.Status, "state_version", st.Version, "claim_version", claim.Version, "lease_owner", st.LeaseOwner, "worker", workerID)
 		unlock()
+		s.store.AppendLog(id, "control.log", fmt.Appendf(nil, "runner start skipped after queue claim changed: status=%s claim_version=%d state_version=%d\n", st.Status, claim.Version, st.Version))
 		return
 	}
 	if !req.CreatedAt.IsZero() {
@@ -410,6 +411,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	unlock()
 	if err != nil {
 		if errors.Is(err, state.ErrConflict) {
+			s.logger.Info("runner admission skipped after claim changed", "id", id, "stage", stage, "claim_version", claim.Version, "worker", workerID)
 			return
 		}
 		var syntax *json.SyntaxError
@@ -436,7 +438,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 	ctx = watchCtx
 
 	jobCheckStartedAt := time.Now()
-	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, st)
+	shouldStart, err := s.ensureWorkflowJobStillQueued(ctx, req, &st)
 	timings.record("github_job_check", jobCheckStartedAt)
 	if err != nil {
 		failStart("github_job_status", err)
@@ -915,7 +917,7 @@ func (s *Server) failQueuedClaim(claim state.RunnerState, stage string, failure 
 	st := claim
 	result := s.applyFailure(&st, stage, failure, true)
 	if err := s.store.WriteQueuedClaim(st, claim.LeaseOwner); err != nil {
-		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "cause", failure, "error", err)
+		s.logger.Warn("write queued runner failure", "id", st.ID, "stage", stage, "claim_owner", claim.LeaseOwner, "claim_version", claim.Version, "cause", failure, "error", err)
 		return
 	}
 	s.recordStartFailure(st, stage, failure, result)
@@ -1435,7 +1437,7 @@ func (s *Server) recoverActiveRunner(ctx context.Context, st state.RunnerState, 
 		stateVersion = latest.Version
 	}
 
-	if st.Status == state.StatusCreating && st.JITRegistrationState == state.JITDispatched && !st.SandboxCreateDispatched && st.SandboxID == "" {
+	if st.Status == state.StatusCreating && (st.JITRegistrationState == state.JITDispatched || st.JITRegistrationState == state.JITRejected) && !st.SandboxCreateDispatched && st.SandboxID == "" {
 		return s.rollbackWindowsJIT(ctx, st, "github_registration", errInterruptedJITRegistration)
 	}
 	timeout := s.remainingSandboxTimeout(st, time.Now().UTC())
@@ -1640,7 +1642,12 @@ func (s *Server) applyReconciledBootstrapFailure(st *state.RunnerState) failureR
 		code, retryable, message = st.LastErrorCode, st.LastErrorRetryable, st.LastErrorMessage
 	}
 	st.SandboxCreateDispatched = false // The exact Sandbox is confirmed gone.
-	return s.applyClassifiedFailure(st, "sandbox_bootstrap", errors.New(message), code, retryable, true)
+	result := s.applyClassifiedFailure(st, "sandbox_bootstrap", errors.New(message), code, retryable, true)
+	if st.Status == state.StatusQueued {
+		st.TerminationSource = ""
+		st.RunnerExitCode = nil
+	}
+	return result
 }
 
 func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
@@ -1984,7 +1991,7 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 	if st.FailureReason == "jit_cleanup_pending" && (st.ManualStopRequested || !st.GitHubJobObservedAt.IsZero()) {
 		st.FailureStage, st.FailureReason, st.Error = "", "", ""
 	}
-	if st.JITRegistrationState == state.JITDispatched && st.FailureReason == "jit_cleanup_pending" && st.TerminationSource == state.TerminationSourceFailureCleanup {
+	if (st.JITRegistrationState == state.JITDispatched || st.JITRegistrationState == state.JITRejected) && st.FailureReason == "jit_cleanup_pending" && st.TerminationSource == state.TerminationSourceFailureCleanup {
 		failure := errors.New(st.LastErrorMessage)
 		result := s.applyClassifiedFailure(&st, st.FailureStage, failure, st.LastErrorCode, st.LastErrorRetryable, true)
 		if st.Status == state.StatusQueued {
@@ -2501,8 +2508,10 @@ func (s *Server) deferCreatingRequest(attempt state.RunnerState, delay time.Dura
 	defer unlock()
 	st, err := s.store.ReadState(id)
 	if err != nil {
-		s.logger.Error("read state for sponsored queue defer", "id", id, "error", err)
-		return
+		// A transient read failure need not strand this request until recovery.
+		// WriteState can only requeue an unchanged, committed creating version.
+		s.logger.Warn("read state for sponsored queue defer", "id", id, "error", err)
+		st = attempt
 	}
 	if !sameCreatingAttempt(st, attempt) || st.SandboxID != "" {
 		return
@@ -2621,13 +2630,6 @@ func profileForRunnerRequest(store state.Store, req state.RunnerRequest) (state.
 		}, nil
 	}
 	return state.RunnerProfile{}, state.ErrNotFound
-}
-
-func inFlightForRunnerProfile(store state.Store, req state.RunnerRequest, name string) (int, error) {
-	if req.ProfileSource == "" || req.ProfileSource == "global" || req.ProfileScopeType == "" || req.ProfileScopeID <= 0 {
-		return store.InFlightCountForProfile(name)
-	}
-	return store.InFlightCountForProfileScope(req.ProfileSource, state.RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}, name)
 }
 
 func validateRequestedProfile(profile state.RunnerProfile, requestedLabels []string) error {
@@ -2826,8 +2828,10 @@ func (s *Server) stopSandboxWithTimeout(ctx context.Context, id, sandboxID strin
 func (s *Server) rollbackWindowsJIT(ctx context.Context, st state.RunnerState, stage string, failure error) error {
 	if st.FailureReason != "jit_cleanup_pending" {
 		st.FailureStage, st.FailureReason = stage, "jit_cleanup_pending"
-		st.LastErrorCode, st.LastErrorRetryable = classifyRetryableError(stage, failure)
-		st.LastErrorMessage = "Windows Runner startup interrupted at " + stage
+		if st.JITRegistrationState != state.JITRejected || st.LastErrorCode == "" {
+			st.LastErrorCode, st.LastErrorRetryable = classifyRetryableError(stage, failure)
+			st.LastErrorMessage = "Windows Runner startup interrupted at " + stage
+		}
 		if err := s.store.WriteWatchedState(st, st.WatchToken); err != nil {
 			return err
 		}
@@ -2883,6 +2887,8 @@ func (s *Server) prepareWindowsJIT(ctx context.Context, req state.RunnerRequest,
 		var runnerID int64
 		if confirmed {
 			runnerID = jit.Runner.ID
+		} else {
+			attempt.LastErrorCode, attempt.LastErrorRetryable = classifyRetryableError("github_registration", err)
 		}
 		receiptCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer done()

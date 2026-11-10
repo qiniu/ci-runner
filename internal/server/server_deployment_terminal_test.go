@@ -261,7 +261,8 @@ func TestDeploymentTerminalLifecycleAndAuthorization(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer api.Close()
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	sandbox := &fakeSandbox{}
 	srv := newTestServer(t, store, api.URL, sandbox)
 	srv.Close()
@@ -346,14 +347,14 @@ func TestDeploymentTerminalLifecycleAndAuthorization(t *testing.T) {
 		}
 	}
 	revoked.Store(true)
-	srv.invalidateUserRepositoryAccess(account.ID)
+	ageAccessSnapshot(t, dir, account.ID, true)
 	for _, suffix := range []string{"", "/" + result.SessionID + "/input", "/" + result.SessionID + "/resize"} {
 		if rec := call("POST", base+suffix, `{}`, true); rec.Code != 404 {
 			t.Fatalf("revoked access %s: %d", suffix, rec.Code)
 		}
 	}
 	revoked.Store(false)
-	srv.invalidateUserRepositoryAccess(account.ID)
+	ageAccessSnapshot(t, dir, account.ID, true)
 	// A separate explicit disconnect must not close the original shell.
 	second := call("POST", base, `{}`, true)
 	var secondResult struct {
@@ -375,7 +376,7 @@ func TestDeploymentTerminalLifecycleAndAuthorization(t *testing.T) {
 	if rec := call("POST", path+"/input", `{"data":"pwd"}`, true); rec.Code != 409 {
 		t.Fatalf("stopped %d", rec.Code)
 	}
-	firstPTY := session.terminal.(*deploymentTerminalProcess).TerminalSession.(*fakeTerminalSession)
+	firstPTY := session.terminal.(*terminalProcess).TerminalSession.(*fakeTerminalSession)
 	deadline := time.Now().Add(7 * time.Second)
 	for !firstPTY.isClosed() && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)

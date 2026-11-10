@@ -181,7 +181,7 @@ func (s *Server) handleUserCreateRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusConflict, "runner_spec_name_conflict", "a runner spec with this name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)
@@ -212,7 +212,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	templateChanged := input.TemplateID != nil && strings.TrimSpace(*input.TemplateID) != current.TemplateID
@@ -296,7 +296,7 @@ func (s *Server) handleUserPatchRunnerSpec(w http.ResponseWriter, r *http.Reques
 			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while saving; refresh and try again")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)
@@ -337,11 +337,11 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusNotFound, "runner_spec_not_found", "runner spec not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	if count, err := s.store.ActiveCountForProfileScope("scoped_custom", scope, name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	} else if count > 0 {
 		writeErrorCode(w, http.StatusConflict, "runner_spec_in_use", "runner spec is in use by active requests")
@@ -366,7 +366,7 @@ func (s *Server) handleUserDeleteRunnerSpec(w http.ResponseWriter, r *http.Reque
 			writeErrorCode(w, http.StatusConflict, "runner_spec_conflict", "Runner spec changed while deleting; refresh and try again")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
 	s.writeUserRunnerSpecList(w, scope, prefScope)

@@ -32,6 +32,7 @@ type failingBootstrapSandbox struct {
 	operation    string
 	starts       int
 	lostResponse bool
+	beforeStop   func()
 }
 
 func (p *failingBootstrapSandbox) StartRunner(ctx context.Context, input sandboxrunner.StartInput) (sandboxrunner.StartResult, error) {
@@ -45,6 +46,13 @@ func (p *failingBootstrapSandbox) StartRunner(ctx context.Context, input sandbox
 		return sandboxrunner.StartResult{}, err
 	}
 	return sandboxrunner.StartResult{SandboxID: id, BootstrapOperation: p.operation}, fmt.Errorf("%w: %w", sandboxrunner.ErrCreateOutcomeUnknown, p.failure)
+}
+
+func (p *failingBootstrapSandbox) StopRunner(ctx context.Context, sandboxID string, pid uint32) error {
+	if p.beforeStop != nil {
+		p.beforeStop()
+	}
+	return p.fakeSandbox.StopRunner(ctx, sandboxID, pid)
 }
 
 func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
@@ -69,6 +77,25 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 			api := httptest.NewServer(githubRunnerAPI(t))
 			defer api.Close()
 			provider := &failingBootstrapSandbox{fakeSandbox: &fakeSandbox{recoverErr: sandboxrunner.ErrRunnerNotFound}, failure: errors.New(tc.message), operation: tc.operation}
+			var previousCleanupToken string
+			provider.beforeStop = func() {
+				current, err := store.ReadState(id)
+				if err != nil || current.Status != state.StatusStopping || current.WatchToken == "" {
+					t.Fatalf("missing durable cleanup owner: status=%s error=%v", current.Status, err)
+				}
+				if previousCleanupToken != "" {
+					if current.WatchToken == previousCleanupToken {
+						t.Fatal("new cleanup reused the former attempt's owner")
+					}
+					if err := store.RecordRunnerCleanup(t.Context(), id, previousCleanupToken, state.CleanupSandbox); !errors.Is(err, state.ErrConflict) {
+						t.Fatalf("old receipt completed a new stopping attempt: %v", err)
+					}
+					if err := store.BindCleanupGitHubRunner(t.Context(), id, previousCleanupToken, 999); !errors.Is(err, state.ErrConflict) {
+						t.Fatalf("old binding changed a new stopping attempt: %v", err)
+					}
+				}
+				previousCleanupToken = current.WatchToken
+			}
 			if tc.name == "located Sandbox disappeared before reconnect" {
 				provider.lostResponse = true
 				provider.recoverErr = sandboxrunner.ErrSandboxNotFound
@@ -100,6 +127,25 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 				if err != nil || st.Status != state.StatusCreating || (st.SandboxID == "") != provider.lostResponse || st.RetryCount != index {
 					t.Fatalf("attempt not retained for cleanup: %#v, %v", st, err)
 				}
+				if index > 0 {
+					if st.TerminationSource != "" || st.RunnerExitCode != nil || st.CleanupSandboxDone || st.CleanupGitHubDone || st.CleanupGitHubRunnerID != 0 || st.WatchToken == previousCleanupToken {
+						t.Fatalf("new bootstrap attempt inherited cleanup state: source=%q watch=%q old=%q", st.TerminationSource, st.WatchToken, previousCleanupToken)
+					}
+					if previousCleanupToken != "" {
+						for _, step := range []state.RunnerCleanupStep{state.CleanupSandbox, state.CleanupGitHub} {
+							if err := store.RecordRunnerCleanup(t.Context(), id, previousCleanupToken, step); !errors.Is(err, state.ErrConflict) {
+								t.Fatalf("old cleanup receipt accepted: step=%s error=%v", step, err)
+							}
+						}
+						if err := store.BindCleanupGitHubRunner(t.Context(), id, previousCleanupToken, 999); !errors.Is(err, state.ErrConflict) {
+							t.Fatalf("old cleanup runner binding accepted: %v", err)
+						}
+						after, err := store.ReadState(id)
+						if err != nil || after.Version != st.Version || after.SandboxID != st.SandboxID || after.CleanupSandboxDone || after.CleanupGitHubDone || after.CleanupGitHubRunnerID != 0 {
+							t.Fatalf("old receipt changed replacement: %+v, %v", after, err)
+						}
+					}
+				}
 				for st.Status == state.StatusCreating {
 					if err := srv.recoverRunner(t.Context(), id); err != nil {
 						t.Fatal(err)
@@ -120,7 +166,7 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 					t.Fatalf("incorrect failure evidence: %#v", st)
 				}
 				if index < tc.retries {
-					if st.Status != state.StatusQueued || st.RetryCount != index+1 || st.NextRetryAt.IsZero() {
+					if st.Status != state.StatusQueued || st.RetryCount != index+1 || st.NextRetryAt.IsZero() || st.TerminationSource != "" || st.RunnerExitCode != nil || st.WatchToken != "" || st.CleanupSandboxDone || st.CleanupGitHubDone || st.CleanupGitHubRunnerID != 0 {
 						t.Fatalf("expected bounded delayed retry: %#v", st)
 					}
 				} else {
@@ -132,6 +178,30 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 						t.Fatalf("expected terminal failure after %d attempts and %d stops: %#v", provider.starts, expectedStops, st)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestReconciledBootstrapFailureRetainsTerminalEvidence(t *testing.T) {
+	for _, retryable := range []bool{true, false} {
+		t.Run(fmt.Sprint(retryable), func(t *testing.T) {
+			exitCode := 1
+			st := state.RunnerState{
+				Status: state.StatusStopping, FailureStage: pendingBootstrapFailure,
+				LastErrorCode: "bootstrap_failure", LastErrorMessage: "test", LastErrorRetryable: retryable,
+				TerminationSource: state.TerminationSourceRecoveryCleanup, RunnerExitCode: &exitCode,
+			}
+			srv := &Server{}
+			srv.cfg.RetryMaxAttempts = 1
+			srv.cfg.RetryBaseDelay = time.Second
+			srv.applyReconciledBootstrapFailure(&st)
+			if retryable {
+				if st.Status != state.StatusQueued || st.TerminationSource != "" || st.RunnerExitCode != nil {
+					t.Fatalf("retry retained old termination evidence: %+v", st)
+				}
+			} else if st.Status != state.StatusFailed || st.TerminationSource != state.TerminationSourceRecoveryCleanup || st.RunnerExitCode == nil || *st.RunnerExitCode != exitCode {
+				t.Fatalf("terminal bootstrap failure lost termination evidence: %+v", st)
 			}
 		})
 	}

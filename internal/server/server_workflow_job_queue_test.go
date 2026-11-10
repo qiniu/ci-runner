@@ -6,6 +6,7 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/qiniu/ci-runner/internal/github"
 
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
@@ -184,7 +187,8 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				if err := store.WriteState(st); err != nil {
 					t.Fatal(err)
 				}
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st)
+				st.Version++
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -241,10 +245,29 @@ func TestWorkflowJobWaitingBackoffAndTerminalTransitions(t *testing.T) {
 				for i := 0; i < srv.cfg.RetryMaxAttempts && queueTestState(t, store).Status != state.StatusFailed; i++ {
 					check()
 				}
+				log, err := store.ReadLog("1001", "control.log", 65536)
+				if err != nil {
+					t.Fatal(err)
+				}
+				seenFailure, seenDelay := false, false
+				for _, line := range strings.Split(string(log), "\n") {
+					if strings.Contains(line, "decision=queued") && strings.Contains(line, "retry_delay=") {
+						seenDelay = true
+					}
+					if strings.Contains(line, "decision=failed") {
+						seenFailure = true
+						if strings.Contains(line, "retry_delay=") {
+							t.Fatalf("terminal decision scheduled a retry: %s", line)
+						}
+					}
+				}
+				if !seenFailure || !seenDelay {
+					t.Fatalf("missing queue decisions: %s", log)
+				}
 				if st = queueTestState(t, store); st.Status != state.StatusFailed || st.FailureStage != "github_job_status" || !st.NextRetryAt.IsZero() || strings.Contains(st.Error, "private upstream") {
 					t.Fatalf("unbounded or leaking lookup failure: %#v", st)
 				}
-				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st); err != nil || start {
+				if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); err != nil || start {
 					t.Fatalf("terminal request must ignore a repeated lookup: start=%v err=%v", start, err)
 				}
 			}
@@ -302,7 +325,8 @@ func TestWorkflowJobWaitingRateLimitDeferral(t *testing.T) {
 					if err := store.WriteState(st); err != nil {
 						t.Fatal(err)
 					}
-					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st)
+					st.Version++
+					start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -399,7 +423,8 @@ func TestWorkflowJobWaitingMetricsCoalesced(t *testing.T) {
 		if err := base.WriteState(st); err != nil {
 			t.Fatal(err)
 		}
-		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, st); start || err != nil {
+		st.Version++
+		if start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &st); start || err != nil {
 			t.Fatalf("unexpected start=%v err=%v", start, err)
 		}
 	}
@@ -515,8 +540,69 @@ func TestWorkflowJobStartupCompletionPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestWorkflowJobPrecheckAfterAssignmentWrite(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":1001,"status":"in_progress"}`)
+	}))
+	defer api.Close()
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, api.URL, &fakeSandbox{})
+	srv.Close()
+	sendQueueTestWebhook(t, srv, "workflow_job", "queued")
+	req, err := store.ReadRequest("1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("claim", ok, err)
+	}
+	attempt.Status = state.StatusCreating
+	if err := store.WriteQueuedClaim(attempt, attempt.LeaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	attempt.Version++
+	// An in_progress webhook may write assignment evidence before the first
+	// precheck read. The existing Job must still enter the monitored queue.
+	assigned := queueTestState(t, store)
+	assigned.AssignedJobID = req.JobID
+	if err := store.WriteState(assigned); err != nil {
+		t.Fatal(err)
+	}
+	start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+	current := queueTestState(t, store)
+	if err != nil || start || current.Status != state.StatusQueued || current.LastErrorCode != workflowJobWaitCode || current.AssignedJobID != req.JobID || current.NextRetryAt.IsZero() {
+		t.Fatalf("precheck stranded an already running workflow: status=%s code=%s start=%t err=%v", current.Status, current.LastErrorCode, start, err)
+	}
+}
+
+func TestWorkflowJobPrecheckDefersChangedAdmission(t *testing.T) {
+	api := httptest.NewServer(githubRunnerAPI(t))
+	defer api.Close()
+	store := state.New(t.TempDir())
+	req := state.RunnerRequest{ID: "webhook-race", JobID: 123, RepositoryFullName: "o/r"}
+	_, attempt, err := store.CreateRequest(req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt.Status, attempt.LeaseOwner, attempt.ProvisionAttemptID = state.StatusCreating, "worker", "original"
+	if err := store.WriteState(attempt); err != nil {
+		t.Fatal(err)
+	}
+	attempt.Version++
+	srv := &Server{store: store, gh: github.NewClient(api.URL, api.Client()), logger: slog.Default()}
+	if _, _, err := srv.markWorkflowJobInProgress(req.ID, github.WorkflowJob{ID: 123, Name: "build", RunnerName: attempt.RunnerName}); err != nil {
+		t.Fatal(err)
+	}
+	start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+	saved, readErr := store.ReadState(req.ID)
+	if err != nil || readErr != nil || start || saved.Status != state.StatusQueued || saved.NextRetryAt.IsZero() || saved.AssignedJobID != req.JobID {
+		t.Fatalf("changed admission lost its retry: start=%v status=%s assigned=%d err=%v read=%v", start, saved.Status, saved.AssignedJobID, err, readErr)
+	}
+}
+
 func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
-	for _, status := range []string{"waiting", "queued", "completed", "lookup_error", "assignment_changed", "replaced"} {
+	for _, status := range []string{"waiting", "queued", "completed", "lookup_error", "assignment_changed", "attempt_replaced", "replaced"} {
 		t.Run(status, func(t *testing.T) {
 			lookup, resume := make(chan struct{}), make(chan struct{})
 			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -527,7 +613,7 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 					return
 				}
 				observed := status
-				if status == "assignment_changed" {
+				if status == "assignment_changed" || status == "attempt_replaced" {
 					observed = "queued"
 				} else if status == "replaced" {
 					observed = "completed"
@@ -540,23 +626,25 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 			srv.Close()
 			sendQueueTestWebhook(t, srv, "workflow_job", "queued")
 			st := queueTestState(t, store)
-			st.Status, st.LeaseOwner, st.ProvisionAttemptID = state.StatusCreating, "worker", "initial"
+			st.Status, st.LeaseOwner, st.ProvisionAttemptID = state.StatusCreating, "worker", "original"
 			if err := store.WriteState(st); err != nil {
 				t.Fatal(err)
 			}
 			req, _ := store.ReadRequest("1001")
 			done := make(chan bool, 1)
-			go func(attempt state.RunnerState) {
-				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, attempt)
+			attempt := st
+			attempt.Version++
+			go func() {
+				start, err := srv.ensureWorkflowJobStillQueued(context.Background(), req, &attempt)
 				done <- start || err != nil
-			}(st)
+			}()
 			<-lookup
 			st = queueTestState(t, store)
 			st.Status = state.StatusCompleted
 			if status == "assignment_changed" {
 				st.Status = state.StatusCreating
 				st.AssignedJobID, st.AssignedJobName = 1001, "build"
-			} else if status == "replaced" {
+			} else if status == "attempt_replaced" || status == "replaced" {
 				st.Status, st.ProvisionAttemptID = state.StatusCreating, "replacement"
 			}
 			if err := store.WriteState(st); err != nil {
@@ -569,9 +657,9 @@ func TestWorkflowJobStartupDiscardsStaleObservation(t *testing.T) {
 				if started || after.Status != state.StatusQueued || after.LeaseOwner != "" || after.NextRetryAt.IsZero() || after.AssignedJobID != 1001 {
 					t.Fatalf("stale assignment observation not deferred: %#v", after)
 				}
-			} else if status == "replaced" {
-				if started || after.Status != state.StatusCreating || after.Version != st.Version+1 || after.ProvisionAttemptID != "replacement" {
-					t.Fatal("stale Job lookup changed a replacement creation")
+			} else if status == "attempt_replaced" || status == "replaced" {
+				if started || after.Status != state.StatusCreating || after.ProvisionAttemptID != "replacement" || after.Version != st.Version+1 {
+					t.Fatalf("stale lookup changed the replacement attempt: %+v", after)
 				}
 			} else if started || after.Status != state.StatusCompleted {
 				t.Fatal("stale lookup advanced a completed request")

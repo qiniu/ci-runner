@@ -251,14 +251,18 @@ func writeAdminReadError(w http.ResponseWriter, r *http.Request, err error) int 
 }
 
 func (s *Server) logAdminReadFailure(ctx context.Context, resource string, err error) {
-	category := "query_failed"
-	if errors.Is(err, context.DeadlineExceeded) {
-		category = "query_timeout"
-	} else if errors.Is(err, context.Canceled) {
-		category = "query_cancelled"
-	}
 	// Retain bounded, credential-free evidence without SQL or database details.
-	s.logger.ErrorContext(ctx, "admin runner read failed", "resource", resource, "category", category)
+	s.logger.ErrorContext(ctx, "admin runner read failed", "resource", resource, "category", readFailureCategory(err))
+}
+
+func readFailureCategory(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "query_timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "query_cancelled"
+	}
+	return "query_failed"
 }
 
 func validRunnerRequestDisplayStatus(status string) bool {
@@ -510,14 +514,9 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("persist profile create", "name", input.Name, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
+		s.writeRunnerSpecMutationError(w, input.Name, err)
 		return
 	}
-	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile created", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusCreated, profile)
@@ -636,14 +635,9 @@ func (s *Server) handlePatchProfile(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("persist profile update", "name", current.Name, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save Runner Spec")
+		s.writeRunnerSpecMutationError(w, current.Name, err)
 		return
 	}
-	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile updated", "name", profile.Name, "labels", profile.Labels, "template_id", profile.TemplateID, "max_concurrency", profile.MaxConcurrency, "enabled", profile.Enabled)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusOK, profile)
@@ -715,14 +709,9 @@ func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		return tx.DeleteProfile(name)
 	})
 	if err != nil {
-		if writeProfileInUse(w, err) || writeProfileConflict(w, err) || writeMutationAuditError(w, err) {
-			return
-		}
-		s.logger.Error("delete profile", "name", name, "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeRunnerSpecMutationError(w, name, err)
 		return
 	}
-	s.invalidatePublicRunnerTemplates()
 	s.logger.Info("profile deleted", "name", name)
 	s.refreshMetrics()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

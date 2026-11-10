@@ -2,10 +2,12 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,5 +203,179 @@ func TestWindowsJITStopBeforeDispatch(t *testing.T) {
 	saved, err := store.ReadState(st.ID)
 	if err != nil || saved.Status != state.StatusCompleted || !saved.CleanupGitHubDone || saved.CleanupGitHubRunnerID != 0 {
 		t.Fatal("unsent registration did not finish cleanly", saved.Status, err)
+	}
+}
+
+func TestWindowsJITLateRejectionAfterRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		retries    int
+		cancel     string
+		wantStatus string
+		wantCode   string
+	}{
+		{"forbidden", http.StatusForbidden, 0, "", state.StatusFailed, "auth_error"},
+		{"forbidden exhausted", http.StatusForbidden, 1, "", state.StatusFailed, "auth_error"},
+		{"conflict retry", http.StatusConflict, 0, "", state.StatusQueued, "http_retryable_status"},
+		{"conflict exhausted", http.StatusConflict, 1, "", state.StatusFailed, "http_retryable_status"},
+		{"rate limited retry", http.StatusTooManyRequests, 0, "", state.StatusQueued, "http_rate_limited"},
+		{"rate limited exhausted", http.StatusTooManyRequests, 1, "", state.StatusQueued, "http_rate_limited"},
+		{"secondary limit exhausted", http.StatusForbidden, 1, "", state.StatusQueued, "github_secondary_rate_limit"},
+		{"manual stop", http.StatusForbidden, 1, "manual", state.StatusCompleted, ""},
+		{"job completed", http.StatusForbidden, 1, "completed", state.StatusCompleted, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "late-rejected"
+			store := state.New(t.TempDir())
+			if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				store = state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true})
+			}
+			req := state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerName: "e2b-late-rejected", JobID: 123, Labels: []string{"self-hosted", "windows"}}
+			_, attempt, err := store.CreateRequest(req, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt.Status, attempt.ProvisionAttemptID, attempt.RetryCount = state.StatusCreating, "late-rejection-attempt", tc.retries
+			if err := store.WriteState(attempt); err != nil {
+				t.Fatal(err)
+			}
+			attempt, _ = store.ReadState(id)
+			if ok, err := store.ClaimRunnerWatch(t.Context(), attempt, "creator", 100*time.Millisecond); !ok || err != nil {
+				t.Fatal("creator lease", err)
+			}
+			attempt, _ = store.ReadState(id)
+			accepted, release := make(chan struct{}), make(chan struct{})
+			finish := sync.OnceFunc(func() { close(release) })
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost:
+					close(accepted)
+					<-release
+					w.WriteHeader(tc.status)
+					if tc.wantCode == "github_secondary_rate_limit" {
+						w.Write([]byte("secondary rate limit: fixture-private-response"))
+					} else {
+						w.Write([]byte("fixture-private-response"))
+					}
+				case r.URL.Path == "/repos/o/r/actions/jobs/123":
+					w.Write([]byte(`{"id":123,"status":"queued"}`))
+				case r.URL.Path == "/repos/o/r/actions/runners":
+					w.Write([]byte(`{"runners":[]}`))
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer api.Close()
+			defer finish()
+			creator := newRunnerLifecycleTestServer(t, store, api.URL, &fakeSandbox{})
+			peer := newRunnerLifecycleTestServer(t, store, api.URL, &fakeSandbox{})
+			creator.cfg.WorkerLeaseTTL = 100 * time.Millisecond
+			peer.cfg.WorkerLeaseTTL = 100 * time.Millisecond
+			peer.cfg.RetryMaxAttempts = 1
+			done := make(chan error, 1)
+			go func() { _, err := creator.prepareWindowsJIT(t.Context(), req, attempt); done <- err }()
+			select {
+			case <-accepted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("JIT POST did not start")
+			}
+			waitExpiredRecoveryWatch(t, store, id, state.StatusCreating)
+			if err := peer.recoverRunner(t.Context(), id); err != nil {
+				t.Fatal(err)
+			}
+			pending := assertAdmissionState(t, store, id, state.StatusStopping)
+			if pending.FailureReason != "jit_cleanup_pending" || pending.JITRegistrationState != state.JITDispatched {
+				t.Fatalf("missing pending receipt: %+v", pending)
+			}
+			finish()
+			if err := <-done; err == nil {
+				t.Fatal("expected JIT rejection")
+			}
+			receipt := assertAdmissionState(t, store, id, state.StatusStopping)
+			if receipt.JITRegistrationState != state.JITRejected || !receipt.CleanupGitHubDone {
+				t.Fatalf("rejection receipt not retained: %+v", receipt)
+			}
+			expectedCode := tc.wantCode
+			if tc.cancel != "" {
+				expectedCode = "auth_error"
+			}
+			if receipt.LastErrorCode != expectedCode || receipt.LastErrorMessage != "Windows JIT registration rejected" {
+				t.Fatalf("rejection classification was not atomic: code=%q message=%q", receipt.LastErrorCode, receipt.LastErrorMessage)
+			}
+			if err := store.WriteState(pending); !errors.Is(err, state.ErrConflict) {
+				t.Fatalf("old cleanup observation overwrote rejection: %v", err)
+			}
+			var job github.WorkflowJob
+			source := state.TerminationSourceRecoveryCleanup
+			if tc.cancel == "manual" {
+				source = state.TerminationSourceManualStop
+			}
+			if tc.cancel == "completed" {
+				job = github.WorkflowJob{ID: 123, Status: "completed", Conclusion: "cancelled"}
+			}
+			if _, _, err := peer.stopRunner(t.Context(), id, job, source); err != nil {
+				t.Fatal(err)
+			}
+			current := assertAdmissionState(t, store, id, tc.wantStatus)
+			wantRetries := tc.retries
+			if tc.wantStatus == state.StatusQueued && wantRetries < 1 {
+				wantRetries++
+			}
+			if current.RetryCount != wantRetries || current.LastErrorCode != tc.wantCode {
+				t.Fatalf("late rejection bypassed its classification/budget: retry=%d code=%q", current.RetryCount, current.LastErrorCode)
+			}
+			if current.Status == state.StatusQueued && (current.NextRetryAt.IsZero() || current.TerminationSource != "" || current.RunnerExitCode != nil || !current.CreatingAt.IsZero() || !current.StoppingAt.IsZero()) {
+				t.Fatalf("retry inherited cleanup or lost backoff: %+v", current)
+			}
+		})
+	}
+}
+
+func TestWindowsJITRejectedReceiptSurvivesCreatorExit(t *testing.T) {
+	store := state.New(t.TempDir())
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+		store = state.NewWithOptions(state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true})
+	}
+	req := state.RunnerRequest{ID: "rejected-creator-exit", RepositoryFullName: "o/r", RunnerName: "e2b-rejected", JobID: 123, Labels: []string{"windows"}}
+	_, attempt, err := store.CreateRequest(req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt.Status, attempt.ProvisionAttemptID = state.StatusCreating, "rejected-attempt"
+	if err := store.WriteState(attempt); err != nil {
+		t.Fatal(err)
+	}
+	attempt, _ = store.ReadState(req.ID)
+	if ok, err := store.ClaimRunnerWatch(t.Context(), attempt, "creator", 100*time.Millisecond); !ok || err != nil {
+		t.Fatal("creator lease", err)
+	}
+	attempt, _ = store.ReadState(req.ID)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusForbidden)
+		case r.URL.Path == "/repos/o/r/actions/jobs/123":
+			w.Write([]byte(`{"id":123,"status":"queued"}`))
+		default:
+			t.Errorf("rejected receipt must not query registrations: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer api.Close()
+	creator := newRunnerLifecycleTestServer(t, store, api.URL, &fakeSandbox{})
+	creator.cfg.WorkerLeaseTTL = 100 * time.Millisecond
+	if _, err := creator.prepareWindowsJIT(t.Context(), req, attempt); err == nil {
+		t.Fatal("expected definitive rejection")
+	}
+	peer := newRunnerLifecycleTestServer(t, store, api.URL, &fakeSandbox{})
+	waitExpiredRecoveryWatch(t, store, req.ID, state.StatusCreating)
+	if err := peer.recoverRunner(t.Context(), req.ID); err != nil {
+		t.Fatal(err)
+	}
+	current := assertAdmissionState(t, store, req.ID, state.StatusFailed)
+	if current.LastErrorCode != "auth_error" || current.RetryCount != 0 {
+		t.Fatalf("recovery lost rejection: %+v", current)
 	}
 }

@@ -335,8 +335,8 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		"lease_owner":                         st.LeaseOwner,
 		"lease_expires_at":                    zeroTimeToPointer(st.LeaseExpiresAt),
 	}
-	if st.Status == StatusQueued && st.queueRetryDelay != nil {
-		updates["next_retry_at"] = queueTime(db, *st.queueRetryDelay)
+	if st.Status == StatusQueued && st.queueRetry != nil && st.queueRetry.version == st.Version {
+		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
 	}
 	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
 	if lease.queueOwner != "" {
@@ -863,6 +863,41 @@ func (s *DBStore) ActiveCount() (int, error) {
 	return int(count), nil
 }
 
+// RunnerCapacityCounts reads all capacity dimensions in one database round trip.
+// Call it inside WithRunnerAdmission when using the result to admit a runner.
+func (s *DBStore) RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error) {
+	var counts RunnerCapacityCounts
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return counts, err
+	}
+	profileCondition := "profile_source IN ?"
+	profileArgs := []any{[]string{"", "global"}}
+	if req.ProfileSource != "" && req.ProfileSource != "global" && req.ProfileScopeType != "" && req.ProfileScopeID > 0 {
+		scope := RunnerProfileScope{Type: req.ProfileScopeType, ID: req.ProfileScopeID}
+		if err := ValidateRunnerProfileScope(scope); err != nil {
+			return counts, err
+		}
+		profileCondition = "profile_source = ? AND profile_scope_type = ? AND profile_scope_id = ?"
+		profileArgs = []any{req.ProfileSource, scope.Type, scope.ID}
+	}
+	repository := strings.ToLower(strings.TrimSpace(req.RepositoryFullName))
+	owner, _, found := strings.Cut(repository, "/")
+	if !found {
+		owner = ""
+	}
+	owner = strings.TrimSpace(owner)
+	ownerPattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(owner) + "/%"
+	query := "COUNT(*) AS global_count, COUNT(CASE WHEN profile_name = ? AND " + profileCondition + " THEN 1 END) AS profile, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) LIKE ? ESCAPE '!' THEN 1 END) AS account, " +
+		"COUNT(CASE WHEN ? <> '' AND LOWER(repository_full_name) = ? THEN 1 END) AS repository"
+	args := append([]any{strings.TrimSpace(req.ProfileName)}, profileArgs...)
+	args = append(args, owner, ownerPattern, repository, repository)
+	err = db.Model(&runnerRequestRecord{}).Select(query, args...).
+		Where("status IN ?", []string{StatusCreating, StatusRunning, StatusStopping}).Scan(&counts).Error
+	return counts, err
+}
+
 func (s *DBStore) InFlightCount() (int, error) {
 	db, err := s.dbOrEnsure()
 	if err != nil {
@@ -1007,27 +1042,16 @@ func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
 		}
 		_, offset := time.Now().Add(after).In(location).Zone()
 		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
-	default:
+	case BackendSQLite:
 		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
+	default:
+		// DBStore.open validates the backend before a queue query can run.
+		panic(fmt.Sprintf("unsupported queue clock dialect: %s", db.Dialector.Name()))
 	}
 }
 
 func liveQueuedClaim(query *gorm.DB, owner string) *gorm.DB {
 	return query.Where("status = ? AND lease_owner = ? AND lease_expires_at > ?", StatusQueued, owner, queueTime(query, 0))
-}
-
-func (s *DBStore) ReleaseQueuedClaim(claim RunnerState) error {
-	db, err := s.dbOrEnsure()
-	if err != nil {
-		return err
-	}
-	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", sanitizeID(claim.ID), claim.Version)
-	return liveQueuedClaim(query, claim.LeaseOwner).
-		Updates(map[string]any{
-			"version":          gorm.Expr("version + 1"),
-			"lease_owner":      "",
-			"lease_expires_at": nil,
-		}).Error
 }
 
 func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {

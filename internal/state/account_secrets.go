@@ -34,7 +34,13 @@ func (s *DBStore) UpsertAccountSecret(secret AccountSecret) (AccountSecret, erro
 	if err != nil {
 		return AccountSecret{}, err
 	}
-	return upsertAccountSecret(db, secret)
+	var saved AccountSecret
+	err = db.Transaction(func(tx *gorm.DB) error {
+		var writeErr error
+		saved, writeErr = upsertAccountSecret(tx, secret)
+		return writeErr
+	})
+	return saved, err
 }
 
 func upsertAccountSecret(db *gorm.DB, secret AccountSecret) (AccountSecret, error) {
@@ -71,6 +77,11 @@ func upsertAccountSecret(db *gorm.DB, secret AccountSecret) (AccountSecret, erro
 	if err := db.First(&record, "scope_type = ? AND scope_id = ? AND key_type = ?", scopeType, secret.ScopeID, keyType).Error; err != nil {
 		return AccountSecret{}, err
 	}
+	if scopeType == AccountScopeTypeAccount && keyType == AccountSecretTypeGitHubOAuthToken {
+		if err := invalidateRepositoryAccess(db, secret.ScopeID); err != nil {
+			return AccountSecret{}, err
+		}
+	}
 	return recordToAccountSecret(record), nil
 }
 
@@ -79,7 +90,7 @@ func (s *DBStore) DeleteAccountSecret(scopeType string, scopeID int64, keyType s
 	if err != nil {
 		return err
 	}
-	return deleteAccountSecret(db, scopeType, scopeID, keyType)
+	return db.Transaction(func(tx *gorm.DB) error { return deleteAccountSecret(tx, scopeType, scopeID, keyType) })
 }
 
 func deleteAccountSecret(db *gorm.DB, scopeType string, scopeID int64, keyType string) error {
@@ -94,6 +105,9 @@ func deleteAccountSecret(db *gorm.DB, scopeType string, scopeID int64, keyType s
 	}
 	if result.RowsAffected == 0 {
 		return ErrNotFound
+	}
+	if scopeType == AccountScopeTypeAccount && keyType == AccountSecretTypeGitHubOAuthToken {
+		return invalidateRepositoryAccess(db, scopeID)
 	}
 	return nil
 }

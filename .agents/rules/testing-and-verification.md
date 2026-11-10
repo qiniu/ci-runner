@@ -25,6 +25,8 @@ Also inspect the diff and keep `docs/README.md` aligned when adding, removing, o
 
 For queue ownership changes, exercise expired and superseded claims on the supported SQL backends and run the catalog-backends two-process PostgreSQL lease handoff regression.
 
+For repository authorization, run `TestSharedRepositoryAccessPostgresSQLBackends` on a disposable PG database. Keep cross-process fail-closed, hard-expiry, and credential rotation coverage.
+
 Run `go test ./internal/state -run "Test(MigrationStartup|LegacyMigration)" -count=1` for retained startup fences. With `RUNNERD_CATALOG_BACKEND_TESTS=1` and a dedicated `RUNNERD_POSTGRES_TEST_DSN` ending in `_test`, `TestMigrationStartupFenceSQLBackends` and `TestPostgresObfuscatedPasswordSQLBackends` use isolated PostgreSQL schemas. Keep normal schema/catalog SQL backend tests and server `TestPlatformSpecRevisionPostgresSQLBackends` coverage; see `docs/database-transfer-retirement.md` for the retired transfer boundary.
 
 For runner-request payload persistence changes, extend the existing state tests: assert accepted and rejected requests leave `github_payload_json` empty, `workflow_job` and `workflow_run` context survives reopening the database, and legacy metadata/installation-ID backfills preserve historical payloads. Keep repeated-migration coverage; do not use tests that create new requests as a substitute for legacy raw-payload fixtures.
@@ -205,18 +207,15 @@ Keep `SMEE_TARGET` aligned with the runnerd port when testing webhook forwarding
   pair before starting another rebuild. If exact status queries remain
   unavailable, retain the last qshell error instead of describing the build as
   active.
-- Template builds require qshell 2.19.13 or newer. Standard and large TOML files
-  set minimum root disk sizes of 20,480 and 81,920 MiB; qshell does not send
-  the setting on same-name rebuilds. Adjust
-  the provider team's `DiskMb` before rebuilding in place. Build must preserve
-  the existing name and ID and may not reject its stale pre-rebuild total;
-  publish and catalog checks use the request only as a lower bound, never as an
-  exact expected total. Regional release smoke reads `disk_size_mb` from the
-  selected TOML and requires the runtime root disk size to meet that lower
-  bound; it remains required before promotion.
-- `task template-build-all` runs all eight remote build targets sequentially
-  and stops at the first failure. Use individual build targets for scoped
-  rebuilds.
+- Template builds require qshell 2.21.0 or newer. The release minimums are 20 GiB
+  free for standard Ubuntu, 80 GiB for large, and 50 GiB for Windows.
+  Every build requests the release minimum through `min_free_disk_mb`,
+  including same-name rebuilds. Check the rebuilt ID before promotion. Publish and
+  catalog checks use `runnerd.min_free_disk_mb` as a total-size lower bound.
+  Regional Ubuntu smoke verifies both the root disk size and available space.
+- `task template-build-all` builds eight Ubuntu templates with default concurrency 4.
+  Test batch recovery with a local qshell fixture, including optional Windows,
+  changed inputs, exact-build lookup failures and interrupted submissions.
 
 ## Deployment Smoke
 
