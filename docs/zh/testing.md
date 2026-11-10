@@ -27,7 +27,7 @@ workflow 触发路径与 job 输入一致。
 重试前检查实际失败步骤，不静默忽略失败。
 
 本地使用 `task docker-check` 和 `task template-check-all`；完整模板检查需要
-Node.js 24、Docker 和网络。静态检查通过不代表真实构建或运行通过。
+Unix 主机、Node.js 24、Python 3.11+、Docker 和网络。静态检查通过不代表真实构建或运行通过。
 Tag 触发的 `Release` 继续使用 `Dockerfile.release` 构建并发布服务镜像；
 各区域 Sandbox 模板构建和发布仍遵循独立验收。Runner 升级 PR 必须取得两个
 workflow 对应当前 head 的证据，包括维护自动化需要显式调度的情况。
@@ -392,7 +392,7 @@ curl -fsS -X DELETE -b "$COOKIE_JAR" \
 
 页面源码在 `ui/`，使用 React、Vite、Tailwind CSS、shadcn 风格组件和仓库内主题 CSS。`task build` 会先执行 `task ui-build`，把前端产物写入 `internal/server/ui/` 后再编译 `runnerd`。`/` 始终显示公开产品首页，提供文档和 Jobs 入口，并且不会加载受保护的用户资源；受保护的普通用户 Jobs 首页位于 `/jobs`。未登录访问 `/jobs`、Job 分组深链、账户设置或 Admin 路由时，会显示独立登录页，其 OAuth 链接通过 `return_to` 保留完整的同源目标地址。未知路由显示 404；已登录但没有管理员角色的用户访问 Admin 路由时，会看到明确的无权限页面。`/repositories` 是普通用户统一的 readiness 页面，负责 GitHub App 安装/同步、用户与 App 的授权仓库交集、本地 job activity，以及有效 Sandbox service 状态。`/account/repositories` 和 `/organizations/{login}/repositories` 作为兼容的 scoped deep links，仍由同一页面渲染。账户与组织 Preferences 是普通用户唯一的 Sandbox credential 编辑器；readiness 只在可管理 scope 缺少配置时链接过去。Settings 只为当前账户和所有者可管理的组织保留 Sandbox Service、Sandbox Templates 和 Sandbox Instances 资源管理。首次进入页面时只加载当前路由实际使用的资源。已登录的用户路由会读取一次 `GET /user/onboarding/product-tour` 获取账户级引导状态；该增强请求失败时会被忽略，不会阻断核心 workspace 数据，也不会参与轮询。只有状态为 `pending`、尚未看过引导且精确进入 `/jobs` 首页的账户会自动开始六步引导，深链不会被打断。最后几步会导航到 `/repositories`；有效来源无需操作，缺少且可管理的来源会引导用户进入 Settings。已看过、已完成或跳过的账户都可从账户菜单重播，且不修改已保存状态。Jobs 首页加载第一页 `GET /user/runner_requests?limit=25&offset=0`，并每 5 秒轮询前 100 条记录，同时保留已经加载的历史；source-specific Jobs 路由的首次加载和轮询都使用受限的 500 条历史窗口；稳定 job-group 路由和 Load older jobs 操作可以加载受限的 500 行历史窗口。API 会拒绝 `limit + offset` 超过 500 的请求，也不会返回不可用的 next link。GitHub App metadata、Preferences 和 onboarding state 都不进入轮询。Admin 路由只加载当前 section 所需的 request/spec/audit 依赖。Overview 与 Runner 请求集合会轮询请求列表；活动中的请求资源每 5 秒轮询自身诊断信息，并在路由切换后忽略过期响应。已发布公共目录 使用无需登录的 `GET /api/public/runner-templates`，并且只能暴露 已发布的稳定名称和 workflow labels。Provider catalog 使用 `GET /user/sandbox/templates?region=<id>` 和 `GET /user/sandbox/instances?region=<id>&template_id=<id>`；实例接口只列出 runner 创建的 sandboxes，并使用统一的 scoped/default credential resolver。Installation scope 的目录读取必须属于所有者可管理的组织。测试必须证明未登录与已登录的公共响应完全相同、不包含 provider/scoped metadata，并保证公共与 provider catalog 的加载、重试、失败恢复和 stale response 处理彼此独立。管理面包含 Overview、`/admin/accounts` 的账户列表与角色控制、带 retry/stop 操作及统一事件时间线的 Runner Requests、Runner Specs、`/admin/sandbox_service` 的平台回退、audit、label match test 和运行时 diagnostics，不包含已退役的内部 Runner Group/Policy 管理或 provider resource catalogs。
 
-公共目录缓存测试覆盖并发读取合并、到期刷新、数据库错误后恢复、Admin 成功创建／修改／删除后的失效，以及拒绝修改后的缓存保留。
+公共目录测试验证重叠的源站请求共享一次规格列表查询、前次查询完成后发起新查询、HTTP 缓存响应头、数据库读取失败后的恢复，以及同一进程内的另一个 `Server` 实例读取同一 SQLite 数据库时可见已提交的 Admin 变更。`TestPublicRunnerTemplatesShareOnlyInFlightReads` 验证已断开连接的请求记为 HTTP 499，同时验证最后一个 HTTP 等待者离开后查询失败也只记录一次。`TestPublicRunnerTemplatesSanitizesSharedQueryPanic` 验证查询出现 panic 时返回通用 HTTP 500，并仅记录一条已脱敏的日志。
 
 受保护的 `/runner-specs` 是不带作用域选择的普通用户只读平台目录，只显示已启用且已发布的公共规格及可复制的工作流标签；来源／状态 Badge、停用规格、账户／Organization 选择以及启用或并发控制都不在该页面展示。Settings 下的 `/account/runner-specs` 与 `/organizations/{login}/runner-specs` 只显示该作用域自有的自定义规格。三个页面都使用 `/user/runner-specs`；该 API 只接受当前账户或可管理 Organization 作用域，作用域自定义模板使用该作用域 Sandbox 凭据验证，不使用 Admin 兜底凭据。
 
@@ -539,6 +539,8 @@ curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:25500/runner_request_metrics | jq
 执行 `cd ui && bun test src/admin-resource-loader.test.js src/app-load-policy.test.js src/components/runner-requests-section.test.js` 和 `bunx playwright test --config playwright.production.config.ts admin-request-loading.pw.ts`。生产构建夹具覆盖跨越多轮轮询的慢响应、统计失败、筛选切换、有界刷新及继续翻页。执行 `go test -race ./internal/state ./internal/server -run 'Test(AdminRunnerReads|RunnerRequestMetrics|GetRunnerRequestMetrics|ListRunnerRequestsIsPaginated|MigratePreservesAdditiveRunnerRequestColumns)'` 验证缓存、鉴权、覆盖索引、历史数据保留和数据库连接等待取消。夹具不代表生产延迟验收。在线上对比两个接口的 `Server-Timing` 响应头：`auth` 包含本地账户鉴权，`data` 包含列表读取或缓存／合并后的统计读取。这些时长包含连接等待，不等同于 SQL 执行时间；调整索引或连接上限前，应结合连接池等待指标及已授权数据库副本上的 `EXPLAIN QUERY PLAN` 定位。
 
 管理员列表和统计读取因 HTTP 请求取消而结束时，记为 `499`（Client Closed Request）；仍连接的 HTTP 等待者在真实查询失败时收到 `500`。失败日志为不含凭据的 `admin runner read failed`，字段为 `resource` 和 `category`（`query_failed`、`query_timeout` 或 `query_cancelled`）。统计共享查询在结束时只记录一次失败，即使所有 HTTP 等待者已经离开也会记录；多个等待者不会重复输出。已取消的等待者保持 `499`，共享查询随后失败时，仍连接的等待者收到 `500`。如果已无 HTTP 等待者，就只保留查询失败日志，不会额外产生 HTTP 响应。历史 500 仍须结合日志归因，不能仅凭支持取消就认定其原因。
+
+公共模板共享查询有独立的五秒期限，断开连接的 HTTP 等待者记为 `499`。查询失败时，即使所有 HTTP 等待者都已断开，也会记录一条 `public runner catalog read failed` 日志。`category` 为 `query_timeout`、`query_cancelled`、`query_panicked` 或 `query_failed`。仍连接的等待者会收到通用 HTTP 500。
 
 停止 runner：
 
@@ -713,8 +715,7 @@ curl -fsS -b "$COOKIE_JAR" \
   scoped Sandbox endpoint 中，managed stable name 恰好对应 1 个公共的
   具有非零有效默认 BuildID 的模板；覆盖最新重建失败但默认构建仍可用的情况。
 - sandbox 创建失败：确认账户/组织 Preferences 或已启用的 admin default 具有与 template 和本地环境匹配的完整 Sandbox service 配置；Runner detail 会显示实际选择的来源。
-- `template-smoke` 报告运行时根磁盘容量不足：检查新建 Sandbox 的根磁盘容量是否
-  达到所选 TOML 中的 `disk_size_mb`。确认 provider 团队的 `DiskMb` 后，按
+- 磁盘 smoke 失败时，分别检查 Sandbox 根磁盘总容量和 runner 的可用空间。确认区域分配后，按
   [同名原地重建步骤](default-runner-templates.md)处理并重新执行 smoke。
 - 模板 conformance 或 release smoke 的 `stdout.raw`、临时目录提前消失：确认只由主 shell
   执行清理。Bash watchdog 在启动时被终止，可能调用继承的 EXIT trap；子 shell 不应删除
@@ -1143,7 +1144,26 @@ Job 详情显示等待原因，事件时间线以 `runner_capacity` 记录原因
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+可通过 `database.postgres_max_open_connections` 设置每个 runnerd 进程的 PostgreSQL 连接上限。省略或设为 0 时连接池无上限。预算应包含所有同时在线进程的上限之和（包括发布时重叠的副本）、预留连接、其他客户端和运维余量，总数须在 PG 的 `max_connections` 内。连接池满后，请求会等待空闲连接；在预生产按真实请求并发量和数据库延迟确定上限。
+
+PostgreSQL 上的并发启动在数据库级事务内串行执行结构检查、迁移和回填。等待进程可以看到前一个事务提交的结果。客户端暂停、事务处于空闲状态时，超时取 PG 配置与 60 秒中的较短值。正在等 DDL 锁的语句属于活动查询，可能持续等待，直到 PG 的 `lock_timeout` 或 `statement_timeout` 触发，或阻塞事务结束。迁移之前拿到的锁会持有到事务结束，后来的读请求也可能排在等待中的 DDL 后面。
+
+较大的结构变更应先在接近生产的数据库副本上演练。为执行升级的 runnerd 在 DSN 中设置唯一的 `application_name`，按维护窗口选取有限的 `lock_timeout`。DSN 参数会作用于该进程的所有数据库连接，包括启动后的业务查询。以下示例使用 `runnerd-upgrade-1` 作为名称，需在目标数据库中用有权查看这些会话的角色执行。
+
+```sql
+SELECT a.pid, a.state, a.wait_event, pg_blocking_pids(a.pid) AS blockers,
+       l.locktype, l.mode, l.granted, l.relation::regclass AS relation
+FROM pg_stat_activity AS a
+JOIN pg_locks AS l ON l.pid = a.pid
+WHERE a.datname = current_database()
+  AND a.application_name = 'runnerd-upgrade-1'
+  AND l.locktype IN ('relation', 'advisory')
+ORDER BY a.pid, l.granted, l.locktype, relation;
+```
+
+启动因锁超时失败时，PG 会回滚同一事务里已执行的 DDL。如果 runnerd 在等待锁时被强制退出，对应的 PG 后端可能仍在运行并继续阻塞其他连接。启动旧版或重试前，先确认已退出进程的 PG 后端及其持锁均已消失。查询列出的阻塞会话应与数据库运维人员一起核实。
 
 这些测试使用隔离 schema，保留 PG 启动、密码混淆、时区与规格版本校验覆盖；不执行生产数据库清理。历史流程和后续运维边界见[迁移退役记录](database-transfer-retirement.md)。

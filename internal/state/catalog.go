@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,18 @@ func (s *DBStore) ListProfiles() ([]RunnerProfile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listProfiles(db)
+}
+
+func (s *DBStore) ListProfilesContext(ctx context.Context) ([]RunnerProfile, error) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, err
+	}
+	return listProfiles(db.WithContext(ctx))
+}
+
+func listProfiles(db *gorm.DB) ([]RunnerProfile, error) {
 	var records []runnerProfileRecord
 	if err := db.Order("priority DESC, name ASC").Find(&records).Error; err != nil {
 		return nil, err

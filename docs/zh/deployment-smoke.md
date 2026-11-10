@@ -15,7 +15,7 @@
 - 目标 account/organization Preferences 已配置 Sandbox service API URL 和 API key，或 `/admin/sandbox_service` 已启用 admin fallback。
 - 已按[公共 Runner 模板](default-runner-templates.md)完成 4 个标准公共 Qiniu 模板的
   双区域构建、发布、catalog 检查和 smoke 验证。4 个 large 模板也必须通过相同门禁
-  （包括运行时根磁盘的 `disk_size_mb` 容量下限）后才能使用其 development specs；适用的
+  （包括运行时根磁盘的 总容量和可用空间下限）后才能使用其 development specs；适用的
   模板门禁通过前，不要部署默认启用的 managed specs。
 - 已通过 `runnerd --bootstrap-admin github:<github-user-id>` 引导 admin account（该命令设置 admin 后直接退出，需在启动服务前执行）。
 
@@ -318,7 +318,7 @@ Workflow 完成后确认：
   重新启用后确认恢复调度。
 - 降低某个 managed spec 的 concurrency，并触发两个 jobs。
 - 运行 `deployment-custom` spec，确认使用显式 template ID；清理后删除它。任何活动全局规格的执行参数修改或删除应返回 `409 runner_spec_in_use`；空闲的原托管规格可编辑和删除，重启后修改仍保留且删除条目不会重建。
-- 发布经过校验的公共名称规格，检查 `/runner-specs` 和公共模板 API；取消发布后两处均隐藏（公共 API 缓存最多 60 秒）。私有 ID 不得出现，无效公共名称应拒绝且没有审计记录。
+- 发布经过校验的公共名称规格，检查 `/runner-specs` 和公共模板 API，取消发布后确认两处均隐藏。公共模板 API 设置 `Cache-Control: public, max-age=60`。验证该 API 时，可直连 runnerd 后端地址以绕过 CDN 或代理，或等待最多 60 秒让已有缓存响应过期。私有 ID 不得出现，无效公共名称应拒绝且没有审计记录。
 
 预期结果取决于场景：
 

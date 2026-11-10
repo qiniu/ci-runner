@@ -1,30 +1,37 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/state"
+	"golang.org/x/sync/singleflight"
 )
 
 type publicTemplatesCountingStore struct {
 	state.Store
-	calls atomic.Int32
-	fail  atomic.Bool
+	calls  atomic.Int32
+	before func(context.Context)
+	fail   atomic.Bool
 }
 
-func (s *publicTemplatesCountingStore) ListProfiles() ([]state.RunnerProfile, error) {
+func (s *publicTemplatesCountingStore) ListProfilesContext(ctx context.Context) ([]state.RunnerProfile, error) {
 	s.calls.Add(1)
+	if s.before != nil {
+		s.before(ctx)
+	}
 	if s.fail.Load() {
 		return nil, errors.New("database unavailable")
 	}
-	return s.Store.ListProfiles()
+	return s.Store.ListProfilesContext(ctx)
 }
 
 func publicTemplatesResponse(srv *Server) *httptest.ResponseRecorder {
@@ -33,145 +40,118 @@ func publicTemplatesResponse(srv *Server) *httptest.ResponseRecorder {
 	return rec
 }
 
-func TestPublicRunnerTemplatesCacheCoalescesConcurrentReads(t *testing.T) {
+func TestPublicRunnerTemplatesReadsEachRequest(t *testing.T) {
 	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
-	if _, err := store.UpsertProfile(publicCatalogFixture()[0]); err != nil {
-		t.Fatal(err)
-	}
-	srv := &Server{store: store}
-	const readers = 32
-	responses := make(chan *httptest.ResponseRecorder, readers)
-	var wg sync.WaitGroup
-	for range readers {
-		wg.Go(func() { responses <- publicTemplatesResponse(srv) })
-	}
-	wg.Wait()
-	close(responses)
-	var body string
-	for rec := range responses {
-		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "public, max-age=60" {
-			t.Fatalf("response: %d %v", rec.Code, rec.Header())
-		}
-		if body == "" {
-			body = rec.Body.String()
-		}
-		if rec.Body.String() != body || !strings.Contains(body, "qiniu-ubuntu-22.04") {
-			t.Fatalf("inconsistent public snapshot: %s", rec.Body.String())
+	srv := &Server{store: store, logger: slog.Default()}
+	for _, fail := range []bool{false, true, false} {
+		store.fail.Store(fail)
+		rec := publicTemplatesResponse(srv)
+		if fail {
+			if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "" {
+				t.Fatalf("failure response: %d %v", rec.Code, rec.Header())
+			}
+		} else if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "public, max-age=60" || strings.TrimSpace(rec.Body.String()) != "[]" {
+			t.Fatalf("catalog response: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 		}
 	}
-	if got := store.calls.Load(); got != 1 {
-		t.Fatalf("profile reads = %d, want one shared fill", got)
+	if store.calls.Load() != 3 {
+		t.Fatalf("profile reads = %d, want one per request", store.calls.Load())
 	}
 }
 
-type publicTemplatesBlockingStore struct {
-	state.Store
-	started chan struct{}
-	release chan struct{}
-	calls   atomic.Int32
+func TestPublicRunnerTemplatesSanitizesSharedQueryPanic(t *testing.T) {
+	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
+	store.before = func(ctx context.Context) { panic("private driver evidence") }
+	var logs bytes.Buffer
+	srv := &Server{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	rec := publicTemplatesResponse(srv)
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "private driver evidence") ||
+		strings.Count(logs.String(), "category=query_panicked") != 1 || strings.Contains(logs.String(), "private driver evidence") {
+		t.Fatalf("unexpected sanitized error: status=%d body=%q log=%q", rec.Code, rec.Body, &logs)
+	}
 }
 
-func (s *publicTemplatesBlockingStore) ListProfiles() ([]state.RunnerProfile, error) {
-	profiles, err := s.Store.ListProfiles()
-	if s.calls.Add(1) == 1 {
-		close(s.started)
-		<-s.release
+func TestPublicRunnerTemplatesShareOnlyInFlightReads(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
+	store.before = func(ctx context.Context) {
+		if store.calls.Load() != 1 {
+			return
+		}
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
+			t.Error("missing shared query deadline")
+		}
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
 	}
-	return profiles, err
-}
-
-func TestPublicRunnerTemplatesInvalidationDoesNotWaitForOldFill(t *testing.T) {
-	store := &publicTemplatesBlockingStore{Store: state.New(t.TempDir()), started: make(chan struct{}), release: make(chan struct{})}
-	profile := publicCatalogFixture()[0]
-	if _, err := store.UpsertProfile(profile); err != nil {
-		t.Fatal(err)
-	}
-	srv := &Server{store: store}
-	oldResponse := make(chan *httptest.ResponseRecorder, 1)
-	go func() { oldResponse <- publicTemplatesResponse(srv) }()
-	// Always release the blocked database read, even when an assertion fails.
-	releaseFill := sync.OnceFunc(func() { close(store.release) })
-	defer releaseFill()
-	select {
-	case <-store.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first fill did not start")
-	}
-	profile.Published = false
-	if _, err := store.UpsertProfile(profile); err != nil {
-		t.Fatal(err)
-	}
-	invalidated := make(chan struct{})
+	var logs bytes.Buffer
+	srv := &Server{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	leaderCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	leaderDone := make(chan struct{})
+	leaderResponse := httptest.NewRecorder()
 	go func() {
-		srv.invalidatePublicRunnerTemplates()
-		close(invalidated)
+		defer close(leaderDone)
+		r := httptest.NewRequestWithContext(leaderCtx, http.MethodGet, "/api/public/runner-templates", nil)
+		srv.handlePublicRunnerTemplates(leaderResponse, r)
 	}()
 	select {
-	case <-invalidated:
+	case <-started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("invalidation waited on database I/O")
+		t.Fatal("catalog read did not start")
 	}
-	newResponse := make(chan *httptest.ResponseRecorder, 1)
-	go func() { newResponse <- publicTemplatesResponse(srv) }()
+	var readers []<-chan singleflight.Result
+	for range 32 {
+		readers = append(readers, srv.publicTemplatesRead())
+	}
+	cancel()
 	select {
-	case rec := <-newResponse:
-		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
-			t.Fatalf("new epoch served the old snapshot: %d %s", rec.Code, rec.Body.String())
+	case <-leaderDone:
+		if leaderResponse.Code != 499 {
+			t.Errorf("disconnected caller status = %d", leaderResponse.Code)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("new epoch waited on old fill")
+	case <-time.After(time.Second):
+		t.Error("disconnected leader kept waiting for the shared read")
 	}
-	releaseFill()
-	select {
-	case rec := <-oldResponse:
-		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
-			t.Fatalf("old fill restored an invalidated snapshot: %d %s", rec.Code, rec.Body.String())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("old fill did not retry")
-	}
-	if got := store.calls.Load(); got != 2 {
-		t.Fatalf("profile reads = %d, want one per epoch", got)
-	}
-}
-
-func TestPublicRunnerTemplatesCacheExpiresAndRetriesFailures(t *testing.T) {
-	store := &publicTemplatesCountingStore{Store: state.New(t.TempDir())}
-	srv := &Server{store: store}
+	// Only direct result readers remain; every HTTP handler has already returned.
 	store.fail.Store(true)
-	if rec := publicTemplatesResponse(srv); rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "" {
-		t.Fatalf("failure response: %d %v", rec.Code, rec.Header())
+	close(release)
+	await := func(ch <-chan singleflight.Result) singleflight.Result {
+		t.Helper()
+		select {
+		case result := <-ch:
+			return result
+		case <-time.After(5 * time.Second):
+			t.Fatal("catalog read did not complete")
+			return singleflight.Result{}
+		}
+	}
+	for _, result := range readers {
+		if r := await(result); r.Err == nil || !r.Shared {
+			t.Fatalf("shared read: %+v", r)
+		}
+	}
+	if strings.Count(logs.String(), "category=query_failed") != 1 || strings.Contains(logs.String(), "database unavailable") {
+		t.Fatalf("expected one sanitized failure after disconnect: %q", &logs)
 	}
 	store.fail.Store(false)
-	if rec := publicTemplatesResponse(srv); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
-		t.Fatalf("recovery response: %d %s", rec.Code, rec.Body.String())
-	}
-	// A change outside this Server becomes visible on expiry, including when the
-	// previous cached projection was empty.
-	if _, err := store.UpsertProfile(publicCatalogFixture()[0]); err != nil {
-		t.Fatal(err)
-	}
-	if rec := publicTemplatesResponse(srv); strings.Contains(rec.Body.String(), "qiniu-ubuntu") {
-		t.Fatal("snapshot unexpectedly changed before expiry")
-	}
-	srv.publicTemplatesMu.Lock()
-	srv.publicTemplatesCache.expiresAt = time.Now().Add(-time.Second)
-	srv.publicTemplatesMu.Unlock()
-	if rec := publicTemplatesResponse(srv); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "qiniu-ubuntu-22.04") {
-		t.Fatalf("expired snapshot was not refreshed: %d %s", rec.Code, rec.Body.String())
-	}
-	if got := store.calls.Load(); got != 3 {
-		t.Fatalf("profile reads = %d, want failed fill, recovery, expiry", got)
+	if result := await(srv.publicTemplatesRead()); result.Err != nil || result.Shared || store.calls.Load() != 2 {
+		t.Fatalf("subsequent read: calls=%d result=%+v", store.calls.Load(), result)
 	}
 }
 
-func TestPublicRunnerTemplatesCacheInvalidatedByAdminMutations(t *testing.T) {
-	srv := newTestServer(t, state.New(t.TempDir()), "", &fakeSandbox{})
+func TestPublicRunnerTemplatesReflectOtherServerMutations(t *testing.T) {
+	dbDir := t.TempDir()
+	srv := newTestServer(t, state.New(dbDir), "", &fakeSandbox{})
+	reader := &Server{store: state.New(dbDir), logger: slog.Default()}
 	configureAdminProfileTemplateService(t, srv, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"templateID":"physical-secret","names":["public-name"],"public":true,"buildID":"00000000-0000-0000-0000-000000000001","buildStatus":"ready"}]`))
 	}))
-	if rec := publicTemplatesResponse(srv); strings.Contains(rec.Body.String(), "new-public") {
+	if rec := publicTemplatesResponse(reader); strings.Contains(rec.Body.String(), "new-public") {
 		t.Fatal("unexpected pre-create entry")
 	}
 	for _, tt := range []struct {
@@ -180,6 +160,8 @@ func TestPublicRunnerTemplatesCacheInvalidatedByAdminMutations(t *testing.T) {
 		present              bool
 	}{
 		{http.MethodPost, "/runner_specs", `{"name":"new-public","labels":["qiniu"],"template_source":"public","default_template_name":"public-name","published":true,"enabled":true}`, http.StatusCreated, true},
+		{http.MethodPatch, "/runner_specs/new-public", `{"published":false}`, http.StatusOK, false},
+		{http.MethodPatch, "/runner_specs/new-public", `{"published":true}`, http.StatusOK, true},
 		{http.MethodPatch, "/runner_specs/new-public", `{"enabled":false}`, http.StatusOK, false},
 		{http.MethodPatch, "/runner_specs/new-public", `{"enabled":true}`, http.StatusOK, true},
 		{http.MethodDelete, "/runner_specs/new-public", "", http.StatusOK, false},
@@ -189,26 +171,9 @@ func TestPublicRunnerTemplatesCacheInvalidatedByAdminMutations(t *testing.T) {
 		if rec.Code != tt.status {
 			t.Fatalf("%s: %d %s", tt.method, rec.Code, rec.Body.String())
 		}
-		public := publicTemplatesResponse(srv)
+		public := publicTemplatesResponse(reader)
 		if public.Code != http.StatusOK || strings.Contains(public.Body.String(), "new-public") != tt.present || strings.Contains(public.Body.String(), "physical-secret") {
 			t.Fatalf("%s did not refresh safe projection: %s", tt.method, public.Body.String())
 		}
-	}
-}
-
-func TestPublicRunnerTemplatesCacheRetainedAfterRejectedAdminMutation(t *testing.T) {
-	srv := newTestServer(t, state.New(t.TempDir()), "", &fakeSandbox{})
-	configureAdminProfileTemplateService(t, srv, nil, "base")
-	if rec := publicTemplatesResponse(srv); rec.Code != http.StatusOK {
-		t.Fatalf("warm cache: %d", rec.Code)
-	}
-	expiresAt := srv.publicTemplatesCache.expiresAt
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(`{"published":true}`)))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("invalid publication: %d %s", rec.Code, rec.Body.String())
-	}
-	if !srv.publicTemplatesCache.expiresAt.Equal(expiresAt) {
-		t.Fatal("rejected mutation invalidated the snapshot")
 	}
 }

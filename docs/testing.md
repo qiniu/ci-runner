@@ -31,7 +31,7 @@ registry failure, not proof of a source regression. Inspect the actual failed
 step before retrying; no failure is silently ignored.
 
 For local checks, use `task docker-check` and `task template-check-all` (Node.js
-24, Docker and network required for the full template gate). A green static
+24, Python 3.11+, Docker and network required for the full template gate on a Unix host). A green static
 check does not prove a real build or runtime. Tag-triggered `Release` still
 builds/publishes service images with `Dockerfile.release`; regional Sandbox
 template builds and promotion retain their existing separate acceptance gates.
@@ -405,7 +405,7 @@ curl -fsS -X DELETE -b "$COOKIE_JAR" \
 
 UI source lives in `ui/` and uses React, Vite, Tailwind CSS, shadcn-style components, and the repository theme CSS. `task build` runs `task ui-build`, writes frontend output to `internal/server/ui/`, and then compiles `runnerd`. In development mode, `internal/server/ui_assets_development.go` proxies UI assets to Vite. In production builds, `internal/server/ui_assets_production.go` embeds `internal/server/ui/*`. `/` always renders the public product landing page with documentation and Jobs destinations; it does not load protected user resources. The protected ordinary-user Jobs homepage is `/jobs`. Opening `/jobs`, a job-group deep link, account settings, or an admin route without a session renders a focused sign-in page whose OAuth link preserves the full same-origin destination through `return_to`. Unknown routes render 404, and authenticated non-admin users receive an explicit access-denied page on admin routes. `/repositories` is the canonical ordinary-user readiness page for GitHub App installation/sync, the user/App authorized repository intersection, local job activity, and effective Sandbox service status. `/account/repositories` and `/organizations/{login}/repositories` remain compatible scoped deep links rendered by the same page. Account and organization Preferences are the only ordinary-user Sandbox credential editors; readiness links there only when a manageable scope is missing configuration. Settings retains Sandbox Service, Sandbox Templates, and Sandbox Instances resource management for the signed-in account and owner-manageable organizations only. Initial navigation loads only resources used by that route. Authenticated user routes load `GET /user/onboarding/product-tour` once for account-level tour state, but a failed onboarding request is ignored so it cannot block core workspace data and it is not part of polling. Only a pending account whose tour has not been seen and that lands on the exact `/jobs` homepage auto-starts the six-step tour; deep links do not interrupt the user. The final steps navigate to `/repositories`; ready sources require no action, while a missing manageable source points the user to Settings. The account-menu replay works for seen, completed, and skipped accounts without changing stored state. The Jobs homepage loads the first `GET /user/runner_requests?limit=25&offset=0` page and polls the first 100 rows every five seconds while preserving any already-loaded history. Source-specific Jobs routes use the bounded 500-row history window for both initial loads and polling. Stable job-group routes and the Load older jobs action can load the bounded 500-row history window; the API rejects `limit + offset` values past 500 and does not advertise an unusable next link. GitHub App metadata, preferences, and onboarding state are not part of the polling loop. Admin routes load only the active section's request/spec/audit dependencies. Overview and the Runner Requests collection poll the request list; an active request resource polls its own diagnostics every five seconds and ignores stale responses after navigation. The published public catalog uses unauthenticated `GET /api/public/runner-templates` and must expose only stable published names and workflow labels. Provider catalogs use `GET /user/sandbox/templates?region=<id>` and `GET /user/sandbox/instances?region=<id>&template_id=<id>`; the instance endpoint lists only runner-created sandboxes and uses the effective scoped/default credential resolver. Installation-scoped catalog reads require an owner-manageable organization scope. Tests must prove signed-out and signed-in public responses are identical, exclude provider/scoped metadata, and keep public and provider loading, retry, failure recovery, and stale-response handling independent. The admin surface includes Overview, the account list and role controls at `/admin/accounts`, Runner Requests with retry/stop controls and a unified event timeline, Runner Specs, the platform fallback at `/admin/sandbox_service`, audit, label match test, and runtime diagnostics, but not retired internal Runner Group/Policy management or provider resource catalogs.
 
-Public-catalog cache tests cover concurrent read coalescing, expiry, recovery after a database error, invalidation after successful Admin create/update/delete, and retention after rejected mutations.
+Public-catalog tests check a fresh profile read after the previous one completes, coalescing of overlapping reads, HTTP cache headers, recovery after a database error, and visibility of committed Admin changes through a second `Server` in the same process reading the same SQLite database. `TestPublicRunnerTemplatesShareOnlyInFlightReads` checks that a disconnected waiter records HTTP 499 and a later query failure logs exactly once. `TestPublicRunnerTemplatesSanitizesSharedQueryPanic` checks for a generic HTTP 500 and a single sanitized panic log.
 
 The protected `/runner-specs` route is the scope-free, read-only ordinary-user platform catalog. It shows only enabled, published public Specs with copyable workflow labels; source/status badges, disabled Specs, account/Organization selectors, and enabled or concurrency controls stay out of this page. Settings routes `/account/runner-specs` and `/organizations/{login}/runner-specs` show only custom Specs owned by that scope. All three surfaces use `/user/runner-specs`, which requires the signed-in account or an owner-manageable Organization scope; scoped custom templates are validated with that scope's Sandbox credentials and never the admin fallback.
 
@@ -566,6 +566,8 @@ The first list load reads one 100-row page. The overview and a collection withou
 Run `cd ui && bun test src/admin-resource-loader.test.js src/app-load-policy.test.js src/components/runner-requests-section.test.js` and `bunx playwright test --config playwright.production.config.ts admin-request-loading.pw.ts`. The production-bundle fixtures cover responses delayed beyond multiple poll ticks, statistics failure, filter changes, bounded refresh and continuation. Run `go test -race ./internal/state ./internal/server -run 'Test(AdminRunnerReads|RunnerRequestMetrics|GetRunnerRequestMetrics|ListRunnerRequestsIsPaginated|MigratePreservesAdditiveRunnerRequestColumns)'` for cache/authentication, covering-index use, historical data preservation, and connection-wait cancellation. These fixtures do not establish production latency acceptance. On production, compare the two endpoints' `Server-Timing` headers: `auth` includes local account authorization and `data` includes the list read or cached/shared statistics read. These durations include connection waiting, not just SQL execution; correlate with database pool waits and `EXPLAIN QUERY PLAN` on an authorized database copy before changing indexes or connection limits.
 
 Cancelled admin list/statistics HTTP reads are recorded as `499` (Client Closed Request). Live HTTP waiters receive `500` for genuine query failures. Failures emit a credential-free `admin runner read failed` log with `resource` and `category` (`query_failed`, `query_timeout`, or `query_cancelled`). A shared statistics query logs its failure exactly once at query completion, even if every HTTP waiter has already left; multiple waiters do not duplicate it. A cancelled waiter remains `499` even when the shared query later fails, while connected waiters receive `500`. With no remaining HTTP waiters, only the query failure log records that failure; there is no additional HTTP response. Correlate historical 500s with logs; cancellation support alone does not prove their cause.
+
+The shared public template query has its own five-second deadline. Disconnected HTTP waiters are recorded as `499`. A failed query emits one `public runner catalog read failed` log, even if all HTTP waiters have disconnected. Its `category` is `query_timeout`, `query_cancelled`, `query_panicked`, or `query_failed`. Connected waiters receive a generic HTTP 500.
 
 Stop a runner:
 
@@ -740,9 +742,8 @@ Common issues:
   scoped Sandbox endpoint exposes exactly one public default template with the
   managed stable name with a nonzero effective default BuildID, including when the latest rebuild failed.
 - sandbox creation fails: confirm the account/organization Preferences or enabled admin default has a complete Sandbox service config matching the template and local environment; the Runner detail shows which source was selected.
-- `template-smoke` reports insufficient runtime root disk size: verify the
-  fresh Sandbox root disk meets `disk_size_mb` from the selected TOML.
-  Confirm the provider team's `DiskMb`, then follow the
+- If disk smoke fails, check both the root disk total and the bytes available
+  to the runner. Confirm the provider allocation, then follow the
   [same-name rebuild steps](default-runner-templates.md) and repeat smoke.
 - Template conformance or release smoke loses `stdout.raw` or its temporary
   directory: verify cleanup runs only in the main shell. A watchdog terminated
@@ -1254,7 +1255,26 @@ Run the PostgreSQL checks against a dedicated `_test` database:
 ```sh
 RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<dedicated test DSN>' \
   go test -tags development ./internal/state ./internal/server \
-  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PlatformSpecRevisionPostgresSQLBackends)' -count=1
+  -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
+
+For a PostgreSQL deployment, set `database.postgres_max_open_connections` to cap the application pool per process. A missing or zero value leaves the pool unbounded. Budget the sum of the caps for all simultaneously running processes, including rollout overlap, plus reserved connections, other clients and maintenance headroom, within PostgreSQL’s `max_connections`. Size the cap in preproduction using real request concurrency and database latency. Requests can wait for a free connection when the pool is full.
+
+On PostgreSQL, concurrent startups serialize schema checks, migrations and backfills in one database-wide transaction. Waiting processes see the preceding commit. A paused client with an idle transaction is limited by the shorter of the configured idle-in-transaction timeout and 60 seconds. An active statement waiting for a DDL lock can wait until its PostgreSQL `lock_timeout` or `statement_timeout` expires, or its blocker finishes. During this wait, earlier DDL locks are held until transaction end and new readers can queue behind the waiting DDL.
+
+Rehearse the first startup against a representative copy before a large schema change. Give the upgrading runnerd a distinct DSN `application_name` and choose a finite `lock_timeout` for the maintenance window. A DSN setting applies to every connection that process opens, including normal queries after startup. The query below uses the example name `runnerd-upgrade-1`. Run it in the target database with a role that can inspect these sessions.
+
+```sql
+SELECT a.pid, a.state, a.wait_event, pg_blocking_pids(a.pid) AS blockers,
+       l.locktype, l.mode, l.granted, l.relation::regclass AS relation
+FROM pg_stat_activity AS a
+JOIN pg_locks AS l ON l.pid = a.pid
+WHERE a.datname = current_database()
+  AND a.application_name = 'runnerd-upgrade-1'
+  AND l.locktype IN ('relation', 'advisory')
+ORDER BY a.pid, l.granted, l.locktype, relation;
+```
+
+If startup times out, PostgreSQL rolls back earlier DDL in that transaction. If runnerd is killed while PostgreSQL is waiting on a lock, its database backend can outlive the OS process and continue blocking other clients. Confirm that the stopped process’s backend and its locks have gone before retrying or starting the previous version. Investigate the reported blocking session with the database operator.
 
 These checks use isolated schemas and retain PostgreSQL startup, password obfuscation, time-zone and catalog revision coverage. They do not clean production databases. See [the retirement record](database-transfer-retirement.md) for historical procedures and operational boundaries.

@@ -85,6 +85,8 @@ Organization owner 可以在 **Settings → Fork 赞助** 中允许可信个人 
 
 Sandbox Deploy 控制面与执行切片见 [docs/zh/deployment.md](docs/zh/deployment.md)。`/deployments` 与部署详情共用仓库侧边栏：点击仓库进入其部署列表，展开后显示活动部署，当前选中的终态部署仍保留入口。导航汇总与部署历史从本地数据库独立分页。列表使用“全部／运行中／处理中／已停止／失败”单选分段筛选，默认“全部”，始终保留一个选中项；全部列表将运行中、处理中的部署优先展示，数量覆盖完整授权范围，URL 保留选择。“创建部署”链接进入 `/deployments/new`，并预选当前仓库。创建页只展示仓库、分支／Tag／PR 和作用域 Sandbox 模板等表单；`deploy.template_id` 仅作为 API 可选默认值。创建成功后进入仓库或 PR 上下文中的部署详情，刷新仍保留该部署与日志。列表、详情、日志与操作复用 Jobs 的 GitHub OAuth/App Installation＋仓库精确授权。内容从本地数据库读取，授权与 Jobs 复用按账户保存的数据库快照（20 秒可刷新，30 秒硬过期）；即使 GitHub 仍返回仓库列表，已暂停的 Installation 也会被拒绝。PR 标题在创建时保存；独立的可选元数据请求补齐旧记录缺失的标题，不阻塞详情和日志。来源标题可以跳转到 GitHub 分支／PR／Tag 页面。仓库成员可以创建和重新部署；Sandbox 设置与私有模板目录仍由 owner 管理。首次部署生成版本 #1，重新部署为固定计划创建新版本并保留旧版状态与日志。详情展示所选模板名称及 CPU、内存、磁盘快照，左侧展示仓库与活动部署，右侧以部署日志、终端和部署历史标签页展示当前部署及所选版本的日志，`?revision=N` 在刷新后恢复版本选择。
 
+Jobs Web 终端绑定到打开它的账户和当次 Runner 执行。连接、输入、调整窗口大小和关闭终端都会校验仓库权限和 shell 所有权。
+
 运行中的部署详情还提供当前版本的 Web 终端。手动连接后可检查进程和应用日志文件，离开终端时关闭 shell。终端访问重新校验仓库权限，并隔离每个用户的 shell，并使用部署保存的 Sandbox 凭据。输出流短暂中断时，会在 20 秒恢复窗口内自动重连同一个 shell；授权或生命周期失效、输出缺口无法恢复时仍关闭终端。
 补偿清理保留部署及版本的原始失败证据，清理过程中断后恢复也遵循此规则。创建幂等性使用不可变的请求摘要，不受 Provider 到期时间精度或后续版本变化影响；旧记录缺少摘要时拒绝幂等重放。
 部署恢复和排队执行由独立后台调度器推进，不继承 HTTP 启动恢复超时。每次重启后首次追加日志会校准版本预算，也覆盖回滚期间旧版写入的情况；Deploy 只支持单控制器，不支持新旧版本混跑。
@@ -290,7 +292,7 @@ Runner spec 通过管理 API 和控制台管理，**不在** `runnerd.yaml` 中�
 
 支持的 workflow labels、发布状态和区域验证流程见[公共 Runner 模板](docs/zh/default-runner-templates.md)。
 
-`GET /api/public/runner-templates` 无需登录即可返回数据库中已启用且开启展示的公共名称引用，包含配置并验证后的 large 名称引用。固定 ID 规格通过公开性验证后可进入受保护的 `/runner-specs` 目录，但不进入这个稳定名称 API。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，每个服务进程将公开投影缓存 60 秒，并合并并发加载；Admin 成功保存或删除规格后会使当前进程缓存失效，浏览器仍可缓存响应 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
+`GET /api/public/runner-templates` 无需登录即可返回数据库中已启用且开启展示的公共名称引用，包含配置并验证后的 large 名称引用。固定 ID 规格通过公开性验证后可进入受保护的 `/runner-specs` 目录，但不进入这个稳定名称 API。响应只包含稳定模板名、逻辑规格名及 workflow labels，不包含物理 ID 或凭据，重叠的源站请求共享一次数据库查询。查询完成后的新请求会重新读取目录。浏览器和代理可缓存成功响应 60 秒。依赖凭据的 `GET /user/sandbox/templates?region=<id>` 仍是独立的 scope 资源。
 
 普通用户在 `/runner-specs` 只读浏览平台 Runner 规格及其工作流标签；该页面不提供
 个人账号／Organization 选择，也不能修改平台规格的启用状态或并发策略。在
@@ -402,8 +404,8 @@ task release-check # 验证发布构建
 
 修改 Python/pipx 安装方式时，运行 `task template-python-test`，通过 Docker 和网络验证
 pipx 与 apt 管理的 Python 包相互隔离。
-先运行 `task template-check-all`，再通过 `task template-build-all` 串行构建全部
-8 个模板，或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
+先运行 `task template-check-all`，再通过 `task template-build-all` 默认以 4 并发构建
+8 个 Ubuntu 模板（加 `INCLUDE_WINDOWS=1` 包含 Windows），或通过单个 `task template-build-ubuntu-*` target 执行一次真实 qshell
 Sandbox 构建。发布与
 远程构建超时后的缓存续跑、发布与 smoke 命令见
 [公共 Runner 模板](docs/zh/default-runner-templates.md)。公共安装代码和
@@ -426,13 +428,11 @@ review 和合并由人工完成。
 双区域推广，在版本化发布记录中保留真实 Job 证据。完整启用、资产校验、no-op、失败
 恢复与验收边界见[公共 Runner 模板](docs/zh/default-runner-templates.md#自动创建-runner-基线更新-pr)。
 
-模板源码验证要求 Node.js 24，模板构建要求 qshell 2.19.13 或更高版本。标准配置为
-新模板请求 `disk_size_mb = 20480`，large 配置请求 `81920`。该配置表示根磁盘容量下限，
-实际总容量可以更大。qshell 在同名 rebuild 时不会发送该配置。先调整 provider 团队的 `DiskMb`，构建任务会保留现有名称和 ID
-并原地重建，不会用重建前的旧总容量拦截构建。发布与 catalog 检查仍要求重建后的
-总容量达到配置下界；总容量较大本身不能说明配置不符。
-发布 smoke 会读取对应 TOML，并要求运行时根磁盘容量达到其中的
-`disk_size_mb` 下限。2.337.0 基线已完成双区域、8 模板重建、catalog、标准
+模板源码验证要求 Node.js 24，模板构建要求 qshell 2.21.0 或更高版本。
+Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
+qshell 2.21.0 每次构建都通过 `min_free_disk_mb` 请求对应的验收值，同名重建也会应用该参数。
+发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
+2.337.0 基线已完成双区域、8 模板重建、catalog、标准
 workflow 与 large workflow 门槛，证据保留在
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 

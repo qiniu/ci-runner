@@ -575,6 +575,7 @@ type RunnerRequestStore interface {
 
 type RunnerCatalogStore interface {
 	ListProfiles() ([]RunnerProfile, error)
+	ListProfilesContext(ctx context.Context) ([]RunnerProfile, error)
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
@@ -703,7 +704,8 @@ type Store interface {
 }
 
 type Options struct {
-	Backend        string
-	DatabaseDSN    string
-	MigrateOnStart bool
+	Backend              string
+	DatabaseDSN          string
+	MigrateOnStart       bool
+	PostgresMaxOpenConns int
 }

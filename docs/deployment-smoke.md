@@ -17,7 +17,7 @@ Use this checklist before treating a runnerd deployment as ready for real GitHub
   and smoke-tested in both supported regions according to
   [Public Runner Templates](default-runner-templates.md). The four large
   templates must pass the same gate, including the runtime root-disk
-  `disk_size_mb` lower bound, before their development specs are used;
+  total and free-space minimums, before their development specs are used;
   do not deploy enabled managed defaults before the applicable gate passes.
 - An admin account bootstrapped by running `runnerd --bootstrap-admin github:<github-user-id>` (sets the admin and exits; run before starting the service).
 
@@ -338,7 +338,7 @@ still under observation:
 - Lower a managed spec's concurrency and trigger two jobs.
 - Run the `deployment-custom` spec, confirm its explicit template ID is used,
   then delete it after cleanup. Execution edits and deletion of any active global spec must return `409 runner_spec_in_use`; an idle former managed spec can be edited and deleted. Restart must preserve edits and must not recreate deleted specs.
-- Publish a validated public-name spec and verify `/runner-specs` and the public template API. Unpublish it and confirm both hide it (the public API cache may last 60 seconds). Private IDs must remain absent. Invalid public names must reject without an audit event.
+- Publish a validated public-name spec and verify `/runner-specs` and the public template API. Unpublish it and confirm both hide it. The public template API sets `Cache-Control: public, max-age=60`. For that check, query the runnerd backend address directly to bypass the CDN or proxy, or allow up to 60 seconds for a cached response to expire. Private IDs must remain absent. Invalid public names must reject without an audit event.
 
 Expected result depends on the scenario:
 

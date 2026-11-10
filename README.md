@@ -85,6 +85,8 @@ For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testi
 
 The Sandbox Deploy control-plane and execution slice is documented in [docs/deployment.md](docs/deployment.md). `/deployments` and deployment details share a repository sidebar: repository links open its deployment list, expandable children show active deployments, and a selected terminal deployment remains visible. Navigation summaries and deployment history paginate independently from the local database. The list uses single-select Running / Processing / Stopped / Failed segmented filters with full authorized counts and URL-restored selection. Running is selected by default; exactly one status remains selected. The Create deployment link opens `/deployments/new` with the current repository preselected. The creation page contains the repository, Branch/Tag/PR and scoped Sandbox template form; `deploy.template_id` is an optional API default. Creation opens the deployment detail under its repository or PR context; refresh preserves the deployment and its logs. Lists, details, logs and actions share Jobs' exact GitHub OAuth/App installation-repository authorization. Content stays in the local database; authorization reads the same per-account database snapshot as Jobs (20-second refresh, 30-second hard expiry) and rejects suspended Installations even if GitHub still lists their repositories. PR titles are saved at admission; a separate optional metadata request fills missing legacy titles without delaying details or logs. Source headings link to GitHub Branch/PR/Tag pages. Repository members may deploy and redeploy; Sandbox settings and private template catalogs remain owner-managed. Each deployment starts at Revision #1; redeploy creates a new numbered revision of the pinned plan and keeps earlier status/logs. Details show the selected template name and CPU, memory, and disk snapshot beside revision history and a chronological log viewer, and `?revision=N` preserves the selected version on reload.
 
+A Jobs Web terminal belongs to the account that opened it and to the active Runner attempt. Each connection, input, resize, and close request checks repository access and shell ownership.
+
 Running deployment details also offer a Web terminal for the current revision. Connect manually to inspect processes and application log files; leaving the terminal closes the shell. Terminal access revalidates repository access and isolates each user's shell and uses the saved Sandbox credentials. Brief output-stream interruptions resume the same shell automatically within a 20-second recovery window; authorization/lifecycle loss or an unrecoverable output gap closes it.
 Compensation cleanup preserves the original deployment failure and revision evidence, including when cleanup resumes after interruption. Creation idempotency uses an immutable request hash, so provider expiry changes and later revisions do not invalidate the original request key.
 Deployment recovery and queued execution run in the independent background scheduler without inheriting the HTTP startup recovery timeout. Revision log budgets are recalibrated on first append after each restart, including after rollback writes; Deploy supports one controller without mixed-version writers.
@@ -292,7 +294,7 @@ The database is the single catalog authority. Startup migrates old managed rows 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials; the public projection is cached in each server process for 60 seconds, with concurrent cache fills coalesced. Successful Admin spec saves and deletes invalidate that process cache; browser caches may retain responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
+`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials. Overlapping origin requests share one database read. The next request after it completes reads the catalog again. Browsers and proxies may cache successful responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
 
 Ordinary users browse the read-only platform Runner Spec catalog at
 `/runner-specs`. That page has no account/Organization selector or user-editable
@@ -412,7 +414,7 @@ source directory or build target.
 Run `task template-python-test` when changing Python/pipx installation; it uses
 Docker and network access to verify isolation from apt-owned Python packages.
 Run `task template-check-all`, then use `task template-build-all` to build all
-eight templates sequentially, or use an individual `task template-build-ubuntu-*`
+eight Ubuntu templates with default concurrency 4 (add `INCLUDE_WINDOWS=1` for Windows), or use an individual `task template-build-ubuntu-*`
 target for one real qshell Sandbox build. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and
@@ -442,16 +444,12 @@ evidence in the versioned release record. See
 for activation, asset validation, no-op/failure behavior and acceptance boundaries.
 
 Template source validation requires Node.js 24, and template builds require
-qshell 2.19.13 or newer. Standard configs request
-`disk_size_mb = 20480`, while large configs request `81920` for new templates.
-This setting is the minimum root disk size; the reported total can be larger.
-Qshell does not send the setting on same-name
-rebuilds. After the provider team's `DiskMb` is adjusted, the build tasks rebuild
-the existing names and IDs in place without rejecting their stale pre-rebuild
-totals. Publish and catalog checks require the rebuilt totals to meet the
-configured lower bounds; a larger total is not a mismatch by itself.
-Release smoke reads the corresponding TOML and requires the runtime root disk
-size to meet its `disk_size_mb` lower bound.
+qshell 2.21.0 or newer. Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). Qshell 2.21.0 applies
+`min_free_disk_mb` on every build, including same-name rebuilds, using
+the configured release minimum. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
 The 2.337.0 baseline completed the two-region, eight-template rebuild, catalog,
 standard workflow, and large workflow gates recorded in
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93).

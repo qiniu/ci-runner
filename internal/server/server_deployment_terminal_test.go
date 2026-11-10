@@ -376,7 +376,7 @@ func TestDeploymentTerminalLifecycleAndAuthorization(t *testing.T) {
 	if rec := call("POST", path+"/input", `{"data":"pwd"}`, true); rec.Code != 409 {
 		t.Fatalf("stopped %d", rec.Code)
 	}
-	firstPTY := session.terminal.(*deploymentTerminalProcess).TerminalSession.(*fakeTerminalSession)
+	firstPTY := session.terminal.(*terminalProcess).TerminalSession.(*fakeTerminalSession)
 	deadline := time.Now().Add(7 * time.Second)
 	for !firstPTY.isClosed() && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
