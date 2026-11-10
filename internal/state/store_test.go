@@ -3881,6 +3881,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			}
 			testRunnerAdmissionRollback(t, migrated)
 			testRunningWatch(t, migrated)
+			testCleanupRecoveryDoesNotStarveExpiredWatches(t, migrated)
 			testRunnerCapacityCounts(t, migrated)
 			if _, err := migrated.UpsertProfile(RunnerProfile{
 				Name: "fresh-default", Labels: []string{"self-hosted", "fresh-default"},

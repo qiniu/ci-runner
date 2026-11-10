@@ -57,7 +57,9 @@ func (s *DBStore) ListExpiredRunnerWatches(ctx context.Context, limit int) ([]Ru
 	var rows []RunnerWatchCandidate
 	err = db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("status IN ? OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?))", []string{StatusCreating, StatusRunning}, StatusStopping, queueTime(db, 0)).
 		Where("watch_expires_at IS NULL OR watch_expires_at <= ?", queueTime(db, 0)).
-		Order("watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error
+		// Unclaimed legacy rows come first on every dialect. Released cleanup
+		// attempts retain an expired timestamp and rotate behind older work.
+		Order("CASE WHEN watch_expires_at IS NULL THEN 0 ELSE 1 END, watch_expires_at, id").Limit(limit).Select("id", "status").Scan(&rows).Error
 	return rows, err
 }
 
@@ -199,7 +201,10 @@ func (s *DBStore) ReleaseRunnerCleanup(ctx context.Context, id, token string) er
 		return err
 	}
 	return db.WithContext(ctx).Model(&runnerRequestRecord{}).Where("id = ? AND status = ? AND watch_token = ?", id, StatusStopping, token).
-		UpdateColumns(map[string]any{"watch_token": nil, "watch_expires_at": nil}).Error
+		// Keep this immediately claimable while moving it behind untouched or
+		// older expired watches. Clearing the expiry lets repeated lookup errors
+		// monopolize every bounded recovery scan on NULL-first SQL dialects.
+		UpdateColumns(map[string]any{"watch_token": nil, "watch_expires_at": queueTime(db, 0)}).Error
 }
 
 // Checkpoints do not bump the business version. Concurrent exit/job evidence

@@ -885,6 +885,8 @@ Sandbox 已创建而 Runner 启动失败时，恢复流程先尝试重连。确�
 
 Sandbox 启动后若接管写入失败，worker 保留进程句柄并重试当前创建尝试的数据库操作。若提交成功但响应丢失，使用已保存的 Sandbox、PID 和监听令牌确认归属。监听在本地取消时，SDK 可能返回退出码 -1 且 Go error 为空；此时任务继续运行，等待接管。只有成功取得清理权的监听才记录 GitHub 忙碌查询错误。
 
+`TestCleanupRecoveryDoesNotStarveExpiredWatches` 在 SQLite、PostgreSQL 和 MySQL 上验证：持续清理失败的任务不会占满每批恢复名额，使其他过期运行任务无法接管。释放清理权时保留数据库当前时间作为过期时间，不再将记录放回过期时间为空的队列；各数据库统一优先处理尚未领取的记录，再处理较早过期的任务。释放操作不改变业务版本、生命周期时间或已安排的重试时间。
+
 `TestRunnerWatchPostgresProcess` 使用两个独立 runnerd 服务进程、独立 PG 连接和本地 Sandbox 替身，覆盖健康续期、暂停超时、接管后旧回调到达，以及杀死第二个进程后原节点重新接管并完成任务。设置 `RUNNERD_CATALOG_BACKEND_TESTS=1`，让 `RUNNERD_POSTGRES_TEST_DSN` 指向名称以 `_test` 结尾的专用数据库，再运行 `go test -race ./internal/server -run '^TestRunnerWatchPostgresProcess$' -count=1`。
 
 每个已接受的进程退出 watcher 都绑定到本次执行的 Sandbox ID 和 PID。若匹配的进程结果在 Webhook、管理员操作或恢复路径已经完成清理或安排清理重试后到达，runnerd 只补写此前缺失的退出码和 `runner_exit` 事件，不改变首次终止来源，也不重复清理。旧尝试的延迟回调只要有任一身份值不再匹配就会被忽略。

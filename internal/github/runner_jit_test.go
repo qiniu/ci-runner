@@ -1,9 +1,11 @@
 package github
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRunnerJITConfigScopeAndNoCache(t *testing.T) {
@@ -176,5 +179,105 @@ func TestJITDispatchBoundary(t *testing.T) {
 	jit, err = c.CreateRunnerJITConfig(t.Context(), "o/r", "", "runner", labels, nil)
 	if err == nil || !jit.CleanupRequired || posts.Load() != 1 {
 		t.Fatal("redirect did not retain unknown outcome", err)
+	}
+}
+
+// Installation token acquisition must finish before recording JIT dispatch.
+func TestJITAppAuthenticationPrecedesDispatch(t *testing.T) {
+	for _, mode := range []string{"rejected", "rate limited", "secondary limit", "timeout", "client timeout", "success", "response lost"} {
+		t.Run(mode, func(t *testing.T) {
+			var tokenCalls, posts, dispatches atomic.Int32
+			release := make(chan struct{})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/app/installations/456/access_tokens":
+					tokenCalls.Add(1)
+					if dispatches.Load() != 0 {
+						t.Error("dispatch recorded before authentication")
+					}
+					switch mode {
+					case "rejected":
+						http.Error(w, "private authentication error", http.StatusForbidden)
+						return
+					case "rate limited":
+						w.Header().Set("Retry-After", "3")
+						http.Error(w, "private authentication error", http.StatusTooManyRequests)
+						return
+					case "secondary limit":
+						http.Error(w, "private authentication error: secondary rate limit", http.StatusForbidden)
+						return
+					case "timeout", "client timeout":
+						<-release
+						return
+					}
+					// Already inside ghinstallation's refresh window: dispatch must use
+					// the prepared token without another lazy auth request.
+					fmt.Fprintf(w, `{"token":"installation-secret","expires_at":%q}`, time.Now().Add(30*time.Second).Format(time.RFC3339))
+				case "/repos/o/r/actions/runners/generate-jitconfig":
+					posts.Add(1)
+					if dispatches.Load() != 1 || r.Header.Get("Authorization") != "Bearer installation-secret" {
+						t.Error("registration requires one dispatch and the prepared token")
+					}
+					if mode == "response lost" {
+						conn, _, err := w.(http.Hijacker).Hijack()
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						conn.Close()
+						return
+					}
+					w.WriteHeader(http.StatusCreated)
+					fmt.Fprintf(w, `{"runner":{"id":42,"name":"dedicated"},"encoded_jit_config":%q}`, jitTestConfig(t, "dedicated", "42"))
+				default:
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+			defer close(release)
+			httpClient := ts.Client()
+			if mode == "client timeout" {
+				httpClient.Timeout = 200 * time.Millisecond
+			}
+			client, err := NewAppClient(ts.URL, AppAuth{AppID: 123, InstallationID: 456, PrivateKeyFile: testPrivateKeyFile(t)}, httpClient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			out, err := client.CreateRunnerJITConfig(ctx, "o/r", "", "dedicated", []string{"windows"}, func() error { dispatches.Add(1); return nil })
+			if mode == "success" || mode == "response lost" {
+				if posts.Load() != 1 || dispatches.Load() != 1 || tokenCalls.Load() != 1 || !out.CleanupRequired {
+					t.Fatalf("dispatch or cleanup evidence: posts=%d dispatches=%d token=%d cleanup=%t", posts.Load(), dispatches.Load(), tokenCalls.Load(), out.CleanupRequired)
+				}
+				if (err == nil) != (mode == "success") {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || out.CleanupRequired || dispatches.Load() != 0 || posts.Load() != 0 || strings.Contains(err.Error(), "private authentication error") {
+				t.Fatalf("unsent registration retained: cleanup=%t dispatches=%d posts=%d err=%v", out.CleanupRequired, dispatches.Load(), posts.Load(), err)
+			}
+			if status, ok := ErrorStatus(err); mode == "rejected" && (!ok || status != http.StatusForbidden) {
+				t.Fatalf("lost auth rejection: %v", err)
+			}
+			if mode == "rate limited" || mode == "secondary limit" {
+				status, ok := ErrorStatus(err)
+				wantStatus := http.StatusTooManyRequests
+				if mode == "secondary limit" {
+					wantStatus = http.StatusForbidden
+				}
+				if !ok || status != wantStatus || !IsRateLimitError(err) {
+					t.Fatalf("lost auth rate limit: %v", err)
+				}
+			}
+			if retryAfter, ok := RateLimitRetryAfter(err); mode == "rate limited" && (!ok || retryAfter != "3") {
+				t.Fatalf("lost auth retry delay: %v", err)
+			}
+			if (mode == "timeout" || mode == "client timeout") && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("lost timeout: %v", err)
+			}
+		})
 	}
 }

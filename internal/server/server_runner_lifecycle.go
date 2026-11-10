@@ -1642,7 +1642,12 @@ func (s *Server) applyReconciledBootstrapFailure(st *state.RunnerState) failureR
 		code, retryable, message = st.LastErrorCode, st.LastErrorRetryable, st.LastErrorMessage
 	}
 	st.SandboxCreateDispatched = false // The exact Sandbox is confirmed gone.
-	return s.applyClassifiedFailure(st, "sandbox_bootstrap", errors.New(message), code, retryable, true)
+	result := s.applyClassifiedFailure(st, "sandbox_bootstrap", errors.New(message), code, retryable, true)
+	if st.Status == state.StatusQueued {
+		st.TerminationSource = ""
+		st.RunnerExitCode = nil
+	}
+	return result
 }
 
 func (s *Server) requeueInterruptedCreation(ctx context.Context, id string, stateVersion int64) error {
