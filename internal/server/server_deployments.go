@@ -742,7 +742,14 @@ func (s *Server) handleUserStopDeployment(w http.ResponseWriter, r *http.Request
 		}
 		err := s.applyMutationWithAudit("github:"+session.Subject, "deployment.stop", "deployment", deployment.ID, map[string]any{"status": next.Status}, func(tx state.Store) error {
 			if next.Status != deployment.Status {
-				return tx.UpdateDeployment(next)
+				if err := tx.UpdateDeployment(next); err != nil {
+					return err
+				}
+				// Keep the database-generated lifecycle timestamps with the
+				// version that cleanup will claim, inside the same transaction.
+				var err error
+				next, err = tx.GetDeployment(deployment.ID)
+				return err
 			}
 			current, err := tx.GetDeployment(deployment.ID)
 			if err != nil {
@@ -756,9 +763,6 @@ func (s *Server) handleUserStopDeployment(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			writeError(w, http.StatusConflict, "deployment changed while stopping")
 			return
-		}
-		if next.Status != deployment.Status {
-			next.Version++
 		}
 		deployment = next
 	}

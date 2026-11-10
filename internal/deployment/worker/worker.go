@@ -593,7 +593,16 @@ func (w *Worker) persist(d *state.Deployment) error {
 	if err := w.Store.UpdateClaimedDeployment(*d, w.workToken); err != nil {
 		return err
 	}
-	d.Version++
+	// The store fills lifecycle timestamps by value. Carry its saved snapshot
+	// into subsequent transitions, but never adopt a concurrent replacement.
+	saved, err := w.Store.GetDeployment(d.ID)
+	if err != nil {
+		return err
+	}
+	if saved.Version != d.Version+1 || saved.RevisionNumber != d.RevisionNumber || saved.Attempt != d.Attempt {
+		return state.ErrConflict
+	}
+	*d = saved
 	return nil
 }
 
