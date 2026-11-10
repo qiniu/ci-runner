@@ -1,82 +1,61 @@
 package server
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"net/http"
-	"strconv"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/qiniu/ci-runner/internal/runnercatalog"
 )
 
-const publicTemplatesCacheTTL = time.Minute
-
-type cachedPublicTemplates struct {
-	templates []runnercatalog.PublicTemplate
-	expiresAt time.Time
-}
-
-func (s *Server) handlePublicRunnerTemplates(w http.ResponseWriter, _ *http.Request) {
-	templates, err := s.publicRunnerTemplates()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list public runner templates")
-		return
-	}
-	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(publicTemplatesCacheTTL.Seconds())))
-	writeJSON(w, http.StatusOK, templates)
-}
-
-func (s *Server) publicRunnerTemplates() ([]runnercatalog.PublicTemplate, error) {
-	for {
-		s.publicTemplatesMu.RLock()
-		cached, epoch := s.publicTemplatesCache, s.publicTemplatesEpoch
-		s.publicTemplatesMu.RUnlock()
-		if time.Now().Before(cached.expiresAt) {
-			return cached.templates, nil
+// Only overlapping origin reads share a result. The next read after completion
+// sees a fresh database view, including mutations committed by another server.
+func (s *Server) publicTemplatesRead() <-chan singleflight.Result {
+	return s.publicTemplatesGroup.DoChan("catalog", func() (value any, err error) {
+		parent := s.loopCtx
+		if parent == nil {
+			parent = context.Background()
 		}
-		// Coalesce fills per epoch without holding a cache lock during database
-		// I/O. An Admin save starts a new epoch, so new readers do not wait on
-		// an old fill and that fill cannot republish an invalidated snapshot.
-		value, err, _ := s.publicTemplatesGroup.Do(strconv.FormatUint(epoch, 10), func() (any, error) {
-			s.publicTemplatesMu.RLock()
-			cached, currentEpoch := s.publicTemplatesCache, s.publicTemplatesEpoch
-			s.publicTemplatesMu.RUnlock()
-			if currentEpoch != epoch {
-				return nil, nil
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+		// DoChan runs outside the HTTP recovery boundary. Keep diagnostics
+		// independent of any surviving waiter and omit provider/SQL details.
+		defer func() {
+			category := readFailureCategory(err)
+			if recover() != nil {
+				err = errors.New("public catalog query panicked")
+				category = "query_panicked"
 			}
-			if time.Now().Before(cached.expiresAt) {
-				return cached.templates, nil
-			}
-			profiles, err := s.store.ListProfiles()
 			if err != nil {
-				return nil, err
+				s.logger.ErrorContext(ctx, "public runner catalog read failed", "category", category)
 			}
-			templates := runnercatalog.PublicTemplates(profiles)
-			s.publicTemplatesMu.Lock()
-			defer s.publicTemplatesMu.Unlock()
-			if s.publicTemplatesEpoch != epoch {
-				return nil, nil
-			}
-			s.publicTemplatesCache = cachedPublicTemplates{
-				templates: templates,
-				expiresAt: time.Now().Add(publicTemplatesCacheTTL),
-			}
-			return templates, nil
-		})
+		}()
+		profiles, err := s.store.ListProfilesContext(ctx)
 		if err != nil {
 			return nil, err
 		}
-		// A discarded fill retries against the new epoch.
-		if value == nil {
-			continue
-		}
-		return value.([]runnercatalog.PublicTemplate), nil
-	}
+		return runnercatalog.PublicTemplates(profiles), nil
+	})
 }
 
-func (s *Server) invalidatePublicRunnerTemplates() {
-	s.publicTemplatesMu.Lock()
-	s.publicTemplatesCache = cachedPublicTemplates{}
-	s.publicTemplatesEpoch++
-	s.publicTemplatesMu.Unlock()
+func (s *Server) handlePublicRunnerTemplates(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Err() != nil {
+		w.WriteHeader(499) // Client Closed Request, retained in logs and metrics.
+		return
+	}
+	select {
+	case <-r.Context().Done():
+		w.WriteHeader(499)
+		return
+	case result := <-s.publicTemplatesRead():
+		if result.Err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list public runner templates")
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		writeJSON(w, http.StatusOK, result.Val)
+	}
 }
