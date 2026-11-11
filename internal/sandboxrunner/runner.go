@@ -1306,8 +1306,8 @@ func capStoppingSandboxLifetime(ctx context.Context, sb *qnsandbox.Sandbox) erro
 }
 
 type e2bTerminalSession struct {
-	sandboxID string
-	pty       interface {
+	sandbox *qnsandbox.Sandbox
+	pty     interface {
 		SendInput(context.Context, uint32, []byte) error
 		Resize(context.Context, uint32, qnsandbox.PtySize) error
 		Kill(context.Context, uint32) error
@@ -1357,7 +1357,7 @@ func (s *E2BService) startTerminal(ctx context.Context, sandboxID string, size P
 	if err != nil {
 		return nil, err
 	}
-	return &e2bTerminalSession{sandboxID: sandboxID, pty: sb.Pty(), pid: pid}, nil
+	return &e2bTerminalSession{sandbox: sb, pty: sb.Pty(), pid: pid}, nil
 }
 
 func (s *e2bTerminalSession) PID() uint32 {
@@ -1376,7 +1376,17 @@ func (s *e2bTerminalSession) Resize(ctx context.Context, size PtySize) error {
 }
 
 func (s *e2bTerminalSession) Close(ctx context.Context) error {
-	return s.pty.Kill(ctx, s.pid)
+	err := s.pty.Kill(ctx, s.pid)
+	if err == nil {
+		return nil
+	}
+	// Deployment cleanup can remove the Sandbox before the browser closes its
+	// PTY. The envd proxy's HTTP 404 is not a typed process-not-found error, so
+	// confirm absence through the original Sandbox API instead of masking it.
+	if _, infoErr := s.sandbox.GetInfo(ctx); isSandboxNotFound(infoErr) {
+		return nil
+	}
+	return err
 }
 
 func startScript(input StartInput, sandboxID string) string {

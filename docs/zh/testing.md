@@ -1088,6 +1088,8 @@ API 回归还覆盖完整分支／Tag 引用解析、同名来源的幂等冲突
 
 运行 `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1`，验证 PTY 输入、缩放、关闭，仓库授权与用户终端归属，revision／attempt 绑定，停止／到期拒绝，以及 Connect 使用剩余有效期。运行 `cd ui && bun run test:production --grep 'separates deployment'`，通过浏览器夹具验证标签切换、手动连接、键盘输入和断开；夹具不证明真实 Sandbox PTY 可用。真实验收时打开运行中的版本，连接后执行 `pwd`、查看应用日志文件、缩放、断开并重连，再停止部署并确认终端不可用。历史版本不得打开当前 Sandbox。
 
+运行 `go test -race ./internal/sandboxrunner -run TestTerminalCloseAfterSandboxRemoval -count=1`，验证 Sandbox 删除后的终端清理。PTY Kill 失败时，只有原 Sandbox API 确认同一资源已不存在才视为关闭成功；资源仍存在、查询被拒绝或提供方不可用时必须保留关闭错误。Kill 成功时不额外查询。
+
 部署上下文验证：执行 `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` 及部署 production 浏览器夹具，覆盖旧链接跳转、直接刷新／OAuth 返回、分支名编码、不可变版本选择、返回列表与分页前的本地历史筛选。状态测试包括 `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`。
 
 PR 来源验证：执行 `go test ./internal/server ./internal/github -run 'TestPullRequestDeployment|TestDeploymentSource' -count=1`，覆盖固定 head／历史提交、fork 身份、base 不匹配、来源删除、head 竞争、幂等重放、权限撤销及最新／历史版本重部署。新增来源快照字段还需执行状态升级与专用 PostgreSQL/MySQL 版本门禁。PR production 夹具验证表单和路由，真实 fork PR 执行仍需单独验收。
