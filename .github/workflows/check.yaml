@@ -184,6 +184,7 @@ jobs:
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|PostgresPoolBudget|PostgresStateReadAfterAdditiveDDL|ConcurrentPostgresStartup|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
           go test ./internal/server -run 'Test(PlatformSpecRevision|SharedRepositoryAccess)PostgresSQLBackends' -count=1 -v
+          go test -race ./internal/server -run '^TestTerminalPeerPostgresSQLBackends$' -count=1 -v
 
       - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
         run: |

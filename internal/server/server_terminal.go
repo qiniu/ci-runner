@@ -95,7 +95,11 @@ func newTerminalHub(logger *slog.Logger) *terminalHub {
 }
 
 func (h *terminalHub) Add(requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
-	session := newTerminalSession(newID(), requestID, sandboxID)
+	return h.add(newID(), requestID, sandboxID, terminal)
+}
+
+func (h *terminalHub) add(id, requestID, sandboxID string, terminal sandboxrunner.TerminalSession) *terminalSession {
+	session := newTerminalSession(id, requestID, sandboxID)
 	h.attach(session, terminal)
 	return session
 }
@@ -562,6 +566,11 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, "terminal is only available while a sandbox job is active")
 		return
 	}
+	sessionID, err := s.newTerminalSessionID(accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot create terminal session")
+		return
+	}
 	var input terminalCreateRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
@@ -588,7 +597,7 @@ func (s *Server) handleUserCreateRunnerTerminal(w http.ResponseWriter, r *http.R
 	stopRequestCancel := context.AfterFunc(r.Context(), cancelStream)
 	// Buffer handshake output in the same bounded tail as an attached PTY.
 	// Only publish the session once both the provider and authorization agree.
-	session := newTerminalSession(newID(), runnerTerminalKey(st, accountID), st.SandboxID)
+	session := newTerminalSession(sessionID, runnerTerminalKey(st, accountID), st.SandboxID)
 	terminal, err := svc.StartTerminal(terminalCtx, st.SandboxID, sandboxrunner.PtySize{Cols: input.Cols, Rows: input.Rows}, session.append)
 	if err != nil {
 		stopRequestCancel()
@@ -662,15 +671,16 @@ func (s *Server) handleUserRunnerTerminalEvents(w http.ResponseWriter, r *http.R
 	s.streamTerminalSession(w, r, session)
 }
 
+// HTTP Server.WriteTimeout is absolute, including for an idle SSE connection.
+// Renew it before headers and each write, while still bounding blocked writes.
+func prepareTerminalStreamWrite(controller *http.ResponseController) bool {
+	err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	return err == nil || errors.Is(err, http.ErrNotSupported)
+}
+
 func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	controller := http.NewResponseController(w)
-	// HTTP Server.WriteTimeout is absolute, even while a stream is active.
-	// Renew it for each write, while still bounding a blocked browser connection.
-	prepareWrite := func() bool {
-		err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		return err == nil || errors.Is(err, http.ErrNotSupported)
-	}
-	if !prepareWrite() {
+	if !prepareTerminalStreamWrite(controller) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -707,7 +717,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		if len(data) == 0 {
 			return true
 		}
-		if !prepareWrite() {
+		if !prepareTerminalStreamWrite(controller) {
 			return false
 		}
 		if err := writeTerminalEvent(w, data, offset); err != nil {
@@ -729,7 +739,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if !prepareWrite() {
+			if !prepareTerminalStreamWrite(controller) {
 				return
 			}
 			if _, err := fmt.Fprintf(w, ": keepalive\n\nid: %d\nevent: terminal-heartbeat\ndata: {}\n\n", *cursor); err != nil {
@@ -740,7 +750,7 @@ func (s *Server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 			}
 		case _, ok := <-ch:
 			if !ok {
-				if prepareWrite() {
+				if prepareTerminalStreamWrite(controller) {
 					_, _ = io.WriteString(w, "event: terminal-closed\ndata: {}\n\n")
 					_ = controller.Flush()
 				}

@@ -46,6 +46,11 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
+	sessionID, err := s.newTerminalSessionID(accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot create terminal session")
+		return
+	}
 	var input terminalCreateRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
@@ -117,7 +122,7 @@ func (s *Server) handleUserCreateDeploymentTerminal(w http.ResponseWriter, r *ht
 		return
 	}
 	mu.Lock()
-	session = s.terminals.Add(deploymentAccountTerminalKey(d, accountID), d.SandboxID, wrapped)
+	session = s.terminals.add(sessionID, deploymentAccountTerminalKey(d, accountID), d.SandboxID, wrapped)
 	session.append(pending)
 	pending = nil
 	mu.Unlock()
