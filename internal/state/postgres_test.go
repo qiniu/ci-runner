@@ -52,11 +52,12 @@ func TestPostgresStateReadAfterAdditiveDDLSQLBackends(t *testing.T) {
 					t.Fatal(err)
 				}
 				q := u.Query()
-				q.Set("options", "-c DateStyle="+dateStyle+" -c bytea_output=escape")
+				q.Set("DateStyle", dateStyle)
+				q.Set("bytea_output", "escape")
 				u.RawQuery = q.Encode()
 				dsn = u.String()
 			} else {
-				dsn += " options='-c DateStyle=" + dateStyle + " -c bytea_output=escape'"
+				dsn += " DateStyle=" + dateStyle + " bytea_output=escape"
 			}
 			store := NewWithOptions(Options{
 				Backend: BackendPostgres, DatabaseDSN: dsn,
@@ -67,6 +68,13 @@ func TestPostgresStateReadAfterAdditiveDDLSQLBackends(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeTestDB(t, db)
+			var outputFormat string
+			if err := db.Raw("SHOW DateStyle").Scan(&outputFormat).Error; err != nil || strings.ReplaceAll(outputFormat, " ", "") != dateStyle {
+				t.Fatalf("DateStyle fixture: %q, %v", outputFormat, err)
+			}
+			if err := db.Raw("SHOW bytea_output").Scan(&outputFormat).Error; err != nil || outputFormat != "escape" {
+				t.Fatalf("bytea_output fixture: %q, %v", outputFormat, err)
+			}
 			const id = "plan-cache"
 			if _, _, err := store.CreateRequest(RunnerRequest{ID: id, RunnerName: id}, nil); err != nil {
 				t.Fatal(err)
