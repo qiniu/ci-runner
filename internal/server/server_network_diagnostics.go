@@ -20,18 +20,12 @@ import (
 const (
 	runnerNetworkDiagnosticTimeout      = 10 * time.Second
 	runnerNetworkDiagnosticCooldown     = 30 * time.Second
-	runnerNetworkDiagnosticStage        = "network_diagnostic"
 	runnerNetworkDiagnosticBodyLimit    = 4 << 10
 	runnerNetworkDiagnosticAddressLimit = 8
 )
 
 type networkDiagnosticRequest struct {
 	Target string `json:"target"`
-}
-
-type networkDiagnosticAttempt struct {
-	Running         bool
-	LastCompletedAt time.Time
 }
 
 func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Request) {
@@ -87,31 +81,25 @@ func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	attemptKey := runnerNetworkDiagnosticAttemptKey(st)
-	release, retryAfter, ok := s.acquireRunnerNetworkDiagnostic(attemptKey, time.Now().UTC())
-	if !ok {
+	token := newID()
+	retryAfter, err := s.store.ClaimNetworkDiagnostic(ctx, st, token, runnerNetworkDiagnosticTimeout, runnerNetworkDiagnosticCooldown)
+	if err != nil {
+		s.writeNetworkDiagnosticStoreError(w, st.ID, err)
+		return
+	}
+	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
 		writeError(w, http.StatusTooManyRequests, "network diagnostic is already running or was requested recently")
 		return
 	}
-	defer func() {
-		release(time.Now().UTC())
-	}()
-
-	result, diagnosticErr := diagnosticService.RunNetworkDiagnostic(ctx, st.SandboxID, target)
-	unlock := s.lockRunner(st.ID)
-	current, readErr := s.store.ReadState(st.ID)
-	if readErr != nil {
-		unlock()
-		s.logger.Error("reload runner request after network diagnostic", "id", st.ID, "error", readErr)
-		writeError(w, http.StatusInternalServerError, "failed to reload runner request after network diagnostic")
-		return
-	}
-	if !sameRunnerNetworkDiagnosticAttempt(st, current) {
-		unlock()
-		writeError(w, http.StatusConflict, "runner sandbox changed while the network diagnostic was running")
-		return
-	}
+	// Reserve time within the original deadline to persist evidence and release
+	// the claim, even when the provider uses its entire command deadline.
+	deadline, _ := ctx.Deadline()
+	probeCtx, stop := context.WithDeadline(ctx, deadline.Add(-500*time.Millisecond))
+	defer stop()
+	result, diagnosticErr := diagnosticService.RunNetworkDiagnostic(probeCtx, st.SandboxID, target)
+	finishCtx, finishCancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer finishCancel()
 	if diagnosticErr != nil {
 		host, _ := sandboxrunner.NetworkDiagnosticTargetHost(target)
 		failure := map[string]any{
@@ -120,13 +108,14 @@ func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Re
 			"status":      "unavailable",
 			"observed_at": time.Now().UTC(),
 		}
-		if errors.Is(diagnosticErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(diagnosticErr, context.DeadlineExceeded) || errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
 			failure["error"] = "probe_timed_out"
 		} else {
 			failure["error"] = "probe_unavailable"
 		}
-		s.appendRunnerNetworkDiagnosticEvent(st.ID, failure)
-		unlock()
+		if !s.finishNetworkDiagnostic(finishCtx, w, st, token, failure) {
+			return
+		}
 		s.logger.Warn("runner network diagnostic failed", "id", st.ID, "target", target, "timed_out", failure["error"] == "probe_timed_out", "error_type", fmt.Sprintf("%T", diagnosticErr))
 		if failure["error"] == "probe_timed_out" {
 			writeError(w, http.StatusGatewayTimeout, "network diagnostic timed out")
@@ -137,8 +126,9 @@ func (s *Server) handleRunnerNetworkDiagnostic(w http.ResponseWriter, r *http.Re
 	}
 
 	result = sanitizeRunnerNetworkDiagnosticResult(target, result, time.Now().UTC())
-	s.appendRunnerNetworkDiagnosticEvent(st.ID, result)
-	unlock()
+	if !s.finishNetworkDiagnostic(finishCtx, w, st, token, result) {
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -213,54 +203,23 @@ func runnerNetworkDiagnosticAvailable(st state.RunnerState) bool {
 	return st.Status == state.StatusRunning && strings.TrimSpace(st.SandboxID) != "" && st.ProcessPID != 0
 }
 
-func runnerNetworkDiagnosticAttemptKey(st state.RunnerState) string {
-	return fmt.Sprintf("%s/%s/%d", st.ID, st.SandboxID, st.ProcessPID)
-}
-
-func sameRunnerNetworkDiagnosticAttempt(before, after state.RunnerState) bool {
-	return runnerNetworkDiagnosticAvailable(after) &&
-		before.ID == after.ID &&
-		before.SandboxID == after.SandboxID &&
-		before.ProcessPID == after.ProcessPID
-}
-
-func (s *Server) acquireRunnerNetworkDiagnostic(key string, now time.Time) (func(time.Time), time.Duration, bool) {
-	s.networkDiagnosticMu.Lock()
-	defer s.networkDiagnosticMu.Unlock()
-	for existingKey, attempt := range s.networkDiagnosticAttempts {
-		if !attempt.Running && !attempt.LastCompletedAt.IsZero() && now.Sub(attempt.LastCompletedAt) >= time.Minute {
-			delete(s.networkDiagnosticAttempts, existingKey)
-		}
-	}
-	if attempt, exists := s.networkDiagnosticAttempts[key]; exists {
-		if attempt.Running {
-			return nil, runnerNetworkDiagnosticCooldown, false
-		}
-		remaining := runnerNetworkDiagnosticCooldown - now.Sub(attempt.LastCompletedAt)
-		if remaining > 0 {
-			return nil, remaining, false
-		}
-	}
-	s.networkDiagnosticAttempts[key] = networkDiagnosticAttempt{Running: true}
-	return func(completedAt time.Time) {
-		s.networkDiagnosticMu.Lock()
-		attempt, exists := s.networkDiagnosticAttempts[key]
-		if exists {
-			attempt.Running = false
-			attempt.LastCompletedAt = completedAt
-			s.networkDiagnosticAttempts[key] = attempt
-		}
-		s.networkDiagnosticMu.Unlock()
-	}, 0, true
-}
-
-func (s *Server) appendRunnerNetworkDiagnosticEvent(requestID string, result any) {
+func (s *Server) finishNetworkDiagnostic(ctx context.Context, w http.ResponseWriter, st state.RunnerState, token string, result any) bool {
 	data, err := json.Marshal(result)
+	if err == nil {
+		err = s.store.FinishNetworkDiagnostic(ctx, st, token, "network diagnostic result="+string(data)+"\n", runnerNetworkDiagnosticCooldown)
+	}
 	if err != nil {
-		s.logger.Warn("marshal runner network diagnostic event failed", "id", requestID, "error", err)
+		s.writeNetworkDiagnosticStoreError(w, st.ID, err)
+		return false
+	}
+	return true
+}
+
+func (s *Server) writeNetworkDiagnosticStoreError(w http.ResponseWriter, id string, err error) {
+	if errors.Is(err, state.ErrConflict) {
+		writeError(w, http.StatusConflict, "runner sandbox changed while the network diagnostic was running")
 		return
 	}
-	message := append([]byte("network diagnostic result="), data...)
-	message = append(message, '\n')
-	s.store.AppendStagedLog(requestID, "control.log", runnerNetworkDiagnosticStage, message)
+	s.logger.Error("persist runner network diagnostic", "id", id, "error", err)
+	writeError(w, http.StatusServiceUnavailable, "failed to coordinate runner network diagnostic")
 }

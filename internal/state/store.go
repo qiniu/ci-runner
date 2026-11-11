@@ -182,6 +182,7 @@ type DeploymentRepository struct {
 
 // DeploymentEvent is bounded, credential-free lifecycle evidence for one deployment.
 type DeploymentEvent struct {
+	WorkToken      string    `json:"-"` // Worker events require a live lease for the current attempt.
 	RevisionNumber int64     `json:"revision_number"`
 	ID             int64     `json:"id"`
 	DeploymentID   string    `json:"deployment_id"`
@@ -575,6 +576,8 @@ type SandboxServiceDefaultAudience struct {
 
 type RunnerRequestStore interface {
 	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	ClaimNetworkDiagnostic(ctx context.Context, st RunnerState, token string, timeout, cooldown time.Duration) (time.Duration, error)
+	FinishNetworkDiagnostic(ctx context.Context, st RunnerState, token, message string, cooldown time.Duration) error
 	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
 	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
 	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error)
@@ -722,6 +725,11 @@ type AuditStore interface {
 }
 
 type DeploymentStore interface {
+	ClaimDeploymentWork(ctx context.Context, d Deployment, token string, ttl time.Duration) (bool, error)
+	RenewDeploymentWork(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
+	ReleaseDeploymentWork(ctx context.Context, id, token string) error
+	UpdateClaimedDeployment(d Deployment, token string) error
+	RecordDeploymentSandbox(ctx context.Context, d Deployment) error
 	CreateDeployment(deployment Deployment) (Deployment, error)
 	CreateDeploymentWithScopeLimit(deployment Deployment, maxConcurrent int) (Deployment, error)
 	GetDeployment(id string) (Deployment, error)

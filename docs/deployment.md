@@ -121,7 +121,7 @@ Once startup recovery finishes, background loops start and the HTTP gate opens.
 The scheduler handles reconnection, compensation and queued plans with its own context. A slow
 clone/install cannot hold the startup gate or inherit its recovery deadline.
 
-The single Deploy worker periodically reconnects to running attempts and checks
+A Deploy worker periodically reconnects to running attempts and checks
 the saved runtime/PID/tag. Healthy services survive controller restart; transient
 provider failures and identity mismatches preserve resources for another check.
 The worker rechecks expiry after provider I/O, so a lookup that crosses the
@@ -134,8 +134,9 @@ The exact-operation lookup requests at most two matches; a full page cannot
 establish uniqueness and keeps the original attempt pending without replacement.
 Stopping an unknown create returns `202` until compensation finishes. A confirmed
 missing Sandbox counts as released. Reconnection preserves remaining lifetime;
-the initial provider expiry is retained when supplied. This is single-process
-execution recovery; multi-instance Deploy workers are not supported or verified.
+the initial provider expiry is retained when supplied.
+
+Deploy workers claim each operation against its saved revision, attempt and version. The database sets the lease deadline using `worker.lease_ttl_seconds` (default 300 seconds). Workers renew every third of that interval. A peer can advance another deployment immediately and can recover an interrupted checkout after lease expiry and its next scan. Recovery cleans up the original attempt and records the interruption. An operator can then redeploy. Late state writes, worker events and cleanup from a superseded owner are fenced. A late successful Create can still record the Sandbox ID for the same revision and attempt. A pending stop uses that ID even if the resource is still hidden from provider searches.
 
 Each account or organization scope admits at most
 `max_concurrent_per_scope` queued/running deployment attempts. Admission is
@@ -787,7 +788,7 @@ independent capacity, so a slow clone/install cannot occupy expiry-cleanup slots
 Each monitoring cycle visits a deployment at most once; completion advances the
 remaining pages without restarting the cycle. Shutdown cancels and joins active
 operations, and creation/application work is bounded by the saved expiry. These
-limits apply within one runnerd process and do not establish multi-instance safety.
+limits apply separately to each runnerd process.
 
 Per-revision event counts and UTF-8 byte totals are updated in the same transaction
 as event insertion and retention eviction, under the owning deployment lock. New
@@ -796,7 +797,7 @@ initialized budgets without changing cached totals, logs or lifecycle timestamps
 The first append to each revision after startup recomputes its totals under the
 same lock; later appends in that process reuse the counters. This repairs drift
 when an older binary writes logs during rollback before a subsequent upgrade.
-Run only one Deploy controller; mixed-version or multi-instance writers are unsupported.
+Use a single production replica until the multi-node rollout gates in [qbox/sandbox#601](https://github.com/qbox/sandbox/issues/601) have passed. Drain old writers before upgrading.
 Counter writes do not change revision lifecycle timestamps. Eviction reads at most
 100 oldest IDs and byte lengths at a time, then deletes the necessary prefix in
 one statement per batch, without loading raw messages or changing the owner lock.

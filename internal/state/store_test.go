@@ -3906,6 +3906,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			if err != nil || match.Profile == nil || match.Profile.Name != "fresh-default" {
 				t.Fatalf("second %s migration matcher = %#v, err=%v", backend.name, match, err)
 			}
+			testNetworkDiagnosticClaim(t, migrated)
 		})
 	}
 }

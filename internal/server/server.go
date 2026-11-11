@@ -65,9 +65,6 @@ type Server struct {
 	diagnosticJobMu    sync.Mutex
 	diagnosticJobCache map[string]cachedDiagnosticJob
 	diagnosticJobGroup singleflight.Group
-
-	networkDiagnosticMu       sync.Mutex
-	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
 }
 
 // runnerRequestLock serializes lifecycle mutations for one request. refs keeps
@@ -172,25 +169,24 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		logger = slog.Default()
 	}
 	s := &Server{
-		cfg:                       cfg,
-		store:                     store,
-		gh:                        gh,
-		sandbox:                   sandbox,
-		sandboxHTTP:               newSandboxHTTPClient(),
-		logger:                    logger,
-		mux:                       http.NewServeMux(),
-		slots:                     make(chan struct{}, cfg.MaxConcurrentRunners),
-		queueNotify:               make(chan struct{}, 1),
-		deploymentNotify:          make(chan struct{}, 1),
-		oauth:                     &http.Client{Timeout: 10 * time.Second},
-		diagnostics:               &http.Client{Timeout: 5 * time.Second},
-		cacheSTS:                  &http.Client{Timeout: 30 * time.Second},
-		terminals:                 newTerminalHub(logger),
-		startedAt:                 time.Now().UTC(),
-		pullTitleCache:            map[string]cachedPullTitle{},
-		workflowRunCache:          map[string]cachedWorkflowRun{},
-		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
-		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
+		cfg:                cfg,
+		store:              store,
+		gh:                 gh,
+		sandbox:            sandbox,
+		sandboxHTTP:        newSandboxHTTPClient(),
+		logger:             logger,
+		mux:                http.NewServeMux(),
+		slots:              make(chan struct{}, cfg.MaxConcurrentRunners),
+		queueNotify:        make(chan struct{}, 1),
+		deploymentNotify:   make(chan struct{}, 1),
+		oauth:              &http.Client{Timeout: 10 * time.Second},
+		diagnostics:        &http.Client{Timeout: 5 * time.Second},
+		cacheSTS:           &http.Client{Timeout: 30 * time.Second},
+		terminals:          newTerminalHub(logger),
+		startedAt:          time.Now().UTC(),
+		pullTitleCache:     map[string]cachedPullTitle{},
+		workflowRunCache:   map[string]cachedWorkflowRun{},
+		diagnosticJobCache: map[string]cachedDiagnosticJob{},
 	}
 	hostname, _ := os.Hostname()
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
