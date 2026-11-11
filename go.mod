@@ -3,6 +3,7 @@ module github.com/qiniu/ci-runner
 go 1.27.3
 
 require (
+	connectrpc.com/connect v1.21.1
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.10.1
@@ -18,7 +19,6 @@ require (
 )
 
 require (
-	connectrpc.com/connect v1.21.1 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
