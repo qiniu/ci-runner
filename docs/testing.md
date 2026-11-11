@@ -1318,3 +1318,7 @@ If startup times out, PostgreSQL rolls back earlier DDL in that transaction. If 
 These checks use isolated schemas and retain PostgreSQL startup, password obfuscation, time-zone and catalog revision coverage. They do not clean production databases. See [the retirement record](database-transfer-retirement.md) for historical procedures and operational boundaries.
 
 For Deploy work leases, run `go test -race ./internal/deployment/worker -run "^TestDeploymentWorkProcess$" -count=1`. The default uses SQLite. The SQL CI gate sets `RUNNERD_CATALOG_BACKEND_TESTS=1` and `RUNNERD_POSTGRES_TEST_DSN` to isolate each case in a temporary schema of a dedicated test database. Two processes simulate a slow checkout, then pause or kill its owner and check the exact Sandbox close count.
+
+## Shared terminal regression checks
+
+Run `TestTerminalSQLBackends` against dedicated PostgreSQL and MySQL databases ending in `_test`, and `TestSharedTerminalThreeProcessesPostgres` with `RUNNERD_CATALOG_BACKEND_TESTS=1` and `RUNNERD_POSTGRES_TEST_DSN`. The latter kills the creating process while the other two resume the same provider PTY. Run `task ui-terminal-fault-test` for browser transport faults. Provider fixtures, real local PTYs and production envd deployment are separate evidence. See `docs/shared-terminals.md` for the deployment dependency gate.

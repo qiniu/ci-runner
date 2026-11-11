@@ -206,6 +206,8 @@ github.com/mattn/go-sqlite3 v1.14.22/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxU
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/miclle/deployd v0.0.0-20261008112950-f1ca4144c713 h1:JIW3oIzBl/kPUkH6rHZ8T9snMy/yyBGQ6zZD7jOqL/Y=
 github.com/miclle/deployd v0.0.0-20261008112950-f1ca4144c713/go.mod h1:EIKYtvvD8KRcIV0v0+AXrdVpUxITKJ2ebiMGZjagF/U=
+github.com/miclle/qiniu-go-sdk/v7 v7.0.0-20261111123601-5b8139e42b07 h1:viiDqH7AxuG1EQeYxdRfXAkMr/uuJrYSmOtz1DNxO9Y=
+github.com/miclle/qiniu-go-sdk/v7 v7.0.0-20261111123601-5b8139e42b07/go.mod h1:pTwVR1B+8SXcPLhDzBUasiKFTD9F7jRglRDR553BW3k=
 github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v0.0.0-20180701023420-4b7aa43c6742/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=

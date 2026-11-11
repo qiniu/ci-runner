@@ -249,3 +249,7 @@ Real deployment readiness still requires `docs/deployment-smoke.md` with a GitHu
 - For Windows registrations, run `TestWindowsJITRegistrationProcess` on PostgreSQL. Kill the creator after the POST, hide the result and expose a different same-name Runner. Check retained capacity, late positive/rejected replies, Job completion and cleanup of the exact numeric ID.
 
 - Runner account/repository concurrency changes must cover simultaneous claims, admission rollback, concurrent spec mutations, cross-Spec totals, independent owners/repositories, exact case-insensitive name matching, zero/missing and invalid configuration, persisted in-flight lifecycle counts after reopen, and queue progress through a restricted backlog. Run these admission tests with race detection; local fixtures do not replace deployed cleanup/restart acceptance.
+
+## Shared terminal regression checks
+
+Run `TestTerminalSQLBackends` against dedicated PostgreSQL and MySQL databases ending in `_test`, and `TestSharedTerminalThreeProcessesPostgres` with `RUNNERD_CATALOG_BACKEND_TESTS=1` and `RUNNERD_POSTGRES_TEST_DSN`. The latter kills the creating process while the other two resume the same provider PTY. Run `task ui-terminal-fault-test` for browser transport faults. Provider fixtures, real local PTYs and production envd deployment are separate evidence. See `docs/shared-terminals.md` for the deployment dependency gate.

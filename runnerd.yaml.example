@@ -4,9 +4,6 @@
 
 server:
   http_addr: ":25500"
-  # Optional, unique to this process's node. Peers connect directly to this
-  # HTTPS origin for Web terminal traffic. Leave empty on a single node.
-  # terminal_peer_origin: "https://runnerd-node-a.internal.example"
   read_timeout_seconds: 15
   write_timeout_seconds: 60
   idle_timeout_seconds: 120

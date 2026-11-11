@@ -44,6 +44,7 @@ type fakeSandbox struct {
 	recovered          int
 	stopped            int
 	terminals          int
+	replayPTYs         map[string]*fakeTerminalSession
 	startBlock         chan struct{}
 	recoverBlock       chan struct{}
 	recoverStarted     chan string
@@ -300,6 +301,8 @@ func (f *fakeSandbox) RunNetworkDiagnostic(ctx context.Context, sandboxID string
 }
 
 type fakeTerminalSession struct {
+	data       []byte
+	streamID   string
 	mu         sync.Mutex
 	pid        uint32
 	input      string
@@ -337,35 +340,6 @@ func (f *fakeTerminalSession) isClosed() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.closed
-}
-
-func TestTerminalHubClosesIdleSessionAfterDisconnect(t *testing.T) {
-	hub := newTerminalHub(nil)
-	terminal := &fakeTerminalSession{pid: 99}
-	session := hub.Add("request-1", "sandbox-1", terminal)
-	_, _, cancel := session.Subscribe()
-
-	hub.CloseSessionWhenIdle(session.id, 10*time.Millisecond)
-	time.Sleep(25 * time.Millisecond)
-	if terminal.isClosed() {
-		t.Fatal("expected terminal to stay open while a watcher is subscribed")
-	}
-	if _, ok := hub.Get(session.id); !ok {
-		t.Fatal("expected terminal session to stay in the hub while a watcher is subscribed")
-	}
-
-	cancel()
-	hub.CloseSessionWhenIdle(session.id, 0)
-	deadline := time.Now().Add(time.Second)
-	for !terminal.isClosed() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !terminal.isClosed() {
-		t.Fatal("expected idle terminal session to close")
-	}
-	if _, ok := hub.Get(session.id); ok {
-		t.Fatal("expected idle terminal session to be removed from the hub")
-	}
 }
 
 func (f *fakeSandbox) startedCount() int {

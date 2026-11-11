@@ -763,6 +763,7 @@ type RunnerCapacityCounts struct {
 }
 
 type Store interface {
+	TerminalStore
 	RunnerRequestStore
 	RunnerCatalogStore
 	IdentityStore

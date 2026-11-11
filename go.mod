@@ -54,3 +54,6 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.61.1 // indirect
 )
+
+// Review-only SDK pin for qiniu/go-sdk#243; replace with the official release before production.
+replace github.com/qiniu/go-sdk/v7 => github.com/miclle/qiniu-go-sdk/v7 v7.0.0-20261111123601-5b8139e42b07

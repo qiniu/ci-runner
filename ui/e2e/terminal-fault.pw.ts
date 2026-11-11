@@ -134,8 +134,8 @@ for (const outageMs of [5000, 15000, 25000]) {
         timing.serverShellExitedMs = exitMs
         // gstack-timing-ok: DELETE cannot reach runnerd, so the real 30-second idle reaper owns cleanup.
         expect(exitMs).toBeGreaterThanOrEqual(29_000)
-        // gstack-timing-ok: bounded scheduler allowance around the actual idle cleanup deadline.
-        expect(exitMs).toBeLessThan(34_000)
+        // gstack-timing-ok: shared DB grace is 30s, cleanup polling is 5s, plus 1s scheduling allowance.
+        expect(exitMs).toBeLessThan(36_000)
         expect(current.creates - before.creates).toBe(1)
         expect(current.deletes - before.deletes).toBe(0)
         const events = await page.evaluate(() => window.terminalFaultEvidence.events)
