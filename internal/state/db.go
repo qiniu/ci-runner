@@ -173,6 +173,9 @@ func (s *DBStore) open() (*gorm.DB, error) {
 		}
 		return db, nil
 	case BackendPostgres:
+		// Additive migrations change SELECT * result shapes. Explicit model
+		// columns keep prepared queries stable across reused backend sessions.
+		cfg.QueryFields = true
 		pool, err := openPostgresPool(s.opts.DatabaseDSN)
 		if err != nil {
 			return nil, err

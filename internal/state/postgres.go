@@ -18,12 +18,6 @@ func openPostgresPool(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Poolers can retain prepared plans across schema upgrades. Query result
-	// descriptions must be refreshed after additive migrations as well.
-	switch parsed.DefaultQueryExecMode {
-	case pgx.QueryExecModeCacheStatement, pgx.QueryExecModeCacheDescribe:
-		parsed.DefaultQueryExecMode = pgx.QueryExecModeExec
-	}
 	var options []stdlib.OptionOpenDB
 	// Preserve GORM's timestamp-without-time-zone scan location when supplying
 	// our own pool, including its supported timezone parameter spellings.
