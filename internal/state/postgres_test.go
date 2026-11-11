@@ -42,6 +42,70 @@ func TestConcurrentPostgresStartupSQLBackends(t *testing.T) {
 	}
 }
 
+func TestPostgresStateReadAfterAdditiveDDLSQLBackends(t *testing.T) {
+	for _, dateStyle := range []string{"ISO,MDY", "German,DMY", "SQL,DMY"} {
+		t.Run(dateStyle, func(t *testing.T) {
+			dsn := isolatedPostgresDSN(t)
+			if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+				u, err := url.Parse(dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				q := u.Query()
+				q.Set("DateStyle", dateStyle)
+				q.Set("bytea_output", "escape")
+				u.RawQuery = q.Encode()
+				dsn = u.String()
+			} else {
+				dsn += " DateStyle=" + dateStyle + " bytea_output=escape"
+			}
+			store := NewWithOptions(Options{
+				Backend: BackendPostgres, DatabaseDSN: dsn,
+				PostgresMaxOpenConns: 1, MigrateOnStart: true,
+			}).(*DBStore)
+			db, err := store.dbOrEnsure()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeTestDB(t, db)
+			var outputFormat string
+			if err := db.Raw("SHOW DateStyle").Scan(&outputFormat).Error; err != nil || strings.ReplaceAll(outputFormat, " ", "") != dateStyle {
+				t.Fatalf("DateStyle fixture: %q, %v", outputFormat, err)
+			}
+			if err := db.Raw("SHOW bytea_output").Scan(&outputFormat).Error; err != nil || outputFormat != "escape" {
+				t.Fatalf("bytea_output fixture: %q, %v", outputFormat, err)
+			}
+			const id = "plan-cache"
+			if _, _, err := store.CreateRequest(RunnerRequest{ID: id, RunnerName: id}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.migrate(db); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.ReadState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the same physical backend while changing SELECT *'s result shape.
+			// A connection pooler can retain such a prepared plan across a rollout.
+			if err := db.Exec("ALTER TABLE runner_requests ADD COLUMN plan_cache_fixture text").Error; err != nil {
+				t.Fatal(err)
+			}
+			after, err := store.ReadState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.ID != before.ID || after.Version != before.Version || !after.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Fatal("schema change altered saved state")
+			}
+			if err := store.migrate(db); err != nil {
+				t.Fatal(err)
+			}
+			testRepositoryAccessRefreshOwnership(t, store)
+		})
+	}
+}
+
 func TestPostgresPoolBudgetSQLBackends(t *testing.T) {
 	dsn := isolatedPostgresDSN(t)
 	for _, limit := range []int{0, 1, 4} {

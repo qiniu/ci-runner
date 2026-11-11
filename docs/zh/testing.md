@@ -1182,6 +1182,8 @@ RUNNERD_CATALOG_BACKEND_TESTS=1 RUNNERD_POSTGRES_TEST_DSN='<专用测试 DSN>' \
   -run 'Test(MigrationStartupFenceSQLBackends|PostgresObfuscatedPasswordSQLBackends|PostgresPoolBudgetSQLBackends|PlatformSpecRevisionPostgresSQLBackends|ConcurrentPostgresStartupSQLBackends)' -count=1
 ```
 
+PostgreSQL 状态查询显式选择模型字段，使增量迁移在后端会话复用时保持查询结果结构稳定，沿用现有 pgx 执行模式及时间、bytea 解码方式。旧版本如出现 `cached plan must not change result type`（`SQLSTATE 0A000`），发布此修复后验证排队领取、创建和清理。数据库代理维护者也可在迁移后重连受影响的后端以清除旧计划。临时使用 `default_query_exec_mode=exec` 时，需要兼容的 ISO 时间、hex bytea 输出，以及代理对新增会话参数的支持。 发布显式字段修复后，可移除临时缓解参数并恢复原有 DSN。
+
 可通过 `database.postgres_max_open_connections` 设置每个 runnerd 进程的 PostgreSQL 连接上限。省略或设为 0 时连接池无上限。预算应包含所有同时在线进程的上限之和（包括发布时重叠的副本）、预留连接、其他客户端和运维余量，总数须在 PG 的 `max_connections` 内。连接池满后，请求会等待空闲连接；在预生产按真实请求并发量和数据库延迟确定上限。
 
 PostgreSQL 上的并发启动在数据库级事务内串行执行结构检查、迁移和回填。等待进程可以看到前一个事务提交的结果。客户端暂停、事务处于空闲状态时，超时取 PG 配置与 60 秒中的较短值。正在等 DDL 锁的语句属于活动查询，可能持续等待，直到 PG 的 `lock_timeout` 或 `statement_timeout` 触发，或阻塞事务结束。迁移之前拿到的锁会持有到事务结束，后来的读请求也可能排在等待中的 DDL 后面。
