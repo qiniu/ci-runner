@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -176,6 +177,15 @@ func (f *fakeSandbox) StartRunner(ctx context.Context, input sandboxrunner.Start
 	}
 	input.OnStdout([]byte("started\n"))
 	return sandboxrunner.StartResult{SandboxID: "sb-" + input.RequestID, PID: 42}, nil
+}
+
+func (f *fakeSandbox) FindRunnerSandbox(context.Context, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id := f.recoverResult.SandboxID; id != "" {
+		return id, nil
+	}
+	return "", sandboxrunner.ErrSandboxNotFound
 }
 
 func (f *fakeSandbox) RecoverRunner(ctx context.Context, input sandboxrunner.RecoverInput) (sandboxrunner.StartResult, error) {
@@ -1312,7 +1322,7 @@ func TestUserRunnerAuthorizationCachesNoInstallations(t *testing.T) {
 	if len(access) != 0 {
 		t.Fatalf("expected no repository access, got %#v", access)
 	}
-	cached, ok := srv.cachedUserRepositoryAccess(account.ID)
+	cached, ok := readTestAccessSnapshot(t, store, account.ID)
 	if !ok || len(cached) != 0 {
 		t.Fatalf("expected empty repository access to be cached, cached=%#v ok=%v", cached, ok)
 	}
@@ -1407,7 +1417,8 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 	}))
 	defer ghServer.Close()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1430,12 +1441,7 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 	if !hasRepositoryAccess(access, 987, "o/old") {
 		t.Fatalf("unexpected initial access: %#v", access)
 	}
-	srv.userRepositoryAccessMu.Lock()
-	cached := srv.userRepositoryAccessCache[account.ID]
-	cached.refreshAfter = time.Now().Add(-time.Second)
-	cached.expiresAt = time.Now().Add(time.Minute)
-	srv.userRepositoryAccessCache[account.ID] = cached
-	srv.userRepositoryAccessMu.Unlock()
+	ageAccessSnapshot(t, dir, account.ID, false)
 
 	for range 2 {
 		access, err = srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
@@ -1461,7 +1467,7 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		access, ok := srv.cachedUserRepositoryAccess(account.ID)
+		access, ok := readTestAccessSnapshot(t, store, account.ID)
 		if ok && hasRepositoryAccess(access, 987, "o/new") {
 			break
 		}
@@ -1475,6 +1481,8 @@ func TestUserRunnerAuthorizationRefreshesValidCacheInBackground(t *testing.T) {
 func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(t *testing.T) {
 	var calls int
 	rejected := make(chan struct{})
+	releaseRejection := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseRejection) })
 	var rejectOnce sync.Once
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveActiveInstallationFixture(w, r, 987) {
@@ -1486,13 +1494,16 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 			w.Write([]byte(`{"repositories":[{"full_name":"o/r"}]}`))
 			return
 		}
+		<-releaseRejection
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"Bad credentials"}`))
 		rejectOnce.Do(func() { close(rejected) })
 	}))
 	defer ghServer.Close()
+	defer release()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1510,16 +1521,13 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
-	srv.userRepositoryAccessMu.Lock()
-	cached := srv.userRepositoryAccessCache[account.ID]
-	cached.refreshAfter = time.Now().Add(-time.Second)
-	srv.userRepositoryAccessCache[account.ID] = cached
-	srv.userRepositoryAccessMu.Unlock()
+	ageAccessSnapshot(t, dir, account.ID, false)
 
 	access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 	if err != nil || !hasRepositoryAccess(access, 987, "o/r") {
 		t.Fatalf("valid cache should be returned before rejection completes: access=%#v err=%v", access, err)
 	}
+	release()
 	select {
 	case <-rejected:
 	case <-time.After(time.Second):
@@ -1527,7 +1535,7 @@ func TestUserRunnerAuthorizationBackgroundRefreshInvalidatesRejectedCredentials(
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		if _, ok := srv.cachedUserRepositoryAccess(account.ID); !ok {
+		if _, ok := readTestAccessSnapshot(t, store, account.ID); !ok {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1577,7 +1585,8 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 	defer ghServer.Close()
 	defer releaseRefresh()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	defer srv.Close()
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
@@ -1595,9 +1604,10 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
+	ageAccessSnapshot(t, dir, account.ID, true)
 	staleResult := make(chan error, 1)
 	go func() {
-		_, err := srv.refreshUserRepositoryAccess(t.Context(), account.ID)
+		_, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		staleResult <- err
 	}()
 	select {
@@ -1606,14 +1616,15 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 		t.Fatal("stale background refresh did not start")
 	}
 
-	srv.invalidateUserRepositoryAccess(account.ID)
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "replacement-user-token")
 	type accessResult struct {
 		access []state.GitHubInstallationRepositoryAccess
 		err    error
 	}
+	peer := newTestServer(t, state.New(dir), ghServer.URL, &fakeSandbox{})
 	result := make(chan accessResult, 1)
 	go func() {
-		access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		access, err := peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		result <- accessResult{access: access, err: err}
 	}()
 	select {
@@ -1629,7 +1640,7 @@ func TestUserRunnerAuthorizationInvalidationSupersedesInFlightRefresh(t *testing
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		access, ok := srv.cachedUserRepositoryAccess(account.ID)
+		access, ok := readTestAccessSnapshot(t, store, account.ID)
 		if ok && hasRepositoryAccess(access, 987, "o/new") && !hasRepositoryAccess(access, 987, "o/stale") {
 			break
 		}
@@ -1681,7 +1692,8 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	defer ghServer.Close()
 	defer releaseRefresh()
 
-	store := state.New(t.TempDir())
+	dir := t.TempDir()
+	store := state.New(dir)
 	srv := newTestServer(t, store, ghServer.URL, &fakeSandbox{})
 	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
 	if err != nil {
@@ -1698,9 +1710,10 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	if _, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID); err != nil {
 		t.Fatal(err)
 	}
+	ageAccessSnapshot(t, dir, account.ID, true)
 	staleResult := make(chan error, 1)
 	go func() {
-		_, err := srv.refreshUserRepositoryAccess(t.Context(), account.ID)
+		_, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		staleResult <- err
 	}()
 	select {
@@ -1709,14 +1722,15 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 		t.Fatal("stale background refresh did not start")
 	}
 
-	srv.invalidateUserRepositoryAccess(account.ID)
+	saveTestGitHubOAuthToken(t, store, account.ID, srv.cfg.AuthEncryptionKey.Value(), "replacement-user-token")
 	type accessResult struct {
 		access []state.GitHubInstallationRepositoryAccess
 		err    error
 	}
+	peer := newTestServer(t, state.New(dir), ghServer.URL, &fakeSandbox{})
 	result := make(chan accessResult, 1)
 	go func() {
-		access, err := srv.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		access, err := peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
 		result <- accessResult{access: access, err: err}
 	}()
 	select {
@@ -1732,9 +1746,67 @@ func TestUserRunnerAuthorizationRejectedStaleRefreshDoesNotInvalidateNewEpoch(t 
 	if err := <-staleResult; err == nil {
 		t.Fatal("expected stale refresh rejection")
 	}
-	access, ok := srv.cachedUserRepositoryAccess(account.ID)
+	access, ok := readTestAccessSnapshot(t, store, account.ID)
 	if !ok || !hasRepositoryAccess(access, 987, "o/new") {
 		t.Fatalf("rejected stale refresh invalidated the new epoch cache: %#v", access)
+	}
+}
+
+func TestUserRunnerAuthorizationSharesRefreshTimeout(t *testing.T) {
+	started := make(chan struct{})
+	var lookups atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/installations" {
+			t.Errorf("unexpected GitHub endpoint %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if lookups.Add(1) > 1 {
+			http.Error(w, "duplicate lookup", http.StatusServiceUnavailable)
+			return
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer api.Close()
+
+	dir := t.TempDir()
+	store := state.New(dir)
+	owner := newTestServer(t, store, api.URL, &fakeSandbox{})
+	peer := newTestServer(t, state.New(dir), api.URL, &fakeSandbox{})
+	account, _, err := store.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertGitHubInstallation(state.GitHubInstallation{AccountID: account.ID, InstallationID: 987}); err != nil {
+		t.Fatal(err)
+	}
+	saveTestGitHubOAuthToken(t, store, account.ID, owner.cfg.AuthEncryptionKey.Value(), "user-token")
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := owner.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cold refresh did not start")
+	}
+	_, err = peer.userAuthorizedRepositoryAccess(t.Context(), account.ID)
+	var shared *repositoryAccessFailure
+	if !errors.As(err, &shared) || shared.code != state.AccessRefreshUnavailable {
+		t.Errorf("waiter error = %v, want shared unavailable result", err)
+	}
+	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("owner error = %v, want GitHub refresh timeout", err)
+	}
+	if got := lookups.Load(); got != 1 {
+		t.Errorf("GitHub lookups = %d, want 1", got)
+	}
+	result, err := store.ReadRepositoryAccessSnapshot(t.Context(), account.ID)
+	if err != nil || result.Valid || result.Refreshing || result.RefreshDue || result.Failure != state.AccessRefreshUnavailable {
+		t.Fatalf("shared timeout cooldown = %+v, error = %v", result, err)
 	}
 }
 
@@ -1809,26 +1881,25 @@ func TestUserRunnerAuthorizationSharedRefreshSurvivesCallerCancellation(t *testi
 	}
 }
 
-func TestUserRunnerAuthorizationCacheIsBounded(t *testing.T) {
-	srv := &Server{userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{}}
-	for accountID := int64(1); accountID <= 513; accountID++ {
-		srv.cacheUserRepositoryAccess(accountID, []state.GitHubInstallationRepositoryAccess{
-			{InstallationID: accountID, Repositories: []string{"o/r"}},
-		})
+func readTestAccessSnapshot(t *testing.T, store state.Store, accountID int64) ([]state.GitHubInstallationRepositoryAccess, bool) {
+	t.Helper()
+	snapshot, err := store.ReadRepositoryAccessSnapshot(t.Context(), accountID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := len(srv.userRepositoryAccessCache); got > 512 {
-		t.Fatalf("expected bounded repository access cache, got %d entries", got)
-	}
+	return snapshot.Access, snapshot.Valid
 }
 
-func TestEvictOneUserRepositoryAccess(t *testing.T) {
-	cache := map[int64]cachedUserRepositoryAccess{
-		1: {},
-		2: {},
+func ageAccessSnapshot(t *testing.T, dir string, accountID int64, expire bool) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "runnerd.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	evictOneUserRepositoryAccess(cache)
-	if len(cache) != 1 {
-		t.Fatalf("expected exactly one cache entry to be evicted, got %d", len(cache))
+	defer db.Close()
+	_, err = db.Exec("UPDATE repository_access_snapshots SET refresh_after = 0, expires_at = CASE WHEN ? THEN 0 ELSE expires_at END WHERE account_id = ?", expire, accountID)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -5710,8 +5781,7 @@ func TestOriginalWorkflowJobCompletionKeepsRunnerAfterJobStartedMarker(t *testin
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5796,8 +5866,7 @@ func TestCompletedWebhookWithRunnerNameStopsRunnerBeforeInProgressEvent(t *testi
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -5870,8 +5939,7 @@ func TestWorkflowJobMismatchRequeuesOriginalJob(t *testing.T) {
 
 	store := state.New(t.TempDir())
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:                 "1001",
@@ -6097,8 +6165,10 @@ func TestStopDuringCreateCleansStartedSandbox(t *testing.T) {
 		t.Fatalf("sandbox should not stop before creation returns, got %d stops", fake.stoppedCount())
 	}
 
+	assertAdmissionState(t, store, "manual-creating", state.StatusStopping)
 	close(block)
 	waitForStops(t, fake, 1)
+	waitForState(t, store, "manual-creating", state.StatusCompleted)
 	st, err := store.ReadState("manual-creating")
 	if err != nil {
 		t.Fatal(err)
@@ -6531,9 +6601,8 @@ func TestRecoverStopsRunnerPastSandboxTimeout(t *testing.T) {
 	}
 
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, "http://example.test", fake)
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	srv.cfg.SandboxTimeout = time.Hour
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6625,8 +6694,7 @@ func TestRecoverCleansUpCompletedWorkflowJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6647,6 +6715,10 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/jobs/1001" {
 			w.Write([]byte(`{"id":1001,"name":"original job","status":"completed","conclusion":"cancelled"}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/actions/runners" {
+			w.Write([]byte(`{"total_count":0,"runners":[]}`))
 			return
 		}
 		t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
@@ -6675,9 +6747,12 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 		t.Fatal(err)
 	}
 
+	before, err := store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeSandbox{}
 	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6694,6 +6769,18 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedButDifferentJobAssigned(
 	}
 	if fake.stoppedCount() != 0 {
 		t.Fatalf("recovery stopped sandbox assigned to another job %d times", fake.stoppedCount())
+	}
+	if got.GitHubJobConclusion != "cancelled" || got.Version != before.Version+3 {
+		t.Fatalf("watch claim, completed Job result and reconnect were not all committed: conclusion=%q version=%d, want cancelled and %d", got.GitHubJobConclusion, got.Version, before.Version+3)
+	}
+
+	fake.lastRecoverInput().OnExit(sandboxrunner.ExitResult{}, nil)
+	got, err = store.ReadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusCompleted || got.TerminationSource != state.TerminationSourceProcessExit || got.RunnerExitCode == nil || *got.RunnerExitCode != 0 {
+		t.Fatalf("recovered exit watcher did not finish its attempt: %#v", got)
 	}
 }
 
@@ -6751,7 +6838,7 @@ func TestRecoverReattachesRunnerWhenOriginalJobCompletedAfterJobStartedMarker(t 
 	}
 }
 
-func TestRecoverRequeuesQueuedRunner(t *testing.T) {
+func TestRecoverPreservesQueuedRunnerLease(t *testing.T) {
 	store := state.New(t.TempDir())
 	_, st, err := store.CreateRequest(state.RunnerRequest{
 		ID:         "recover-queued",
@@ -6762,6 +6849,7 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st.NextRetryAt = time.Now().UTC().Add(30 * time.Second)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
@@ -6777,8 +6865,8 @@ func TestRecoverRequeuesQueuedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected queued request with cleared lease, got %#v", got)
+	if got.Status != state.StatusQueued || got.LeaseOwner != st.LeaseOwner || !got.LeaseExpiresAt.Equal(st.LeaseExpiresAt) || !got.NextRetryAt.Equal(st.NextRetryAt) {
+		t.Fatalf("expected queued request with original lease and retry deadline, got %#v", got)
 	}
 	if fake.recoveredCount() != 0 || fake.stoppedCount() != 0 {
 		t.Fatalf("queued recovery touched sandbox: recovered=%d stopped=%d", fake.recoveredCount(), fake.stoppedCount())
@@ -6797,13 +6885,21 @@ func TestRecoverPromotesCreatingRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Status = state.StatusCreating
+	st.ProvisionAttemptID = "interrupted-attempt"
 	st.CreatingAt = time.Now().UTC().Add(-time.Minute)
 	st.LeaseOwner = "old-worker"
 	st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
 	if err := store.WriteState(st); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeSandbox{recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77}}
+	fake := &fakeSandbox{
+		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-discovered", PID: 77},
+		recoverHook: func(input sandboxrunner.RecoverInput) {
+			if input.ProvisionAttemptID != "interrupted-attempt" || input.SandboxID != "" {
+				t.Errorf("unexpected recovery identity: attempt=%q sandbox=%q", input.ProvisionAttemptID, input.SandboxID)
+			}
+		},
+	}
 	srv := newTestServer(t, store, "http://example.test", fake)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
@@ -6896,8 +6992,7 @@ func TestRecoverFailsCreatingRunnerWithInProgressJobWhenSandboxIsAbsent(t *testi
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6930,8 +7025,7 @@ func TestRecoverStopsDiscoveredSandboxWithoutRunnerBeforeRequeue(t *testing.T) {
 		recoverResult: sandboxrunner.StartResult{SandboxID: "sb-without-runner"},
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -6967,8 +7061,7 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 		recoverErr:    sandboxrunner.ErrRunnerNotFound,
 		stopErr:       errors.New("temporary sandbox cleanup failure"),
 	}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected sandbox cleanup error")
 	}
@@ -6976,8 +7069,8 @@ func TestRecoverDoesNotRequeueRunnerWhenDiscoveredSandboxCleanupFails(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusCreating {
-		t.Fatalf("expected failed cleanup to preserve creating state, got %#v", got)
+	if got.Status != state.StatusStopping || got.FailureReason != interruptedCreateCleanup || got.NextRetryAt.IsZero() {
+		t.Fatalf("expected failed cleanup to retain stop intent and retry, got %#v", got)
 	}
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected one sandbox cleanup attempt, got %d", fake.stoppedCount())
@@ -7044,8 +7137,7 @@ func TestRecoverFailsRunningRunnerWhenSandboxIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeSandbox{recoverErr: sandboxrunner.ErrSandboxNotFound}
-	srv := newTestServer(t, store, "http://example.test", fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", fake, 10)
 	if err := srv.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -7110,18 +7202,18 @@ func TestRecoverMissingRunningSandboxDoesNotOverwriteConcurrentStateChange(t *te
 
 func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	store := state.New(t.TempDir())
-	_, queued, err := store.CreateRequest(state.RunnerRequest{
-		ID:         "recover-queued-after-error",
+	_, healthy, err := store.CreateRequest(state.RunnerRequest{
+		ID:         "recover-healthy-neighbor",
 		Source:     "test",
 		Labels:     []string{"self-hosted"},
-		RunnerName: "e2b-recover-queued-after-error",
+		RunnerName: "e2b-recover-healthy-neighbor",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	queued.LeaseOwner = "old-worker"
-	queued.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
-	if err := store.WriteState(queued); err != nil {
+	healthy.Status, healthy.SandboxID, healthy.ProcessPID = state.StatusRunning, "sb-healthy", 41
+	healthy.LastErrorCode = "temporary_network_error"
+	if err := store.WriteState(healthy); err != nil {
 		t.Fatal(err)
 	}
 	_, running, err := store.CreateRequest(state.RunnerRequest{
@@ -7147,12 +7239,12 @@ func TestRecoverContinuesAfterOneRunnerFails(t *testing.T) {
 	if err := srv.Recover(context.Background()); err == nil {
 		t.Fatal("expected aggregated recovery error")
 	}
-	got, err := store.ReadState(queued.ID)
+	got, err := store.ReadState(healthy.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != state.StatusQueued || got.LeaseOwner != "" || !got.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected later queued request to be recovered, got %#v", got)
+	if got.Status != state.StatusRunning || got.ProcessPID != healthy.ProcessPID || got.LastErrorCode != "" || fake.recoveredCount() != 2 {
+		t.Fatalf("healthy runner was not reconnected alongside failing runner: pid=%d calls=%d", got.ProcessPID, fake.recoveredCount())
 	}
 }
 
@@ -8445,6 +8537,66 @@ func TestSweeperStopsIdleRunnerThatNeverAcceptedJob(t *testing.T) {
 	}
 }
 
+// GitHub can answer a busy/idle query after another worker has replaced
+// the attempt. Neither answer may act on the replacement.
+func TestSweeperDiscardsSupersededIdleObservation(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			dir := t.TempDir()
+			store, peer := state.New(dir), state.New(dir)
+			if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") == "1" {
+				opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: catalogServerTestDSN(t), MigrateOnStart: true}
+				store = state.NewWithOptions(opts)
+				opts.MigrateOnStart = false
+				peer = state.NewWithOptions(opts)
+			}
+			const id = "idle-observation"
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/orgs/o/actions/runners" {
+					t.Errorf("unexpected GitHub operation %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				st, err := peer.ReadState(id)
+				if err == nil {
+					st.SandboxID, st.ProcessPID = "replacement", 222
+					st.RunningAt = time.Now().UTC()
+					err = peer.WriteState(st)
+				}
+				if err != nil {
+					t.Error(err)
+					http.Error(w, "state setup failed", http.StatusInternalServerError)
+					return
+				}
+				fmt.Fprintf(w, `{"runners":[{"id":99,"name":"observed","status":"online","busy":%t}]}`, busy)
+			}))
+			defer api.Close()
+			fake := &fakeSandbox{}
+			srv := New(config.Config{SandboxTimeout: time.Hour, RunnerIdleTimeout: time.Minute}, store, github.NewClient(api.URL, api.Client()), fake, nil)
+			t.Cleanup(srv.Close)
+			_, st, err := store.CreateRequest(state.RunnerRequest{ID: id, RepositoryFullName: "o/r", RunnerGroup: "default", RunnerName: "observed"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Status, st.SandboxID, st.ProcessPID = state.StatusRunning, "original", 111
+			st.RunningAt = time.Now().Add(-10 * time.Minute).UTC()
+			if err := store.WriteState(st); err != nil {
+				t.Fatal(err)
+			}
+			srv.sweepOnce(t.Context())
+			got, err := store.ReadState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != state.StatusRunning || got.SandboxID != "replacement" || got.ProcessPID != 222 ||
+				got.AssignedJobName != "" || got.TerminationSource != "" || fake.stoppedCount() != 0 {
+				t.Fatalf("late busy=%v changed replacement: status=%s sandbox=%s pid=%d assignment=%q source=%q stops=%d",
+					busy, got.Status, got.SandboxID, got.ProcessPID, got.AssignedJobName, got.TerminationSource, fake.stoppedCount())
+			}
+		})
+	}
+}
+
 func TestSweeperIdleRunnerRespectsWorkflowJobState(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -8857,6 +9009,13 @@ func newTestServer(t *testing.T, store state.Store, ghURL string, fake *fakeSand
 
 func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
 	t.Helper()
+	srv := newTestServerWithoutLoops(t, store, ghURL, fake, limit)
+	srv.Start()
+	return srv
+}
+
+func newTestServerWithoutLoops(t *testing.T, store state.Store, ghURL string, fake *fakeSandbox, limit int) *Server {
+	t.Helper()
 	cfg := config.Config{
 		StateDir:                "./var/runner_requests",
 		StateBackend:            "sqlite",
@@ -8899,7 +9058,6 @@ func newTestServerWithLimit(t *testing.T, store state.Store, ghURL string, fake 
 	}
 	gh := github.NewClient(ghURL, http.DefaultClient)
 	srv := New(cfg, store, gh, fake, nil)
-	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -9337,14 +9495,42 @@ type blockingRunnerSpecMutationStore struct {
 	once    sync.Once
 }
 
-func (s *blockingRunnerSpecMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
-	s.once.Do(func() { close(s.started) })
-	<-s.proceed
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+func (s *blockingRunnerSpecMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
+	return s.Store.WithRunnerCatalogMutation(ctx, func(tx state.Store) error {
+		s.once.Do(func() { close(s.started) })
+		<-s.proceed
+		return mutation(tx)
+	})
+}
+
+// Use a separate pool and SQLite connection, so the guard must exclude a
+// second database writer rather than simply using up the only connection.
+func assertDatabaseGuardHeld(t *testing.T, probe state.Store, release chan struct{}) {
+	t.Helper()
+	started, result := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		result <- probe.WithRunnerAdmission(t.Context(), func(state.Store) error { return nil })
+	}()
+	<-started
+	select {
+	case err := <-result:
+		close(release)
+		t.Fatalf("independent writer escaped the held guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("independent writer could not proceed after release: %v", err)
+	}
 }
 
 func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
-	baseStore := state.New(t.TempDir())
+	dir := t.TempDir()
+	baseStore, probe := state.New(dir), state.New(dir)
+	if err := probe.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 	store := &blockingRunnerSpecMutationStore{Store: baseStore, started: make(chan struct{}), proceed: make(chan struct{})}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
 	req := adminRequest(http.MethodPatch, "/runner_specs/default", strings.NewReader(`{"enabled":false}`))
@@ -9357,17 +9543,10 @@ func TestAdminRunnerSpecMutationUsesAdmissionSerialization(t *testing.T) {
 	}()
 
 	<-store.started
-	mutationCouldInterleave := srv.admissionMu.TryLock()
-	if mutationCouldInterleave {
-		srv.admissionMu.Unlock()
-	}
-	close(store.proceed)
+	assertDatabaseGuardHeld(t, probe, store.proceed)
 	recorder := <-done
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if mutationCouldInterleave {
-		t.Fatal("admin Runner Spec mutation did not hold the admission serialization lock")
 	}
 }
 
@@ -9458,15 +9637,52 @@ type activeRequestBeforeMutationStore struct {
 	once    sync.Once
 }
 
-func (s *activeRequestBeforeMutationStore) ApplyMutationWithAudit(event state.AuditEvent, mutation func(state.Store) error) (state.AuditEvent, error) {
+func (s *activeRequestBeforeMutationStore) WithRunnerCatalogMutation(ctx context.Context, mutation func(state.Store) error) error {
 	var createErr error
 	s.once.Do(func() {
 		_, _, createErr = s.Store.CreateRequest(s.request, nil)
 	})
 	if createErr != nil {
-		return state.AuditEvent{}, createErr
+		return createErr
 	}
-	return s.Store.ApplyMutationWithAudit(event, mutation)
+	return s.Store.WithRunnerCatalogMutation(ctx, mutation)
+}
+
+func TestUserRunnerSpecMutationMasksGuardErrors(t *testing.T) {
+	baseStore := state.New(t.TempDir())
+	srv := newTestServer(t, baseStore, "", &fakeSandbox{})
+	account, _, err := baseStore.GetAccountByOAuthIdentity("github", "hubot-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := state.RunnerProfileScope{Type: state.RunnerProfileScopeAccount, ID: account.ID}
+	profile, err := baseStore.UpsertScopedProfileIfUnchanged(state.ScopedRunnerProfile{
+		ScopeType: scope.Type, ScopeID: scope.ID, Name: "custom-guard",
+		WorkflowLabels: []string{"qiniu", "custom-guard"}, TemplateID: "template", Enabled: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("/user/runner-specs/%s?expected_updated_at=%s", profile.Name, url.QueryEscape(profile.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	for _, tc := range []struct {
+		method  string
+		cause   error
+		status  int
+		message string
+	}{
+		{http.MethodPatch, fmt.Errorf("private database error: %w", context.DeadlineExceeded), http.StatusServiceUnavailable, "runner_spec_mutation_unavailable"},
+		{http.MethodDelete, errors.New("private database error"), http.StatusInternalServerError, "failed to persist Runner Spec change"},
+	} {
+		srv.store = runnerSpecGuardErrorStore{Store: baseStore, err: tc.cause}
+		body := fmt.Sprintf(`{"enabled":false,"expected_updated_at":%q}`, profile.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		req := httptest.NewRequest(tc.method, target, strings.NewReader(body))
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.message) || strings.Contains(rec.Body.String(), "private database error") {
+			t.Fatalf("%s status=%d body=%s", tc.method, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestUserDeleteRunnerSpecRechecksActiveRequestsInsideMutation(t *testing.T) {
@@ -9558,11 +9774,11 @@ func TestProfileAtCapacityUsesGlobalCountAcrossScopes(t *testing.T) {
 		}
 	}
 	srv := newTestServer(t, store, "", &fakeSandbox{})
-	inFlight, err := srv.inFlightForRunnerProfile(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
+	counts, err := srv.store.RunnerCapacityCounts(state.RunnerRequest{ProfileName: profile.Name, ProfileSource: "global", ProfileScopeType: state.RunnerProfileScopeAccount, ProfileScopeID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inFlight < profile.MaxConcurrency {
+	if counts.Profile < profile.MaxConcurrency {
 		t.Fatal("global profile capacity must include in-flight requests from other scopes")
 	}
 }

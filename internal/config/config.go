@@ -23,6 +23,7 @@ type Config struct {
 	StateDir                  string
 	StateBackend              string
 	StateDatabaseDSN          Secret
+	PostgresMaxOpenConns      int
 	GitHubAppID               int64
 	GitHubAppInstallationID   int64
 	GitHubAppSlug             string
@@ -79,6 +80,7 @@ type fileConfig struct {
 	} `yaml:"server"`
 	Database struct {
 		Backend                string    `yaml:"backend"`
+		PostgresMaxOpenConns   int       `yaml:"postgres_max_open_connections"`
 		DSN                    Secret    `yaml:"dsn"`
 		LegacyURL              Secret    `yaml:"url"`
 		RetiredOnlineMigration yaml.Node `yaml:"online_migration"`
@@ -210,6 +212,7 @@ func LoadFile(path string) (Config, error) {
 		HTTPIdleTimeout:           durationSeconds(raw.Server.IdleTimeoutSec, 120),
 		StateBackend:              strings.ToLower(defaultString(raw.Database.Backend, "sqlite")),
 		StateDatabaseDSN:          defaultSecret(raw.Database.DSN, raw.Database.LegacyURL),
+		PostgresMaxOpenConns:      raw.Database.PostgresMaxOpenConns,
 		GitHubAppID:               raw.GitHub.App.ID,
 		GitHubAppInstallationID:   raw.GitHub.App.InstallationID,
 		GitHubAppSlug:             strings.TrimSpace(raw.GitHub.App.Slug),
@@ -380,6 +383,9 @@ func (c Config) validate() error {
 	}
 	if c.StateBackend != "sqlite" && c.StateBackend != "postgres" && c.StateBackend != "mysql" {
 		return fmt.Errorf("invalid config database.backend: must be sqlite, postgres, or mysql")
+	}
+	if c.PostgresMaxOpenConns < 0 || (c.PostgresMaxOpenConns > 0 && c.StateBackend != "postgres") {
+		return fmt.Errorf("database.postgres_max_open_connections requires a nonnegative PostgreSQL pool limit")
 	}
 	if strings.TrimRight(c.GitHubAPIBaseURL, "/") != defaultGitHubAPIBaseURL {
 		return fmt.Errorf("invalid config github.api_base_url: only %s is supported", defaultGitHubAPIBaseURL)

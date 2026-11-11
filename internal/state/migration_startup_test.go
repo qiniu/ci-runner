@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -92,7 +93,13 @@ func testMigrationStartupFence(t *testing.T, backend string) {
 				if tc.empty {
 					expectedError = gorm.ErrRecordNotFound
 				}
-				if tc.malformed {
+				if tc.malformed && backend == BackendPostgres {
+					// PostgreSQL validates the explicit marker columns before scanning.
+					var pgErr *pgconn.PgError
+					if !errors.As(err, &pgErr) || pgErr.Code != "42703" {
+						t.Fatalf("startup error = %v, want undefined marker column", err)
+					}
+				} else if tc.malformed {
 					// With only the id column present, database/sql cannot scan
 					// the scalar row into the marker struct. Check its column
 					// context without depending on the driver's scan error wording.

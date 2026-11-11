@@ -97,6 +97,8 @@ expected_build_target() {
   esac
 }
 
+source scripts/lib/runner-template-disk.sh
+
 seen_names_file="$(mktemp)"
 cleanup() {
   find "$seen_names_file" -type f -delete 2>/dev/null || true
@@ -163,14 +165,14 @@ for image_key in ubuntu-slim ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 ubuntu-slim-
   memory_mb="$(awk -F= '/^[[:space:]]*memory_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$config_path")"
   test "$cpu_count" = 8 || fail "$image_key cpu_count is $cpu_count, want 8"
   test "$memory_mb" = 8192 || fail "$image_key memory_mb is $memory_mb, want 8192"
-  disk_size_mb="$(awk -F= '/^[[:space:]]*disk_size_mb[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$config_path")"
+  expected_mib=20480
   if [[ "$image_key" == *-large ]]; then
-    test "$disk_size_mb" = 81920 ||
-      fail "$image_key disk_size_mb is $disk_size_mb, want 81920"
-  else
-    test "$disk_size_mb" = 20480 ||
-      fail "$image_key disk_size_mb is $disk_size_mb, want 20480"
+    expected_mib=81920
   fi
+  test "$(template_disk_mib "$config_path" runnerd.min_free_disk_mb)" = "$expected_mib" ||
+    fail "$image_key must provide $expected_mib MiB free at release"
+  test "$(template_disk_mib "$config_path" min_free_disk_mb)" = "$expected_mib" ||
+    fail "$image_key must request $expected_mib MiB free on creation"
 
   base_reference="$(
     awk '

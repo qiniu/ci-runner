@@ -4,7 +4,7 @@
 
 Qiniu 维护 8 个用于 GitHub Actions 的 Linux x64 Sandbox 物理模板：4 个标准
 镜像（Ubuntu Slim、Ubuntu 22.04、Ubuntu 24.04，以及处于预览阶段的 Ubuntu
-26.04）和 4 个磁盘容量下限为 80 GiB 的 `-large` 变体。`ubuntu-latest` 是
+26.04）和 4 个发布时可用空间下限为 80 GiB 的 `-large` 变体。`ubuntu-latest` 是
 Runner catalog 中指向 Ubuntu 24.04 的逻辑映射，不是第 9 个镜像。
 
 4 个标准物理模板已于 2026-08-03 在两个受支持的 Sandbox 区域完成发布、catalog
@@ -21,20 +21,14 @@ Managed Runner Spec rollout 已于 2026-08-04（CST）通过
 large workflow 矩阵；catalog 和生产证据保留在
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93)。
 
-4 份标准模板的构建配置设置 `disk_size_mb = 20480`，表示新模板的根磁盘容量下限为
-20 GiB。provider 展示的实际总容量可以更大。qshell 同名重建时不会
-发送该配置。先调整 provider 团队的 `DiskMb`，构建脚本会保留现有名称和 ID
-原地重建，不检查重建前的旧总容量。发布与 catalog 检查要求重建后的总容量至少为
-20,480 MiB，之后仍需运行 Sandbox smoke。
+Ubuntu 模板发布时，标准模板须有至少 20 GiB 可用空间，large 模板须有至少 80 GiB（`runnerd.min_free_disk_mb`）。
+qshell 2.21.0 每次构建都通过 `min_free_disk_mb` 请求对应的验收值，同名重建也会应用该参数。
+发布和 catalog 检查用验收值筛查总容量，发布前还须在新的 Sandbox 中实测 runner 的可用空间。
 
 每个标准模板源码目录还包含一份 `qshell.sandbox.large.toml`，供对应的 `-large`
 变体使用。标准和 large 配置复用同一份 Dockerfile 与脚本，但使用不同的物理模板
-名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式物理 ID。进入公共目录还要求经过校验的公共模板（名称或物理 ID）和明确开启目录展示。每份 `qshell.sandbox.large.toml` 都设置了
-`disk_size_mb = 81920`，表示新模板的根磁盘容量下限为 80 GiB；原地重建前，
-provider 团队的 `DiskMb` 必须至少为 81,920 MiB。qshell 重建同名模板时不会发送
-此字段，因此构建脚本允许旧总容量较小的模板进入 rebuild；发布与 catalog 检查
-会在重建后验证容量下界。
-[qshell v2.19.13 文档说明了磁盘参数仅在创建时生效](https://github.com/qiniu/qshell/blob/v2.19.13/docs/sandbox_template_build.md#L29-L48)。
+名称。large 规格由管理员在 Admin 创建并启用，可绑定稳定公共名称或显式物理 ID。进入公共目录还要求经过校验的公共模板（名称或物理 ID）和明确开启目录展示。
+[qshell v2.21.0 模板构建参数](https://github.com/qiniu/qshell/blob/v2.21.0/docs/sandbox_template_build.md)。
 
 4 个源码目录中的 8 份 qshell 配置均以 `templates/` 为构建上下文。Dockerfile 从
 `templates/common/` 复制共用的安装函数和辅助脚本；各标准模板仍保留对应
@@ -98,8 +92,7 @@ digest 证明下载内容与 GitHub 元数据一致，不提供独立来源认�
 验收 Issue；无变化时安静结束，首次验收 Issue 关闭不停止后续维护。
 
 源码自动化不接收 Sandbox 凭据，不构建、发布、取消发布或回滚模板。operator 继续
-在本地用现有 Task 完成双区域各八个 Linux 模板的构建、发布、catalog、真实 Sandbox
-smoke 和 standard／large 生产 Job 验证。Windows pin 同步不扩大 Linux 清单的生产
+在本地用现有 Task 完成双区域各八个 Linux 模板的构建、真实 Sandbox smoke、发布、catalog 检查 和 standard／large 生产 Job 验证。Windows pin 同步不扩大 Linux 清单的生产
 发布范围。生产凭据只在 operator 当前 shell 中使用，不确定结果交由人工处理。
 
 ### 启用与验收
@@ -111,8 +104,8 @@ smoke 和 standard／large 生产 Job 验证。Windows pin 同步不扩大 Linux
 
 ## 公共 Catalog API
 
-未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`，并取得相同的、
-数据库目录，缓存时间为 60 秒。响应按稳定顺序将已启用、已发布的公共名称规格分组，只包含以下字段：
+未登录和已登录客户端都可以访问 `GET /api/public/runner-templates`。
+重叠的源站请求共享一次数据库查询，查询完成后的新请求会重新读取目录，客户端和代理可缓存成功响应 60 秒。响应按稳定顺序将已启用、已发布的公共名称规格分组，只包含以下字段：
 
 ```json
 [
@@ -166,9 +159,9 @@ jobs:
       - run: uname -a
 ```
 
-对外的 large 默认规格使用相同的标签契约和资源配置，但磁盘容量下限为 80 GiB：
+对外的 large 默认规格使用相同的标签契约和资源配置，发布时要求至少有 80 GiB 可用空间：
 
-| Workflow label | 物理模板 | 磁盘容量下限 |
+| Workflow label | 物理模板 | 发布时的可用空间下限 |
 | --- | --- | --- |
 | `[qiniu, ubuntu-slim-large]` | `github-runner-ubuntu-slim-large` | 80 GiB |
 | `[qiniu, ubuntu-22.04-large]` | `github-runner-ubuntu-22-04-large` | 80 GiB |
@@ -185,8 +178,7 @@ jobs:
 ## 软件兼容性
 
 这些模板会逐项跟踪固定版本的 `actions/runner-images` 软件报告，但并非与 GitHub
-托管 Runner 镜像逐字节一致。此前的标准区域模板约有 22,222 MiB 根磁盘；
-本次配置请求 20,480 MiB。完整 GitHub 托管 Runner 软件清单需要更大空间。
+托管 Runner 镜像逐字节一致。此前的标准区域模板约有 22,222 MiB 根磁盘。完整 GitHub 托管 Runner 软件清单需要更大空间。
 因此，3 个版本化模板保证在对应 Ubuntu 版本上提供与 Ubuntu Slim 兼容的核心工具，并额外
 提供 Apache、Podman、Buildah、Skopeo、Ninja、Docker 支持、预装 Actions
 Runner、用于 installer 验证的固定版本 Pester，以及 Runner 文件系统契约。
@@ -199,7 +191,7 @@ Runner、用于 installer 验证的固定版本 Pester，以及 Runner 文件系
 
 ## 环境要求
 
-- `qiniu/qshell` 2.19.13 或更高版本；
+- `qiniu/qshell` 2.21.0 或更高版本；
 - 构建机器上的 Node.js 24、`task`、`jq`、`curl`、`sha256sum` 和 `split`；
 - 当前 Sandbox 区域的 `QINIU_API_KEY`；
 - 指向当前区域端点的 `QINIU_SANDBOX_API_URL`。
@@ -211,8 +203,10 @@ task template-build-ubuntu-24-04 QSHELL=/path/to/qshell
 ```
 
 任一凭据变量为空时，所有远端任务都会直接失败。仓库中的标准与 large TOML 文件
-只保存稳定名称和资源设置；构建任务让 qshell 使用所选文件的临时副本，因此不会
-提交区域相关的 template ID。
+保存稳定名称和资源设置，构建任务让 qshell 使用所选文件的临时副本。
+qshell 2.21.0 中，`template_id` 与 `from_template` 都用于选择底模板。
+迁移旧的本地配置时，删除旧版 qshell 回写、指向模板自身的 `template_id`，
+通过 `name` 指定目标模板。Windows 继续使用 `from_template = "windows11"` 作为底模板。
 
 ## 在单个区域构建与验证
 
@@ -258,15 +252,35 @@ task template-build-ubuntu-24-04-large
 task template-build-ubuntu-26-04-large
 ```
 
-`template-build-all` 会串行执行这 8 个远程构建，并在首个失败处停止。只需重建
-一个模板时，使用对应的单模板 target。
+批次默认构建 8 个 Ubuntu 模板，最多同时运行 4 个构建。加上 `INCLUDE_WINDOWS=1` 可选入 Windows 11 预览模板，
+也可以通过 `BUILD_CONCURRENCY` 设置 1–9 个并发，例如设为 1 即串行。批量命令需要 Unix 构建机和 Python 3.11 或更高版本。
 
-标准和 large 构建目标分别通过已追踪的 TOML 设置 20,480 MiB 和 81,920 MiB
-磁盘容量下限，但 qshell 不会在同名 rebuild 请求中发送该值。先调整
-provider 团队的 `DiskMb`，再运行对应构建任务，保留现有名称和 ID 原地重建。
-构建脚本不会使用重建前的旧总容量拦截 rebuild。qshell 报告 `Status: ready` 后，
-核对 catalog 的总容量 `disk_size_mb`，完成 Sandbox smoke，并仅在两项门禁通过后
-发布。总容量高于配置下限是有效结果；provider 配额仍可能拒绝分配。
+```sh
+task template-build-all BUILD_BATCH=nov-refresh INCLUDE_WINDOWS=1
+```
+
+在同一 shell 中导出区域的 `QINIU_SANDBOX_API_URL` 和匹配的 `QINIU_API_KEY` 后执行上述命令。
+所有并发构建和状态查询都会继承这两个变量。
+
+重复同一命令即可续跑。脚本用 qshell 查询保存的 Template ID 和 Build ID，等待在途构建，核对当前模板目录后跳过同一批次内输入相同的成功项。
+失败项在下次执行时重试。构建输入变更会触发重新构建。需要定期刷新系统包时，即使输入未变也可指定新的 `BUILD_BATCH`。
+默认批次标签为 `default`。每个区域端点和模板名保留最近一次尝试，记录位于该 clone 的 Git 公共目录，多个 worktree 共享。
+同一端点同时只运行一个批处理进程。单模板命令及其他 clone 的构建需由操作人员协调。
+
+状态查询遇到短暂错误时会在等待期限内重试，默认 3600 秒，可通过环境变量 `BUILD_WAIT_SECONDS` 调整。
+查询响应中的 ID 不匹配时立即停止批次；查询超时后可重跑同一批次。
+
+如果 qshell 失败或中断，尚未返回两个 ID，或尚未确认 `Build started`，批次会停止并显示记录路径。
+已登记但尚未确认启动的构建记为 `requested`，续跑时立即提示核查。
+先核对区域构建历史，处理完活动或等待中的尝试后，将对应记录**移出记录目录**再重跑。
+在同一目录内改名为其他 `*.json` 仍会被读取。旧记录可能将尚未启动的构建记为 `pending`；
+如果它持续处于 `waiting`，按同样步骤核查处理。
+已确认失败的构建会直接重试，无需再次查询旧 Build。
+批次成功后仍须单独运行区域 smoke 并按流程发布。
+
+如果已有模板的可用空间不足，使用 qshell 2.21.0 按原名称重建，应用配置中的空闲空间请求。
+如果请求因配额限制被拒绝，再与 provider 确认可分配容量。
+qshell 报告 `Status: ready` 后，核对总容量，并在该 ID 上运行 release smoke 确认可用空间，再发布。
 
 Dockerfile 会按需将 `bootstrap`、`platform`、`node`、`toolchain` 和
 `runtime` 工作保留为独立的 qshell 兼容缓存层。模板版本元数据会在预置工作
@@ -288,10 +302,32 @@ runner-images apt 软件包列表拆成 18 个可缓存批次安装，再由上�
 binutils 和 `systemd-coredump` 依赖集分别独立成层，最后一批使用开放区间，
 避免遗漏固定列表后续新增项。如果远程构建
 在已有阶段完成后触及服务时限，请保留
-默认缓存并重跑同一命令，不要强制使用 `--no-cache`。发布门槛仍然是某一次构建
+默认缓存并重跑同一命令，不要强制使用 `--no-cache`。执行 smoke 前，先确认该次构建
 最终达到 `Status: ready`。
 
-8 个构建全部 ready 后再发布：
+保存每次 ready 构建输出的 Template ID，先对这 8 个 ID 执行 Sandbox smoke：
+
+```bash
+task template-smoke IMAGE_KEY=ubuntu-slim TEMPLATE_ID=<slim-template-id>
+task template-smoke IMAGE_KEY=ubuntu-22.04 TEMPLATE_ID=<22.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<24.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-26.04 TEMPLATE_ID=<26.04-template-id>
+task template-smoke IMAGE_KEY=ubuntu-slim-large TEMPLATE_ID=<slim-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-22.04-large TEMPLATE_ID=<22.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-24.04-large TEMPLATE_ID=<24.04-large-template-id>
+task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-template-id>
+```
+
+Smoke 会通过 qshell 创建临时 Sandbox，检查系统版本、架构、预装 Actions
+Runner、出站 HTTPS、Docker daemon、可写 work/tool-cache 路径、运行时根磁盘
+总容量、runner 可用空间和清理行为。
+无论验证是否成功，脚本都会尝试终止临时 Sandbox。请保存命令输出的 JSON 路径
+作为发布证据。完整 compatibility manifest 仍是静态 inventory contract；
+逐条 runtime conformance 只作为可选诊断，不阻塞发布可用性门槛。
+Docker 检查会导入并运行一个关闭网络的本地最小 rootfs，用于验证 daemon、
+socket 和容器执行能力；registry 可达性不属于该检查，出站 HTTPS 会独立验证。
+
+8 个 ID 均通过 smoke 后，发布模板并核对公共 catalog：
 
 ```bash
 task template-publish-ubuntu-slim
@@ -307,49 +343,25 @@ task template-defaults-check
 
 `template-defaults-check` 要求每个物理名称（包括 4 个 large 变体）都恰好对应 1 个
 公共的 `ready` 或 `uploaded` 模板，且 template ID 非空；缺失、重复、标准模板的
-实际 `diskSizeMB` 不等于 20,480 MiB，或 large 模板不等于 81,920 MiB 都会失败。
-
-保留 catalog 检查输出的 template ID，然后执行真实的 Sandbox smoke：
-
-```bash
-task template-smoke IMAGE_KEY=ubuntu-slim TEMPLATE_ID=<slim-template-id>
-task template-smoke IMAGE_KEY=ubuntu-22.04 TEMPLATE_ID=<22.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-24.04 TEMPLATE_ID=<24.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-26.04 TEMPLATE_ID=<26.04-template-id>
-task template-smoke IMAGE_KEY=ubuntu-slim-large TEMPLATE_ID=<slim-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-22.04-large TEMPLATE_ID=<22.04-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-24.04-large TEMPLATE_ID=<24.04-large-template-id>
-task template-smoke IMAGE_KEY=ubuntu-26.04-large TEMPLATE_ID=<26.04-large-template-id>
-```
-
-Smoke 会通过 qshell 创建临时 Sandbox，检查系统版本、架构、预装 Actions
-Runner、出站 HTTPS、Docker daemon、可写 work/tool-cache 路径、运行时根磁盘
-容量和清理行为。运行时检查会读取所选 TOML 中的 `disk_size_mb`，并要求根磁盘
-容量达到该下限。
-无论验证是否成功，脚本都会尝试终止临时 Sandbox。请保存命令输出的 JSON 路径
-作为发布证据。完整 compatibility manifest 仍是静态 inventory contract；
-逐条 runtime conformance 只作为可选诊断，不阻塞发布可用性门槛。
-Docker 检查会导入并运行一个关闭网络的本地最小 rootfs，用于验证 daemon、
-socket 和容器执行能力；registry 可达性不属于该检查，出站 HTTPS 会独立验证。
+实际 `diskSizeMB` 低于 20,480 MiB，或 large 模板低于 81,920 MiB 都会失败。
 
 本地 Docker 构建和 `task template-conformance-local` 只用于按需诊断，不能替代
 qshell 模板构建或 Sandbox smoke。
 
 ## 首次双区域发布
 
-按以下顺序完成全部构建、发布、catalog 和 smoke 流程：
+按以下顺序完成全部构建、smoke、发布和 catalog 流程：
 
 1. 导出
    `QINIU_SANDBOX_API_URL=https://cn-yangzhou-1-sandbox.qiniuapi.com`，并设置
    扬州区域的 `QINIU_API_KEY`。
-2. 确认 provider 团队的 `DiskMb` 已按目标容量调整，再原地重建 4 个标准模板和
-   4 个 large 模板，保留现有名称与 ID。随后运行 `task template-defaults-check`，
-   并对全部 8 个 ID 做 smoke 验证；容量或运行时检查失败时，不得发布该模板。
+2. 构建 4 个标准模板和 4 个 large 模板。逐个 ID 核对总容量并运行 smoke，达标后发布，
+   再运行 `task template-defaults-check` 检查 8 个公共目录条目。
 3. 保存构建输出、catalog ID、smoke JSON 和相关 workflow URL。
 4. 导出
    `QINIU_SANDBOX_API_URL=https://us-south-1-sandbox.qiniuapi.com`，并设置
    美国南部区域的 `QINIU_API_KEY`。
-5. 重复 8 个模板的构建、发布、catalog 检查和 smoke 验证。
+5. 重复 8 个模板的构建、smoke 验证、发布和 catalog 检查。
 6. 确认两个 catalog 结果都为每个稳定物理名称返回且仅返回 1 个可运行的公共
    模板。
 7. 在将模板状态改为 verified 或启用独立的 managed Runner rollout 前，把双

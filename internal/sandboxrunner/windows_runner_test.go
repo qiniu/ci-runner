@@ -355,7 +355,7 @@ func TestWindowsTemplateBuildUsesQshellOnWindows11Template(t *testing.T) {
 	fakeQshell := filepath.Join(root, "qshell")
 	writeExecutable(t, fakeQshell, `#!/usr/bin/env bash
 if [ "$1" = version ]; then
-  echo v2.19.13
+  echo v2.21.0
   exit 0
 fi
 { pwd; printf '%s\n' "$@"; } >"`+argsFile+`"
@@ -381,10 +381,12 @@ echo 'Status: ready'
 	for _, want := range []string{
 		`name = "github-runner-windows-11"`,
 		`from_template = "windows11"`,
+		`min_free_disk_mb = 51200`,
+		`runnerd.min_free_disk_mb = 51200`,
 		`dockerfile = "./Dockerfile"`,
 		`path = ".."`,
 	} {
-		if !strings.Contains(string(config), want+"\n") {
+		if !strings.Contains("\n"+string(config), "\n"+want+"\n") {
 			t.Fatalf("qshell config does not contain %q:\n%s", want, config)
 		}
 	}

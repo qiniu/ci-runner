@@ -40,27 +40,19 @@ type Server struct {
 	deploymentWorker *deploymentworker.Worker
 	startedAt        time.Time
 
-	// Admissions share the guard; catalog mutations exclude them through persistence.
-	admissionMu          sync.RWMutex
-	runnerCapacity       runnerAdmissionCapacity
-	forkSponsorshipLocks [64]sync.Mutex
-	runnerLocksMu        sync.Mutex
-	runnerLocks          map[string]*runnerRequestLock
-	windowsCreationLocks map[string]*runnerRequestLock
-	queueNotify          chan struct{}
-	deploymentNotify     chan struct{}
-	startOnce            sync.Once
-	workerID             string
-	loopCtx              context.Context
-	loopCancel           context.CancelFunc
-	loopWG               sync.WaitGroup
+	runnerLocksMu    sync.Mutex
+	runnerLocks      map[string]*runnerRequestLock
+	queueNotify      chan struct{}
+	deploymentNotify chan struct{}
+	startOnce        sync.Once
+	workerID         string
+	loopCtx          context.Context
+	loopCancel       context.CancelFunc
+	loopWG           sync.WaitGroup
 
 	recoveryMetricsDeferred atomic.Int32
 	waitingMetricsDirty     atomic.Bool
 
-	publicTemplatesMu    sync.RWMutex
-	publicTemplatesCache cachedPublicTemplates
-	publicTemplatesEpoch uint64
 	publicTemplatesGroup singleflight.Group
 
 	pullTitleMu    sync.Mutex
@@ -74,14 +66,6 @@ type Server struct {
 	diagnosticJobMu    sync.Mutex
 	diagnosticJobCache map[string]cachedDiagnosticJob
 	diagnosticJobGroup singleflight.Group
-
-	networkDiagnosticMu       sync.Mutex
-	networkDiagnosticAttempts map[string]networkDiagnosticAttempt
-
-	userRepositoryAccessMu    sync.Mutex
-	userRepositoryAccessCache map[int64]cachedUserRepositoryAccess
-	userRepositoryAccessEpoch map[int64]uint64
-	userRepositoryAccessGroup singleflight.Group
 }
 
 // runnerRequestLock serializes lifecycle mutations for one request. refs keeps
@@ -107,13 +91,6 @@ type cachedDiagnosticJob struct {
 	job        github.WorkflowJob
 	observedAt time.Time
 	expiresAt  time.Time
-}
-
-type cachedUserRepositoryAccess struct {
-	access       []state.GitHubInstallationRepositoryAccess
-	refreshAfter time.Time
-	expiresAt    time.Time
-	refreshing   bool
 }
 
 type manualCreateRequest struct {
@@ -193,28 +170,25 @@ func New(cfg config.Config, store state.Store, gh *github.Client, sandbox sandbo
 		logger = slog.Default()
 	}
 	s := &Server{
-		cfg:                       cfg,
-		store:                     store,
-		gh:                        gh,
-		sandbox:                   sandbox,
-		sandboxHTTP:               newSandboxHTTPClient(),
-		logger:                    logger,
-		mux:                       http.NewServeMux(),
-		slots:                     make(chan struct{}, cfg.MaxConcurrentRunners),
-		queueNotify:               make(chan struct{}, 1),
-		deploymentNotify:          make(chan struct{}, 1),
-		oauth:                     &http.Client{Timeout: 10 * time.Second},
-		diagnostics:               &http.Client{Timeout: 5 * time.Second},
-		cacheSTS:                  &http.Client{Timeout: 30 * time.Second},
-		terminals:                 newTerminalHub(logger),
-		terminalPeerHTTP:          newTerminalPeerClient(),
-		startedAt:                 time.Now().UTC(),
-		pullTitleCache:            map[string]cachedPullTitle{},
-		workflowRunCache:          map[string]cachedWorkflowRun{},
-		diagnosticJobCache:        map[string]cachedDiagnosticJob{},
-		networkDiagnosticAttempts: map[string]networkDiagnosticAttempt{},
-		userRepositoryAccessCache: map[int64]cachedUserRepositoryAccess{},
-		userRepositoryAccessEpoch: map[int64]uint64{},
+		cfg:                cfg,
+		store:              store,
+		gh:                 gh,
+		sandbox:            sandbox,
+		sandboxHTTP:        newSandboxHTTPClient(),
+		logger:             logger,
+		mux:                http.NewServeMux(),
+		slots:              make(chan struct{}, cfg.MaxConcurrentRunners),
+		queueNotify:        make(chan struct{}, 1),
+		deploymentNotify:   make(chan struct{}, 1),
+		oauth:              &http.Client{Timeout: 10 * time.Second},
+		diagnostics:        &http.Client{Timeout: 5 * time.Second},
+		cacheSTS:           &http.Client{Timeout: 30 * time.Second},
+		terminals:          newTerminalHub(logger),
+		terminalPeerHTTP:   newTerminalPeerClient(),
+		startedAt:          time.Now().UTC(),
+		pullTitleCache:     map[string]cachedPullTitle{},
+		workflowRunCache:   map[string]cachedWorkflowRun{},
+		diagnosticJobCache: map[string]cachedDiagnosticJob{},
 	}
 	hostname, _ := os.Hostname()
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())

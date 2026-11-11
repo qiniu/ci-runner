@@ -83,7 +83,7 @@ Organization owners can open **Settings → Fork sponsorship** to let trusted pe
 
 For local development, use `task dev` with `runnerd.local.yaml`. See [docs/testing.md](docs/testing.md) for detailed local setup including GitHub App creation and webhook forwarding.
 
-The Sandbox Deploy control-plane and execution slice is documented in [docs/deployment.md](docs/deployment.md). `/deployments` and deployment details share a repository sidebar: repository links open its deployment list, expandable children show active deployments, and a selected terminal deployment remains visible. Navigation summaries and deployment history paginate independently from the local database. The list uses single-select Running / Processing / Stopped / Failed segmented filters with full authorized counts and URL-restored selection. Running is selected by default; exactly one status remains selected. The Create deployment link opens `/deployments/new` with the current repository preselected. The creation page contains the repository, Branch/Tag/PR and scoped Sandbox template form; `deploy.template_id` is an optional API default. Creation opens the deployment detail under its repository or PR context; refresh preserves the deployment and its logs. Lists, details, logs and actions share Jobs' exact GitHub OAuth/App installation-repository authorization. Content stays in the local database; authorization uses the same short-lived cache as Jobs and rejects suspended Installations even if GitHub still lists their repositories. PR titles are saved at admission; a separate optional metadata request fills missing legacy titles without delaying details or logs. Source headings link to GitHub Branch/PR/Tag pages. Repository members may deploy and redeploy; Sandbox settings and private template catalogs remain owner-managed. Each deployment starts at Revision #1; redeploy creates a new numbered revision of the pinned plan and keeps earlier status/logs. Details show the selected template name and CPU, memory, and disk snapshot beside revision history and a chronological log viewer, and `?revision=N` preserves the selected version on reload.
+The Sandbox Deploy control-plane and execution slice is documented in [docs/deployment.md](docs/deployment.md). `/deployments` and deployment details share a repository sidebar: repository links open its deployment list, expandable children show active deployments, and a selected terminal deployment remains visible. Navigation summaries and deployment history paginate independently from the local database. The list uses single-select Running / Processing / Stopped / Failed segmented filters with full authorized counts and URL-restored selection. Running is selected by default; exactly one status remains selected. The Create deployment link opens `/deployments/new` with the current repository preselected. The creation page contains the repository, Branch/Tag/PR and scoped Sandbox template form; `deploy.template_id` is an optional API default. Creation opens the deployment detail under its repository or PR context; refresh preserves the deployment and its logs. Lists, details, logs and actions share Jobs' exact GitHub OAuth/App installation-repository authorization. Content stays in the local database; authorization reads the same per-account database snapshot as Jobs (20-second refresh, 30-second hard expiry) and rejects suspended Installations even if GitHub still lists their repositories. PR titles are saved at admission; a separate optional metadata request fills missing legacy titles without delaying details or logs. Source headings link to GitHub Branch/PR/Tag pages. Repository members may deploy and redeploy; Sandbox settings and private template catalogs remain owner-managed. Each deployment starts at Revision #1; redeploy creates a new numbered revision of the pinned plan and keeps earlier status/logs. Details show the selected template name and CPU, memory, and disk snapshot beside revision history and a chronological log viewer, and `?revision=N` preserves the selected version on reload.
 
 A Jobs Web terminal belongs to the account that opened it and to the active Runner attempt. Each connection, input, resize, and close request checks repository access and shell ownership.
 
@@ -115,7 +115,7 @@ Operators can set `worker.account_concurrency_limits` by GitHub repository owner
 Key notes:
 
 - Relative `database.dsn` and `github.app.private_key_file` paths resolve from the config file's directory.
-- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported but multi-instance operation on a shared database has not been verified.
+- Use SQLite for local and single-node deployments. PostgreSQL and MySQL are supported. On restart, queued requests keep their leases. The database clock determines expiry. Each worker must present its original claim version and owner to change or release a queued request. If a worker dies after claiming a request, the queue can reclaim it on a poll after both the lease (default 300 seconds) and any retry delay have expired. Runner admission checks capacity and commits the creating state in one database transaction. Keep worker limits identical across nodes. Two-process queue handoff and a shared global capacity limit have been verified on PostgreSQL. MySQL still needs two-process verification, including server-side `innodb_lock_wait_timeout` and idle `wait_timeout` during takeover. See the [backend test guide](docs/testing.md). Production remains at one active runnerd pending running-attempt recovery, Deploy and terminal failover acceptance.
 - The one-time SQLite-to-PostgreSQL transfer tool is retired; see [the retirement record](docs/database-transfer-retirement.md) for archived procedures and remaining operational work.
 - CI creates fresh PostgreSQL and MySQL schemas and reruns migration against an existing catalog before exercising policy-free matching. See [docs/testing.md](docs/testing.md) for the opt-in local real-dialect command.
 - Existing SQLite `runner_requests` and `runner_profiles` tables add missing model columns and indexes on startup without table recreation. This preserves historical runner values plus legacy profile rows and indexes. Creating missing indexes does not rewrite rows, but it can add brief startup I/O and lock contention on a large database; see [docs/testing.md](docs/testing.md) for migration and query-plan checks.
@@ -269,6 +269,12 @@ runnerd handles `queued`, `in_progress`, and `completed` actions. For `workflow_
 
 A startup REST check reporting `waiting`, `pending`, or `requested` keeps the request queued with capped exponential backoff and no Runner resources or lease. `in_progress` is monitored without starting a duplicate Runner. A later queued delivery can wake a deferred request; polling also resumes it without another webhook. GitHub owns approval/concurrency timeouts. Unknown states or lookup failures use the configured finite retry budget and fail visibly rather than recording success. HTTP 429 and GitHub secondary rate limits remain queued with capped backoff even after that budget is exhausted, and resume automatically when throttling clears. See [targeted recovery of historical false completions](docs/testing.md#waiting-workflow-jobs).
 
+The admission transaction grants the worker a database lease for creation. Before calling the Sandbox service, runnerd records the attempt as dispatched. It saves the Sandbox ID as soon as the provider returns it. If a node dies before that checkpoint, recovery looks up the same attempt. An empty lookup keeps the request in creation with its capacity reserved until the provider confirms the outcome. An accepted stop also waits for that resource to be reconciled. A fresh retry gets a new attempt only after the previous outcome is established.
+
+Stopping a Runner also acquires a database lease. A replacement worker resumes from the last confirmed cleanup step and uses the saved numeric GitHub Runner ID. A lost delete response can cause another request for the same resource.
+
+Windows JIT registration records the dispatch in the database before sending it to GitHub. A worker taking over cleans up by the returned numeric Runner ID or by matching both the attempt label and Runner name. An empty lookup keeps the request in `stopping` and holds its capacity. If the dispatch never reached GitHub, or all 100 labels were occupied and the response was lost, an operator must reconcile the registration before releasing the request. JIT credentials stay in memory.
+
 If a Runner process ends before accepting any Job, for example because GitHub terminated its listener (`run.sh` still exits 0) or its Sandbox output stream was lost while GitHub reports it idle, runnerd retries the request with the same bounded backoff instead of marking it completed or failed; the retry rechecks the Job before creating another Sandbox.
 
 New runner requests, including admission rejections, store the parsed GitHub context but not the raw webhook body. The legacy `github_payload_json` column and existing values remain available for historical metadata backfill; this change does not clean up old payloads, request history, or logs.
@@ -296,7 +302,7 @@ The database is the single catalog authority. Startup migrates old managed rows 
 See [Public Runner Templates](docs/default-runner-templates.md) for supported
 workflow labels, publication status, and regional verification.
 
-`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials; the public projection is cached in each server process for 60 seconds, with concurrent cache fills coalesced. Successful Admin spec saves and deletes invalidate that process cache; browser caches may retain responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
+`GET /api/public/runner-templates` exposes enabled, displayed public-name references from the database without authentication, including validated large name references when configured. Fixed-ID specs can appear in the protected `/runner-specs` directory after publicness validation, but remain absent from this stable-name API. It returns stable template names, logical spec names and workflow labels, never physical IDs or credentials. Overlapping origin requests share one database read. The next request after it completes reads the catalog again. Browsers and proxies may cache successful responses for 60 seconds. The credential-bound `GET /user/sandbox/templates?region=<id>` remains a separate scoped resource.
 
 Ordinary users browse the read-only platform Runner Spec catalog at
 `/runner-specs`. That page has no account/Organization selector or user-editable
@@ -353,7 +359,7 @@ Runner request lists return the newest 100 rows by default and cap pages at 500.
 | Job stays **queued** forever, no webhook in runnerd logs | GitHub App has no subscribed events | Go to GitHub App settings → Subscribe to **Workflow jobs** event |
 | `runner_group_permission_denied` (legacy: `github registration token: status 404`) | Group lookup cannot access the owner organization, including personal-account owners or missing App permissions | Leave `runner_group` empty for personal repositories; for organizations, check the App installation and Self-hosted runners permission |
 | `invalid signature` in logs | Webhook secret mismatch | Ensure `github.webhook_secret` matches the secret in GitHub App/repo webhook settings |
-| `runner start deferred ... at capacity` | Global or per-spec concurrency limit reached | Wait for running jobs to finish, or increase `max_concurrent_runners` / spec `max_concurrency` |
+| `runner_capacity` event | Global, spec, account or repository limit reached | Check the dimension in `last_error_code`. Wait for capacity or adjust that limit |
 | Sandbox creation fails | Repository owner has no effective Sandbox service | Open **Repositories**, select the account or organization, and complete **Runner readiness**; admins may also configure an eligible fallback at `/admin/sandbox_service` |
 | GitHub reports that a self-hosted runner lost communication | The runner, Sandbox, or its network path stopped reporting heartbeats | Open **Admin → Runner Requests**, look up the Runner Name shown by GitHub (for example, `e2b-101445685709`), and inspect the request resource's findings and lifecycle timeline |
 
@@ -416,7 +422,7 @@ source directory or build target.
 Run `task template-python-test` when changing Python/pipx installation; it uses
 Docker and network access to verify isolation from apt-owned Python packages.
 Run `task template-check-all`, then use `task template-build-all` to build all
-eight templates sequentially, or use an individual `task template-build-ubuntu-*`
+eight Ubuntu templates with default concurrency 4 (add `INCLUDE_WINDOWS=1` for Windows), or use an individual `task template-build-ubuntu-*`
 target for one real qshell Sandbox build. See
 [Public Runner Templates](docs/default-runner-templates.md) for publication and
 cache-resume guidance after a remote build time limit, plus publication and
@@ -446,16 +452,12 @@ evidence in the versioned release record. See
 for activation, asset validation, no-op/failure behavior and acceptance boundaries.
 
 Template source validation requires Node.js 24, and template builds require
-qshell 2.19.13 or newer. Standard configs request
-`disk_size_mb = 20480`, while large configs request `81920` for new templates.
-This setting is the minimum root disk size; the reported total can be larger.
-Qshell does not send the setting on same-name
-rebuilds. After the provider team's `DiskMb` is adjusted, the build tasks rebuild
-the existing names and IDs in place without rejecting their stale pre-rebuild
-totals. Publish and catalog checks require the rebuilt totals to meet the
-configured lower bounds; a larger total is not a mismatch by itself.
-Release smoke reads the corresponding TOML and requires the runtime root disk
-size to meet its `disk_size_mb` lower bound.
+qshell 2.21.0 or newer. Ubuntu release smoke requires 20 GiB available on standard templates and
+80 GiB on large templates (`runnerd.min_free_disk_mb`). Qshell 2.21.0 applies
+`min_free_disk_mb` on every build, including same-name rebuilds, using
+the configured release minimum. Publish and catalog checks use the
+release minimum as a lower bound on total disk size. Verify available space
+in a fresh Sandbox before publication.
 The 2.337.0 baseline completed the two-region, eight-template rebuild, catalog,
 standard workflow, and large workflow gates recorded in
 [Issue #93](https://github.com/qiniu/ci-runner/issues/93).

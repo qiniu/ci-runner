@@ -182,6 +182,7 @@ type DeploymentRepository struct {
 
 // DeploymentEvent is bounded, credential-free lifecycle evidence for one deployment.
 type DeploymentEvent struct {
+	WorkToken      string    `json:"-"` // Worker events require a live lease for the current attempt.
 	RevisionNumber int64     `json:"revision_number"`
 	ID             int64     `json:"id"`
 	DeploymentID   string    `json:"deployment_id"`
@@ -192,6 +193,20 @@ type DeploymentEvent struct {
 	Message        string    `json:"message,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+type RunnerCleanupStep string
+
+const (
+	CleanupSandbox RunnerCleanupStep = "cleanup_sandbox_done"
+	CleanupGitHub  RunnerCleanupStep = "cleanup_github_done"
+)
+
+// An empty JIT state also covers registrations made by older versions.
+const (
+	JITUnsent     = "unsent"
+	JITDispatched = "dispatched"
+	JITRejected   = "rejected"
+)
 
 type RunnerState struct {
 	ID                              string    `json:"id"`
@@ -245,8 +260,17 @@ type RunnerState struct {
 	RetryCount                      int       `json:"retry_count,omitempty"`
 	UpdatedAt                       time.Time `json:"updated_at"`
 	CreatedAt                       time.Time `json:"created_at"`
+	ProvisionAttemptID              string    `json:"-"`
+	WatchToken                      string    `json:"-"`
+	JITRegistrationState            string    `json:"-"`
+	SandboxCreateDispatched         bool      `json:"-"`
+	ManualStopRequested             bool      `json:"-"`
+	CleanupSandboxDone              bool      `json:"-"`
+	CleanupGitHubDone               bool      `json:"-"`
+	CleanupGitHubRunnerID           int64     `json:"-"`
 	LastAttemptAt                   time.Time `json:"last_attempt_at,omitempty"`
 	NextRetryAt                     time.Time `json:"next_retry_at,omitempty"`
+	queueRetry                      *queuedRetry
 	CreatingAt                      time.Time `json:"creating_at,omitempty"`
 	RunningAt                       time.Time `json:"running_at,omitempty"`
 	StoppingAt                      time.Time `json:"stopping_at,omitempty"`
@@ -255,6 +279,19 @@ type RunnerState struct {
 	LeaseOwner                      string    `json:"lease_owner,omitempty"`
 	LeaseExpiresAt                  time.Time `json:"lease_expires_at,omitempty"`
 	Version                         int64     `json:"version"`
+}
+
+type queuedRetry struct {
+	version int64
+	delay   time.Duration
+}
+
+// ScheduleQueuedRetry makes a queued-state write at this version derive its deadline from
+// the database clock. A state read from storage retains its absolute deadline
+// across unrelated writes, including writes after a process restart.
+func (st *RunnerState) ScheduleQueuedRetry(delay time.Duration) {
+	st.NextRetryAt = time.Time{}
+	st.queueRetry = &queuedRetry{version: st.Version, delay: delay}
 }
 
 // RunnerRequestListOptions controls admin Runner request filtering and pagination.
@@ -538,6 +575,27 @@ type SandboxServiceDefaultAudience struct {
 }
 
 type RunnerRequestStore interface {
+	WithRunnerAdmission(ctx context.Context, mutation func(Store) error) error
+	ClaimNetworkDiagnostic(ctx context.Context, st RunnerState, token string, timeout, cooldown time.Duration) (time.Duration, error)
+	FinishNetworkDiagnostic(ctx context.Context, st RunnerState, token, message string, cooldown time.Duration) error
+	ClaimRunnerWatch(ctx context.Context, st RunnerState, token string, ttl time.Duration) (bool, error)
+	RenewRunnerWatch(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
+	ListExpiredRunnerWatches(ctx context.Context, limit int) ([]RunnerWatchCandidate, error)
+	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
+	BeginRunnerCleanup(ctx context.Context, st RunnerState, observedWatch, token string, ttl time.Duration) error
+	WriteCleanupState(st RunnerState, token string) error
+	RecordLateRunnerExit(ctx context.Context, observed RunnerState) (bool, error)
+	ReleaseRunnerCleanup(ctx context.Context, id, token string) error
+	BindCleanupGitHubRunner(ctx context.Context, id, token string, runnerID int64) error
+	RecordRunnerCleanup(ctx context.Context, id, token string, step RunnerCleanupStep) error
+	DispatchJITRegistration(ctx context.Context, id, token, attempt string) error
+	RecordJITRegistrationResult(ctx context.Context, attempt RunnerState, runnerID int64) error
+	DispatchSandboxCreate(ctx context.Context, id, token, attempt string) error
+	RecordSandboxCreateResult(ctx context.Context, attempt RunnerState, sandboxID string) error
+	AdoptRunningWatch(st RunnerState, token string, ttl time.Duration) error
+	WriteWatchedState(st RunnerState, token string) error
+	WithRunnerEnqueue(ctx context.Context, mutation func(Store) error) error
+	WithRunnerCatalogMutation(ctx context.Context, mutation func(Store) error) error
 	Ensure() error
 	CreateRequest(req RunnerRequest, payload []byte) (bool, RunnerState, error)
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)
@@ -557,14 +615,15 @@ type RunnerRequestStore interface {
 	ListStatesForGitHubInstallationRepositories(access []GitHubInstallationRepositoryAccess, limit, offset int) ([]RunnerState, int64, error)
 	ActiveCount() (int, error)
 	InFlightCount() (int, error)
+	RunnerCapacityCounts(req RunnerRequest) (RunnerCapacityCounts, error)
 	InFlightCountForRepositoryOwner(owner string) (int, error)
 	InFlightCountForRepository(repositoryFullName string) (int, error)
 	ActiveCountForProfile(name string) (int, error)
 	InFlightCountForProfile(name string) (int, error)
 	ActiveCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
 	InFlightCountForProfileScope(source string, scope RunnerProfileScope, name string) (int, error)
-	ClaimNextRunnable(workerID string, now time.Time, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
-	ReleaseLease(id, workerID string) error
+	ClaimNextRunnable(workerID string, leaseTTL time.Duration) (RunnerRequest, RunnerState, bool, error)
+	WriteQueuedClaim(st RunnerState, owner string) error
 	RetryRequest(id string, now time.Time) (RunnerState, error)
 	AppendLog(id, name string, data []byte)
 	AppendStagedLog(id, name, stage string, data []byte)
@@ -575,6 +634,7 @@ type RunnerRequestStore interface {
 
 type RunnerCatalogStore interface {
 	ListProfiles() ([]RunnerProfile, error)
+	ListProfilesContext(ctx context.Context) ([]RunnerProfile, error)
 	GetProfile(name string) (RunnerProfile, error)
 	UpsertProfile(profile RunnerProfile) (RunnerProfile, error)
 	UpsertProfileIfUnchanged(profile RunnerProfile, expectedUpdatedAt *time.Time) (RunnerProfile, error)
@@ -601,6 +661,10 @@ type IdentityStore interface {
 }
 
 type GitHubInstallationStore interface {
+	ReadRepositoryAccessSnapshot(ctx context.Context, accountID int64) (RepositoryAccessSnapshot, error)
+	RequestRepositoryAccessRefresh(ctx context.Context, accountID int64) error
+	ClaimRepositoryAccessRefresh(ctx context.Context, accountID int64) (string, error)
+	FinishRepositoryAccessRefresh(ctx context.Context, accountID int64, claim string, result RepositoryAccessResult) error
 	ListGitHubInstallations(accountID int64) ([]GitHubInstallation, error)
 	ListGitHubInstallationAccounts() ([]GitHubInstallationAccount, error)
 	GitHubInstallationAccountForInstallation(installationID int64) (GitHubInstallationAccount, error)
@@ -661,6 +725,11 @@ type AuditStore interface {
 }
 
 type DeploymentStore interface {
+	ClaimDeploymentWork(ctx context.Context, d Deployment, token string, ttl time.Duration) (bool, error)
+	RenewDeploymentWork(ctx context.Context, id, token string, ttl time.Duration) (bool, error)
+	ReleaseDeploymentWork(ctx context.Context, id, token string) error
+	UpdateClaimedDeployment(d Deployment, token string) error
+	RecordDeploymentSandbox(ctx context.Context, d Deployment) error
 	CreateDeployment(deployment Deployment) (Deployment, error)
 	CreateDeploymentWithScopeLimit(deployment Deployment, maxConcurrent int) (Deployment, error)
 	GetDeployment(id string) (Deployment, error)
@@ -685,6 +754,14 @@ type DeploymentStore interface {
 	ListDeploymentEventsAfter(id string, afterID int64, limit int) ([]DeploymentEvent, bool, error)
 }
 
+// RunnerCapacityCounts describes the same active population across admission limits.
+type RunnerCapacityCounts struct {
+	Global     int `gorm:"column:global_count"`
+	Profile    int
+	Account    int
+	Repository int
+}
+
 type Store interface {
 	RunnerRequestStore
 	RunnerCatalogStore
@@ -699,7 +776,8 @@ type Store interface {
 }
 
 type Options struct {
-	Backend        string
-	DatabaseDSN    string
-	MigrateOnStart bool
+	Backend              string
+	DatabaseDSN          string
+	MigrateOnStart       bool
+	PostgresMaxOpenConns int
 }

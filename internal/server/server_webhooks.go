@@ -56,7 +56,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	switch event.Action {
 	case "queued":
 		workflowName := workflowNameFor(event.WorkflowJob.WorkflowName, event.WorkflowRun.Name)
-		st, created, err := s.enqueueWorkflowJob(event.Repository.FullName, event.Installation.ID, workflowName, event.WorkflowJob, body)
+		st, created, err := s.enqueueWorkflowJob(r.Context(), event.Repository.FullName, event.Installation.ID, workflowName, event.WorkflowJob, body)
 		if err != nil {
 			s.logger.Error("enqueue workflow_job", "job_id", id, "repository", event.Repository.FullName, "labels", []string(event.WorkflowJob.Labels), "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -228,7 +228,7 @@ func (s *Server) handleWorkflowRunWebhook(w http.ResponseWriter, r *http.Request
 			skipped++
 			continue
 		}
-		st, wasCreated, err := s.enqueueWorkflowJob(event.Repository.FullName, event.Installation.ID, event.WorkflowRun.Name, job, body)
+		st, wasCreated, err := s.enqueueWorkflowJob(r.Context(), event.Repository.FullName, event.Installation.ID, event.WorkflowRun.Name, job, body)
 		if err != nil {
 			s.logger.Error("enqueue workflow_run job", "run_id", event.WorkflowRun.ID, "job_id", job.ID, "error", err)
 			failed++

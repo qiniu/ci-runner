@@ -8,8 +8,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/bradleyfalzon/ghinstallation/v2"
 )
 
 // RunnerJITConfig is bound to one server-created ephemeral Runner. Never log it.
@@ -23,9 +26,42 @@ type RunnerJITConfig struct {
 func (c RunnerJITConfig) String() string   { return "[REDACTED JIT configuration]" }
 func (c RunnerJITConfig) GoString() string { return c.String() }
 
+// GitHub accepts at most 100 custom labels. Preserve every workflow label if
+// the list is already full; without a marker, a lost reply requires numeric
+// evidence instead of deleting an unrelated registration by name.
+func JITAttemptLabels(labels []string, attempt string) []string {
+	if attempt == "" || len(labels) == 0 || len(labels) >= 100 {
+		return labels
+	}
+	return append(slices.Clone(labels), jitAttemptLabel(attempt))
+}
+
+func jitAttemptLabel(attempt string) string { return "runnerd-jit-" + strings.ToLower(attempt) }
+
+func (c *Client) FindJITRunnerID(ctx context.Context, repository, group, name, attempt string) (int64, error) {
+	if attempt == "" {
+		return 0, errors.New("missing JIT attempt")
+	}
+	runners, err := c.listRunners(ctx, repository, group, name)
+	if err != nil {
+		return 0, err
+	}
+	var id int64
+	for _, r := range runners {
+		if r.Name != name || !slices.ContainsFunc(r.Labels, func(l RunnerLabel) bool { return strings.EqualFold(l.Name, jitAttemptLabel(attempt)) }) {
+			continue
+		}
+		if r.ID <= 0 || (id != 0 && id != r.ID) {
+			return 0, errors.New("ambiguous JIT Runner identity")
+		}
+		id = r.ID
+	}
+	return id, nil
+}
+
 // CreateRunnerJITConfig may return a Runner identity with an error. The caller
-// must reconcile that identity (or the unique requested name after a lost response).
-func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, name string, labels []string) (RunnerJITConfig, error) {
+// must reconcile that identity (or the attempt label and name after a lost response).
+func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, name string, labels []string, beforePost func() error) (RunnerJITConfig, error) {
 	target, err := c.runnerTarget(repository, group)
 	if err != nil {
 		return RunnerJITConfig{}, err
@@ -66,26 +102,50 @@ func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, n
 	}
 	setGitHubHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.do(req, target.repositoryFullName)
+	client := c.http
+	if c.appAuth != nil {
+		client, err = c.appAuth.clientForRepository(ctx, target.repositoryFullName)
+		if err != nil {
+			return RunnerJITConfig{}, err
+		}
+		// ghinstallation normally acquires its token lazily in RoundTrip. Do
+		// that before recording dispatch, then freeze the token for this POST
+		// so a later auth refresh cannot strand an unsent registration.
+		authCtx := ctx
+		if client.Timeout > 0 {
+			var cancel context.CancelFunc
+			authCtx, cancel = context.WithTimeout(ctx, client.Timeout)
+			defer cancel()
+		}
+		token, err := client.Transport.(*ghinstallation.Transport).Token(authCtx)
+		if err != nil {
+			var authErr *ghinstallation.HTTPError
+			if errors.As(err, &authErr) && authErr.Response != nil {
+				defer authErr.Response.Body.Close()
+				return RunnerJITConfig{}, jitResponseError(authErr.Response)
+			}
+			return RunnerJITConfig{}, jitTransportError(err)
+		}
+		client = clientWithTransport(c.appAuth.httpClient, bearerTransport{token: token})
+	}
+	if beforePost != nil {
+		if err := beforePost(); err != nil {
+			return RunnerJITConfig{}, err
+		}
+	}
+	// A redirected POST would create another operation outside the single
+	// recorded dispatch. Classify a redirect as unconfirmed.
+	postClient := *client
+	postClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := postClient.Do(req)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return RunnerJITConfig{CleanupRequired: true}, context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return RunnerJITConfig{CleanupRequired: true}, context.DeadlineExceeded
-		}
-		return RunnerJITConfig{CleanupRequired: true}, errors.New("github JIT Runner temporary network error")
+		return RunnerJITConfig{CleanupRequired: true}, jitTransportError(err)
 	}
 	defer resp.Body.Close()
 	// Error bodies and parsing errors may contain credentials; never retain them.
 	if resp.StatusCode != http.StatusCreated {
-		category := "request rejected"
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "secondary rate limit") {
-			category = "secondary rate limit"
-		}
-		uncertain := resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout
-		return RunnerJITConfig{CleanupRequired: uncertain}, &apiError{Operation: "github JIT Runner", StatusCode: resp.StatusCode, Body: category, RetryAfter: resp.Header.Get("Retry-After"), RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining")}
+		uncertain := resp.StatusCode < 400 || resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout
+		return RunnerJITConfig{CleanupRequired: uncertain}, jitResponseError(resp)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil || len(body) > 1<<20 {
@@ -104,6 +164,25 @@ func (c *Client) CreateRunnerJITConfig(ctx context.Context, repository, group, n
 	}
 	out.EncodedConfig = config
 	return out, nil
+}
+
+func jitTransportError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return errors.New("github JIT Runner temporary network error")
+}
+
+func jitResponseError(resp *http.Response) error {
+	category := "request rejected"
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "secondary rate limit") {
+		category = "secondary rate limit"
+	}
+	return &apiError{Operation: "github JIT Runner", StatusCode: resp.StatusCode, Body: category, RetryAfter: resp.Header.Get("Retry-After"), RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining")}
 }
 
 // GitHub's JIT defaults disable self-update. Keep runnerd's existing update

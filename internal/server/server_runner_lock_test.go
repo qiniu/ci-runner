@@ -20,8 +20,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 	fake := &fakeSandbox{stopBlock: stopBlock, stopStarted: make(chan struct{}, 1)}
 	ghServer := httptest.NewServer(githubRunnerAPI(t))
 	defer ghServer.Close()
-	srv := newTestServer(t, store, ghServer.URL, fake)
-	srv.Close()
+	srv := newTestServerWithoutLoops(t, store, ghServer.URL, fake, 10)
 
 	const cleanupID = "probe-37"
 	const targetID = "118521076552"
@@ -63,7 +62,7 @@ func TestRunnerCleanupDoesNotBlockAnotherRequest(t *testing.T) {
 
 	targetDone := make(chan struct{})
 	go func() {
-		srv.appendRunnerStdout(targetID, []byte("Running job: target\n"))
+		srv.appendRunnerStdout(targetID, "", "", []byte("Running job: target\n"))
 		close(targetDone)
 	}()
 	select {
@@ -299,16 +298,11 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 					}
 				}
 				srv.runnerLocksMu.Unlock()
-				if srv.admissionMu.TryLock() {
-					srv.admissionMu.Unlock()
-				} else {
-					t.Error("timing persistence held the admission lock")
-				}
 				batches <- message
 			}
 			done := make(chan struct{})
 			go func() {
-				srv.startRunner(t.Context(), id, "worker-test")
+				srv.startClaimedRunner(t.Context(), queuedRunnerForTest(t, srv.store, id, "worker-test"))
 				close(done)
 			}()
 			var batch string
@@ -325,7 +319,7 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 				t.Fatalf("initial lock timing includes request read: %q, read at %v", firstLine, firstRead)
 			}
 			if enabled {
-				for _, stage := range []string{"request_read", "initial_state_read", "admission_lock_wait", "profile_lookup", "global_capacity_check", "profile_capacity_check", "creating_state_persist", "github_runner_applications", "sandbox_start", "running_lock_wait", "running_state_read", "running_state_persist"} {
+				for _, stage := range []string{"request_read", "initial_state_read", "admission_lock_wait", "profile_lookup", "capacity_count", "creating_state_persist", "github_runner_applications", "sandbox_start", "running_lock_wait", "running_state_read", "running_state_persist"} {
 					if !strings.Contains(batch, "stage="+stage+" ") {
 						t.Errorf("missing startup timing %q: %s", stage, batch)
 					}
@@ -350,5 +344,141 @@ func TestRunnerStartupFlushesTimingsOutsideLocks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Direct-start fixtures exercise a specific request without running the queue loop.
+func queuedRunnerForTest(t *testing.T, store state.Store, id, owner string) state.RunnerState {
+	t.Helper()
+	st, err := store.ReadState(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status == state.StatusQueued && st.LeaseOwner == "" {
+		st.LeaseOwner = owner
+		st.LeaseExpiresAt = time.Now().UTC().Add(time.Minute)
+		if err := store.WriteState(st); err != nil {
+			t.Fatal(err)
+		}
+		st.Version++
+	}
+	return st
+}
+
+func TestChangedQueueClaimRecordsStartSkip(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, _, err := store.CreateRequest(state.RunnerRequest{ID: "claim-skip"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, first, ok, err := store.ClaimNextRunnable("same-worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("initial claim", ok, err)
+	}
+	released := first
+	released.LeaseOwner = ""
+	released.LeaseExpiresAt = time.Time{}
+	if err := store.WriteQueuedClaim(released, first.LeaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	_, second, ok, err := store.ClaimNextRunnable("same-worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatal("second claim", ok, err)
+	}
+	srv := &Server{store: store, logger: slog.Default()}
+	srv.startClaimedRunner(t.Context(), first)
+	saved, err := store.ReadState(first.ID)
+	if err != nil || saved.Version != second.Version || saved.LeaseOwner != second.LeaseOwner || saved.Status != state.StatusQueued {
+		t.Fatalf("stale worker modified the replacement: %+v, %v", saved, err)
+	}
+	log, err := store.ReadLog(first.ID, "control.log", 0)
+	if err != nil || !strings.Contains(string(log), "runner start skipped after queue claim changed") {
+		t.Fatalf("skipped attempt missing from control log: %q, %v", log, err)
+	}
+}
+
+func TestSponsoredCreatingDeferAfterReadError(t *testing.T) {
+	api := httptest.NewServer(githubRunnerAPI(t))
+	defer api.Close()
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("advanced=%t", changed), func(t *testing.T) {
+			store := state.New(t.TempDir())
+			req := state.RunnerRequest{ID: "sponsored", RepositoryFullName: "o/r", JobID: 123}
+			_, waiting, err := store.CreateRequest(req, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting.LastErrorCode = workflowJobWaitCode
+			waiting.LastErrorMessage = "workflow job is waiting"
+			waiting.LastErrorRetryable = true
+			if err := store.WriteState(waiting); err != nil {
+				t.Fatal(err)
+			}
+			_, attempt, ok, err := store.ClaimNextRunnable("worker", time.Minute)
+			if err != nil || !ok {
+				t.Fatal("claim", ok, err)
+			}
+			attempt.Status = state.StatusCreating
+			if err := store.WriteQueuedClaim(attempt, attempt.LeaseOwner); err != nil {
+				t.Fatal(err)
+			}
+			attempt.Version++
+			srv := &Server{store: store, gh: github.NewClient(api.URL, api.Client()), logger: slog.Default()}
+			admittedVersion := attempt.Version
+			start, err := srv.ensureWorkflowJobStillQueued(t.Context(), req, &attempt)
+			if err != nil || !start {
+				t.Fatalf("queued workflow could not start: %v", err)
+			}
+			if attempt.Version != admittedVersion+1 || attempt.LastErrorCode != "" || attempt.LastErrorRetryable {
+				t.Fatalf("precheck lost the cleared waiting state: version=%d code=%q", attempt.Version, attempt.LastErrorCode)
+			}
+			if changed {
+				latest := attempt
+				latest.SandboxID = "newer-sandbox"
+				if err := store.WriteState(latest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv.store = &readStateErrorStore{Store: store, err: fmt.Errorf("transient read failure")}
+			srv.deferCreatingRequest(attempt, 5*time.Second)
+			got, err := store.ReadState(attempt.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				if got.Status != state.StatusCreating || got.SandboxID != "newer-sandbox" || got.LeaseOwner != attempt.LeaseOwner || got.Version != attempt.Version+1 {
+					t.Fatalf("stale deferral cleared a newer version: %+v", got)
+				}
+			} else if got.Status != state.StatusQueued || got.LeaseOwner != "" || got.NextRetryAt.IsZero() || got.LastErrorCode != "" || got.Version != attempt.Version+1 {
+				t.Fatalf("unchanged attempt lost its delayed requeue: %+v", got)
+			}
+		})
+	}
+}
+
+func TestSponsoredCreatingDeferPreservesReplacedAttempt(t *testing.T) {
+	store := state.New(t.TempDir())
+	_, current, err := store.CreateRequest(state.RunnerRequest{ID: "sponsored-replacement"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Status = state.StatusCreating
+	current.LeaseOwner = "worker"
+	current.ProvisionAttemptID = "replacement"
+	if err := store.WriteState(current); err != nil {
+		t.Fatal(err)
+	}
+	current.Version++
+	stale := current
+	stale.Version--
+	stale.ProvisionAttemptID = "superseded"
+	srv := &Server{store: store, logger: slog.Default()}
+	srv.deferCreatingRequest(stale, time.Second)
+	got, err := store.ReadState(current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != current.Version || got.Status != state.StatusCreating || got.ProvisionAttemptID != current.ProvisionAttemptID {
+		t.Fatalf("stale deferral changed replacement: %+v", got)
 	}
 }

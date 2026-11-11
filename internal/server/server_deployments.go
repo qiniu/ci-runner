@@ -20,6 +20,7 @@ import (
 	deploy "github.com/miclle/deployd"
 	deployconfig "github.com/qiniu/ci-runner/internal/deployment/config"
 	deployruntime "github.com/qiniu/ci-runner/internal/deployment/runtime"
+	deploymentworker "github.com/qiniu/ci-runner/internal/deployment/worker"
 	"github.com/qiniu/ci-runner/internal/github"
 	"github.com/qiniu/ci-runner/internal/sandboxrunner"
 	"github.com/qiniu/ci-runner/internal/state"
@@ -730,7 +731,7 @@ func (s *Server) handleUserStopDeployment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	terminal := deployment.Status == state.DeploymentStatusCompleted || deployment.Status == state.DeploymentStatusExpired || deployment.Status == state.DeploymentStatusFailed
-	if !(terminal && deployment.SandboxID == "") {
+	if !terminal || deployment.SandboxID != "" {
 		next := deployment
 		next.Status = state.DeploymentStatusStopping
 		if deployment.Status == state.DeploymentStatusFailed {
@@ -739,16 +740,48 @@ func (s *Server) handleUserStopDeployment(w http.ResponseWriter, r *http.Request
 		if deployment.Status == state.DeploymentStatusQueued || (s.deploymentWorker == nil && deployment.SandboxID == "") {
 			next.Status = state.DeploymentStatusCompleted
 		}
-		err := s.applyMutationWithAudit("github:"+session.Subject, "deployment.stop", "deployment", deployment.ID, map[string]any{"status": next.Status}, func(tx state.Store) error { return tx.UpdateDeployment(next) })
+		err := s.applyMutationWithAudit("github:"+session.Subject, "deployment.stop", "deployment", deployment.ID, map[string]any{"status": next.Status}, func(tx state.Store) error {
+			if next.Status != deployment.Status {
+				if err := tx.UpdateDeployment(next); err != nil {
+					return err
+				}
+				// Keep the database-generated lifecycle timestamps with the
+				// version that cleanup will claim, inside the same transaction.
+				var err error
+				next, err = tx.GetDeployment(deployment.ID)
+				return err
+			}
+			current, err := tx.GetDeployment(deployment.ID)
+			if err != nil {
+				return err
+			}
+			if current.Version != deployment.Version {
+				return state.ErrConflict
+			}
+			return nil
+		})
 		if err != nil {
 			writeError(w, http.StatusConflict, "deployment changed while stopping")
 			return
 		}
+		deployment = next
 	}
 	if s.deploymentWorker != nil {
-		if err := s.deploymentWorker.Stop(r.Context(), deployment.ID, false); err != nil {
-			if errors.Is(err, deployruntime.ErrCreatePending) {
-				updated, _ := s.store.GetDeployment(deployment.ID)
+		if err := s.deploymentWorker.StopObserved(r.Context(), deployment, false); err != nil {
+			if errors.Is(err, state.ErrConflict) {
+				writeError(w, http.StatusConflict, "deployment changed during cleanup")
+				return
+			}
+			if errors.Is(err, deployruntime.ErrCreatePending) || errors.Is(err, deploymentworker.ErrWorkClaimed) {
+				updated, readErr := s.store.GetDeployment(deployment.ID)
+				if readErr != nil {
+					writeError(w, http.StatusInternalServerError, "load deployment during cleanup")
+					return
+				}
+				if updated.RevisionNumber != deployment.RevisionNumber || updated.Attempt != deployment.Attempt {
+					writeError(w, http.StatusConflict, "deployment changed during cleanup")
+					return
+				}
 				w.Header().Set("Cache-Control", "no-store")
 				writeJSON(w, http.StatusAccepted, deploymentResponseFromState(updated))
 				return
@@ -801,8 +834,12 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusServiceUnavailable, "deployment worker is not configured")
 			return
 		}
-		if err := s.deploymentWorker.Stop(r.Context(), deployment.ID, false); err != nil {
-			if errors.Is(err, deployruntime.ErrCreatePending) {
+		if err := s.deploymentWorker.StopObserved(r.Context(), deployment, false); err != nil {
+			if errors.Is(err, state.ErrConflict) {
+				writeError(w, http.StatusConflict, "deployment changed during cleanup")
+				return
+			}
+			if errors.Is(err, deployruntime.ErrCreatePending) || errors.Is(err, deploymentworker.ErrWorkClaimed) {
 				// No retry revision has been admitted. Invite an explicit retry once
 				// cleanup reconciles instead of reporting an accepted deployment.
 				s.signalDeployments()
@@ -813,10 +850,15 @@ func (s *Server) handleUserRetryDeployment(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadGateway, "deployment cleanup is incomplete")
 			return
 		}
+		revision, attempt := deployment.RevisionNumber, deployment.Attempt
 		var err error
 		deployment, err = s.store.GetDeployment(deployment.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "load deployment after cleanup")
+			return
+		}
+		if deployment.RevisionNumber != revision || deployment.Attempt != attempt {
+			writeError(w, http.StatusConflict, "deployment changed during cleanup")
 			return
 		}
 	}
