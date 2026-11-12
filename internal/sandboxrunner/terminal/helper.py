@@ -1,6 +1,7 @@
 # runnerd-owned Linux PTY supervisor. Only stdlib; no provider changes.
 import base64
 import ctypes
+import errno
 import fcntl
 import json
 import os
@@ -80,8 +81,24 @@ def serve(rows, cols, deadline):
     emitted = 0
     try:
         running = True
-        while running and time.monotonic() - last_ping < 30:
-            readable, writable, _ = select.select([listener, master], [sys.stdout] if pending else [], [], 1)
+        drain_deadline = None
+        while running:
+            now = time.monotonic()
+            if drain_deadline is not None:
+                if not pending:
+                    break
+                if now >= drain_deadline:
+                    raise TimeoutError('terminal output drain expired')
+                timeout = min(1, drain_deadline-now)
+            else:
+                if now-last_ping >= 30:
+                    break
+                timeout = 1
+            # EOF is still readable forever. Stop selecting the PTY while its
+            # final encoded frames drain; a stalled consumer cannot delay
+            # cleanup beyond two seconds or renew that deadline with pings.
+            readers = [listener] if drain_deadline is not None else [listener, master]
+            readable, writable, _ = select.select(readers, [sys.stdout] if pending else [], [], timeout)
             if sys.stdout in writable:
                 try:
                     written = os.write(sys.stdout.fileno(), pending)
@@ -96,19 +113,29 @@ def serve(rows, cols, deadline):
             if master in readable:
                 try:
                     data = os.read(master, 4096)
-                except OSError:
-                    break
-                if not data:
-                    break
-                pending += frame({'data': base64.b64encode(data).decode()})
-                if len(pending) > 131072:
-                    break  # Backpressure closes instead of silently losing output.
+                except BlockingIOError:
+                    data = None
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    data = b''  # Linux PTY EOF after its slave closes.
+                if data == b'':
+                    drain_deadline = time.monotonic()+2
+                elif data:
+                    pending += frame({'data': base64.b64encode(data).decode()})
+                    if len(pending) > 131072:
+                        break  # Backpressure closes instead of silently losing output.
             if listener in readable:
                 conn, _ = listener.accept()
                 with conn:
                     conn.settimeout(2)
                     raw = b''
                     while b'\n' not in raw and len(raw) <= 16384:
+                        if drain_deadline is not None:
+                            remaining = drain_deadline-time.monotonic()
+                            if remaining <= 0:
+                                raise TimeoutError('terminal output drain expired')
+                            conn.settimeout(min(2, remaining))
                         part = conn.recv(16384 - len(raw) + 1)
                         if not part:
                             break

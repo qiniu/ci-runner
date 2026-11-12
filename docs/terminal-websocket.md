@@ -56,6 +56,11 @@ Helper stdout uses marked frames and request-specific acknowledgements so a
 login-profile or `BASH_ENV` banner cannot be mistaken for protocol data. Startup
 text is ignored up to 16 KiB; malformed frames or larger banners fail closed.
 
+After PTY EOF, the supervisor gives buffered final output up to two seconds to
+drain. A permanently stalled consumer causes an unsuccessful exit after cleanup;
+an explicit close can interrupt the drain. Normal shell exit does not discard
+the buffered tail merely because stdout is temporarily backpressured.
+
 The supervisor exits after 30 seconds without a valid heartbeat or operation, closing the PTY and
 killing/reaping its direct shell. Linux parent-death signaling also protects the
 direct child on supervisor death. Intentionally detached descendants are not

@@ -6,6 +6,7 @@ import os
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -109,6 +110,57 @@ class HelperTest(unittest.TestCase):
             total += len(data)
         self.assertLessEqual(total, 4*1024*1024+8192)
         self.assertEqual(p.wait(timeout=5), 0)
+
+    def final_output_with_backpressure(self):
+        p = self.serve(); self.ready(p)
+        # Keep encoded output below the helper's 128 KiB pending budget but
+        # above a normal pipe capacity. No literal Z occurs in the echo.
+        command = b"python3 -c 'import os; os.write(1, bytes([90])*80000)'; exit\n"
+        self.assertEqual(self.call('input', data=base64.b64encode(command).decode()).returncode, 0)
+        return p
+
+    def test_final_output_drains_after_short_backpressure(self):
+        p = self.final_output_with_backpressure()
+        time.sleep(.3)  # Let the shell exit while stdout cannot accept its tail.
+        output, _ = p.communicate(timeout=5)
+        data = b''.join(base64.b64decode(self.decode(line).get('data', ''))
+                        for line in output.split(b'\n') if line)
+        self.assertEqual(data.count(b'Z'), 80000)
+        self.assertEqual(p.returncode, 0)
+        self.assertTrue((self.root/'finished').exists())
+
+    def test_final_output_drain_has_deadline(self):
+        p = self.final_output_with_backpressure()
+        started = time.monotonic()
+        # Do not read the pipe at all. Cleanup must not wait for its consumer.
+        self.assertNotEqual(p.wait(timeout=5), 0)
+        self.assertLess(time.monotonic()-started, 4)
+        self.assertTrue((self.root/'finished').exists())
+
+    def test_close_can_interrupt_final_output_drain(self):
+        p = self.final_output_with_backpressure()
+        time.sleep(.3)
+        self.assertEqual(self.call('close').returncode, 0)
+        self.assertEqual(p.wait(timeout=3), 0)
+        self.assertTrue((self.root/'finished').exists())
+
+    def test_partial_control_cannot_extend_output_drain(self):
+        p = self.final_output_with_backpressure()
+        deadline = time.monotonic()+3
+        time.sleep(.3)
+        with socket.socket(socket.AF_UNIX) as control:
+            control.settimeout(.5)
+            control.connect(str(self.root/'control.sock'))
+            control.sendall(b'{')
+            while p.poll() is None and time.monotonic() < deadline:
+                time.sleep(.1)
+                try:
+                    control.sendall(b' ')  # Never finish the request.
+                except OSError:
+                    break
+        self.assertNotEqual(p.wait(timeout=1), 0)
+        self.assertLess(time.monotonic(), deadline)
+        self.assertTrue((self.root/'finished').exists())
 
     def test_unknown_creation_watchdog_and_expired_dispatch(self):
         p = self.serve(); self.ready(p)  # Drop control, as if runnerd crashed.

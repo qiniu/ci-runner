@@ -118,13 +118,24 @@ func TestTerminalExistingAPIIntegration(t *testing.T) {
 	if err = term.KeepAlive(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err = term.Close(ctx); err != nil {
+	// Natural shell completion must deliver its final output through the actual
+	// SDK stream before Done closes, not just through a fake terminal callback.
+	if err = term.SendInput(ctx, []byte("python3 -c 'import os; os.write(1, bytes([122])*80000)'; printf '__TAIL_%s__\\n' complete; exit\n")); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-term.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("helper did not exit")
+	}
+	mu.Lock()
+	complete := strings.Contains(output.String(), strings.Repeat("z", 80000)) && strings.Contains(output.String(), "__TAIL_complete__")
+	mu.Unlock()
+	if !complete {
+		t.Fatal("natural completion lost final output")
+	}
+	if err = term.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
