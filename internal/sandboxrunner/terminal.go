@@ -19,6 +19,63 @@ import (
 //go:embed terminal/helper.py
 var terminalHelper []byte
 
+const terminalProtocolPrefix = "\x1eRUNNERD_TERMINAL:"
+
+type terminalOutputFrame struct {
+	Ready uint32 `json:"ready"`
+	Data  []byte `json:"data"`
+}
+
+// Commands.Start runs a login shell. Ignore its bounded startup banner, even
+// without a trailing newline, but strictly decode the helper's framed stream.
+type terminalOutputReader struct {
+	pending []byte
+	started bool
+}
+
+func (r *terminalOutputReader) feed(data []byte, visit func(terminalOutputFrame)) error {
+	r.pending = append(r.pending, data...)
+	if !r.started {
+		i := bytes.Index(r.pending, []byte(terminalProtocolPrefix))
+		if i < 0 {
+			// A split marker is not part of the startup banner budget.
+			partial := min(len(r.pending), len(terminalProtocolPrefix)-1)
+			for partial > 0 && !bytes.HasSuffix(r.pending, []byte(terminalProtocolPrefix[:partial])) {
+				partial--
+			}
+			if len(r.pending)-partial > 16384 {
+				return errors.New("terminal startup output too large")
+			}
+			return nil
+		}
+		if i > 16384 {
+			return errors.New("terminal startup output too large")
+		}
+		r.pending, r.started = r.pending[i:], true
+	}
+	for {
+		i := bytes.IndexByte(r.pending, '\n')
+		if i < 0 {
+			if len(r.pending) > 8192 {
+				return errors.New("terminal frame too large")
+			}
+			return nil
+		}
+		var frame terminalOutputFrame
+		if i > 8192 || !bytes.HasPrefix(r.pending[:i], []byte(terminalProtocolPrefix)) || json.Unmarshal(r.pending[len(terminalProtocolPrefix):i], &frame) != nil {
+			return errors.New("invalid terminal frame")
+		}
+		r.pending = r.pending[i+1:]
+		visit(frame)
+	}
+}
+
+func terminalCallConfirmed(stdout, nonce string) bool {
+	marker := terminalProtocolPrefix + nonce + ":ok\n"
+	i := bytes.Index([]byte(stdout), []byte(marker))
+	return i >= 0 && i <= 16384 && stdout[i:] == marker
+}
+
 type TerminalStart struct {
 	ID        string
 	SandboxID string
@@ -71,28 +128,14 @@ func (s *E2BService) StartTerminal(ctx context.Context, input TerminalStart, onD
 	}
 	ready := make(chan uint32, 1)
 	var mu sync.Mutex
-	var pending []byte
+	var reader terminalOutputReader
 	streamCtx, cancel := context.WithCancel(ctx)
 	handle, err := sb.Commands().Start(streamCtx,
-		fmt.Sprintf("python3 %s/helper.py serve %d %d %d", term.directory, size.Rows, size.Cols, time.Now().Add(15*time.Second).Unix()),
+		fmt.Sprintf("exec python3 %s/helper.py serve %d %d %d", term.directory, size.Rows, size.Cols, time.Now().Add(15*time.Second).Unix()),
 		qnsandbox.WithOnStdout(func(data []byte) {
 			mu.Lock()
 			defer mu.Unlock()
-			pending = append(pending, data...)
-			for {
-				i := bytes.IndexByte(pending, '\n')
-				if i < 0 {
-					break
-				}
-				var frame struct {
-					Ready uint32 `json:"ready"`
-					Data  []byte `json:"data"`
-				}
-				if i > 8192 || json.Unmarshal(pending[:i], &frame) != nil {
-					cancel()
-					return
-				}
-				pending = pending[i+1:]
+			if err := reader.feed(data, func(frame terminalOutputFrame) {
 				if frame.Ready != 0 {
 					select {
 					case ready <- frame.Ready:
@@ -102,8 +145,7 @@ func (s *E2BService) StartTerminal(ctx context.Context, input TerminalStart, onD
 				if len(frame.Data) > 0 && onData != nil {
 					onData(frame.Data)
 				}
-			}
-			if len(pending) > 8192 {
+			}); err != nil {
 				cancel()
 			}
 		}))
@@ -181,8 +223,8 @@ func (s *helperTerminal) call(ctx context.Context, request map[string]any) error
 	if _, err = s.sandbox.Files().Write(ctx, path, payload); err != nil {
 		return errors.New("terminal operation outcome unknown")
 	}
-	result, err := s.sandbox.Commands().Run(ctx, "python3 "+s.directory+"/helper.py call "+name, qnsandbox.WithTimeout(5*time.Second))
-	if err != nil || result.ExitCode != 0 || result.Stdout != "ok\n" {
+	result, err := s.sandbox.Commands().Run(ctx, "exec python3 "+s.directory+"/helper.py call "+name, qnsandbox.WithTimeout(5*time.Second))
+	if err != nil || result.ExitCode != 0 || !terminalCallConfirmed(result.Stdout, name) {
 		return errors.New("terminal operation outcome unknown")
 	}
 	return nil

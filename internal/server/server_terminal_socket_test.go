@@ -279,6 +279,75 @@ func TestTerminalFrameLimits(t *testing.T) {
 	}
 }
 
+func TestTerminalSocketSlowCreationKeepsHeartbeat(t *testing.T) {
+	f := newTerminalFixture(t, "runner")
+	f.fake.onTerminalOpen = func(ctx context.Context, _ func([]byte)) {
+		select {
+		case <-time.After(16 * time.Second):
+		case <-ctx.Done():
+		}
+	}
+	c := f.dial(t)
+	started := time.Now()
+	var pings []time.Duration
+	c.SetPingHandler(func(data string) error {
+		pings = append(pings, time.Since(started))
+		return c.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
+	})
+	_ = c.SetReadDeadline(time.Now().Add(25 * time.Second))
+	var frame map[string]any
+	if err := c.ReadJSON(&frame); err != nil || frame["type"] != "ready" {
+		t.Fatalf("slow creation: %v %v", frame, err)
+	}
+	id := frame["session_id"].(string)
+	// Keep reading (and responding to ping) beyond the old absolute deadline.
+	time.AfterFunc(6*time.Second, func() { _ = c.Close() })
+	for c.ReadJSON(&frame) == nil {
+	}
+	if time.Since(started) < 21*time.Second || len(pings) == 0 || pings[0] >= 15*time.Second {
+		t.Fatalf("healthy slow start disconnected after %s; pings=%v", time.Since(started), pings)
+	}
+	if row := waitTerminalClosed(t, f, id); row.Cleanup != "confirmed" {
+		t.Fatalf("cleanup: %+v", row)
+	}
+}
+
+func TestTerminalSocketDrainsCompletedOutput(t *testing.T) {
+	f := newTerminalFixture(t, "runner")
+	var want strings.Builder
+	want.WriteString("terminal ready\n")
+	for i := range 10 {
+		fmt.Fprintf(&want, "final output %d\n", i)
+	}
+	f.fake.onTerminalOpen = func(_ context.Context, output func([]byte)) {
+		for i := range 10 {
+			data := fmt.Sprintf("final output %d\n", i)
+			output([]byte(data))
+		}
+		f.fake.terminal.done = make(chan struct{})
+		close(f.fake.terminal.done)
+	}
+	c := f.dial(t)
+	id := readTerminalReady(t, c)
+	var got strings.Builder
+	for {
+		var frame struct {
+			Type string
+			Data []byte
+		}
+		if err := c.ReadJSON(&frame); err != nil {
+			break
+		}
+		got.Write(frame.Data)
+	}
+	if got.String() != want.String() {
+		t.Fatalf("completed output lost: got %q want %q", got.String(), want.String())
+	}
+	if row := waitTerminalClosed(t, f, id); row.CloseReason != "process_exited" || row.Cleanup != "confirmed" {
+		t.Fatalf("completion: %+v", row)
+	}
+}
+
 func TestTerminalSocketCreationRaceAndUnknownCleanup(t *testing.T) {
 	for _, unknown := range []bool{false, true} {
 		t.Run(fmt.Sprint(unknown), func(t *testing.T) {

@@ -417,12 +417,28 @@ The 2026-10-14 public API, startup-failure and accelerated retention results are
 recorded in [Deploy configuration](deployment.md#iteration-plan). Retention used
 a timestamp change on one completed test record; it was not a natural seven-day wait.
 
-Run the local [timed terminal fault regression](testing.md#timed-terminal-transport-faults)
-with `task ui-terminal-fault-test` before terminal promotion. Its 5/15-second
-same-Shell recovery and 25-second timeout/idle-reaping checks do not cover the
-deployed ingress or remote Sandbox. Retain separately timed production evidence
-for those paths; an unmeasured manual outage cannot establish recovery within
-the twenty-second window.
+Run the local [terminal transport fault regression](testing.md#timed-terminal-transport-faults)
+with `task ui-terminal-fault-test` before terminal promotion. It checks a real
+local PTY over WebSocket: disconnect closes the shell, no new shell opens
+automatically, and explicit Connect creates a new session ID and shell without
+restoring shell variables or replaying input. It does not exercise the deployed
+ingress or a remote Sandbox.
+
+For production acceptance, exercise both Jobs and Deploy through the public
+ingress and retain separate evidence:
+
+- Verify WebSocket upgrade, input, output and resize with the deployed build.
+- Interrupt the connection and confirm the UI reports disconnection. Check the
+  old session's close reason and cleanup evidence, and verify the underlying
+  Job/Deploy and Sandbox continue independently. Record unconfirmed cleanup as
+  `unknown`; elapsed time alone does not prove remote shell cleanup.
+- Restore connectivity and explicitly Connect. Verify a new session ID and
+  shell, absent previous shell variables, and no replay of previously submitted
+  input. Disconnect again and verify the new shell's cleanup.
+
+Same-shell recovery within twenty seconds is not a release gate. See
+[Web Console rollout and limits](terminal-websocket.md#compatibility-and-rollout)
+for prerequisites, connection draining and browser refresh requirements.
 
 Record three evidence classes separately: local unit/integration checks,
 browser/UI checks, and the real Sandbox provider run. Local fakes and preview

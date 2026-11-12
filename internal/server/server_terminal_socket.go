@@ -173,6 +173,24 @@ func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, tar
 	// session index is retained: this cancellation belongs only to this request.
 	stopSocket := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopSocket()
+	// Creation can use the full 20-second start budget. Ping from upgrade,
+	// independently of provider creation and authorization/operation latency.
+	// WriteControl is safe concurrently with the one data-frame writer below.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	frames := make(chan terminalFrame, 8)
 	go func() {
 		defer cancel()
@@ -280,7 +298,18 @@ func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, tar
 			return
 		case <-term.Done():
 			reason = "process_exited"
-			return
+			// Done follows all provider output callbacks. The bounded queue may
+			// still contain the final output; send it before closing the socket.
+			for {
+				select {
+				case data := <-output:
+					if err := write(map[string]any{"type": "output", "data": data}); err != nil {
+						return
+					}
+				default:
+					return
+				}
+			}
 		case data := <-output:
 			if err := write(map[string]any{"type": "output", "data": data}); err != nil {
 				return
@@ -300,9 +329,6 @@ func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, tar
 			opCancel()
 			if err != nil {
 				reason = "remote_unavailable"
-				return
-			}
-			if err = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
 				return
 			}
 		case frame := <-frames:

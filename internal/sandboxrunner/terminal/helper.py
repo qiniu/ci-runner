@@ -16,6 +16,7 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOCKET = os.path.join(ROOT, 'control.sock')
+PROTOCOL = '\x1eRUNNERD_TERMINAL:'
 
 
 def locked():
@@ -29,8 +30,8 @@ def mark(name):
     os.close(fd)
 
 
-def emit(value):
-    print(json.dumps(value, separators=(',', ':')), flush=True)
+def frame(value):
+    return (PROTOCOL + json.dumps(value, separators=(',', ':')) + '\n').encode()
 
 
 def resize(fd, rows, cols):
@@ -75,7 +76,7 @@ def serve(rows, cols, deadline):
     last_ping = time.monotonic()
     os.set_blocking(master, False)
     os.set_blocking(sys.stdout.fileno(), False)
-    pending = (json.dumps({'ready': child.pid}) + '\n').encode()
+    pending = frame({'ready': child.pid})
     emitted = 0
     try:
         running = True
@@ -99,7 +100,7 @@ def serve(rows, cols, deadline):
                     break
                 if not data:
                     break
-                pending += (json.dumps({'data': base64.b64encode(data).decode()}) + '\n').encode()
+                pending += frame({'data': base64.b64encode(data).decode()})
                 if len(pending) > 131072:
                     break  # Backpressure closes instead of silently losing output.
             if listener in readable:
@@ -179,7 +180,7 @@ def call(name):
         finally:
             os.close(gate)
     if q.get('op') == 'close' and os.path.exists(os.path.join(ROOT, 'finished')):
-        print('ok')
+        print(PROTOCOL + name + ':ok')
         return
     with socket.socket(socket.AF_UNIX) as conn:
         conn.settimeout(3)
@@ -195,7 +196,7 @@ def call(name):
             time.sleep(.02)
         if os.path.exists(SOCKET):
             raise ValueError('close pending')
-    print('ok')
+    print(PROTOCOL + name + ':ok')
 
 
 if __name__ == '__main__':

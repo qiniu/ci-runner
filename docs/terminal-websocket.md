@@ -27,9 +27,11 @@ The underlying Job/Deploy and Sandbox continue independently.
 - Client frames: `{"type":"input","data":"pwd\n"}` or
   `{"type":"resize","cols":100,"rows":28}`. No session selector or arbitrary
   operation is accepted. Input is at most 4096 UTF-8 bytes; dimensions are 1–500.
-- Writes have a five-second deadline. Ping every five seconds and a twenty-second
+- Writes have a five-second deadline. Ping from upgrade (including creation)
+  every five seconds and a twenty-second
   pong deadline detect silent peers. The output queue is 64 KiB. Overflow closes
   the connection rather than dropping output or replaying input.
+  On process completion, queued output is drained before the socket closes.
 
 ## Database and PTY ownership
 
@@ -49,6 +51,10 @@ not command arguments. Neither API calls nor recovery kill a saved PID. An
 exclusive creation marker and close tombstone prevent duplicate or delayed
 creation from reviving an ID. A startup deadline bounds dispatch delay. Keep runnerd and Sandbox clocks
 synchronized; expired control messages fail closed.
+
+Helper stdout uses marked frames and request-specific acknowledgements so a
+login-profile or `BASH_ENV` banner cannot be mistaken for protocol data. Startup
+text is ignored up to 16 KiB; malformed frames or larger banners fail closed.
 
 The supervisor exits after 30 seconds without a valid heartbeat or operation, closing the PTY and
 killing/reaping its direct shell. Linux parent-death signaling also protects the

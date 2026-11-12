@@ -246,6 +246,7 @@ type DefaultTemplateCatalog interface {
 }
 
 type TerminalSession interface {
+	// Done closes after the process stream and all output callbacks finish.
 	Done() <-chan struct{}
 	KeepAlive(context.Context) error
 	PID() uint32

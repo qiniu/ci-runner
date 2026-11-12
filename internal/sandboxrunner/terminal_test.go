@@ -176,3 +176,48 @@ func TestTerminalHelperLinux(t *testing.T) {
 		t.Fatalf("helper: %v\n%s", err, output)
 	}
 }
+
+func TestTerminalProtocolIgnoresShellStartupOutput(t *testing.T) {
+	// Both login profiles and BASH_ENV can print arbitrary text or even JSON,
+	// including an unterminated banner immediately before the first frame.
+	stream := "welcome\n{\"ready\":999}\nBASH_ENV banner" + terminalProtocolPrefix + `{"ready":42}` + "\n" + terminalProtocolPrefix + `{"data":"dGFpbA=="}` + "\n"
+	for _, chunkSize := range []int{1, 7, len(stream)} {
+		var reader terminalOutputReader
+		var frames []terminalOutputFrame
+		for offset := 0; offset < len(stream); offset += chunkSize {
+			if err := reader.feed([]byte(stream[offset:min(offset+chunkSize, len(stream))]), func(frame terminalOutputFrame) { frames = append(frames, frame) }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(frames) != 2 || frames[0].Ready != 42 || string(frames[1].Data) != "tail" {
+			t.Fatalf("chunk size %d: %+v", chunkSize, frames)
+		}
+	}
+	for _, stream := range []string{strings.Repeat("x", 16385), terminalProtocolPrefix + "invalid\n", terminalProtocolPrefix + strings.Repeat("x", 8193), terminalProtocolPrefix + "{}\nmissing prefix\n"} {
+		var reader terminalOutputReader
+		if err := reader.feed([]byte(stream), func(terminalOutputFrame) {}); err == nil {
+			t.Fatal("unbounded or malformed protocol accepted")
+		}
+	}
+	var boundary terminalOutputReader
+	for _, chunk := range []string{strings.Repeat("x", 16384) + terminalProtocolPrefix[:1], terminalProtocolPrefix[1:] + "{}\n"} {
+		if err := boundary.feed([]byte(chunk), func(terminalOutputFrame) {}); err != nil {
+			t.Fatalf("split marker counted as banner: %v", err)
+		}
+	}
+	const nonce = "request-nonce"
+	ack := terminalProtocolPrefix + nonce + ":ok\n"
+	for _, banner := range []string{"", "welcome\n", "unterminated BASH_ENV output"} {
+		if !terminalCallConfirmed(banner+ack, nonce) {
+			t.Fatalf("banner rejected: %q", banner)
+		}
+	}
+	for _, stdout := range []string{"ok\n", ack, ack + "extra", strings.Repeat("x", 16385) + ack} {
+		if terminalCallConfirmed(stdout, "different-request") {
+			t.Fatal("unrelated acknowledgement accepted")
+		}
+	}
+	if terminalCallConfirmed(ack+"extra", nonce) || terminalCallConfirmed(strings.Repeat("x", 16385)+ack, nonce) {
+		t.Fatal("unbounded or malformed acknowledgement accepted")
+	}
+}

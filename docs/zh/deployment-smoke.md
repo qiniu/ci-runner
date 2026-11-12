@@ -378,9 +378,21 @@ Workflow 完成后确认：
 并非自然等待七天。
 
 终端变更上线前运行 `task ui-terminal-fault-test`，步骤见
-[终端计时断流回归](testing.md#终端计时断流回归)。本地 5／15 秒原 Shell 恢复和
-25 秒超时／空闲回收检查不覆盖已部署的入口代理与远程 Sandbox，需要单独保留
-这些链路的计时生产证据；未计时的手动断网不能证明在 20 秒窗口内恢复。
+[终端断流回归](testing.md#终端计时断流回归)。该测试通过 WebSocket 操作真实本地
+PTY，验证断连关闭 shell、不会自动创建新 shell，以及显式点击“连接”后创建新会话 ID
+和新 shell，不恢复原 shell 变量、不重放输入。它不覆盖已部署的入口代理或远程 Sandbox。
+
+生产验收需通过公开入口分别检查 Jobs 和 Deploy，并单独保留以下证据：
+
+- 使用已部署版本验证 WebSocket 升级，以及输入、输出和窗口尺寸调整。
+- 中断连接，确认 UI 提示断连。检查旧会话的关闭原因与清理证据，并确认底层
+  Job／Deploy 和 Sandbox 独立继续运行。未经确认的清理记为 `unknown`；不能仅凭
+  时间经过认定远程 shell 已回收。
+- 恢复网络后显式点击“连接”，确认获得新会话 ID 和新 shell、原 shell 变量不存在，
+  之前提交的输入没有重放。再次断开连接，验证新 shell 的清理结果。
+
+20 秒内恢复原 shell 不再作为发布门禁。运行前提、旧连接摘流和浏览器刷新要求见
+[Web Console 发布边界](../terminal-websocket.md#compatibility-and-rollout)。
 
 分别记录本地单元／集成检查、浏览器/UI 检查和真实 Sandbox provider 运行三类证据。Local fake
 和 preview fixture 不能替代本节验收。

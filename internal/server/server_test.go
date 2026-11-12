@@ -301,6 +301,7 @@ func (f *fakeSandbox) RunNetworkDiagnostic(ctx context.Context, sandboxID string
 
 type fakeTerminalSession struct {
 	mu         sync.Mutex
+	done       chan struct{}
 	pid        uint32
 	input      string
 	closed     bool
@@ -9884,5 +9885,5 @@ func publicCatalogFixture() []state.RunnerProfile {
 	return profiles
 }
 
-func (f *fakeTerminalSession) Done() <-chan struct{}           { return nil }
+func (f *fakeTerminalSession) Done() <-chan struct{}           { return f.done }
 func (f *fakeTerminalSession) KeepAlive(context.Context) error { return nil }

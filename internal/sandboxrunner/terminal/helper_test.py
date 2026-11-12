@@ -35,9 +35,14 @@ class HelperTest(unittest.TestCase):
 
     def ready(self, p):
         self.assertTrue(select.select([p.stdout], [], [], 5)[0], 'no readiness')
-        frame = json.loads(p.stdout.readline())
+        frame = self.decode(p.stdout.readline())
         self.assertGreater(frame['ready'], 0)
         return frame['ready']
+
+    def decode(self, line):
+        prefix = b'\x1eRUNNERD_TERMINAL:'
+        self.assertTrue(line.startswith(prefix), line)
+        return json.loads(line[len(prefix):])
 
     def call(self, op, **args):
         name = uuid.uuid4().hex
@@ -52,7 +57,7 @@ class HelperTest(unittest.TestCase):
                 line = p.stdout.readline()
                 if not line:
                     break
-                data += base64.b64decode(json.loads(line).get('data', ''))
+                data += base64.b64decode(self.decode(line).get('data', ''))
                 if marker in data:
                     return data
         self.fail(f'missing {marker!r}: {data!r}')
