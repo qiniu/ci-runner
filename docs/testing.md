@@ -489,38 +489,7 @@ Linux hosts missing browser system libraries can use
 Sandbox credentials or production endpoint is used. Allow about two minutes
 after the first Go/browser setup; tests run serially without automatic retries.
 
-The dedicated Playwright suite starts a loopback-only Go test fixture with the
-`terminalfault` build tag and race detector. It serves the built UI, uses the
-actual terminal SSE/replay/idle-cleanup code and starts an interactive `/bin/sh`
-in a real local PTY through Python. Authentication, deployment metadata, provider
-creation and PTY resize are fixtures. A loopback HTTP proxy drops existing
-connections and rejects new browser requests for measured intervals, using the
-browser's native EventSource and real clocks:
-
-| Outage | Required behavior |
-| --- | --- |
-| 5 seconds | Resume before the 20-second recovery deadline with the same session/PID and exact `Last-Event-ID`; all 60 numbered outputs arrive once in order and later input works. |
-| 15 seconds | The same assertions near the recovery deadline; no replacement shell or premature cleanup. |
-| 25 seconds | The UI closes around 20 seconds and attempts DELETE during the outage. Because DELETE cannot reach runnerd, the shell remains alive at network restoration and exits through the real 30-second idle cleanup. No automatic replacement or reconnection occurs. |
-
-The recovery deadline starts at the first EventSource error, not the instant the
-proxy is interrupted. The assertions include bounded scheduler allowances and
-retain measured durations; browser clocks are never accelerated. The proxy
-rechecks its monotonic deadline before restoring traffic, even if a timer fires
-early. The 5-second case waits for an extra frame after an early cursor observation
-and verifies replay against the final data/heartbeat event preceding the first
-error, so in-flight output cannot make the cursor assertion stale. Fixtures and
-child processes are torn down after the suite. This command runs separately from
-`task test` and `task ui-production-smoke`; Check runs it in the `terminal-fault`
-job. `RUNNERD_UI_SMOKE_BASE_URL` does not redirect this local-only suite.
-
-Inspect `ui/test-results/`: `terminal-harness-*.log`, per-test `timings.json`,
-native `events.json` and server `metrics.json`, recovery/timeout screenshots, and retained
-Playwright traces on failure. CI uploads these artifacts on success and failure.
-On failure inspect timing, cursor, sequence and process-exit evidence before
-changing bounds or adding retries. These tests do not establish production proxy,
-GitHub authorization, remote Sandbox, TTL or permission-revocation acceptance;
-retain those [deployment smoke gates](deployment-smoke.md#9-sandbox-deploy-acceptance).
+The loopback `terminalfault` fixture serves the built UI and uses the product WebSocket/database handler with a real local PTY. A TCP proxy drops the upgraded connection. Chromium must show disconnection, close the shell, and create a different session only after explicit Connect, without restoring variables or replaying input. Auth/provider/resize are fixtures. Logs are in `ui/test-results/terminal-websocket.log`; failed runs retain Playwright traces. See [Web Console verification](terminal-websocket.md#verification) for remote adapter and PostgreSQL process tests.
 
 Inspect configured public-name specs (migration preserves existing rows; startup creates none):
 
@@ -1161,24 +1130,7 @@ Deployment revision verification must cover initial #1, atomic next-version crea
 
 ### Deployment terminal checks
 
-Reconnect regression checks additionally cover a ten-second proxy read-idle
-limit across more than a minute of periodic output, HTTP/1.1 and HTTP/2 server
-read/write deadlines, byte-offset suffix replay without duplicates, invalid or
-evicted cursors, closed-session output rejection, and stale idle timers. Run
-`cd ui && bun run test:production --grep 'resumes deployment terminal'` for real
-Chromium EventSource transport loss followed by resume on the same PTY, permission
-denial, explicit server closure, repeated empty reconnects, idle-heartbeat recovery, and the twenty-second outage limit. These are
-local transport fixtures, not proof that the production ingress keeps a stream
-open. Production acceptance must run continuous output and an idle shell for more
-than one minute, confirm the same PID survives a transport recovery, then verify
-stop/expiry and access revocation still close it. Keep runnerd and ingress logs
-when diagnosing the initial transport close; heartbeat and local deadline tests
-alone cannot identify a proxy's total request limit.
-
-
-Run `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1` for PTY input/resize/close, repository authorization and per-user session ownership, revision/attempt identity, stopped/expired rejection, and remaining-lifetime Connect coverage. Run `cd ui && bun run test:production --grep 'separates deployment'` for browser tab navigation, manual connection, typing and disconnect with fixture APIs/output. Fixtures do not prove a real Sandbox PTY. For live acceptance, open a running revision, connect, run `pwd` and inspect an application log file, resize, disconnect, reconnect, then stop the deployment and confirm the terminal becomes unavailable. Historical revisions must never open the current Sandbox.
-
-Run `go test -race ./internal/sandboxrunner -run TestTerminalCloseAfterSandboxRemoval -count=1` to verify terminal cleanup after Sandbox deletion. A failed PTY Kill succeeds only when the original Sandbox API confirms that exact Sandbox is absent. A live Sandbox, denied lookup or unavailable provider must retain the close error; a successful Kill must not perform a lookup.
+Run `go test ./internal/server ./internal/sandboxrunner -run "TestTerminal|TestDeploymentTerminal"` and `cd ui && bun run test:production --grep "deployment terminal closes"`. Validate exact repository access, saved credentials/lifetime, changed attempts, closure and explicit new sessions. See [Web Console](terminal-websocket.md) for separate real PTY adapter, browser fault and multi-process database tests.
 
 Deployment context checks: run `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` and the deployment production browser fixture. Cover legacy redirects, direct reload/OAuth return, encoded branch names, immutable revision selection, back navigation, and local-only filtered history before pagination. State coverage includes `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`.
 

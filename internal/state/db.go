@@ -259,6 +259,7 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 		&deploymentRevisionRecord{},
 		&deploymentEventRecord{},
 		&auditEventRecord{},
+		&TerminalSession{},
 		&accountRecord{},
 		&oauthIdentityRecord{},
 		&githubInstallationRecord{},

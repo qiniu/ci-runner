@@ -87,9 +87,9 @@ The Sandbox Deploy control-plane and execution slice is documented in [docs/depl
 
 A Jobs Web terminal belongs to the account that opened it and to the active Runner attempt. Each connection, input, resize, and close request checks repository access and shell ownership.
 
-When testing multiple nodes, set `server.terminal_peer_origin` to a unique HTTPS origin on each node. Every peer must reach that address directly and trust its TLS certificate. Configure the same session secret and encryption key on each node. A load balancer may send successive terminal requests to different nodes. The owner serves the live PTY and its bounded replay buffer. During a brief peer-link outage the browser retries the same session for up to 20 seconds, retaining its last output cursor. If the owner exits, open a new terminal on another node. The underlying Job or Deployment keeps its lifecycle state. An abrupt process exit can leave the old PTY in the Sandbox until provider cleanup. Single-node installations can leave this setting empty.
+Web Console uses one WebSocket for input, output and resize, without peer forwarding, sticky routing or `terminal_peer_origin`. The database records ownership, execution identity and cleanup evidence. Disconnect requires an explicit new session; shell state and input are not replayed. Refresh old UI tabs after rollout and enable WebSocket upgrades on the load balancer. Sandboxes need Linux, Python 3 and bash. See [Web Console](docs/terminal-websocket.md) for limits, compatibility and rollout.
 
-Running deployment details also offer a Web terminal for the current revision. Connect manually to inspect processes and application log files; leaving the terminal closes the shell. Terminal access revalidates repository access and isolates each user's shell and uses the saved Sandbox credentials. Brief output-stream interruptions resume the same shell automatically within a 20-second recovery window; authorization/lifecycle loss or an unrecoverable output gap closes it.
+Running deployment details also offer a Web terminal for the current revision. Connect manually to inspect processes and application log files; leaving the terminal closes the shell. Terminal access revalidates repository access and isolates each user's shell and uses the saved Sandbox credentials. Disconnect or authorization/lifecycle loss closes the session. Explicitly reconnect to create a new shell.
 Compensation cleanup preserves the original deployment failure and revision evidence, including when cleanup resumes after interruption. Creation idempotency uses an immutable request hash, so provider expiry changes and later revisions do not invalidate the original request key.
 Deployment recovery and queued execution run in the independent background scheduler without inheriting the HTTP startup recovery timeout. Revision log budgets are recalibrated on first append after each restart, including after rollback writes; Deploy supports one controller without mixed-version writers.
 Application startup supplies the exact Sandbox hostname for Vite's Host allowlist, so Vite preview needs no repository-specific ingress domain.
@@ -385,7 +385,7 @@ task deps          # Install Go dependencies
 task ui-deps       # Install UI dependencies
 task build         # Build runnerd with embedded production UI
 task ui-production-smoke # Execute the production UI bundle in Chromium
-task ui-terminal-fault-test # Timed SSE outages with Chromium and real local PTYs
+task ui-terminal-fault-test # WebSocket outages with Chromium and real local PTYs
 task dev           # Start local dev (runnerd + Vite + smee)
 task lint          # Run linters
 task test          # Rebuild UI + run all tests (Go with race detection + Bun UI tests)
@@ -401,7 +401,7 @@ For focused UI tests, run `cd ui && bun run test`. Use `task ui-production-smoke
 after changing UI dependencies, Vite/Rollup configuration, or production asset
 loading.
 
-Run `task ui-terminal-fault-test` after terminal replay, reconnect or idle-cleanup
+Run `task ui-terminal-fault-test` after terminal connection, disconnect or cleanup
 changes. It requires Go, Bun and Python 3 on Linux/macOS; see
 [timed terminal transport faults](docs/testing.md#timed-terminal-transport-faults)
 for the scenarios, artifacts and production-verification boundary.

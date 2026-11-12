@@ -425,3 +425,26 @@ type sandboxServiceDefaultAudienceRecord struct {
 func (sandboxServiceDefaultAudienceRecord) TableName() string {
 	return "sandbox_service_default_audiences"
 }
+
+// TerminalSession records ownership and cleanup evidence, never terminal contents
+// or a PID that another worker could mistake for a current process.
+type TerminalSession struct {
+	NodeID               string `gorm:"size:128;not null;default:'';index"`
+	ID                   string `gorm:"primaryKey;size:64"`
+	AccountID            int64  `gorm:"not null;index"`
+	ResourceKind         string `gorm:"size:16;not null"`
+	ResourceID           string `gorm:"size:128;not null;index"`
+	Binding              string `gorm:"type:text;not null"`
+	GitHubInstallationID int64  `gorm:"not null"`
+	RepositoryFullName   string `gorm:"size:255;not null"`
+	SandboxID            string `gorm:"size:128;not null"`
+	Owner                string `gorm:"size:64;not null"`
+	Status               string `gorm:"size:16;not null;index:idx_terminal_expiry,priority:1"`
+	Cleanup              string `gorm:"size:16;not null"`
+	CloseReason          string `gorm:"size:64;not null"`
+	LeaseUntil           int64  `gorm:"not null;index:idx_terminal_expiry,priority:2"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+func (TerminalSession) TableName() string { return "terminal_sessions" }

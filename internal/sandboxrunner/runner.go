@@ -246,6 +246,8 @@ type DefaultTemplateCatalog interface {
 }
 
 type TerminalSession interface {
+	Done() <-chan struct{}
+	KeepAlive(context.Context) error
 	PID() uint32
 	SendInput(ctx context.Context, data []byte) error
 	Resize(ctx context.Context, size PtySize) error
@@ -258,7 +260,7 @@ type Service interface {
 	StartRunner(ctx context.Context, input StartInput) (StartResult, error)
 	RecoverRunner(ctx context.Context, input RecoverInput) (StartResult, error)
 	StopRunner(ctx context.Context, sandboxID string, pid uint32) error
-	StartTerminal(ctx context.Context, sandboxID string, size PtySize, onData func([]byte)) (TerminalSession, error)
+	StartTerminal(ctx context.Context, input TerminalStart, onData func([]byte)) (TerminalSession, error)
 }
 
 var (
@@ -1303,90 +1305,6 @@ func capStoppingSandboxLifetime(ctx context.Context, sb *qnsandbox.Sandbox) erro
 	updateCtx, cancel := context.WithTimeout(ctx, updateBudget)
 	defer cancel()
 	return sb.SetTimeout(updateCtx, 30*time.Second)
-}
-
-type e2bTerminalSession struct {
-	sandbox *qnsandbox.Sandbox
-	pty     interface {
-		SendInput(context.Context, uint32, []byte) error
-		Resize(context.Context, uint32, qnsandbox.PtySize) error
-		Kill(context.Context, uint32) error
-	}
-	pid uint32
-}
-
-func (s *E2BService) StartTerminal(ctx context.Context, sandboxID string, size PtySize, onData func([]byte)) (TerminalSession, error) {
-	return s.startTerminal(ctx, sandboxID, size, 30, onData)
-}
-
-// StartTerminalUntil connects with the deployment's remaining lifetime rather
-// than the fixed timeout used for interactive Runner diagnostics.
-func (s *E2BService) StartTerminalUntil(ctx context.Context, sandboxID string, size PtySize, expiresAt time.Time, onData func([]byte)) (TerminalSession, error) {
-	remaining := time.Until(expiresAt)
-	if remaining <= 0 {
-		return nil, errors.New("deployment has expired")
-	}
-	seconds := math.Ceil(remaining.Seconds())
-	if seconds > math.MaxInt32 {
-		return nil, errors.New("deployment lifetime exceeds limit")
-	}
-	return s.startTerminal(ctx, sandboxID, size, int32(seconds), onData)
-}
-
-func (s *E2BService) startTerminal(ctx context.Context, sandboxID string, size PtySize, timeout int32, onData func([]byte)) (TerminalSession, error) {
-	sb, err := s.client.Connect(ctx, sandboxID, qnsandbox.ConnectParams{Timeout: timeout})
-	if err != nil {
-		return nil, err
-	}
-	if size.Cols == 0 {
-		size.Cols = 100
-	}
-	if size.Rows == 0 {
-		size.Rows = 28
-	}
-	handle, err := sb.Pty().Create(
-		ctx,
-		qnsandbox.PtySize{Cols: size.Cols, Rows: size.Rows},
-		qnsandbox.WithTag("runnerd-web-terminal"),
-		qnsandbox.WithOnPtyData(onData),
-	)
-	if err != nil {
-		return nil, err
-	}
-	pid, err := handle.WaitPID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &e2bTerminalSession{sandbox: sb, pty: sb.Pty(), pid: pid}, nil
-}
-
-func (s *e2bTerminalSession) PID() uint32 {
-	return s.pid
-}
-
-func (s *e2bTerminalSession) SendInput(ctx context.Context, data []byte) error {
-	return s.pty.SendInput(ctx, s.pid, data)
-}
-
-func (s *e2bTerminalSession) Resize(ctx context.Context, size PtySize) error {
-	if size.Cols == 0 || size.Rows == 0 {
-		return nil
-	}
-	return s.pty.Resize(ctx, s.pid, qnsandbox.PtySize{Cols: size.Cols, Rows: size.Rows})
-}
-
-func (s *e2bTerminalSession) Close(ctx context.Context) error {
-	err := s.pty.Kill(ctx, s.pid)
-	if err == nil {
-		return nil
-	}
-	// Deployment cleanup can remove the Sandbox before the browser closes its
-	// PTY. The envd proxy's HTTP 404 is not a typed process-not-found error, so
-	// confirm absence through the original Sandbox API instead of masking it.
-	if _, infoErr := s.sandbox.GetInfo(ctx); isSandboxNotFound(infoErr) {
-		return nil
-	}
-	return err
 }
 
 func startScript(input StartInput, sandboxID string) string {

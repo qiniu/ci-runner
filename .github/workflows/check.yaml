@@ -184,7 +184,7 @@ jobs:
         run: |
           go test ./internal/state -run 'Test(ApplyMutationWithAudit|CompareProfileMatches|FreshSchema|ScopedRunnerCatalogFreshSchema|RunnerProfilePolicy|MigrationStartupFence|PostgresObfuscatedPassword|PostgresPoolBudget|PostgresStateReadAfterAdditiveDDL|ConcurrentPostgresStartup|Deployment(Query|Revisions|ScopeQuota))SQLBackends' -count=1 -v
           go test ./internal/server -run 'Test(PlatformSpecRevision|SharedRepositoryAccess)PostgresSQLBackends' -count=1 -v
-          go test -race ./internal/server -run '^TestTerminalPeerPostgresSQLBackends$' -count=1 -v
+          go test -race ./internal/server -run '^TestTerminalSocketProcess$' -count=1 -v
 
       - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
         run: |
@@ -227,9 +227,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: cd ui && bun install --frozen-lockfile
       - run: cd ui && bunx playwright install --with-deps chromium
-      - name: Verify real-time terminal recovery and idle cleanup
+      - name: Verify terminal disconnect and explicit new sessions
         run: cd ui && bun run test:terminal-fault
-      - name: Upload terminal timing and browser evidence
+      - name: Upload terminal browser evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:

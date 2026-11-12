@@ -257,7 +257,7 @@ func (f *fakeSandbox) StopRunner(ctx context.Context, sandboxID string, pid uint
 	return err
 }
 
-func (f *fakeSandbox) StartTerminal(ctx context.Context, sandboxID string, size sandboxrunner.PtySize, onData func([]byte)) (sandboxrunner.TerminalSession, error) {
+func (f *fakeSandbox) StartTerminal(ctx context.Context, input sandboxrunner.TerminalStart, onData func([]byte)) (sandboxrunner.TerminalSession, error) {
 	f.mu.Lock()
 	f.terminals++
 	terminal := &fakeTerminalSession{pid: 99}
@@ -337,35 +337,6 @@ func (f *fakeTerminalSession) isClosed() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.closed
-}
-
-func TestTerminalHubClosesIdleSessionAfterDisconnect(t *testing.T) {
-	hub := newTerminalHub(nil)
-	terminal := &fakeTerminalSession{pid: 99}
-	session := hub.Add("request-1", "sandbox-1", terminal)
-	_, _, cancel := session.Subscribe()
-
-	hub.CloseSessionWhenIdle(session.id, 10*time.Millisecond)
-	time.Sleep(25 * time.Millisecond)
-	if terminal.isClosed() {
-		t.Fatal("expected terminal to stay open while a watcher is subscribed")
-	}
-	if _, ok := hub.Get(session.id); !ok {
-		t.Fatal("expected terminal session to stay in the hub while a watcher is subscribed")
-	}
-
-	cancel()
-	hub.CloseSessionWhenIdle(session.id, 0)
-	deadline := time.Now().Add(time.Second)
-	for !terminal.isClosed() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !terminal.isClosed() {
-		t.Fatal("expected idle terminal session to close")
-	}
-	if _, ok := hub.Get(session.id); ok {
-		t.Fatal("expected idle terminal session to be removed from the hub")
-	}
 }
 
 func (f *fakeSandbox) startedCount() int {
@@ -873,7 +844,7 @@ func TestUserRunnerAuthorizationUsesRepositoryIntersection(t *testing.T) {
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/siblings"},
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/logs/control.log"},
 		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/events"},
-		{method: http.MethodPost, target: "/user/runner_requests/hidden-job/terminal", body: strings.NewReader(`{"cols":120,"rows":32}`)},
+		{method: http.MethodGet, target: "/user/runner_requests/hidden-job/terminal?cols=120&rows=32"},
 		{method: http.MethodGet, target: "/user/github/pulls/o/hidden/7/jobs"},
 		{method: http.MethodGet, target: "/user/github/runs/o/hidden/42/jobs"},
 		{method: http.MethodGet, target: "/user/github/branches/o/hidden/def/jobs?branch=secret"},
@@ -2122,46 +2093,6 @@ func TestUserRunnerDetailLogAndTerminal(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "runner request created") {
 		t.Fatalf("expected user runner log, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodPost, "/user/runner_requests/job-detail-1/terminal", strings.NewReader(`{"cols":120,"rows":32}`))
-	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
-	rec = httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected terminal session, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	var terminal struct {
-		SessionID string `json:"session_id"`
-		PID       uint32 `json:"pid"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &terminal); err != nil {
-		t.Fatal(err)
-	}
-	if terminal.SessionID == "" || terminal.PID != 99 {
-		t.Fatalf("unexpected terminal response: %#v", terminal)
-	}
-	if fake.terminals != 1 {
-		t.Fatalf("expected one terminal start, got %d", fake.terminals)
-	}
-
-	latest, err := store.ReadState(st.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	latest.Status = state.StatusCompleted
-	if err := store.WriteState(latest); err != nil {
-		t.Fatal(err)
-	}
-	req = httptest.NewRequest(http.MethodPost, "/user/runner_requests/job-detail-1/terminal/"+terminal.SessionID+"/input", strings.NewReader(`{"data":"ls\n"}`))
-	req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
-	rec = httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected inactive terminal to be rejected, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if fake.terminal == nil || !fake.terminal.isClosed() {
-		t.Fatalf("expected inactive terminal session to be closed")
 	}
 }
 
@@ -9952,3 +9883,6 @@ func publicCatalogFixture() []state.RunnerProfile {
 	}
 	return profiles
 }
+
+func (f *fakeTerminalSession) Done() <-chan struct{}           { return nil }
+func (f *fakeTerminalSession) KeepAlive(context.Context) error { return nil }

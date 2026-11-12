@@ -196,7 +196,7 @@ func TestSuspendedInstallationDeniesJobsAndDeploymentAccess(t *testing.T) {
 			t.Fatalf("suspended read: %s %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
-	for _, action := range []struct{ method, path string }{{"POST", "/user/deployments/" + d.ID + "/stop"}, {"POST", "/user/deployments/" + d.ID + "/retry"}, {"DELETE", "/user/deployments/" + d.ID}, {"POST", "/user/deployments/" + d.ID + "/revisions/1/terminal"}} {
+	for _, action := range []struct{ method, path string }{{"POST", "/user/deployments/" + d.ID + "/stop"}, {"POST", "/user/deployments/" + d.ID + "/retry"}, {"DELETE", "/user/deployments/" + d.ID}, {"GET", "/user/deployments/" + d.ID + "/revisions/1/terminal"}} {
 		if rec := deploymentAuthCall(srv, action.method, action.path, "{}"); rec.Code != 404 {
 			t.Fatalf("suspended mutation: %s %d %s", action.path, rec.Code, rec.Body.String())
 		}

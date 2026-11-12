@@ -16,13 +16,14 @@ const workflowJobLookupTimeout = 5 * time.Second
 func (s *Server) startBackgroundLoops() {
 	s.startOnce.Do(func() {
 		s.logger.Info("starting background loops", "worker_id", s.workerID, "max_concurrent_runners", s.cfg.MaxConcurrentRunners)
-		loopCount := 5
+		loopCount := 6
 		s.loopWG.Add(loopCount)
 		go s.workerLoop(s.loopCtx)
 		go s.sweeperLoop(s.loopCtx)
 		go s.reconcilerLoop(s.loopCtx)
 		go s.runnerWatchLoop(s.loopCtx)
 		go s.deploymentLoop(s.loopCtx)
+		go s.terminalExpiryLoop(s.loopCtx, s.store)
 	})
 }
 
