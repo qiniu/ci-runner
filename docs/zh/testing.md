@@ -468,33 +468,7 @@ Task 会安装匹配的 Chromium 并重新构建内嵌生产 UI。直接运行�
 Sandbox 凭据或生产地址。首次 Go／浏览器安装完成后约需两分钟；测试串行运行，
 不自动重试。
 
-独立 Playwright suite 会通过 `terminalfault` build tag 和 race detector 启动
-仅监听 loopback 的 Go 测试服务。它提供构建后的 UI，使用真实终端 SSE、回放与
-空闲清理代码，并通过 Python 在本地真实 PTY 中启动交互式 `/bin/sh`。
-认证、部署元数据、Provider 创建和 PTY resize 使用 fixture。loopback HTTP
-代理会断开现有连接，并按计时拒绝新的浏览器请求；使用浏览器原生 EventSource
-与真实时钟：
-
-| 中断时长 | 预期行为 |
-| --- | --- |
-| 5 秒 | 20 秒恢复窗口内恢复，session/PID 和 `Last-Event-ID` 保持一致；60 条编号输出按顺序且仅到达一次，恢复后输入正常。 |
-| 15 秒 | 在接近恢复边界时验证相同断言，不创建替代 Shell，也不提前清理。 |
-| 25 秒 | UI 约 20 秒关闭，并在断网期间尝试 DELETE。因 DELETE 无法到达 runnerd，网络恢复时 Shell 仍存活，随后由真实的 30 秒空闲清理回收；不自动创建替代 Shell 或重连。 |
-
-恢复窗口从首个 EventSource error 开始计算，而非代理中断瞬间。断言保留有界
-调度余量和实际时长，不加速浏览器时钟。即使计时器提前触发，代理也会重新核对
-单调时钟截止时间后才恢复流量。5 秒场景会在早期游标观察后等待额外一帧，
-并以首个 error 之前最后一个数据／心跳事件的游标核对回放，避免在途输出导致
-断言使用过期游标。测试结束后回收 fixture 和子进程。
-该命令独立于 `task test` 与 `task ui-production-smoke`，Check 中由
-`terminal-fault` job 运行；`RUNNERD_UI_SMOKE_BASE_URL` 不会将它切到线上。
-
-查看 `ui/test-results/` 中的 `terminal-harness-*.log`、每个测试的 `timings.json`、
-原生 `events.json` 和服务端 `metrics.json`、恢复／超时截图，以及失败时保留的 Playwright trace。
-CI 无论成功或失败都会上传这些产物。失败时先核对时长、游标、序号和进程退出
-证据，再决定如何处理，不要直接放宽断言或增加重试。该测试不能证明生产代理、
-GitHub 授权、远程 Sandbox、TTL 或权限撤销验收通过，仍须执行
-[部署 smoke 门槛](deployment-smoke.md#9-sandbox-deploy-验收)。
+本地 `terminalfault` 夹具提供构建后的 UI，使用产品 WebSocket／数据库处理逻辑与真实本地 PTY。TCP 代理断开已升级连接后，Chromium 必须显示断连并关闭 shell；只有手动连接才创建新 session，不恢复旧变量或重放输入。认证、Provider 和 resize 使用夹具。日志见 `ui/test-results/terminal-websocket.log`，失败时保留 Playwright trace。远端适配与 PostgreSQL 双进程验证见 [Web Console](../terminal-websocket.md#verification)。
 
 确认已配置的公共规格（迁移保留旧行，启动不创建规格）：
 
@@ -1077,18 +1051,7 @@ API 回归还覆盖完整分支／Tag 引用解析、同名来源的幂等冲突
 
 ### 部署终端验证
 
-重连回归还覆盖持续输出超过一分钟时的 10 秒代理读取空闲限制、HTTP/1.1 与 HTTP/2 的读写期限、按字节偏移只补发缺失后缀、
-无效或已移出缓冲区的游标、已关闭会话不再重放输出，以及旧空闲定时器的竞态。
-运行 `cd ui && bun run test:production --grep 'resumes deployment terminal'`，
-使用 Chromium 的真实 EventSource 验证断流后恢复同一个 PTY、权限拒绝、服务端显式关闭、反复空响应、空闲心跳恢复及 20 秒恢复上限。
-这些是本地传输夹具，不证明生产入口会一直保持输出连接。生产验收仍需分别验证持续输出及空闲超过一分钟，
-确认传输恢复后 PID 不变，再验证停止、到期和权限撤销仍会关闭终端。
-定位首次断流时应保留 runnerd 和入口代理日志；仅凭心跳及本地期限测试，无法确认代理是否存在整次请求时长限制。
-
-
-运行 `go test ./internal/server ./internal/sandboxrunner -run 'TestDeploymentTerminal|TestDeploymentsShareJobs|TestDeploymentReadsAndMutations|TestUser.*Terminal|TestTerminalHub' -count=1`，验证 PTY 输入、缩放、关闭，仓库授权与用户终端归属，revision／attempt 绑定，停止／到期拒绝，以及 Connect 使用剩余有效期。运行 `cd ui && bun run test:production --grep 'separates deployment'`，通过浏览器夹具验证标签切换、手动连接、键盘输入和断开；夹具不证明真实 Sandbox PTY 可用。真实验收时打开运行中的版本，连接后执行 `pwd`、查看应用日志文件、缩放、断开并重连，再停止部署并确认终端不可用。历史版本不得打开当前 Sandbox。
-
-运行 `go test -race ./internal/sandboxrunner -run TestTerminalCloseAfterSandboxRemoval -count=1`，验证 Sandbox 删除后的终端清理。PTY Kill 失败时，只有原 Sandbox API 确认同一资源已不存在才视为关闭成功；资源仍存在、查询被拒绝或提供方不可用时必须保留关闭错误。Kill 成功时不额外查询。
+运行 `go test ./internal/server ./internal/sandboxrunner -run "TestTerminal|TestDeploymentTerminal"` 与 `cd ui && bun run test:production --grep "deployment terminal closes"`，覆盖精确仓库权限、保存的凭据／剩余有效期、执行批次变化、关闭及手动新建会话。真实 PTY 适配、浏览器故障及数据库双进程验证的证据边界见 [Web Console](../terminal-websocket.md)。
 
 部署上下文验证：执行 `cd ui && bun test src/github-context-routes.test.js src/app-load-policy.test.js src/components/user-deployments-section.test.js` 及部署 production 浏览器夹具，覆盖旧链接跳转、直接刷新／OAuth 返回、分支名编码、不可变版本选择、返回列表与分页前的本地历史筛选。状态测试包括 `TestDeploymentContextListsMatchHistoricalRevisionsBeforePagination`。
 

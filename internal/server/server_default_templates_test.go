@@ -1221,7 +1221,7 @@ func (s *lifecycleSandboxService) StopRunner(context.Context, string, uint32) er
 	return nil
 }
 
-func (s *lifecycleSandboxService) StartTerminal(context.Context, string, sandboxrunner.PtySize, func([]byte)) (sandboxrunner.TerminalSession, error) {
+func (s *lifecycleSandboxService) StartTerminal(context.Context, sandboxrunner.TerminalStart, func([]byte)) (sandboxrunner.TerminalSession, error) {
 	return nil, nil
 }
 

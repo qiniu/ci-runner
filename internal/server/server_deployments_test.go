@@ -481,7 +481,7 @@ func TestDeploymentReadsAndMutationsRejectRevokedRepositoryAccess(t *testing.T) 
 				t.Fatal(err)
 			}
 			for _, action := range []struct{ method, path string }{
-				{"GET", ""}, {"GET", "/events"}, {"GET", "/revisions"}, {"GET", "/revisions/1/events"}, {"POST", "/stop"}, {"POST", "/retry"}, {"DELETE", ""}, {"POST", "/revisions/1/terminal"}, {"GET", "/revisions/1/terminal/other/events"}, {"POST", "/revisions/1/terminal/other/input"}, {"POST", "/revisions/1/terminal/other/resize"},
+				{"GET", ""}, {"GET", "/events"}, {"GET", "/revisions"}, {"GET", "/revisions/1/events"}, {"POST", "/stop"}, {"POST", "/retry"}, {"DELETE", ""}, {"GET", "/revisions/1/terminal"}, {"GET", "/revisions/1/terminal/other/events"}, {"POST", "/revisions/1/terminal/other/input"}, {"POST", "/revisions/1/terminal/other/resize"},
 			} {
 				req := httptest.NewRequest(action.method, "/user/deployments/"+fixture.ID+action.path, nil)
 				req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))

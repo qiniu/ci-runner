@@ -107,11 +107,14 @@ func TestReconciledBootstrapFailureRespectsRetryBudget(t *testing.T) {
 				}
 			}
 			srv := newRunnerLifecycleTestServer(t, store, api.URL, provider)
-			srv.cfg.WorkerLeaseTTL = 150 * time.Millisecond
+			// Keep the creation lease live long enough to checkpoint the failure
+			// under race/coverage instrumentation, then let recovery take over.
+			// A 150ms lease can lose the cause before this fixture records it.
+			srv.cfg.WorkerLeaseTTL = time.Second
 			srv.cfg.RetryBaseDelay, srv.cfg.RetryMaxDelay, srv.cfg.RetryMaxAttempts = 20*time.Millisecond, 20*time.Millisecond, 1
 
 			for index := 0; index <= tc.retries; index++ {
-				deadline := time.Now().Add(4 * time.Second)
+				deadline := time.Now().Add(10 * time.Second)
 				for {
 					_, claim, ok, err := store.ClaimNextRunnable("creator", time.Minute)
 					if err != nil || time.Now().After(deadline) {

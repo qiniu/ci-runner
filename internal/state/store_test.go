@@ -3848,6 +3848,7 @@ func TestFreshSchemaSQLBackends(t *testing.T) {
 			}
 			defer closeTestDB(t, migratedDB)
 			testRepositoryAccessRefreshOwnership(t, migrated)
+			testTerminalOwnership(t, migrated)
 			for _, table := range sqlBackendTestTables() {
 				if table == "runner_groups" || table == "runner_group_specs" || table == "repository_policies" {
 					if migratedDB.Migrator().HasTable(table) {
@@ -4566,6 +4567,7 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 func sqlBackendTestTables() []string {
 	return []string{
 		"runner_admission_guard",
+		"terminal_sessions",
 		"deployment_events",
 		"deployment_revisions",
 		"deployments",

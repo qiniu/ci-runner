@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { connect, type Socket } from "node:net"
 import { once } from "node:events"
 import { createServer, request, type ServerResponse, type ClientRequest } from "node:http"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -9,9 +10,7 @@ import { fileURLToPath } from "node:url"
 
 export type TerminalMetrics = {
   creates: number
-  deletes: number
   records: Record<string, { pid: number; alive: boolean; exited_at: string }>
-  streams: { session_id: string; last_event_id: string }[]
 }
 
 // Timers can fire before a performance.now() deadline. Keep traffic blocked
@@ -26,8 +25,8 @@ export function scheduleAtMonotonicDeadline(deadline: number, callback: () => vo
   return () => clearTimeout(timer)
 }
 
-// All traffic is loopback-only. A real proxy drops the active SSE connection and
-// rejects subsequent requests using native EventSource retries and browser timers.
+// All traffic is loopback-only. Drop real upgraded sockets to exercise browser
+// disconnect behavior without replacing the WebSocket implementation.
 export async function startTerminalFaultHarness(logPath: string) {
   const temporary = await mkdtemp(join(tmpdir(), "runnerd-terminal-fault-"))
   const readyFile = join(temporary, "ready")
@@ -65,9 +64,27 @@ export async function startTerminalFaultHarness(logPath: string) {
     incoming.pipe(upstream)
   })
 
+  const sockets = new Set<Socket>()
+  proxy.on("upgrade", (incoming, socket, head) => {
+    if (faulted) { blockedRequests++; socket.destroy(); return }
+    const target = new URL(backend)
+    const upstream = connect(Number(target.port), target.hostname, () => {
+      upstream.write(`${incoming.method} ${incoming.url} HTTP/1.1\r\n` +
+        Object.entries(incoming.headers).map(([k,v]) => `${k}: ${v}`).join("\r\n") + "\r\n\r\n")
+      if (head.length) upstream.write(head)
+      socket.pipe(upstream).pipe(socket)
+    })
+    sockets.add(upstream)
+    upstream.on("error", () => socket.destroy())
+    socket.on("error", () => upstream.destroy())
+    upstream.on("close", () => { sockets.delete(upstream); socket.destroy() })
+    socket.on("close", () => upstream.destroy())
+  })
+
   async function close() {
     cancelRestoration?.()
     faulted = false
+    for (const socket of sockets) socket.destroy()
     proxy.closeAllConnections()
     await new Promise<void>(resolve => proxy.close(() => resolve()))
     try {
@@ -121,6 +138,7 @@ export async function startTerminalFaultHarness(logPath: string) {
       blockedRequests = 0
       const started = performance.now()
       const startedAt = Date.now()
+      for (const socket of sockets) socket.destroy()
       for (const entry of active) { entry.upstream.destroy(); entry.response.destroy() }
       const restored = new Promise<{ actualOutageMs: number; blockedRequests: number }>(resolve => {
         cancelRestoration = scheduleAtMonotonicDeadline(started + durationMs, () => {

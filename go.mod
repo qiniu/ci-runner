@@ -6,6 +6,7 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.10.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jimmicro/pprof v1.2.0
 	github.com/miclle/deployd v0.0.0-20261008112950-f1ca4144c713

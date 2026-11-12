@@ -23,7 +23,7 @@ import (
 )
 
 // This fixture is opt-in and loopback-only. Authentication and deployment data
-// are fixtures; SSE, replay, idle cleanup and the OS PTY are real.
+// are fixtures; the WebSocket handler, database lifecycle and OS PTY are real.
 func TestTerminalFaultHarness(t *testing.T) {
 	readyFile := os.Getenv("RUNNERD_TERMINAL_FAULT_READY_FILE")
 	if readyFile == "" {
@@ -33,11 +33,41 @@ func TestTerminalFaultHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal("terminal fault tests require Python 3 with the Unix pty module")
 	}
-	srv := &Server{terminals: newTerminalHub(nil)}
+	fixture := newTerminalFixture(t, "deployment")
+	srv := fixture.srv
 	var mu sync.Mutex
 	records := map[string]*faultShellRecord{}
-	streams := []faultStreamRecord{}
-	creates, deletes := 0, 0
+	creates := 0
+	fixture.srv.sandbox = &faultSandbox{fakeSandbox: fixture.fake, start: func(ctx context.Context, input sandboxrunner.TerminalStart, onData func([]byte)) (sandboxrunner.TerminalSession, error) {
+		pty, output, err := startFaultPTY(python)
+		if err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		creates++
+		record := &faultShellRecord{PID: pty.pid, Alive: true}
+		records[input.ID] = record
+		mu.Unlock()
+		go func() {
+			buffer := make([]byte, 4096)
+			for {
+				n, err := output.Read(buffer)
+				if n > 0 {
+					onData(buffer[:n])
+				}
+				if err != nil {
+					break
+				}
+			}
+			_ = pty.cmd.Wait()
+			mu.Lock()
+			record.Alive = false
+			record.ExitedAt = time.Now()
+			mu.Unlock()
+			close(pty.done)
+		}()
+		return pty, nil
+	}}
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	deployment := map[string]any{
@@ -55,78 +85,15 @@ func TestTerminalFaultHarness(t *testing.T) {
 		case path == "/__metrics":
 			mu.Lock()
 			defer mu.Unlock()
-			writeJSON(w, http.StatusOK, map[string]any{"creates": creates, "deletes": deletes, "records": records, "streams": streams})
+			writeJSON(w, http.StatusOK, map[string]any{"creates": creates, "records": records})
 		case path == "/auth/session":
 			writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "oauth_enabled": true, "login": "fixture", "role": "user"})
 		case path == "/sandbox/regions":
 			writeJSON(w, http.StatusOK, []any{})
-		case path == "/user/deployments/terminal-fault/terminal" && r.Method == http.MethodPost:
-			pty, output, err := startFaultPTY(python)
-			if err != nil {
-				t.Error(err)
-				http.Error(w, "start test PTY", http.StatusInternalServerError)
-				return
-			}
-			session := srv.terminals.Add("deployment:terminal-fault", "local-pty", pty)
-			srv.terminals.CloseSessionWhenIdle(session.id, terminalIdleCloseDelay)
-			mu.Lock()
-			creates++
-			record := &faultShellRecord{PID: pty.pid, Alive: true}
-			records[session.id] = record
-			mu.Unlock()
-			go func() {
-				buffer := make([]byte, 4096)
-				for {
-					n, err := output.Read(buffer)
-					if n > 0 {
-						session.append(buffer[:n])
-					}
-					if err != nil {
-						break
-					}
-				}
-				_ = pty.cmd.Wait()
-				mu.Lock()
-				record.Alive = false
-				record.ExitedAt = time.Now()
-				mu.Unlock()
-				close(pty.done)
-			}()
-			writeJSON(w, http.StatusCreated, map[string]any{"session_id": session.id, "pid": pty.pid, "sandbox_id": "local-pty"})
-		case strings.HasPrefix(path, "/user/deployments/terminal-fault/terminal/"):
-			parts := strings.Split(strings.TrimPrefix(path, "/user/deployments/terminal-fault/terminal/"), "/")
-			session, ok := srv.terminals.Get(parts[0])
-			if !ok {
-				http.NotFound(w, r)
-				return
-			}
-			if r.Method == http.MethodDelete && len(parts) == 1 {
-				mu.Lock()
-				deletes++
-				mu.Unlock()
-				if err := srv.terminals.CloseSession(r.Context(), session.id); err != nil {
-					t.Error(err)
-				}
-				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-				return
-			}
-			if len(parts) == 2 {
-				switch parts[1] {
-				case "events":
-					mu.Lock()
-					streams = append(streams, faultStreamRecord{SessionID: session.id, LastEventID: r.Header.Get("Last-Event-ID")})
-					mu.Unlock()
-					srv.streamTerminalSession(w, r, session)
-					return
-				case "input":
-					srv.sendTerminalInput(w, r, session)
-					return
-				case "resize":
-					srv.resizeTerminalSession(w, r, session)
-					return
-				}
-			}
-			http.NotFound(w, r)
+		case path == "/user/deployments/terminal-fault/terminal" && r.Method == http.MethodGet:
+			r.URL.Path = "/user/deployments/terminal-deploy/revisions/1/terminal"
+			r.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+			srv.ServeHTTP(w, r)
 		case path == "/user/deployments/terminal-fault":
 			writeJSON(w, http.StatusOK, deployment)
 		case path == "/user/deployment-repositories":
@@ -145,7 +112,6 @@ func TestTerminalFaultHarness(t *testing.T) {
 	})
 	httpServer := httptest.NewServer(handler)
 	t.Cleanup(httpServer.Close)
-	t.Cleanup(srv.terminals.Close)
 	if err := os.WriteFile(readyFile, []byte(httpServer.URL), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +127,6 @@ type faultShellRecord struct {
 	PID      uint32    `json:"pid"`
 	Alive    bool      `json:"alive"`
 	ExitedAt time.Time `json:"exited_at"`
-}
-
-type faultStreamRecord struct {
-	SessionID   string `json:"session_id"`
-	LastEventID string `json:"last_event_id"`
 }
 
 type faultPTY struct {
@@ -219,3 +180,14 @@ func (p *faultPTY) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+type faultSandbox struct {
+	*fakeSandbox
+	start func(context.Context, sandboxrunner.TerminalStart, func([]byte)) (sandboxrunner.TerminalSession, error)
+}
+
+func (s *faultSandbox) StartTerminal(ctx context.Context, input sandboxrunner.TerminalStart, output func([]byte)) (sandboxrunner.TerminalSession, error) {
+	return s.start(ctx, input, output)
+}
+func (p *faultPTY) Done() <-chan struct{}           { return p.done }
+func (p *faultPTY) KeepAlive(context.Context) error { return nil }

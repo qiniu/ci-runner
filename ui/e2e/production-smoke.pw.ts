@@ -1281,18 +1281,11 @@ test("separates deployment list, creation, and refreshable detail pages", async 
   const pageLoads = observePageLoads(page)
   const terminalInputs: string[] = []
   let terminalClosed = false
-  await page.addInitScript(() => {
-    const BrowserEventSource = window.EventSource
-    window.EventSource = class extends BrowserEventSource {
-      constructor(url: string | URL, options?: EventSourceInit) {
-        if (String(url).includes("/terminal/")) {
-          const stream = { onmessage: null as ((event: { data: string }) => void) | null, onerror: null, addEventListener() {}, close() {} }
-          window.setTimeout(() => stream.onmessage?.({ data: JSON.stringify("Sandbox shell ready\r\n$ ") }), 100)
-          return stream as unknown as EventSource
-        }
-        super(url, options)
-      }
-    }
+  await page.routeWebSocket("**/terminal?**", socket => {
+    socket.send(JSON.stringify({ type: "ready", session_id: "terminal-fixture", pid: 99, sandbox_id: "sandbox-fixture" }))
+    socket.send(JSON.stringify({ type: "output", data: Buffer.from("Sandbox shell ready\r\n$ ").toString("base64") }))
+    socket.onMessage(raw => { const frame = JSON.parse(String(raw)); if (frame.type === "input") terminalInputs.push(frame.data) })
+    socket.onClose(() => { terminalClosed = true })
   })
   let created = false
   let submittedTemplate = ""
@@ -1321,12 +1314,7 @@ test("separates deployment list, creation, and refreshable detail pages", async 
       created = true
       return route.fulfill({ status: 201, json: deployment })
     }
-    if (url.pathname.endsWith("/terminal") && route.request().method() === "POST") return route.fulfill({ status: 201, json: { session_id: "terminal-fixture", pid: 99, sandbox_id: "sandbox-fixture" } })
-    if (url.pathname.includes("/terminal/")) {
-      if (url.pathname.endsWith("/input")) terminalInputs.push(route.request().postDataJSON().data)
-      if (route.request().method() === "DELETE") terminalClosed = true
-      return route.fulfill({ json: { status: "ok" } })
-    }
+    if (url.pathname.endsWith("/terminal")) return route.fulfill({ json: { available: true } })
     if (url.pathname === "/user/deployment-repositories") return route.fulfill({ json: deploymentNavigationFixture(created ? [deployment, otherDeployment] : []) })
     if (url.pathname === "/user/deployments") return route.fulfill({ json: { items: created ? (url.searchParams.get("repository_full_name") === otherDeployment.repository_full_name ? [otherDeployment] : url.searchParams.has("repository_full_name") ? [deployment] : [deployment, otherDeployment]) : [], total: created ? 2 : 0 } })
     if (url.pathname === "/user/deployments/deployment-fixture") return route.fulfill({ json: { ...deployment, revisions: [{ ...revisions[0], status: deployment.status }, revisions[1]] } })
@@ -1751,90 +1739,37 @@ test("ignores an old deployment reauthentication failure after navigation", asyn
   expect(loginRequests).toBe(0)
 })
 
-for (const ending of ["denied access", "server closure", "prolonged outage", "empty reconnects", "idle heartbeat"] as const) {
-test(`resumes deployment terminal output after transport loss and closes on ${ending}`, async ({ page }, testInfo) => {
-  test.setTimeout(60000)
+test("deployment terminal closes on transport loss and requires explicit new session", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
   const deployment = { id: "terminal-resume", repository_full_name: "fixture-user/project", ref: "refs/heads/main", commit_sha: "a".repeat(40), status: "running", sandbox_id: "same-sandbox", revision_number: 1, expires_at: new Date(Date.now() + 3600000).toISOString() }
   let creates = 0
-  let deletes = 0
-  let streams = 0
-  await page.addInitScript(() => {
-    const NativeEventSource = window.EventSource
-    window.EventSource = class extends NativeEventSource {
-      constructor(url: string | URL, options?: EventSourceInit) {
-        super(url, options)
-        this.addEventListener("terminal-heartbeat", () => {
-          document.documentElement.dataset.terminalHeartbeats = "received"
-        })
-        this.addEventListener("message", (event) => {
-          document.documentElement.dataset.terminalEventIds = `${document.documentElement.dataset.terminalEventIds ?? ""}${event.lastEventId},`
-        })
-      }
-    }
+  let closeSocket: () => void = () => {}
+  const input: string[] = []
+  await page.routeWebSocket("**/terminal?**", socket => {
+    creates++
+    socket.send(JSON.stringify({ type: "ready", session_id: `session-${creates}`, pid: 99, sandbox_id: "same-sandbox" }))
+    socket.send(JSON.stringify({ type: "output", data: Buffer.from(`SESSION ${creates}\r\n`).toString("base64") }))
+    socket.onMessage(data => input.push(String(data)))
+    closeSocket = () => socket.close()
   })
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
-  await page.route("**/user/**", async (route) => {
-    const request = route.request()
-    const path = new URL(request.url()).pathname
-    if (path.endsWith("/terminal") && request.method() === "POST") {
-      creates++
-      return route.fulfill({ status: 201, json: { session_id: "same-pty", pid: 99, sandbox_id: deployment.sandbox_id } })
-    }
-    if (path.includes("/terminal/")) {
-      if (request.method() === "DELETE") {
-        deletes++
-        return route.fulfill({ json: { status: "ok" } })
-      }
-      if (path.endsWith("/events")) {
-        streams++
-        if (streams >= 3) {
-          if (ending === "empty reconnects") return route.fulfill({ contentType: "text/event-stream", body: ": empty\n\n" })
-          if (ending === "idle heartbeat" && streams === 3) return route.fulfill({ contentType: "text/event-stream", body: "id: 13\nevent: terminal-heartbeat\ndata: {}\n\n" })
-          if (ending === "prolonged outage") return route.abort("failed")
-          if (ending === "server closure") return route.fulfill({ contentType: "text/event-stream", body: "event: terminal-closed\ndata: {}\n\n" })
-          return route.fulfill({ status: 403, body: "access revoked" })
-        }
-        const id = streams === 1 ? 6 : 13
-        const text = streams === 1 ? "FIRST\r\n" : "SECOND\r\n"
-        // A finite SSE response models a proxy dropping an otherwise healthy
-        // stream. Use the browser's real EventSource retry and cursor handling.
-        return route.fulfill({ contentType: "text/event-stream", body: `id: ${id}\ndata: ${JSON.stringify(text)}\n\n` })
-      }
-      return route.fulfill({ json: { status: "ok" } })
-    }
+  await page.route("**/auth/session", route => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/**", route => {
+    const path = new URL(route.request().url()).pathname
     if (path === "/user/deployments/terminal-resume") return route.fulfill({ json: { ...deployment, revisions: [{ ...deployment, number: 1 }] } })
     if (path === "/user/deployment-repositories") return route.fulfill({ json: deploymentNavigationFixture([deployment]) })
     if (path === "/user/deployments") return route.fulfill({ json: { items: [deployment], total: 1 } })
     if (path.endsWith("/events")) return route.fulfill({ json: { events: [], has_more: false } })
-    if (path.endsWith("/resources")) return route.fulfill({ json: {} })
-    return route.fulfill({ status: 404, body: "fixture route not found" })
+    return route.fulfill({ json: {} })
   })
   await page.goto("/github/fixture-user/project/deployments/terminal-resume?branch=main")
   await page.getByRole("tab", { name: "Terminal", exact: true }).click()
   await page.getByRole("button", { name: "Connect", exact: true }).click()
-  await expect(page.locator(".xterm-rows")).toContainText("FIRST")
-  await expect(page.locator(".xterm-rows")).toContainText("SECOND", { timeout: 10000 })
-  expect(streams).toBe(2)
-  await expect(page.locator("html")).toHaveAttribute("data-terminal-event-ids", "6,13,")
+  await expect(page.locator(".xterm-rows")).toContainText("SESSION 1")
+  closeSocket()
+  await expect(page.getByRole("alert")).toContainText("disconnected")
   expect(creates).toBe(1)
-  expect(deletes).toBe(0)
-  await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath("terminal-resumed.png") })
-  if (ending === "idle heartbeat") {
-    await page.clock.install()
-    await page.clock.fastForward(18_000)
-    await expect(page.locator("html")).toHaveAttribute("data-terminal-heartbeats", "received", { timeout: 10000 })
-    await page.clock.fastForward(3_000)
-    await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible()
-    expect(deletes).toBe(0)
-    await page.getByRole("button", { name: "Disconnect", exact: true }).click()
-    await expect.poll(() => deletes).toBe(1)
-    return
-  }
-  await expect(page.getByRole("alert")).toContainText("Terminal stream disconnected", { timeout: 25000 })
-  await expect.poll(() => deletes).toBe(1)
-  expect(streams).toBeGreaterThanOrEqual(3)
-  expect(creates).toBe(1)
+  await page.getByRole("button", { name: "Connect", exact: true }).click()
+  await expect(page.locator(".xterm-rows")).toContainText("SESSION 2")
+  expect(creates).toBe(2)
+  expect(input.every(data => JSON.parse(data).type === "resize")).toBe(true)
 })
-}

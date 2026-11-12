@@ -49,9 +49,6 @@ worker:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.TerminalPeerOrigin != "https://node-a.example.test" {
-		t.Fatalf("unexpected peer origin %q", cfg.TerminalPeerOrigin)
-	}
 	if cfg.HTTPAddr != ":28000" {
 		t.Fatalf("unexpected HTTP address: %s", cfg.HTTPAddr)
 	}
@@ -615,14 +612,5 @@ github:
 	}
 	if !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("expected multiple auth error, got %v", err)
-	}
-}
-
-func TestTerminalPeerOriginRejectsUnsafeAddresses(t *testing.T) {
-	for _, value := range []string{"http://node.example.test", "ftp://node.example.test", "https://u:p@node.example.test", "https://node.example.test/a", "https://node.example.test?q=1", "https://node.example.test#part", ":25500"} {
-		cfg := Config{TerminalPeerOrigin: value}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "terminal_peer_origin") {
-			t.Errorf("accepted origin %q", value)
-		}
 	}
 }

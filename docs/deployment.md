@@ -661,43 +661,7 @@ closes the interactive shell. The shell can inspect processes and application
 log files; it does not automatically replay the deployment log or attach to the
 service process's stdout. Shell changes are local to that Sandbox.
 
-Terminal routes use `/user/deployments/{id}/revisions/{number}/terminal`:
-`POST` creates a PTY; `GET /{sessionID}/events` streams output;
-`POST /{sessionID}/input` sends input; `POST /{sessionID}/resize` resizes it;
-`DELETE /{sessionID}` closes it. Every access checks the current user's repository permission and shell ownership.
-Closing an existing shell requires its creating account, so cleanup still works
-after permissions or lifecycle change. Sessions bind the opening account,
-deployment, revision, attempt and Sandbox identity; historical
-revisions cannot connect to the current Sandbox. Persisted details/logs remain
-local reads; opening a terminal uses the saved provider endpoint and encrypted
-credential, without exposing them to the browser. Connect uses remaining
-lifetime rather than a fixed Sandbox timeout. A local lifecycle check runs every
-five seconds and open sessions revalidate remote access every thirty seconds;
-closed/disconnected streams receive the existing thirty-second idle cleanup.
-Terminal output streams send an SSE comment heartbeat every five seconds and
-renew a thirty-second write deadline before each output/heartbeat. This avoids
-the HTTP server's absolute response timeout closing an active shell while still
-bounding blocked writes. Heartbeats do not appear in shell output, extend Sandbox
-lifetime, or bypass lifecycle and repository authorization checks. Ordinary detail
-refresh does not close the shell. A transient transport failure lets EventSource
-resume the same PTY instead of deleting it. SSE output IDs are byte offsets in
-the session's retained tail (64 KiB after trimming, at most 128 KiB before trimming);
-`Last-Event-ID` replays only the missing suffix. Cursorless reconnects retain the
-first subscription's baseline, so losing the first event cannot hide an evicted
-prefix. Invalid, future or evicted cursors
-close the stream explicitly rather than duplicating output or hiding a gap.
-Each reconnect repeats the normal account/repository/revision authorization.
-Recovery is bounded to twenty seconds per outage, below the thirty-second idle
-cleanup. Response headers alone do not reset that window; only output or a
-`terminal-heartbeat` SSE event confirms recovery, including for an idle shell. Old cleanup timers cannot shorten the latest disconnect's grace period.
-A denied reconnect, explicit server closure, unrecoverable gap or recovery timeout
-closes the PTY and requires a manual new connection. Leaving the terminal still
-closes it immediately. This does not extend Sandbox lifetime.
-The shared Runner terminal stream also checks its saved request/Sandbox and exact
-installation/repository identity every five seconds, and the opening account's
-repository access every thirty seconds. Terminal state, changed identity, denied
-access or an authorization refresh failure closes the PTY and attached streams;
-heartbeats and continuous output cannot keep a revoked shell alive.
+The terminal uses a single same-origin WebSocket with database session ownership. Disconnect ends the session; users explicitly open a new shell. Current account/repository/revision/attempt checks and saved provider credentials remain required. See [Web Console](terminal-websocket.md) for protocol, Linux prerequisites, cleanup evidence, limits and rollout.
 
 ## GitHub context routes
 

@@ -3,12 +3,7 @@ import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 
-export type SandboxTerminalSession = {
-  session_id: string
-  pid: number
-  sandbox_id: string
-}
-
+export type SandboxTerminalSession = { session_id: string; pid: number; sandbox_id: string }
 type UseSandboxTerminalOptions = {
   endpoint: string
   available: boolean
@@ -18,238 +13,127 @@ type UseSandboxTerminalOptions = {
   connectErrorMessage: string
 }
 
-export function useSandboxTerminal({
-  endpoint,
-  available,
-  request,
-  connectingMessage,
-  streamDisconnectedMessage,
-  connectErrorMessage,
-}: UseSandboxTerminalOptions) {
+// Every connection owns a new shell. No session resume, command retries or
+// follow-up HTTP requests that would need to locate a particular runnerd node.
+export function useSandboxTerminal({ endpoint, available, request, connectingMessage, streamDisconnectedMessage, connectErrorMessage }: UseSandboxTerminalOptions) {
   const [terminalSession, setTerminalSession] = useState<SandboxTerminalSession | null>(null)
   const [terminalError, setTerminalError] = useState("")
   const [terminalConnecting, setTerminalConnecting] = useState(false)
   const terminalEl = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
-  const terminalDataDisposableRef = useRef<{ dispose: () => void } | null>(null)
-  const terminalSessionRef = useRef<SandboxTerminalSession | null>(null)
-  const reconnectTimeoutRef = useRef<number | null>(null)
-  const resizeTimeoutRef = useRef<number | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const resizeRef = useRef<number | null>(null)
+  const generation = useRef(0)
 
-  const closeTerminalSession = useCallback(
-    (session = terminalSessionRef.current) => {
-      if (reconnectTimeoutRef.current !== null) {
-        window.clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-      eventSourceRef.current?.close()
-      eventSourceRef.current = null
-      terminalDataDisposableRef.current?.dispose()
-      terminalDataDisposableRef.current = null
-      if (resizeTimeoutRef.current) {
-        window.clearTimeout(resizeTimeoutRef.current)
-        resizeTimeoutRef.current = null
-      }
-      terminalRef.current?.dispose()
-      terminalRef.current = null
-      fitRef.current = null
-      terminalSessionRef.current = null
-      setTerminalSession(null)
-      if (session) {
-        void fetch(`${endpoint}/terminal/${encodeURIComponent(session.session_id)}`, {
-          method: "DELETE",
-          credentials: "same-origin",
-          keepalive: true,
-        }).catch(() => undefined)
-      }
-    },
-    [endpoint],
-  )
+  const closeTerminalSession = useCallback(() => {
+    generation.current++
+    const socket = socketRef.current
+    socketRef.current = null
+    socket?.close()
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    if (resizeRef.current !== null) window.clearTimeout(resizeRef.current)
+    timerRef.current = resizeRef.current = null
+    terminalRef.current?.dispose()
+    terminalRef.current = null
+    fitRef.current = null
+    setTerminalSession(null)
+    setTerminalConnecting(false)
+  }, [])
 
   useEffect(() => {
-    setTerminalError("")
+    // The endpoint/lifecycle owns this external socket; tear it down before
+    // another resource can render or send input through it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     closeTerminalSession()
-    return () => {
-      closeTerminalSession()
-    }
-  }, [closeTerminalSession])
+    return closeTerminalSession
+  }, [endpoint, available, closeTerminalSession])
 
   const connectTerminal = useCallback(async () => {
-    if (!available || terminalConnecting || terminalSession) return
+    if (!available || terminalRef.current) return
+    const attempt = ++generation.current
     setTerminalConnecting(true)
     setTerminalError("")
+    const fail = (message: string) => {
+      if (generation.current !== attempt) return
+      setTerminalError(message)
+      closeTerminalSession()
+    }
     try {
-      // Canvas renderers need the resolved stack, not a CSS var() expression.
       const fontFamily = terminalEl.current
         ? getComputedStyle(terminalEl.current).getPropertyValue("--font-mono").trim() || "monospace"
         : "monospace"
-      const term = new Terminal({
-        cursorBlink: true,
-        convertEol: true,
-        fontFamily,
-        fontSize: 13,
-        theme: {
-          background: "#111318",
-          foreground: "#e6edf3",
-          cursor: "#36d399",
-          selectionBackground: "#334155",
-        },
-      })
+      const term = new Terminal({ cursorBlink: true, convertEol: true, fontFamily, fontSize: 13,
+        theme: { background: "#111318", foreground: "#e6edf3", cursor: "#36d399", selectionBackground: "#334155" } })
       const fit = new FitAddon()
       term.loadAddon(fit)
       terminalRef.current = term
       fitRef.current = fit
-      if (terminalEl.current) {
-        await document.fonts.load(`13px ${fontFamily}`).catch(() => undefined)
-        if (terminalRef.current !== term) return
-        term.open(terminalEl.current)
-        fit.fit()
-      }
+      await document.fonts.load(`13px ${fontFamily}`).catch(() => undefined)
+      if (generation.current !== attempt) return
+      if (terminalEl.current) { term.open(terminalEl.current); fit.fit() }
       term.writeln(connectingMessage)
-      const cols = term.cols || 100
-      const rows = term.rows || 28
-      const session = (await request(`${endpoint}/terminal`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cols, rows }),
-      })) as SandboxTerminalSession
-      if (terminalRef.current !== term) {
-        void fetch(`${endpoint}/terminal/${encodeURIComponent(session.session_id)}`, {
-          method: "DELETE",
-          credentials: "same-origin",
-          keepalive: true,
-        }).catch(() => undefined)
-        return
-      }
-      setTerminalSession(session)
-      terminalSessionRef.current = session
-      term.writeln(`Connected to ${session.sandbox_id} pid=${session.pid}`)
-      const events = new EventSource(`${endpoint}/terminal/${encodeURIComponent(session.session_id)}/events`, {
-        withCredentials: true,
-      })
-      eventSourceRef.current = events
-      const streamFailed = () => {
-        if (eventSourceRef.current !== events) return
-        setTerminalError(streamDisconnectedMessage)
-        closeTerminalSession(session)
-      }
-      const streamRecovered = () => {
-        if (eventSourceRef.current !== events) return
-        if (reconnectTimeoutRef.current !== null) {
-          window.clearTimeout(reconnectTimeoutRef.current)
-          reconnectTimeoutRef.current = null
-        }
-      }
-      events.addEventListener("terminal-closed", streamFailed)
-      events.addEventListener("terminal-heartbeat", streamRecovered)
-      events.onmessage = (event) => {
-        if (eventSourceRef.current !== events) return
-        streamRecovered()
+      const url = new URL(`${endpoint}/terminal`, window.location.href)
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+      url.searchParams.set("cols", String(Math.min(500, term.cols || 100)))
+      url.searchParams.set("rows", String(Math.min(500, term.rows || 28)))
+      await request(`${endpoint}/terminal`)
+      if (generation.current !== attempt) return
+      const socket = new WebSocket(url)
+      socketRef.current = socket
+      let ready = false
+      timerRef.current = window.setTimeout(() => fail(connectErrorMessage), 25_000)
+      socket.onmessage = (event) => {
+        if (socketRef.current !== socket) return
         try {
-          term.write(JSON.parse(event.data) as string)
-        } catch {
-          term.write(event.data)
-        }
+          const frame = JSON.parse(event.data as string)
+          if (frame.type === "ready" && !ready && typeof frame.session_id === "string") {
+            ready = true
+            if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+            timerRef.current = null
+            setTerminalSession({ session_id: frame.session_id, pid: frame.pid, sandbox_id: frame.sandbox_id })
+            setTerminalConnecting(false)
+            term.focus()
+          } else if (frame.type === "output" && ready && typeof frame.data === "string") {
+            // Decode bytes, not UTF-8 fragments: xterm retains split codepoints.
+            term.write(Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0)))
+          } else { fail(connectErrorMessage) }
+        } catch (error) { fail(error instanceof Error ? error.message : connectErrorMessage) }
       }
-      events.onerror = () => {
-        if (eventSourceRef.current !== events) return
-        // Let EventSource resume the same PTY with Last-Event-ID. Bound the
-        // outage below the server's 30-second idle cleanup. Only output or a
-        // server heartbeat confirms recovery; headers alone must not reset it.
-        // Repeated failures
-        // cannot keep an orphaned shell alive indefinitely.
-        if (events.readyState === EventSource.CLOSED) {
-          streamFailed()
-        } else if (reconnectTimeoutRef.current === null) {
-          reconnectTimeoutRef.current = window.setTimeout(streamFailed, 20_000)
+      socket.onerror = () => fail(connectErrorMessage)
+      socket.onclose = () => fail(ready ? streamDisconnectedMessage : connectErrorMessage)
+      term.onData((data) => {
+        if (!ready || socketRef.current !== socket) return
+        // Never retain an input queue for a future connection or retry an
+        // ambiguous operation. Bound both paste size and browser backpressure.
+        if (new TextEncoder().encode(data).byteLength > 4096 || socket.bufferedAmount > 16384 || socket.readyState !== WebSocket.OPEN) {
+          fail(streamDisconnectedMessage)
+          return
         }
-      }
-      let inputClosed = false
-      let inputSending = false
-      const inputQueue: string[] = []
-      const sendNextInput = async () => {
-        if (inputClosed || inputSending || inputQueue.length === 0) return
-        inputSending = true
-        const data = inputQueue.join("")
-        inputQueue.length = 0
-        try {
-          await request(`${endpoint}/terminal/${encodeURIComponent(session.session_id)}/input`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ data }),
-          })
-        } catch (error) {
-          if (!inputClosed) {
-            setTerminalError(error instanceof Error ? error.message : "Failed to send input")
-          }
-        } finally {
-          inputSending = false
-          void sendNextInput()
-        }
-      }
-      const inputDisposable = term.onData((data) => {
-        inputQueue.push(data)
-        void sendNextInput()
+        socket.send(JSON.stringify({ type: "input", data }))
       })
-      terminalDataDisposableRef.current = {
-        dispose: () => {
-          inputClosed = true
-          inputQueue.length = 0
-          inputDisposable.dispose()
-        },
-      }
-    } catch (error) {
-      setTerminalError(error instanceof Error ? error.message : connectErrorMessage)
-      closeTerminalSession()
-    } finally {
-      setTerminalConnecting(false)
-    }
-  }, [
-    available,
-    closeTerminalSession,
-    connectErrorMessage,
-    connectingMessage,
-    endpoint,
-    request,
-    streamDisconnectedMessage,
-    terminalConnecting,
-    terminalSession,
-  ])
+    } catch (error) { fail(error instanceof Error ? error.message : connectErrorMessage) }
+  }, [available, closeTerminalSession, connectErrorMessage, connectingMessage, endpoint, request, streamDisconnectedMessage])
 
   const resizeTerminal = useCallback(() => {
-    const session = terminalSession
     const term = terminalRef.current
-    const fit = fitRef.current
-    if (!session || !term || !fit) return
-    fit.fit()
-    if (resizeTimeoutRef.current) {
-      window.clearTimeout(resizeTimeoutRef.current)
-    }
-    resizeTimeoutRef.current = window.setTimeout(() => {
-      resizeTimeoutRef.current = null
-      void request(`${endpoint}/terminal/${encodeURIComponent(session.session_id)}/resize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cols: term.cols, rows: term.rows }),
-      }).catch(() => undefined)
+    const socket = socketRef.current
+    if (!terminalSession || !term || !fitRef.current || !socket) return
+    fitRef.current.fit()
+    if (resizeRef.current !== null) window.clearTimeout(resizeRef.current)
+    resizeRef.current = window.setTimeout(() => {
+      resizeRef.current = null
+      if (socketRef.current === socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "resize", cols: Math.max(1, Math.min(500, term.cols)), rows: Math.max(1, Math.min(500, term.rows)) }))
+      }
     }, 250)
-  }, [endpoint, request, terminalSession])
-
+  }, [terminalSession])
   useEffect(() => {
     if (!terminalSession) return
     const observer = new ResizeObserver(resizeTerminal)
     if (terminalEl.current) observer.observe(terminalEl.current)
     return () => observer.disconnect()
   }, [resizeTerminal, terminalSession])
-
-  return {
-    terminalEl,
-    terminalSession,
-    terminalError,
-    terminalConnecting,
-    connectTerminal,
-    closeTerminalSession,
-  }
+  return { terminalEl, terminalSession, terminalError, terminalConnecting, connectTerminal, closeTerminalSession }
 }

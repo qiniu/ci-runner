@@ -762,7 +762,16 @@ type RunnerCapacityCounts struct {
 	Repository int
 }
 
+type TerminalStore interface {
+	CreateTerminalSession(context.Context, TerminalSession) error
+	TouchTerminalSession(context.Context, string, string, bool) (bool, error)
+	FinishTerminalSession(context.Context, string, string, string, string) error
+	ExpireTerminalSessions(context.Context) error
+	GetTerminalSession(context.Context, string) (TerminalSession, error)
+}
+
 type Store interface {
+	TerminalStore
 	RunnerRequestStore
 	RunnerCatalogStore
 	IdentityStore

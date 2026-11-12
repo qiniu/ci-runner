@@ -74,12 +74,10 @@ Deploy startup regressions must keep queued plans untouched during `Server.Recov
 
 Run both `task ui-production-smoke` and `task ui-terminal-fault-test` after
 terminal dependency changes. Run `task ui-terminal-fault-test` after changing
-terminal SSE replay, browser recovery deadlines or idle cleanup. Its opt-in
-`terminalfault` Go fixture and Chromium exercise real local PTYs under measured 5/15/25-second transport
-outages, preserving the actual 20-second client and 30-second idle deadlines.
-See [Testing](../../docs/testing.md#timed-terminal-transport-faults) for
-prerequisites, artifacts and boundaries; local fixtures do not replace live
-provider, production proxy or authorization-revocation acceptance.
+terminal WebSocket disconnection and explicit new-session behavior. Its opt-in
+`terminalfault` fixture runs the product connection/database path with real local
+PTYs and Chromium. See [Web Console](../../docs/terminal-websocket.md) for
+remote-adapter, PID reuse and database-process checks and their evidence limits.
 
 - For waiting Job handling (Issue #134), cover the complete queued webhook → REST waiting → waiting webhook → queued webhook sequence, delayed polling without a webhook, capped waiting and capacity/lease release, restart, cancellation, completion-state read/write failures releasing leases and creation capacity through normal failure handling, in-progress ownership, finite unknown/query-error retries with exactly-once terminal failure counters, coalesced waiting-metric scans with failed-refresh recovery and immediate terminal gauges, HTTP 429/secondary-rate-limit deferral beyond the retry budget with recovery after throttling clears, and concurrent queued/workflow_run/stale lookups. Targeted historical retry must reject real results, active/cleanup evidence, missing or stdout-only control evidence, invalid specs, nonqueued/assigned Jobs, failed lookups and concurrent changes. Run focused tests with race detection.
 

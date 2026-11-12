@@ -17,7 +17,8 @@ export default defineConfig({
       "/diagnostics": "http://127.0.0.1:25500",
       "/auth": "http://127.0.0.1:25500",
       "/user/github-app": "http://127.0.0.1:25500",
-      "/user/runner_requests": "http://127.0.0.1:25500",
+      "/user/runner_requests": { target: "http://127.0.0.1:25500", ws: true },
+      "/user/deployments": { target: "http://127.0.0.1:25500", ws: true },
     },
   },
   resolve: {
