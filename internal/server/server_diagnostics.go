@@ -38,11 +38,12 @@ type runnerDiagnosticFinding struct {
 }
 
 type runnerRequestDiagnostics struct {
-	State           state.RunnerState         `json:"state"`
-	GitHubJob       diagnosticGitHubJob       `json:"github_job"`
-	Findings        []runnerDiagnosticFinding `json:"findings"`
-	Events          []state.RunnerEvent       `json:"events"`
-	EventsTruncated bool                      `json:"events_truncated"`
+	CreationAttemptID string                    `json:"creation_attempt_id,omitempty"`
+	State             state.RunnerState         `json:"state"`
+	GitHubJob         diagnosticGitHubJob       `json:"github_job"`
+	Findings          []runnerDiagnosticFinding `json:"findings"`
+	Events            []state.RunnerEvent       `json:"events"`
+	EventsTruncated   bool                      `json:"events_truncated"`
 }
 
 type runnerRequestEventPage struct {
@@ -150,11 +151,12 @@ func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(w, http.StatusOK, runnerRequestDiagnostics{
-		State:           st,
-		GitHubJob:       job,
-		Findings:        diagnoseRunnerRequest(st, events, truncated, job),
-		Events:          events,
-		EventsTruncated: truncated,
+		State:             st,
+		CreationAttemptID: st.ProvisionAttemptID,
+		GitHubJob:         job,
+		Findings:          diagnoseRunnerRequest(st, events, truncated, job),
+		Events:            events,
+		EventsTruncated:   truncated,
 	})
 }
 
@@ -323,6 +325,15 @@ func (s *Server) diagnosticWorkflowJob(ctx context.Context, repository string, j
 
 func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, truncated bool, job diagnosticGitHubJob) []runnerDiagnosticFinding {
 	findings := make([]runnerDiagnosticFinding, 0, 5)
+	if state.UnknownSandboxCreation(st) && (st.Status == state.StatusStopping || st.LastErrorCode == "sandbox_create_outcome_unknown") {
+		findings = append(findings, runnerDiagnosticFinding{Code: "sandbox_creation_unresolved", Severity: "warning", Detail: st.LastErrorMessage})
+	}
+	if st.Status == state.StatusStopping && !st.StoppingAt.IsZero() && time.Since(st.StoppingAt) >= state.UnknownCreationReviewDelay {
+		findings = append(findings, runnerDiagnosticFinding{Code: "runner_cleanup_overdue", Severity: "critical", Detail: st.StoppingAt.UTC().Format(time.RFC3339)})
+	}
+	if st.LastErrorCode == state.UnknownCreationResolvedCode {
+		findings = append(findings, runnerDiagnosticFinding{Code: "sandbox_creation_resolved_absent", Severity: "warning"})
+	}
 	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || controlEventMessageContains(events, "runner accepted a job")
 	hasRunnerExit := controlEventStage(events, runnerEventStageRunnerExit) || controlEventMessageContains(events, "runner process exited")
 	hasCompletedHook := controlEventStage(events, runnerEventStageRunnerHook) || controlEventMessageContains(events, "runner completed job hook received")

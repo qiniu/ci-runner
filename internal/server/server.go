@@ -504,6 +504,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /runner_requests/{id}/network-diagnostics", s.handleRunnerNetworkDiagnostic)
 	s.mux.HandleFunc("GET /runner_requests/{id}/events", s.handleRunnerRequestEvents)
 	s.mux.HandleFunc("POST /runner_requests/{id}/retry", s.handleRetryRunner)
+	s.mux.HandleFunc("POST /runner_requests/{id}/resolve-unknown-creation", s.handleResolveUnknownCreation)
 	s.mux.HandleFunc("GET /runner_requests/{id}/logs/{name}", s.handleGetRunnerLog)
 	s.mux.HandleFunc("DELETE /runner_requests/{id}", s.handleDeleteRunner)
 	s.mux.HandleFunc("GET /audit-events", s.handleListAuditEvents)

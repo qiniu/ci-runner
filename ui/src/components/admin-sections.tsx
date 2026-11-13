@@ -718,6 +718,12 @@ function diagnosticFindingText(finding: RunnerDiagnosticFinding, t: AppTFunction
       return t("admin.findingRunnerRequestFailed")
     case "runner_request_unmatched":
       return t("admin.findingRunnerRequestUnmatched")
+    case "sandbox_creation_unresolved":
+      return t("admin.findingCreationUnresolved")
+    case "runner_cleanup_overdue":
+      return t("admin.findingCleanupOverdue")
+    case "sandbox_creation_resolved_absent":
+      return t("admin.findingCreationResolvedAbsent")
     case "no_anomaly_detected":
       return t("admin.findingNoAnomaly")
     default:

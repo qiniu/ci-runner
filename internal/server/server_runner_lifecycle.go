@@ -639,7 +639,11 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 					s.logger.Warn("record Sandbox bootstrap failure", "id", id, "error", noteErr)
 				}
 			}
-			s.store.AppendLog(id, "control.log", []byte("Sandbox creation outcome unknown; waiting to reconcile this attempt\n"))
+			if result.SandboxID == "" && result.BootstrapOperation == "" {
+				s.retainUnknownCreateFailure(st, err)
+			} else {
+				s.store.AppendLog(id, "control.log", []byte("Sandbox creation outcome unknown; waiting to reconcile this attempt\n"))
+			}
 			return
 		}
 		if startStage == "sandbox_start" && !errors.Is(err, state.ErrConflict) {
@@ -1387,8 +1391,8 @@ func (s *Server) recoverRunnerInState(ctx context.Context, id, requiredStatus st
 		st.Version++
 		st.WatchToken = token
 	}
-	s.logger.Info("recovering runner after restart", "id", id, "status", st.Status, "sandbox_id", st.SandboxID)
-	s.store.AppendLog(id, "control.log", []byte("recovering runner after service restart\n"))
+	s.logger.Info("reconciling runner lifecycle after startup or expired lease", "id", id, "status", st.Status, "sandbox_id", st.SandboxID)
+	s.store.AppendLog(id, "control.log", []byte("reconciling runner lifecycle after startup or expired lease\n"))
 	switch st.Status {
 	case state.StatusStopping:
 		unlock()
@@ -1859,7 +1863,9 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 		box, err := service.FindRunnerSandbox(lookupCtx, id, st.ProvisionAttemptID)
 		if errors.Is(err, sandboxrunner.ErrSandboxNotFound) {
 			st.LastErrorCode = "sandbox_create_outcome_unknown"
-			st.LastErrorMessage = "Stop is waiting for the dispatched Sandbox creation"
+			if st.LastErrorMessage == "" {
+				st.LastErrorMessage = "Stop is waiting for the dispatched Sandbox creation"
+			}
 			st.NextRetryAt = time.Now().UTC().Add(s.runnerWatchTTL())
 			if err := cleanup.write(st); err != nil {
 				return st, false, err
