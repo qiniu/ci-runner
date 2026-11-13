@@ -186,6 +186,9 @@ jobs:
           go test ./internal/server -run 'Test(PlatformSpecRevision|SharedRepositoryAccess)PostgresSQLBackends' -count=1 -v
           go test -race ./internal/server -run '^TestTerminalSocketProcess$' -count=1 -v
 
+      - name: Verify audited unknown-creation resolution on SQL backends
+        run: go test -race ./internal/state -run '^TestUnknownCreationResolutionSQLBackends$' -count=1 -v
+
       - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
         run: |
           go build -o "$RUNNER_TEMP/runnerd" ./cmd/runnerd
