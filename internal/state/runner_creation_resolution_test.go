@@ -55,6 +55,8 @@ func testUnknownCreationResolution(t *testing.T, store *DBStore) {
 	}
 	t.Run("audited completion and delayed writers", func(t *testing.T) {
 		st, audit := resolutionFixture(t, store, "resolved")
+		st.GitHubJobName = "Build and test"
+		st.GitHubJobRunnerName = "runner-that-executed-job"
 		beforeCount, _ := store.RunnerCapacityCounts(RunnerRequest{RepositoryFullName: "o/r"})
 		if err := store.ResolveUnknownSandboxCreation(t.Context(), st, "owner", audit); err != nil {
 			t.Fatalf("resolution: %v st=%+v", err, st)
@@ -62,6 +64,11 @@ func testUnknownCreationResolution(t *testing.T, store *DBStore) {
 		got, _ := store.ReadState(st.ID)
 		if got.Status != StatusCompleted || got.CleanupSandboxDone || !got.CleanupGitHubDone || got.SandboxCreateDispatched || got.ProvisionAttemptID != st.ProvisionAttemptID || got.LastErrorCode != UnknownCreationResolvedCode || !got.NextRetryAt.IsZero() || got.WatchToken != "" {
 			t.Fatalf("bad resolution: %+v", got)
+		}
+		if got.GitHubJobName != st.GitHubJobName || got.GitHubJobRunnerName != st.GitHubJobRunnerName ||
+			got.GitHubJobStatus != st.GitHubJobStatus || got.GitHubJobConclusion != st.GitHubJobConclusion || got.GitHubJobObservedAt.IsZero() {
+			t.Fatalf("incomplete retained GitHub Job result: name=%q runner=%q status=%q conclusion=%q observed=%v",
+				got.GitHubJobName, got.GitHubJobRunnerName, got.GitHubJobStatus, got.GitHubJobConclusion, got.GitHubJobObservedAt)
 		}
 		events, _ := store.ListAuditEvents(100)
 		found := 0

@@ -50,10 +50,13 @@ func (s *DBStore) ResolveUnknownSandboxCreation(ctx context.Context, st RunnerSt
 				"sandbox_create_dispatched": false, "cleanup_github_done": true,
 				"manual_stop_requested": true, "next_retry_at": nil,
 				"watch_token": nil, "watch_expires_at": nil, "lease_owner": "", "lease_expires_at": nil,
-				"last_error_code":      UnknownCreationResolvedCode,
-				"last_error_message":   "Administrator verified no Sandbox or pending creation; see resolution audit",
-				"last_error_retryable": false,
-				"github_job_status":    st.GitHubJobStatus, "github_job_conclusion": st.GitHubJobConclusion,
+				"last_error_code":        UnknownCreationResolvedCode,
+				"last_error_message":     "Administrator verified no Sandbox or pending creation; see resolution audit",
+				"last_error_retryable":   false,
+				"github_job_name":        st.GitHubJobName,
+				"github_job_status":      st.GitHubJobStatus,
+				"github_job_conclusion":  st.GitHubJobConclusion,
+				"github_job_runner_name": st.GitHubJobRunnerName,
 				"github_job_observed_at": zeroTimeToPointer(st.GitHubJobObservedAt),
 			})
 		if res.Error != nil {
