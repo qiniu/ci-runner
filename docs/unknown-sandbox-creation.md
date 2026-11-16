@@ -40,6 +40,30 @@ that has expired may no longer appear in the current list.
 - Periodic recovery says `reconciling runner lifecycle after startup or expired
   lease`; its event does not imply that the process restarted.
 
+## Read-only GitHub Runner registration lookup
+
+On the admin Runner request detail page, click **Check registration** to query
+`GET /runner_requests/{id}/github-runner`. The lookup uses runnerd's existing
+GitHub client (including GitHub App installation authentication), the saved exact
+Runner name and the saved repository/organization registration scope. A configured
+Runner group selects the organization scope; the displayed group is the request's
+configuration, not a fresh verification of the registration's group membership.
+The browser cannot override these targets. Ordinary users cannot call this API.
+
+The response reports `found` or `not_found`, the lookup time, and, when found, the
+numeric registration ID, online/offline status and busy flag. A 403/404 from
+GitHub, rate limit, malformed response, timeout or other lookup failure is an
+error, **not absence**. Exact-name lookup follows pagination and has a ten-second
+request deadline. The response is not HTTP-cacheable; the UI queries only on an
+explicit click and discards results when switching requests or attempts.
+
+This endpoint does not acquire or renew cleanup leases, write request state,
+events or audit records, call Sandbox, delete a GitHub registration, or resolve
+unknown creation. It has no schema or configuration migration. A successful
+empty result proves only that no same-name registration was found at lookup time;
+it does not prove historical absence, Sandbox deletion or creation termination.
+Do not use the resolution endpoint as a substitute for this read-only lookup.
+
 ## Long-term unknown results
 
 Current list and lifetime information alone cannot safely prove permanent
