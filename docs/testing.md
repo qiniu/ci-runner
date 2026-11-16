@@ -958,6 +958,12 @@ history preservation and capacity release. See [Unconfirmed Sandbox creation](un
 for payloads and rollout limits. These tests do not authorize production closure
 or establish that a historical Sandbox no longer exists.
 
+`task ui-production-smoke` includes the admin closure dialog on desktop and narrow
+Chinese layouts. Local fixtures cover explicit confirmation, UTF-8 reason bounds,
+fresh-version submission, changed-attempt rejection, duplicate suppression,
+navigation during preflight, failed-check retention and successful diagnosis
+refresh. These fixtures never call a production closure endpoint.
+
 ## 11. Official References
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow

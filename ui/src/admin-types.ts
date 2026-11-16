@@ -3,6 +3,7 @@ export type RunnerDisplayStatus = RunnerStatus | "unmatched"
 
 export type RunnerState = {
   id: string
+  version?: number
   status: RunnerStatus
   repository_full_name?: string
   requested_labels?: string[]
@@ -155,6 +156,7 @@ export type RunnerDiagnosticFinding = {
 
 export type RunnerRequestDiagnosis = {
   creation_attempt_id?: string
+  unknown_creation_resolution_available?: boolean
   state: RunnerState
   github_job: {
     lookup_status: "ok" | "retained" | "unavailable" | "not_applicable" | string

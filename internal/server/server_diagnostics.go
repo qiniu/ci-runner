@@ -38,12 +38,13 @@ type runnerDiagnosticFinding struct {
 }
 
 type runnerRequestDiagnostics struct {
-	CreationAttemptID string                    `json:"creation_attempt_id,omitempty"`
-	State             state.RunnerState         `json:"state"`
-	GitHubJob         diagnosticGitHubJob       `json:"github_job"`
-	Findings          []runnerDiagnosticFinding `json:"findings"`
-	Events            []state.RunnerEvent       `json:"events"`
-	EventsTruncated   bool                      `json:"events_truncated"`
+	UnknownCreationResolutionAvailable bool                      `json:"unknown_creation_resolution_available,omitempty"`
+	CreationAttemptID                  string                    `json:"creation_attempt_id,omitempty"`
+	State                              state.RunnerState         `json:"state"`
+	GitHubJob                          diagnosticGitHubJob       `json:"github_job"`
+	Findings                           []runnerDiagnosticFinding `json:"findings"`
+	Events                             []state.RunnerEvent       `json:"events"`
+	EventsTruncated                    bool                      `json:"events_truncated"`
 }
 
 type runnerRequestEventPage struct {
@@ -151,12 +152,13 @@ func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(w, http.StatusOK, runnerRequestDiagnostics{
-		State:             st,
-		CreationAttemptID: st.ProvisionAttemptID,
-		GitHubJob:         job,
-		Findings:          diagnoseRunnerRequest(st, events, truncated, job),
-		Events:            events,
-		EventsTruncated:   truncated,
+		UnknownCreationResolutionAvailable: canResolveUnknownCreation(st, time.Now()),
+		State:                              st,
+		CreationAttemptID:                  st.ProvisionAttemptID,
+		GitHubJob:                          job,
+		Findings:                           diagnoseRunnerRequest(st, events, truncated, job),
+		Events:                             events,
+		EventsTruncated:                    truncated,
 	})
 }
 

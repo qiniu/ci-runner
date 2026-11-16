@@ -21,6 +21,16 @@ type unknownCreationResolutionRequest struct {
 	AcceptUnknownResult        bool   `json:"accept_unknown_result"`
 }
 
+// This is only a local eligibility hint. Closure still requires live provider
+// checks and the database lease/version/attempt fence in the mutation path.
+func canResolveUnknownCreation(st state.RunnerState, now time.Time) bool {
+	return state.UnknownSandboxCreation(st) && st.Status == state.StatusStopping && st.Version > 0 &&
+		!st.StoppingAt.IsZero() && now.Sub(st.StoppingAt) >= state.UnknownCreationReviewDelay &&
+		st.WorkflowJobID > 0 && st.RunningAt.IsZero() && st.CleanupGitHubRunnerID == 0 &&
+		st.RepositoryFullName != "" && st.RunnerName != "" &&
+		(st.JITRegistrationState == "" || st.JITRegistrationState == state.JITUnsent || st.JITRegistrationState == state.JITRejected)
+}
+
 // This is deliberately separate from Stop and from automatic recovery. Only a
 // named administrator can attest absence or explicitly accept an unknown result.
 func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Request) {
@@ -51,10 +61,7 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "runner not found")
 		return
 	}
-	if !state.UnknownSandboxCreation(st) || st.Status != state.StatusStopping || st.Version != input.Version || st.ProvisionAttemptID != input.AttemptID ||
-		st.StoppingAt.IsZero() || time.Since(st.StoppingAt) < state.UnknownCreationReviewDelay ||
-		st.WorkflowJobID <= 0 || !st.RunningAt.IsZero() || st.CleanupGitHubRunnerID != 0 || st.RepositoryFullName == "" || st.RunnerName == "" ||
-		(st.JITRegistrationState != "" && st.JITRegistrationState != state.JITUnsent && st.JITRegistrationState != state.JITRejected) {
+	if !canResolveUnknownCreation(st, time.Now()) || st.Version != input.Version || st.ProvisionAttemptID != input.AttemptID {
 		writeError(w, http.StatusConflict, "request changed or is not an eligible long-unknown creation")
 		return
 	}
