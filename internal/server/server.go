@@ -501,6 +501,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)
 	s.mux.HandleFunc("GET /runner_requests/{id}/diagnostics", s.handleDiagnosticsRunnerRequest)
+	s.mux.HandleFunc("GET /runner_requests/{id}/github-runner", s.handleRunnerRegistrationLookup)
 	s.mux.HandleFunc("POST /runner_requests/{id}/network-diagnostics", s.handleRunnerNetworkDiagnostic)
 	s.mux.HandleFunc("GET /runner_requests/{id}/events", s.handleRunnerRequestEvents)
 	s.mux.HandleFunc("POST /runner_requests/{id}/retry", s.handleRetryRunner)

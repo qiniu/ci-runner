@@ -19,6 +19,7 @@ import type { AppTFunction } from "@/i18n"
 import { Detail, StatusBadge } from "@/components/admin-shared"
 import { RunnerEventTimeline } from "@/components/runner-event-timeline"
 import { RunnerRequestDetails } from "@/components/runner-request-details"
+import { RunnerRegistrationLookup } from "@/components/runner-registration-lookup"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -583,6 +584,14 @@ export function RunnerRequestDiagnosisResult({
           ))}
         </div>
       </section>
+
+      {request ? (
+        <RunnerRegistrationLookup
+          key={JSON.stringify([state.id, state.runner_name, state.runner_group, diagnosis.creation_attempt_id])}
+          id={state.id}
+          request={request}
+        />
+      ) : null}
 
       {state.status === "running" && state.sandbox_id && state.process_pid && onRunNetworkDiagnostic ? (
         <RunnerNetworkDiagnostic

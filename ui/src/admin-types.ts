@@ -154,6 +154,7 @@ export type RunnerDiagnosticFinding = {
 }
 
 export type RunnerRequestDiagnosis = {
+  creation_attempt_id?: string
   state: RunnerState
   github_job: {
     lookup_status: "ok" | "retained" | "unavailable" | "not_applicable" | string

@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 
 import i18n from "../i18n"
 import { RunnerRequestDetails } from "./runner-request-details"
+import { RunnerRegistrationLookup } from "./runner-registration-lookup"
 import { DiagnosticsSection, RunnerdRuntimeDiagnostics, RunnerRequestDiagnosisResult, RunnerRequestSection } from "./admin-sections"
 
 const window = new Window({ url: "http://localhost/" })
@@ -90,6 +91,61 @@ async function click(element) {
 }
 
 describe("admin diagnostics", () => {
+  test("queries registration only on click and clears success when the next lookup fails", async () => {
+    await i18n.changeLanguage("en")
+    const calls = []
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    const request = async (url, options) => {
+      calls.push({ url, method: options.method })
+      if (calls.length === 2) throw new Error("secret-provider-error")
+      if (calls.length === 3) return { lookup_status: "not_found", runner_name: "e2b-123", scope: "organization", target: "o", runner_group: "build", observed_at: "2026-11-16T07:01:00Z" }
+      return { lookup_status: "found", runner_name: "e2b-123", scope: "repository", target: "o/r", observed_at: "2026-11-16T07:00:00Z", runner: { id: 42, status: "offline", busy: false } }
+    }
+    await act(async () => root.render(createElement(RunnerRegistrationLookup, { id: "123", request })))
+    expect(calls).toEqual([])
+    await click(container.querySelector("button"))
+    expect(calls).toEqual([{ url: "/runner_requests/123/github-runner", method: "GET" }])
+    expect(container.textContent).toContain("currently exists")
+    expect(container.textContent).toContain("42 · offline · idle")
+    expect(container.textContent).toContain("repository o/r")
+    await click(container.querySelector("button"))
+    expect(container.textContent).toContain("registration is unknown")
+    expect(container.textContent).not.toContain("currently exists")
+    expect(container.textContent).not.toContain("secret-provider-error")
+    await click(container.querySelector("button"))
+    expect(container.textContent).toContain("No registration with this name was found")
+    expect(container.textContent).toContain("organization o · configured group build")
+    expect(container.textContent).not.toContain("registration is unknown")
+  })
+
+  test("discards an outstanding registration lookup when navigating to another request", async () => {
+    await i18n.changeLanguage("en")
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    mountedRoots.push({ root, container })
+    let resolveOld
+    let oldSignal
+    const request = async (url, options) => {
+      if (!url.endsWith("/github-runner")) return { events: [], has_more: false }
+      oldSignal = options.signal
+      return new Promise((resolve) => { resolveOld = resolve })
+    }
+    const render = (id) => createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: { state: { ...runnerState, id }, github_job: { lookup_status: "unavailable" }, findings: [], events: [] }, request,
+    })
+    await act(async () => root.render(render("123")))
+    await click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Check registration")))
+    await act(async () => root.render(render("456")))
+    expect(oldSignal.aborted).toBe(true)
+    await act(async () => resolveOld({ lookup_status: "not_found", runner_name: "e2b-123", scope: "repository", target: "o/r", observed_at: "2026-11-16T07:00:00Z" }))
+    expect(container.textContent).not.toContain("No registration with this name was found")
+    expect(container.textContent).toContain("456")
+  })
+
   test("keeps the diagnostics page focused on runnerd runtime diagnostics", async () => {
     await i18n.changeLanguage("en")
     const html = renderToStaticMarkup(createElement(DiagnosticsSection, {

@@ -889,6 +889,10 @@ func (c *Client) ListRunners(ctx context.Context, repositoryFullName, runnerGrou
 }
 
 func (c *Client) listRunners(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) ([]Runner, error) {
+	return c.queryRunners(ctx, repositoryFullName, runnerGroup, runnerName, false)
+}
+
+func (c *Client) queryRunners(ctx context.Context, repositoryFullName, runnerGroup, runnerName string, strict bool) ([]Runner, error) {
 	startedAt := time.Now()
 	result := "error"
 	defer func() { metrics.RecordGitHubAPI("list_runners", result, time.Since(startedAt)) }()
@@ -924,6 +928,14 @@ func (c *Client) listRunners(ctx context.Context, repositoryFullName, runnerGrou
 		}
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, err
+		}
+		if strict && out.Runners == nil {
+			return nil, fmt.Errorf("github list runners: missing runners array")
+		}
+		for _, runner := range out.Runners {
+			if strict && (runner.ID <= 0 || strings.TrimSpace(runner.Name) == "") {
+				return nil, fmt.Errorf("github list runners: invalid runner identity")
+			}
 		}
 		runners = append(runners, out.Runners...)
 		nextURL = nextLink(resp.Header.Get("Link"))
@@ -978,23 +990,39 @@ func (c *Client) RemoveRunnerByName(ctx context.Context, repositoryFullName, run
 }
 
 func (c *Client) FindRunnerIDByName(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) (int64, error) {
+	// Preserve the existing cleanup contract; stricter response validation is
+	// limited to the explicit read-only diagnostic lookup.
+	runner, err := c.findRunnerByName(ctx, repositoryFullName, runnerGroup, runnerName, false)
+	if err != nil || runner == nil {
+		return 0, err
+	}
+	return runner.ID, nil
+}
+
+// FindRunnerByName reads the current registration in the saved registration scope.
+// A nil result means a successful, complete lookup found no exact name match.
+func (c *Client) FindRunnerByName(ctx context.Context, repositoryFullName, runnerGroup, runnerName string) (*Runner, error) {
+	return c.findRunnerByName(ctx, repositoryFullName, runnerGroup, runnerName, true)
+}
+
+func (c *Client) findRunnerByName(ctx context.Context, repositoryFullName, runnerGroup, runnerName string, strict bool) (*Runner, error) {
 	runnerName = strings.TrimSpace(runnerName)
 	if runnerName == "" {
-		return 0, nil
+		return nil, nil
 	}
-	runners, err := c.listRunners(ctx, repositoryFullName, runnerGroup, runnerName)
+	runners, err := c.queryRunners(ctx, repositoryFullName, runnerGroup, runnerName, strict)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, runner := range runners {
 		if runner.Name == runnerName {
 			if runner.ID <= 0 {
-				return 0, fmt.Errorf("github runner has invalid ID")
+				return nil, fmt.Errorf("github runner has invalid ID")
 			}
-			return runner.ID, nil
+			return &runner, nil
 		}
 	}
-	return 0, nil
+	return nil, nil
 }
 
 func (c *Client) ListWorkflowRunJobs(ctx context.Context, repositoryFullName string, runID int64) ([]WorkflowJob, error) {
