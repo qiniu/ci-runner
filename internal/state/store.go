@@ -584,6 +584,7 @@ type RunnerRequestStore interface {
 	BeginRunnerCreation(st RunnerState, ttl time.Duration) error
 	BeginRunnerCleanup(ctx context.Context, st RunnerState, observedWatch, token string, ttl time.Duration) error
 	WriteCleanupState(st RunnerState, token string) error
+	AppendRunnerCleanupEvent(ctx context.Context, st RunnerState, token, stage, message string) error
 	ResolveUnknownSandboxCreation(ctx context.Context, st RunnerState, token string, audit AuditEvent) error
 	RecordLateRunnerExit(ctx context.Context, observed RunnerState) (bool, error)
 	ReleaseRunnerCleanup(ctx context.Context, id, token string) error

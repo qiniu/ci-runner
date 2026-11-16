@@ -268,6 +268,35 @@ func (s *DBStore) WriteCleanupState(st RunnerState, token string) error {
 	return s.writeState(st, stateWriteLease{currentToken: token, cleanupWrite: true})
 }
 
+// AppendRunnerCleanupEvent fences diagnostics without changing business state.
+// Lock the row before inserting so a takeover cannot race the lease check.
+func (s *DBStore) AppendRunnerCleanupEvent(ctx context.Context, st RunnerState, token, stage, message string) error {
+	if token == "" || st.ProvisionAttemptID == "" {
+		return ErrConflict
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return err
+	}
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		live := tx.Model(&runnerRequestRecord{}).
+			Where("id = ? AND status = ? AND provision_attempt_id = ? AND watch_token = ? AND watch_expires_at > ?", st.ID, StatusStopping, st.ProvisionAttemptID, token, queueTime(tx, 0))
+		// A no-op update locks the row on all supported dialects. MySQL may
+		// report zero changed rows, so check existence under that lock.
+		if err := live.Session(&gorm.Session{}).UpdateColumn("watch_token", token).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := live.Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return ErrConflict
+		}
+		return tx.Create(&runnerEventRecord{RequestID: st.ID, EventType: "control_log", Stage: stage, Message: message, CreatedAt: time.Now().UTC()}).Error
+	})
+}
+
 // RecordLateRunnerExit fills missing evidence for the exact stopping or terminal
 // attempt. A concurrent cleanup may advance the business version between the
 // observer's read and this write. Advance it again to fence stale full writes.
