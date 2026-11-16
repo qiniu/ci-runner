@@ -61,6 +61,7 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
       <Detail label={t("user.requestedLabels")} value={runner.requested_labels?.join(", ") || "-"} />
       <Detail label={t("user.failure")} value={runner.failure_reason || "-"} />
       <Detail label={t("admin.lastErrorCode")} value={runner.last_error_code || "-"} />
+      <Detail label={t("admin.lastErrorMessage")} value={runner.last_error_message || "-"} />
       <Detail label={t("admin.error")} value={runner.error || "-"} />
     </div>
   )

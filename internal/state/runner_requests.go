@@ -1043,7 +1043,7 @@ func queueTime(db *gorm.DB, after time.Duration) clause.Expr {
 		_, offset := time.Now().Add(after).In(location).Zone()
 		return gorm.Expr("TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP(3))", after.Microseconds()+int64(offset)*1_000_000)
 	case BackendSQLite:
-		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("+%.6f seconds", after.Seconds()))
+		return gorm.Expr("strftime('%Y-%m-%d %H:%M:%f', 'now', ?)", fmt.Sprintf("%+.6f seconds", after.Seconds()))
 	default:
 		// DBStore.open validates the backend before a queue query can run.
 		panic(fmt.Sprintf("unsupported queue clock dialect: %s", db.Dialector.Name()))

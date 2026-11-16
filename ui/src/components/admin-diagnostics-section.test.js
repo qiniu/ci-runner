@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 
 import i18n from "../i18n"
+import { RunnerRequestDetails } from "./runner-request-details"
 import { DiagnosticsSection, RunnerdRuntimeDiagnostics, RunnerRequestDiagnosisResult, RunnerRequestSection } from "./admin-sections"
 
 const window = new Window({ url: "http://localhost/" })
@@ -490,6 +491,32 @@ describe("admin diagnostics", () => {
 
     expect(findingsGrid?.classList.contains("grid-cols-1")).toBe(true)
     expect(findingsGrid?.classList.contains("lg:grid-cols-2")).toBe(false)
+  })
+
+  test("shows the retained creation error when legacy error is empty", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestDetails, {
+      runner: { ...runnerState, error: "", last_error_message: "category=deadline_exceeded" },
+    }))
+    expect(html).toContain("category=deadline_exceeded")
+  })
+
+  test("explains unresolved creation, overdue cleanup and audited resolution", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: { ...runnerState, status: "stopping", last_error_message: "category=deadline_exceeded" },
+        github_job: { lookup_status: "retained", status: "completed", conclusion: "success" },
+        findings: [
+          { code: "sandbox_creation_unresolved", severity: "warning" },
+          { code: "runner_cleanup_overdue", severity: "critical" },
+          { code: "sandbox_creation_resolved_absent", severity: "warning" },
+        ],
+        events: [], events_truncated: false,
+      },
+    }))
+    expect(html).toContain("Sandbox creation remains unconfirmed")
+    expect(html).toContain("Cleanup has been pending for at least 15 minutes")
+    expect(html).toContain("An administrator resolved this creation as absent using external evidence")
+    expect(html).not.toContain("No anomaly was detected")
   })
 
   test("renders an unknown finding as neutral instead of claiming no anomaly", () => {
