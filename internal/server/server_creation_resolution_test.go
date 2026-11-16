@@ -18,7 +18,18 @@ import (
 )
 
 func TestResolveUnknownCreationEndpoint(t *testing.T) {
-	for _, scenario := range []string{"success", "not admin", "not authenticated", "no attestation", "stale version", "stale attempt", "recent", "sandbox exists", "lookup error", "job running", "github runner exists", "receipt during verification", "audit failure", "lease lost"} {
+	for _, acceptUnknown := range []bool{false, true} {
+		name := "verified absence"
+		if acceptUnknown {
+			name = "accept unknown"
+		}
+		t.Run(name, func(t *testing.T) { testResolveUnknownCreationEndpoint(t, acceptUnknown) })
+	}
+}
+
+func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
+	t.Helper()
+	for _, scenario := range []string{"success", "not admin", "not authenticated", "no attestation", "conflicting attestations", "short reason", "long reason", "GitHub unavailable", "job lookup error", "wrong job", "runner lookup error", "malformed runner list", "malformed runner", "stale version", "stale attempt", "recent", "sandbox exists", "lookup error", "job running", "github runner exists", "receipt during verification", "audit failure", "lease lost"} {
 		t.Run(scenario, func(t *testing.T) {
 			store := state.New(t.TempDir())
 			_, _, err := store.EnsureAccountForOAuthIdentity(state.OAuthIdentity{OAuthProvider: "github", OAuthSubject: "12345", OAuthLogin: "octocat"}, "admin")
@@ -72,8 +83,15 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 				fake.lookupErr = errors.New("credential-canary")
 			}
 			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("resolution made remote mutation: %s %s", r.Method, r.URL.Path)
+				}
 				switch r.URL.Path {
 				case "/repos/o/r/actions/jobs/123":
+					if scenario == "job lookup error" {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
 					if scenario == "receipt during verification" {
 						if err := store.RecordSandboxCreateResult(t.Context(), original, "late-box"); err != nil {
 							t.Error(err)
@@ -89,11 +107,26 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 					if scenario == "job running" {
 						status = "in_progress"
 					}
-					writeJSON(w, 200, map[string]any{"id": 123, "status": status, "conclusion": "success"})
+					jobID := 123
+					if scenario == "wrong job" {
+						jobID++
+					}
+					writeJSON(w, 200, map[string]any{"id": jobID, "status": status, "conclusion": "success"})
 				case "/repos/o/r/actions/runners":
+					if scenario == "runner lookup error" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					if scenario == "malformed runner list" {
+						writeJSON(w, 200, map[string]any{})
+						return
+					}
 					runners := []map[string]any{}
 					if scenario == "github runner exists" {
 						runners = append(runners, map[string]any{"id": 77, "name": "e2b-123"})
+					}
+					if scenario == "malformed runner" {
+						runners = append(runners, map[string]any{"id": 77})
 					}
 					writeJSON(w, 200, map[string]any{"runners": runners})
 				default:
@@ -108,9 +141,26 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 			}
 			srv := New(config.Config{AuthSessionSecret: "session-secret", AuthEncryptionKey: "encryption-key", WorkerLeaseTTL: time.Minute, SandboxStopTimeout: time.Second}, actualStore, github.NewClient(gh.URL, http.DefaultClient), fake, nil)
 			defer srv.Close()
-			input := unknownCreationResolutionRequest{Version: st.Version, AttemptID: st.ProvisionAttemptID, Evidence: "Operator verified original dispatch was canceled and no resource remains", NoSandboxOrPendingCreation: true}
+			if scenario == "GitHub unavailable" {
+				srv.gh = nil
+			}
+			input := unknownCreationResolutionRequest{Version: st.Version, AttemptID: st.ProvisionAttemptID, Evidence: "Operator verified original dispatch was canceled and no resource remains", NoSandboxOrPendingCreation: !acceptUnknown, AcceptUnknownResult: acceptUnknown}
 			if scenario == "no attestation" {
 				input.NoSandboxOrPendingCreation = false
+				input.AcceptUnknownResult = false
+			}
+			if scenario == "conflicting attestations" {
+				input.NoSandboxOrPendingCreation = true
+				input.AcceptUnknownResult = true
+			}
+			if scenario == "short reason" {
+				input.Evidence = "   "
+			}
+			if scenario == "long reason" {
+				input.Evidence = strings.Repeat("x", 1025)
+			}
+			if acceptUnknown && scenario == "success" {
+				input.Evidence = "Administrator accepts the unresolved historical create; orphan resources remain possible"
 			}
 			if scenario == "stale version" {
 				input.Version--
@@ -135,6 +185,24 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 				if rec.Code != 200 || got.Status != state.StatusCompleted || got.CleanupSandboxDone || len(audits) != 1 || audits[0].Actor != "github:12345" {
 					t.Fatalf("resolution failed: status=%d body=%s state=%+v audit=%+v", rec.Code, rec.Body.String(), got, audits)
 				}
+				expectedCode := state.UnknownCreationResolvedCode
+				if acceptUnknown {
+					expectedCode = state.UnknownCreationClosedCode
+					if !strings.Contains(got.LastErrorMessage, "unverified") {
+						t.Fatal("unknown outcome was presented as verified absence")
+					}
+				}
+				if got.LastErrorCode != expectedCode || !strings.Contains(rec.Body.String(), expectedCode) {
+					t.Fatalf("wrong resolution provenance: %s %s", got.LastErrorCode, rec.Body.String())
+				}
+				var recorded unknownCreationResolutionRequest
+				if err := json.Unmarshal([]byte(audits[0].PayloadJSON), &recorded); err != nil || recorded != input {
+					t.Fatalf("resolution audit lost intent: %+v %v", recorded, err)
+				}
+				log, err := store.ReadLog(st.ID, "control.log", 0)
+				if err != nil || !strings.Contains(string(log), "no Sandbox deletion was observed") || (acceptUnknown && !strings.Contains(string(log), "resource absence is unverified")) {
+					t.Fatalf("resolution log lost intent: %s %v", log, err)
+				}
 				// Duplicate submission cannot create another audit or replay provider mutations.
 				rec2 := httptest.NewRecorder()
 				srv.ServeHTTP(rec2, adminRequest("POST", "/runner_requests/unknown/resolve-unknown-creation", bytes.NewReader(body)))
@@ -148,6 +216,12 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 				if strings.Contains(rec.Body.String(), "credential-canary") {
 					t.Fatal("provider error leaked")
 				}
+				switch scenario {
+				case "no attestation", "conflicting attestations", "short reason", "long reason", "not admin", "not authenticated", "stale version", "stale attempt", "recent", "GitHub unavailable":
+					if got.Version != original.Version || got.WatchToken != original.WatchToken {
+						t.Fatal("rejected input changed cleanup ownership")
+					}
+				}
 			}
 			if fake.stoppedCount() != 0 {
 				t.Fatal("resolution must not fabricate a remote stop")
@@ -158,7 +232,7 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 
 type resolutionFailingStore struct{ state.Store }
 
-func (s *resolutionFailingStore) ResolveUnknownSandboxCreation(_ context.Context, _ state.RunnerState, _ string, _ state.AuditEvent) error {
+func (s *resolutionFailingStore) ResolveUnknownSandboxCreation(_ context.Context, _ state.RunnerState, _ string, _ bool, _ state.AuditEvent) error {
 	return state.ErrAuditEventPersistence
 }
 

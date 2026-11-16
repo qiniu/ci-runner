@@ -71,21 +71,33 @@ absence. There is intentionally no TTL-based automatic completion. If an exact
 resource is found, let the existing lease-protected cleanup remove it. If an
 operation is still pending, retain the reservation and investigate it.
 
-Only an administrator who has independently established **both** that no Sandbox
-remains **and** that the original create cannot still complete may close an
-unresolved attempt. For example, use the authoritative create-operation outcome
-and matching resource deletion/expiry evidence, recorded in an incident record.
-An empty catalog, a successful GitHub Job, age, or a guess is insufficient. If that
-proof is unavailable, do not use the resolution endpoint. It cannot independently
-verify an operator's external attestation.
+An administrator can explicitly end an eligible attempt in one of two ways:
 
-The initial implementation provides one explicit admin API; it does not add a
-bulk close or change the ordinary Stop button:
+- **Verified absence:** independently establish both that no Sandbox remains and
+  that the original create cannot still complete. For example, record the
+  authoritative create-operation outcome and matching resource deletion/expiry
+  evidence in an incident record. An empty catalog, Job completion or age alone
+  is not this evidence.
+- **Accept the unknown result:** decide to close the request despite missing
+  authoritative creation/resource evidence. Record the reason and explicit risk
+  acceptance. This ends reconciliation and releases capacity; a delayed create
+  or an unobserved remaining resource is still possible and will no longer be
+  reconciled by this request. The record must continue to say the result is
+  unknown, rather than claim verified absence or deletion.
+
+Neither choice is automatic or inferred from age, retries or list misses. Both
+require current external checks and the same lease/version/attempt fencing.
+The service cannot verify the operator's independent evidence or risk decision.
+
+Both modes use the existing explicit admin API; there is no bulk close or
+change to the ordinary Stop button:
 
 `POST /runner_requests/{id}/resolve-unknown-creation`
 
 Use a named administrator's normal OAuth session, read the latest
-`GET /runner_requests/{id}/diagnostics` response, and submit:
+`GET /runner_requests/{id}/diagnostics` response, and submit one of these payloads.
+
+For verified absence (existing callers remain compatible):
 
 ```json
 {
@@ -96,9 +108,26 @@ Use a named administrator's normal OAuth session, read the latest
 }
 ```
 
-The evidence is 20–1024 UTF-8 bytes. Do not include secrets, response bodies, or
-credential-bearing URLs. It is retained in the admin audit, not terminal output.
-The endpoint:
+For explicit acceptance of an unknown result:
+
+```json
+{
+  "version": 123,
+  "attempt_id": "exact creation_attempt_id from diagnosis",
+  "evidence": "Incident reference and administrator decision to end reconciliation and release capacity despite possible delayed creation or remaining resources",
+  "accept_unknown_result": true
+}
+```
+
+Exactly one of `no_sandbox_or_pending_creation` and `accept_unknown_result` must
+be true. Both true or both false/missing reject before acquiring a cleanup lease.
+`evidence` contains the external proof for verified absence, or the administrator's
+closure reason/risk acceptance for an unknown result. It is 20–1024 UTF-8 bytes
+and is retained in the admin audit, not terminal output. Do not include secrets,
+response bodies or credential-bearing URLs. Do not attest verified absence when
+only accepting uncertainty.
+
+The endpoint, in either mode:
 
 1. Requires the exact current version and attempt, a stopping duration of at least
    15 minutes, no saved Sandbox/PID/running timestamp, and an original GitHub Job.
@@ -107,25 +136,34 @@ The endpoint:
 2. Claims the existing database cleanup lease, then makes bounded read-only
    external checks outside the transaction: exact Sandbox lookup must be empty,
    the original GitHub Job must be completed, and the Runner registration must be
-   absent. Lookup errors or a present resource reject the operation. No provider
+   absent. Malformed GitHub registration responses, lookup errors, a running Job
+   or a present resource reject the operation even when accepting uncertainty.
+   A retained Job snapshot is not a substitute for this live check. No provider
    resource is created or deleted by this endpoint.
 3. Atomically commits a completed state with the administrator, evidence, expected
-   version and exact attempt in a `runner.resolve_unknown_creation` audit event.
+   version, exact attempt and selected confirmation flag in a
+   `runner.resolve_unknown_creation` audit event.
    The live lease, version and attempt are rechecked using database time. If a
    receipt, another owner, or another update won the race, the transaction fails.
    Audit insertion failure rolls back completion and capacity release.
 4. Retains attempt identity, original termination ownership and the separate
-   GitHub result; records `sandbox_creation_resolved_absent`. It clears dispatch
-   and retry/lease fields, releases capacity, and does **not** set a Sandbox-delete
-   receipt. Diagnostics continue to identify administrator resolution. This does
-   not assert the Job ran on this request or that runnerd observed a deletion.
+   GitHub result. Verified absence records `sandbox_creation_resolved_absent`;
+   accepting uncertainty records `sandbox_creation_closed_unknown`. It clears
+   dispatch and retry/lease fields, releases capacity, and does **not** set a
+   Sandbox-delete receipt. The latter code, timeline and English/Chinese admin
+   finding explicitly retain the unknown outcome and unverified resource absence.
+   Both remain `completed` request lifecycle records, independently of the Job
+   result; this does not assert that the Job ran on this request or that runnerd
+   observed a deletion. Requests and their histories are not deleted.
 
 A 409 means refresh the evidence and state before deciding to retry. Do not loop
 against stale versions. Failed preflight may renew/release the cleanup lease and
 advance its version, but does not complete the request or release its capacity.
 Repeated submissions after completion are rejected without another audit. Late
-callbacks cannot overwrite the completed record; this is not a substitute for
-proving no remote create is in flight before submitting the attestation.
+callbacks cannot overwrite the completed record. For verified absence, this is
+not a substitute for proving no remote create is in flight. For accepted unknown
+results, loss of automatic reconciliation for a later resource is part of the
+explicit operator decision, not evidence that such a resource cannot appear.
 
 ## Deployment and existing backlog
 
@@ -138,12 +176,13 @@ version before performing operator resolutions so the new diagnostics are
 consistent. Rolling back does not undo already audited resolutions; the older
 binary reads them as completed but lacks the new diagnostic explanation.
 
-For the 2026-11-13 backlog, collect the 29 exact attempts and authoritative
-operation/resource evidence first. The initial investigation only sampled four
-detailed histories and observed an empty Sandbox column for all 29 requests.
-It did not establish absence of remote resources. No production resolution is
-part of development or automated testing. Continue to defer controlled node
-failure exercises until the backlog and connection/capacity budget are understood.
+For a historical backlog, first agree on the exact request/attempt scope and
+which resolution mode the administrator authorizes. Do not turn an unavailable
+historical receipt into a verified-absence statement. Refresh each request before
+submission and stop on conflicts or failed external checks rather than bypassing
+them. After each successful closure, verify the saved resolution marker, audit,
+completed state and released capacity. Publishing this capability does not
+authorize any production closure; development and tests use disposable fixtures.
 
 For a current stopping request, filter service logs before taking the tail so
 browser polling does not hide cleanup observations. Run on both runnerd nodes
@@ -167,7 +206,10 @@ edit is needed to collect this evidence; deployment does not close the backlog.
   `TestUnknownCreationResolutionSQLBackends` with the existing
   `RUNNERD_CATALOG_BACKEND_TESTS=1` backend test variables. This test writes only
   fixtures; it must never be pointed at production.
-- The tests cover empty lookup preservation after prolonged waits, delayed
-  receipts, replaced/expired leases, stale versions/attempts, concurrent database
-  connections, audit rollback, permissions, invalid attestations, provider lookup
-  failure, present resources, live GitHub Jobs and sensitive-error redaction.
+- Both modes cover delayed receipts, replaced/expired leases, stale versions and
+  attempts, concurrent database connections, audit rollback, permissions,
+  conflicting/missing confirmations, provider lookup failure, present resources,
+  live or unavailable GitHub Jobs and malformed registration responses. Tests
+  verify distinct provenance, retained history/results, released capacity and
+  sensitive-error redaction. Empty lookup preservation without explicit closure
+  remains covered; acceptance is never an automatic recovery policy.

@@ -340,6 +340,7 @@ export const en = {
     findingCreationUnresolved: "Sandbox creation remains unconfirmed; capacity is retained until reconciliation or an audited operator resolution",
     findingCleanupOverdue: "Cleanup has been pending for at least 15 minutes; investigate before releasing capacity",
     findingCreationResolvedAbsent: "An administrator resolved this creation as absent using external evidence; see the audit. This is not an observed Sandbox deletion.",
+    findingCreationClosedUnknown: "An administrator accepted the unknown creation outcome and ended reconciliation, releasing capacity; see the audit. Resource absence remains unverified.",
     findingNoAnomaly: "No anomaly was detected from the available evidence",
     findingUnknown: "Unknown diagnostic finding: {{code}}",
     managed: "Managed",

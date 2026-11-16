@@ -906,6 +906,16 @@ RUNNERD_WINDOWS_E2E=1 go test -tags development ./internal/sandboxrunner -run Te
 它不覆盖 webhook、Runner Spec 和 Web UI；这条链路请用 `task dev`，并配置一个 labels 包含
 `windows` 的固定 ID spec 验证。
 
+## Sandbox 创建结果未知的人工结案
+
+管理员结案提供两个互斥确认：有证据确认不存在，或明确接受创建结果未知。
+两种方式都保留当前 Sandbox、原始 Job 和 Runner 注册检查、精确 attempt 的租约隔离，以及状态与审计的原子提交。
+运行 `TestResolveUnknownCreationEndpoint` 和 `TestUnknownCreationResolution` 测试族，
+并使用上文专用 PostgreSQL/MySQL 测试配置运行 `TestUnknownCreationResolutionSQLBackends`。
+覆盖两种模式、无效注册响应、并发回执与租约接管、审计回滚、历史保留和配额释放。
+请求示例与发布限制见[创建结果未知的处理说明](../unknown-sandbox-creation.md)。
+这些测试不代表生产结案授权，也不证明历史 Sandbox 已不存在。
+
 ## 11. 官方参考
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow

@@ -733,6 +733,8 @@ function diagnosticFindingText(finding: RunnerDiagnosticFinding, t: AppTFunction
       return t("admin.findingCleanupOverdue")
     case "sandbox_creation_resolved_absent":
       return t("admin.findingCreationResolvedAbsent")
+    case "sandbox_creation_closed_unknown":
+      return t("admin.findingCreationClosedUnknown")
     case "no_anomaly_detected":
       return t("admin.findingNoAnomaly")
     default:

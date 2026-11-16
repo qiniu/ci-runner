@@ -67,6 +67,11 @@ func TestUnknownCreationDiagnostics(t *testing.T) {
 	if len(findings) != 1 || findings[0].Code != "sandbox_creation_resolved_absent" {
 		t.Fatalf("resolution lost provenance: %+v", findings)
 	}
+	st.LastErrorCode = state.UnknownCreationClosedCode
+	findings = diagnoseRunnerRequest(st, nil, false, diagnosticGitHubJob{})
+	if len(findings) != 1 || findings[0].Code != "sandbox_creation_closed_unknown" {
+		t.Fatalf("unknown closure lost provenance: %+v", findings)
+	}
 }
 
 func TestUnknownCreationNeverAutoCompletesFromEmptyList(t *testing.T) {

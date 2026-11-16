@@ -334,6 +334,9 @@ func diagnoseRunnerRequest(st state.RunnerState, events []state.RunnerEvent, tru
 	if st.LastErrorCode == state.UnknownCreationResolvedCode {
 		findings = append(findings, runnerDiagnosticFinding{Code: "sandbox_creation_resolved_absent", Severity: "warning"})
 	}
+	if st.LastErrorCode == state.UnknownCreationClosedCode {
+		findings = append(findings, runnerDiagnosticFinding{Code: "sandbox_creation_closed_unknown", Severity: "warning"})
+	}
 	hasAcceptedJob := st.AssignedJobID != 0 || st.AssignedJobName == runnerJobStartedMarker || controlEventMessageContains(events, "runner accepted a job")
 	hasRunnerExit := controlEventStage(events, runnerEventStageRunnerExit) || controlEventMessageContains(events, "runner process exited")
 	hasCompletedHook := controlEventStage(events, runnerEventStageRunnerHook) || controlEventMessageContains(events, "runner completed job hook received")
