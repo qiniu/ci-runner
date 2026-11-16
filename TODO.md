@@ -4,6 +4,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Deploy the explicit unknown-creation closure capability on both runnerd nodes, then separately authorize the historical request/attempt scope before any production resolution. Acceptance of uncertainty must retain audit and live checks without claiming resource absence; see [Unconfirmed Sandbox creation](docs/unknown-sandbox-creation.md).
+
 - Complete deployed acceptance for CI Runner account/repository concurrency: configure limits, verify an unrelated repository progresses under backlog, cleanup releases slots, and restart with a reduced limit retains existing Runners. Local regression coverage is documented in [Testing](docs/testing.md#ci-runner-account-and-repository-concurrency).
 
 - Production SQLite-to-PostgreSQL transfer and historical backfill completed on 2026-11-02. Confirm regular PostgreSQL backups and a restore drill, then separately inventory and review cleanup of completed target transfer objects under the retention policy. Preserve sealed sources and backups; production cleanup is not part of tool retirement. See [the retirement record](docs/database-transfer-retirement.md). Local Deployment/Web Terminal tests do not establish production acceptance or multi-instance support.

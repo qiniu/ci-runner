@@ -18,10 +18,11 @@ type unknownCreationResolutionRequest struct {
 	AttemptID                  string `json:"attempt_id"`
 	Evidence                   string `json:"evidence"`
 	NoSandboxOrPendingCreation bool   `json:"no_sandbox_or_pending_creation"`
+	AcceptUnknownResult        bool   `json:"accept_unknown_result"`
 }
 
 // This is deliberately separate from Stop and from automatic recovery. Only a
-// named administrator can attest external evidence about an unresolved create.
+// named administrator can attest absence or explicitly accept an unknown result.
 func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Request) {
 	session, _, ok := s.requireAdminAccount(w, r)
 	if !ok {
@@ -39,8 +40,8 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	input.Evidence = strings.TrimSpace(input.Evidence)
-	if !input.NoSandboxOrPendingCreation || input.AttemptID == "" || input.Version <= 0 || len(input.Evidence) < 20 || len(input.Evidence) > 1024 {
-		writeError(w, http.StatusBadRequest, "exact version/attempt, external verification evidence (20–1024 bytes), and confirmation of no Sandbox or pending creation are required")
+	if input.NoSandboxOrPendingCreation == input.AcceptUnknownResult || input.AttemptID == "" || input.Version <= 0 || len(input.Evidence) < 20 || len(input.Evidence) > 1024 {
+		writeError(w, http.StatusBadRequest, "exact version/attempt, evidence or closure reason (20–1024 bytes), and exactly one of no_sandbox_or_pending_creation or accept_unknown_result are required")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -55,6 +56,10 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		st.WorkflowJobID <= 0 || !st.RunningAt.IsZero() || st.CleanupGitHubRunnerID != 0 || st.RepositoryFullName == "" || st.RunnerName == "" ||
 		(st.JITRegistrationState != "" && st.JITRegistrationState != state.JITUnsent && st.JITRegistrationState != state.JITRejected) {
 		writeError(w, http.StatusConflict, "request changed or is not an eligible long-unknown creation")
+		return
+	}
+	if s.gh == nil {
+		writeError(w, http.StatusServiceUnavailable, "GitHub verification is unavailable")
 		return
 	}
 	cleanup, err := s.beginRunnerCleanup(ctx, &st, time.Now(), "")
@@ -91,8 +96,8 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusConflict, "original GitHub Job completion is not verified")
 		return
 	}
-	runnerID, err := s.gh.FindRunnerIDByName(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
-	if err != nil || runnerID != 0 {
+	runner, err := s.gh.FindRunnerByName(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
+	if err != nil || runner != nil {
 		writeError(w, http.StatusConflict, "GitHub Runner absence is not verified")
 		return
 	}
@@ -103,7 +108,7 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 	}
 	audit, err := auditEventFor(provider+":"+session.Subject, "runner.resolve_unknown_creation", "runner_request", st.ID, input)
 	if err == nil {
-		err = s.store.ResolveUnknownSandboxCreation(ctx, st, cleanup.token, audit)
+		err = s.store.ResolveUnknownSandboxCreation(ctx, st, cleanup.token, input.AcceptUnknownResult, audit)
 	}
 	if err != nil {
 		if errors.Is(err, state.ErrConflict) {
@@ -114,7 +119,13 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.logRequiredAuditEvent(audit)
-	s.store.AppendStagedLog(st.ID, "control.log", "sandbox_creation_resolution", []byte("Administrator resolved the exact creation attempt as absent using external evidence; no Sandbox deletion was observed. See audit.\n"))
+	code := state.UnknownCreationResolvedCode
+	message := "Administrator resolved the exact creation attempt as absent using external evidence; no Sandbox deletion was observed. See audit.\n"
+	if input.AcceptUnknownResult {
+		code = state.UnknownCreationClosedCode
+		message = "Administrator accepted the unknown creation outcome and ended reconciliation for this exact attempt; resource absence is unverified and no Sandbox deletion was observed. See audit.\n"
+	}
+	s.store.AppendStagedLog(st.ID, "control.log", "sandbox_creation_resolution", []byte(message))
 	s.refreshMetrics()
-	writeJSON(w, http.StatusOK, map[string]string{"id": st.ID, "status": state.StatusCompleted, "resolution": state.UnknownCreationResolvedCode})
+	writeJSON(w, http.StatusOK, map[string]string{"id": st.ID, "status": state.StatusCompleted, "resolution": code})
 }

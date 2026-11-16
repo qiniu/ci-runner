@@ -340,6 +340,7 @@ export const zh = {
     findingCreationUnresolved: "Sandbox 创建结果尚未确认；核对或人工审计收尾前继续保留配额",
     findingCleanupOverdue: "清理已等待至少 15 分钟，请核查后再释放配额",
     findingCreationResolvedAbsent: "管理员已依据外部证据确认此次创建无遗留并收尾；请查看审计。这不代表观察到了 Sandbox 删除。",
+    findingCreationClosedUnknown: "管理员已接受创建结果未知并人工结案，停止核对并释放配额；请查看审计。资源不存在仍未经证实。",
     findingNoAnomaly: "现有证据中未发现异常",
     findingUnknown: "未知诊断项：{{code}}",
     managed: "托管",

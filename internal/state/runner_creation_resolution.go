@@ -11,6 +11,7 @@ import (
 const (
 	UnknownCreationReviewDelay  = 15 * time.Minute
 	UnknownCreationResolvedCode = "sandbox_creation_resolved_absent"
+	UnknownCreationClosedCode   = "sandbox_creation_closed_unknown"
 )
 
 // UnknownSandboxCreation identifies outstanding dispatches, not evidence that
@@ -23,14 +24,21 @@ func UnknownSandboxCreation(st RunnerState) bool {
 // ResolveUnknownSandboxCreation is an explicit, audited operator resolution.
 // Its caller must verify the original Job is completed, GitHub registration is
 // absent, and an exact Sandbox search is empty. The operator must separately
-// attest that no create is still in flight; a list miss or elapsed TTL alone is
-// never sufficient. No cleanup receipt is fabricated for a Sandbox DELETE.
-func (s *DBStore) ResolveUnknownSandboxCreation(ctx context.Context, st RunnerState, token string, audit AuditEvent) error {
+// attest that no create is still in flight, or explicitly accept the unknown
+// outcome and end reconciliation. Neither mode fabricates a Sandbox DELETE
+// receipt; accepting the unknown result never records verified absence.
+func (s *DBStore) ResolveUnknownSandboxCreation(ctx context.Context, st RunnerState, token string, acceptUnknownResult bool, audit AuditEvent) error {
 	if !UnknownSandboxCreation(st) || st.Status != StatusStopping || token == "" ||
 		(st.JITRegistrationState != "" && st.JITRegistrationState != JITUnsent && st.JITRegistrationState != JITRejected) ||
 		st.WorkflowJobID <= 0 || !st.RunningAt.IsZero() || st.CleanupGitHubRunnerID != 0 || st.GitHubJobStatus != "completed" ||
 		audit.Actor == "" || audit.Action != "runner.resolve_unknown_creation" || audit.ResourceID != st.ID || audit.ResourceType != "runner_request" {
 		return ErrConflict
+	}
+	code := UnknownCreationResolvedCode
+	message := "Administrator verified no Sandbox or pending creation; see resolution audit"
+	if acceptUnknownResult {
+		code = UnknownCreationClosedCode
+		message = "Administrator accepted the unknown creation outcome and ended reconciliation; resource absence is unverified; see resolution audit"
 	}
 	db, err := s.dbOrEnsure()
 	if err != nil {
@@ -50,8 +58,8 @@ func (s *DBStore) ResolveUnknownSandboxCreation(ctx context.Context, st RunnerSt
 				"sandbox_create_dispatched": false, "cleanup_github_done": true,
 				"manual_stop_requested": true, "next_retry_at": nil,
 				"watch_token": nil, "watch_expires_at": nil, "lease_owner": "", "lease_expires_at": nil,
-				"last_error_code":        UnknownCreationResolvedCode,
-				"last_error_message":     "Administrator verified no Sandbox or pending creation; see resolution audit",
+				"last_error_code":        code,
+				"last_error_message":     message,
 				"last_error_retryable":   false,
 				"github_job_name":        st.GitHubJobName,
 				"github_job_status":      st.GitHubJobStatus,

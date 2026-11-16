@@ -575,6 +575,21 @@ describe("admin diagnostics", () => {
     expect(html).not.toContain("No anomaly was detected")
   })
 
+  test("distinguishes accepted unknown creation from verified absence", () => {
+    const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
+      diagnosis: {
+        state: { ...runnerState, status: "completed" },
+        github_job: { lookup_status: "retained", status: "completed", conclusion: "success" },
+        findings: [{ code: "sandbox_creation_closed_unknown", severity: "warning" }],
+        events: [], events_truncated: false,
+      },
+    }))
+    expect(html).toContain("accepted the unknown creation outcome and ended reconciliation, releasing capacity")
+    expect(html).toContain("Resource absence remains unverified")
+    expect(html).not.toContain("resolved this creation as absent using external evidence")
+    expect(html).not.toContain("No anomaly was detected")
+  })
+
   test("renders an unknown finding as neutral instead of claiming no anomaly", () => {
     const html = renderToStaticMarkup(createElement(RunnerRequestDiagnosisResult, {
       diagnosis: {

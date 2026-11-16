@@ -945,6 +945,19 @@ The caller owns the pre-created GitHub Runner identity: if startup or the test f
 It does not exercise webhooks, Runner Specs, or the web UI; use `task dev` with
 a fixed-ID spec whose labels include `windows` for that path.
 
+## Unknown Sandbox creation resolution
+
+The explicit admin resolution has two mutually exclusive confirmations: verified
+absence or acceptance of an unknown outcome. Both retain current Sandbox, original
+Job and Runner registration checks, exact-attempt lease fencing and atomic audit.
+Run the `TestResolveUnknownCreationEndpoint` and `TestUnknownCreationResolution`
+test families, including `TestUnknownCreationResolutionSQLBackends` with the
+dedicated PostgreSQL/MySQL test configuration above. They cover both modes,
+malformed registration responses, concurrent receipts/owners, audit rollback,
+history preservation and capacity release. See [Unconfirmed Sandbox creation](unknown-sandbox-creation.md)
+for payloads and rollout limits. These tests do not authorize production closure
+or establish that a historical Sandbox no longer exists.
+
 ## 11. Official References
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow
