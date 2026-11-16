@@ -20,6 +20,7 @@ import { Detail, StatusBadge } from "@/components/admin-shared"
 import { RunnerEventTimeline } from "@/components/runner-event-timeline"
 import { RunnerRequestDetails } from "@/components/runner-request-details"
 import { RunnerRegistrationLookup } from "@/components/runner-registration-lookup"
+import { RunnerUnknownCreationResolution } from "@/components/runner-unknown-creation-resolution"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -387,6 +388,7 @@ export function RunnerRequestSection({
             onRetryRunner={onRetryRunner ? () => void runRequestAction("retry", onRetryRunner) : undefined}
             onStopRunner={onStopRunner ? () => void runRequestAction("stop", onStopRunner) : undefined}
             onRunNetworkDiagnostic={(target) => void runNetworkDiagnostic(target)}
+            onUnknownCreationResolved={() => runDiagnosis(diagnosis.state.id, { preserveExisting: true })}
           />
         ) : null}
       </CardContent>
@@ -497,6 +499,7 @@ export function RunnerRequestDiagnosisResult({
   onRetryRunner,
   onStopRunner,
   onRunNetworkDiagnostic,
+  onUnknownCreationResolved,
 }: {
   diagnosis: RunnerRequestDiagnosis
   request?: (url: string, options?: RequestInit) => Promise<unknown>
@@ -509,6 +512,7 @@ export function RunnerRequestDiagnosisResult({
   onRetryRunner?: () => void
   onStopRunner?: () => void
   onRunNetworkDiagnostic?: (target: NetworkDiagnosticTarget) => void
+  onUnknownCreationResolved?: () => Promise<void>
 }) {
   const { t, i18n } = useTranslation()
   const state = diagnosis.state
@@ -539,6 +543,15 @@ export function RunnerRequestDiagnosisResult({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {request && onUnknownCreationResolved ? (
+            <RunnerUnknownCreationResolution
+              key={JSON.stringify([state.id, diagnosis.creation_attempt_id])}
+              diagnosis={diagnosis}
+              request={request}
+              disabled={requestAction !== null}
+              onResolved={onUnknownCreationResolved}
+            />
+          ) : null}
           {onCopyRunnerID ? (
             <Button type="button" size="sm" variant="outline" onClick={() => onCopyRunnerID(state.id)}>
               <Copy />

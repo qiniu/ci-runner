@@ -94,6 +94,32 @@ change to the ordinary Stop button:
 
 `POST /runner_requests/{id}/resolve-unknown-creation`
 
+### Admin browser action
+
+For an eligible request, `/admin/runner_requests/{id}` shows **Close with unknown
+outcome** (中文：**接受未知结果并结案**). Open the dialog, enter a closure reason,
+and explicitly confirm that a remaining or delayed resource may go unreconciled.
+The reason is required and must fit the same 20–1024 UTF-8 byte limit as the API.
+Canceling or reopening clears the reason and confirmation. The browser exposes
+only the acceptance-of-uncertainty mode; verified absence remains an API action.
+
+The admin diagnosis includes `unknown_creation_resolution_available`, a local
+eligibility hint using the mutation handler's existing state checks. It does not
+claim current Job completion, Runner absence, or ownership of a cleanup lease.
+The browser reads the latest diagnosis again on submission, uses its current
+version and refuses to transfer confirmation to a changed attempt. The service
+then performs all live checks and the atomic state/audit write described below.
+
+While submitting, the dialog prevents duplicate submissions and dismissal.
+Navigating to another request discards the old dialog and does not submit after
+an outstanding fresh-state read. A POST already sent may still commit after
+navigation or a lost response: reload that request and check its audit before
+deciding whether to submit again. Failed checks are displayed and never retried
+automatically. Successful closure refreshes diagnosis and the existing timeline;
+the request retains the unknown-outcome warning.
+
+### API payloads
+
 Use a named administrator's normal OAuth session, read the latest
 `GET /runner_requests/{id}/diagnostics` response, and submit one of these payloads.
 

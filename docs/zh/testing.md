@@ -916,6 +916,11 @@ RUNNERD_WINDOWS_E2E=1 go test -tags development ./internal/sandboxrunner -run Te
 请求示例与发布限制见[创建结果未知的处理说明](../unknown-sandbox-creation.md)。
 这些测试不代表生产结案授权，也不证明历史 Sandbox 已不存在。
 
+`task ui-production-smoke` 覆盖桌面和中文窄屏布局下的管理员结案弹窗。
+本地 fixture 验证显式确认、理由的 UTF-8 字节边界、最新版本提交、attempt 变化拒绝、
+重复提交拦截、预检期间切换请求、检查失败保留，以及成功后的诊断刷新。
+这些 fixture 不会调用生产结案接口。
+
 ## 11. 官方参考
 
 - GitHub self-hosted runner workflow labels: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow

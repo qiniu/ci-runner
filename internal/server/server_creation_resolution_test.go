@@ -17,6 +17,42 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
+func TestUnknownCreationResolutionEligibility(t *testing.T) {
+	now := time.Now()
+	eligible := state.RunnerState{
+		Status: state.StatusStopping, Version: 7, ProvisionAttemptID: "attempt", SandboxCreateDispatched: true,
+		StoppingAt: now.Add(-state.UnknownCreationReviewDelay), WorkflowJobID: 123, RepositoryFullName: "o/r", RunnerName: "runner",
+	}
+	if !canResolveUnknownCreation(eligible, now) {
+		t.Fatal("eligible request hidden")
+	}
+	for name, change := range map[string]func(*state.RunnerState){
+		"completed":            func(s *state.RunnerState) { s.Status = state.StatusCompleted },
+		"creating":             func(s *state.RunnerState) { s.Status = state.StatusCreating },
+		"version missing":      func(s *state.RunnerState) { s.Version = 0 },
+		"attempt missing":      func(s *state.RunnerState) { s.ProvisionAttemptID = "" },
+		"not dispatched":       func(s *state.RunnerState) { s.SandboxCreateDispatched = false },
+		"recent":               func(s *state.RunnerState) { s.StoppingAt = now.Add(-time.Minute) },
+		"no stopping time":     func(s *state.RunnerState) { s.StoppingAt = time.Time{} },
+		"sandbox":              func(s *state.RunnerState) { s.SandboxID = "known" },
+		"process":              func(s *state.RunnerState) { s.ProcessPID = 7 },
+		"previously running":   func(s *state.RunnerState) { s.RunningAt = now },
+		"registration receipt": func(s *state.RunnerState) { s.CleanupGitHubRunnerID = 12 },
+		"jit dispatched":       func(s *state.RunnerState) { s.JITRegistrationState = state.JITDispatched },
+		"job missing":          func(s *state.RunnerState) { s.WorkflowJobID = 0 },
+		"repository missing":   func(s *state.RunnerState) { s.RepositoryFullName = "" },
+		"name missing":         func(s *state.RunnerState) { s.RunnerName = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := eligible
+			change(&st)
+			if canResolveUnknownCreation(st, now) {
+				t.Fatal("ineligible request exposed")
+			}
+		})
+	}
+}
+
 func TestResolveUnknownCreationEndpoint(t *testing.T) {
 	for _, acceptUnknown := range []bool{false, true} {
 		name := "verified absence"
@@ -141,6 +177,19 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 			}
 			srv := New(config.Config{AuthSessionSecret: "session-secret", AuthEncryptionKey: "encryption-key", WorkerLeaseTTL: time.Minute, SandboxStopTimeout: time.Second}, actualStore, github.NewClient(gh.URL, http.DefaultClient), fake, nil)
 			defer srv.Close()
+			if scenario == "success" || scenario == "recent" {
+				rec := httptest.NewRecorder()
+				srv.ServeHTTP(rec, adminRequest("GET", "/runner_requests/unknown/diagnostics", nil))
+				var diagnosis runnerRequestDiagnostics
+				if err := json.Unmarshal(rec.Body.Bytes(), &diagnosis); err != nil || rec.Code != http.StatusOK || diagnosis.UnknownCreationResolutionAvailable != (scenario == "success") {
+					t.Fatalf("wrong eligibility hint: %d %s", rec.Code, rec.Body.String())
+				}
+				got, _ := store.ReadState(st.ID)
+				audits, _ := store.ListAuditEvents(100)
+				if got.Version != st.Version || got.WatchToken != st.WatchToken || len(audits) != 0 || fake.stoppedCount() != 0 {
+					t.Fatal("diagnostic eligibility mutated request")
+				}
+			}
 			if scenario == "GitHub unavailable" {
 				srv.gh = nil
 			}
