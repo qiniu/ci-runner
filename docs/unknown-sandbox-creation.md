@@ -20,6 +20,19 @@ that has expired may no longer appear in the current list.
 - Recovery preserves that original category while scheduling another lookup.
   Historical records without it get the existing waiting explanation; deployment
   does not reconstruct missing historical errors.
+- Each stopping-path lookup records a `sandbox_creation_lookup` control event
+  in the existing request timeline and a `Sandbox creation lookup` service log.
+  `outcome=not_found` means the exact-attempt lookup returned no verified resource;
+  it records `matches=0` and the next scheduled retry, **not permanent absence**.
+  `outcome=found` records `matches=1` before normal cleanup continues.
+  `outcome=failed` records `matches=unknown` and a safe error category; `phase`
+  distinguishes request loading, service configuration, provider lookup and
+  retry checkpoint failures. `next_retry_at=unchanged` means this observation
+  did not schedule a new retry. The original creation error remains intact.
+  Only service logs include the internal attempt ID. Timeline insertion checks
+  the current attempt and live cleanup lease atomically; a stale owner can log
+  its observation with `event_recorded=false` but cannot add a timeline event.
+  Evidence persistence failures do not complete or otherwise change the request.
 - Admin diagnostics show unresolved creation and warn when stopping has lasted
   at least 15 minutes. This threshold is for review, **not automatic release**.
   `creation_attempt_id` is exposed only in the admin diagnosis response. The
@@ -107,6 +120,20 @@ detailed histories and observed an empty Sandbox column for all 29 requests.
 It did not establish absence of remote resources. No production resolution is
 part of development or automated testing. Continue to defer controlled node
 failure exercises until the backlog and connection/capacity budget are understood.
+
+For a current stopping request, filter service logs before taking the tail so
+browser polling does not hide cleanup observations. Run on both runnerd nodes
+from their log directory (replace the example request ID):
+
+```bash
+grep -F '131669767108' qiniu-ci-runner.log.1 \
+  | grep -v '"msg":"http request"' \
+  | tail -n 60
+```
+
+After deploying lookup diagnostics, wait for the next normal retry and inspect
+`sandbox_creation_lookup` in that request's timeline. No manual Stop or database
+edit is needed to collect this evidence; deployment does not close the backlog.
 
 ## Verification
 

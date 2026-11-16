@@ -1850,15 +1850,18 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 	}
 	s.logger.Info("runner marked stopping", "id", id, "sandbox_id", st.SandboxID, "pid", st.ProcessPID)
 	if st.SandboxCreateDispatched && st.SandboxID == "" {
+		lookupStarted := time.Now()
 		req, err := s.store.ReadRequest(id)
 		if err != nil {
-			return st, false, err
+			cleanup.recordSandboxLookup(st, "request", "failed", err, lookupStarted)
+			return st, false, fmt.Errorf("sandbox lookup request failed: category=%s", sandboxrunner.CreateFailureCategory(err))
 		}
 		lookupCtx, cancel := context.WithTimeout(ctx, s.cfg.SandboxStopTimeout)
 		defer cancel()
 		service, err := s.sandboxServiceForRunnerRequest(lookupCtx, req)
 		if err != nil {
-			return st, false, err
+			cleanup.recordSandboxLookup(st, "service", "failed", err, lookupStarted)
+			return st, false, fmt.Errorf("sandbox lookup service failed: category=%s", sandboxrunner.CreateFailureCategory(err))
 		}
 		box, err := service.FindRunnerSandbox(lookupCtx, id, st.ProvisionAttemptID)
 		if errors.Is(err, sandboxrunner.ErrSandboxNotFound) {
@@ -1868,15 +1871,20 @@ func (s *Server) stopRunnerIfVersion(ctx context.Context, id string, expectedVer
 			}
 			st.NextRetryAt = time.Now().UTC().Add(s.runnerWatchTTL())
 			if err := cleanup.write(st); err != nil {
+				cleanup.recordSandboxLookup(st, "checkpoint", "failed", err, lookupStarted)
 				return st, false, err
 			}
 			st.Version++
+			cleanup.recordSandboxLookup(st, "provider", "not_found", nil, lookupStarted)
 			return st, false, nil
 		}
 		if err != nil {
-			return st, false, err
+			cleanup.recordSandboxLookup(st, "provider", "failed", err, lookupStarted)
+			return st, false, fmt.Errorf("sandbox creation lookup failed: category=%s", sandboxrunner.CreateFailureCategory(err))
 		}
+		cleanup.recordSandboxLookup(st, "provider", "found", nil, lookupStarted)
 		if err := s.store.RecordSandboxCreateResult(ctx, st, box); err != nil {
+			cleanup.recordSandboxLookup(st, "checkpoint", "failed", err, lookupStarted)
 			return st, false, err
 		}
 		st.SandboxID = box

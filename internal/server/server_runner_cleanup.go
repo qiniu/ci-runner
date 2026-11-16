@@ -139,6 +139,38 @@ func (c *runnerCleanup) write(st state.RunnerState) error {
 	return c.server.store.WriteCleanupState(st, c.token)
 }
 
+// Only safe categories cross into service logs and the shared event timeline.
+// The internal attempt ID stays in service logs, not ordinary-user events.
+func (c *runnerCleanup) recordSandboxLookup(st state.RunnerState, phase, outcome string, failure error, started time.Time) {
+	category, matches := "none", "unknown"
+	if failure != nil {
+		category = sandboxrunner.CreateFailureCategory(failure)
+	}
+	switch outcome {
+	case "not_found":
+		matches = "0"
+	case "found":
+		matches = "1"
+	}
+	next := "unchanged"
+	if outcome == "not_found" && !st.NextRetryAt.IsZero() {
+		next = st.NextRetryAt.UTC().Format(time.RFC3339Nano)
+	}
+	message := fmt.Sprintf("Sandbox creation lookup: phase=%s outcome=%s matches=%s category=%s duration_ms=%d next_retry_at=%s", phase, outcome, matches, category, time.Since(started).Milliseconds(), next)
+	if outcome == "not_found" {
+		message += "; creation still unconfirmed; keeping stopping state and capacity"
+	}
+	eventCtx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+	eventErr := c.server.store.AppendRunnerCleanupEvent(eventCtx, st, c.token, "sandbox_creation_lookup", message+"\n")
+	c.server.logger.Info("Sandbox creation lookup", "id", st.ID, "attempt_id", st.ProvisionAttemptID,
+		"phase", phase, "outcome", outcome, "matches", matches, "category", category,
+		"next_retry_at", next, "duration_ms", time.Since(started).Milliseconds(), "event_recorded", eventErr == nil)
+	if eventErr != nil && !errors.Is(eventErr, state.ErrConflict) && c.ctx.Err() == nil {
+		c.server.logger.Warn("record Sandbox creation lookup failed", "id", st.ID, "category", sandboxrunner.CreateFailureCategory(eventErr))
+	}
+}
+
 func (c *runnerCleanup) writeOrLog(st state.RunnerState, msg string) bool {
 	if err := c.write(st); err != nil {
 		c.server.logger.Error(msg, "id", c.id, "error", err)
