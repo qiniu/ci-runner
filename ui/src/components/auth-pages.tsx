@@ -140,7 +140,7 @@ function RouteMessagePage({
 }) {
   const { t } = useTranslation()
   return (
-    <main className="brand-home relative flex min-h-screen items-center overflow-hidden bg-[#f7fcff] px-5 py-16 text-[#0a0d12]">
+    <main className="relative flex min-h-screen items-center overflow-hidden bg-[#f7fcff] px-5 py-16 text-[#0a0d12]">
       <div className="brand-grid absolute inset-0 opacity-70" />
       <div className="absolute -right-40 -top-48 h-[560px] w-[560px] rounded-full bg-[#00aae7]/15 blur-[110px]" />
       <section className="relative mx-auto w-full max-w-lg rounded-2xl border border-[#d5e4eb] bg-white p-7 shadow-[0_30px_90px_rgba(7,49,73,0.12)] sm:p-10">

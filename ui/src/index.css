@@ -28,17 +28,12 @@
 
 :root {
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
+    system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Noto Sans', 'Helvetica Neue', Arial, sans-serif,
     'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   --font-mono:
     'Maple Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     'Liberation Mono', 'Courier New', monospace;
-  --app-font-sans: 'Maple Mono', var(--font-sans);
-}
-
-body {
-  font-family: var(--app-font-sans);
 }
 
 code,
@@ -48,9 +43,6 @@ samp {
   font-family: var(--font-mono);
 }
 
-.font-sans {
-  font-family: var(--app-font-sans) !important;
-}
 .font-mono {
   font-family: var(--font-mono) !important;
 }
@@ -61,14 +53,6 @@ samp {
     'Liberation Mono', 'Noto Sans Mono CJK SC', 'Microsoft YaHei', monospace;
   font-family: var(--font-mono);
   font-variant-ligatures: none;
-}
-
-.brand-home {
-  font-family: var(--font-sans);
-}
-
-.brand-home .font-mono {
-  font-family: var(--font-mono) !important;
 }
 
 .brand-grid {
@@ -244,5 +228,6 @@ samp {
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
   }
 }

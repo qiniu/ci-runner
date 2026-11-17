@@ -71,7 +71,7 @@ const workflowSteps = [
 export function LandingPage() {
   const { t } = useTranslation()
   return (
-    <div className="brand-home min-h-screen overflow-x-hidden bg-white text-[#0a0d12] transition-colors duration-300 dark:bg-[#050d12] dark:text-[#edf8fc]">
+    <div className="min-h-screen overflow-x-hidden bg-white text-[#0a0d12] transition-colors duration-300 dark:bg-[#050d12] dark:text-[#edf8fc]">
       <a
         href="#main-content"
         className="fixed left-4 top-4 z-[60] -translate-y-24 rounded-md bg-[#0a0d12] px-4 py-2 text-sm font-semibold text-white transition-transform focus:translate-y-0"
