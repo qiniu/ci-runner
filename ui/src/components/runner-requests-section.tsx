@@ -3,8 +3,8 @@ import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } 
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
-import { activeStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
-import { createAutomaticPageLoadGate } from "@/app-load-policy"
+import { activeStatuses, runnerDisplayStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
+import { adminRunnerRequestDetailPath, createAutomaticPageLoadGate } from "@/app-load-policy"
 import { StatusBadge } from "@/components/admin-shared"
 import { stickyTableHeaderOffset } from "@/components/runner-request-table"
 import { Button } from "@/components/ui/button"
@@ -72,6 +72,8 @@ export function RunnerRequestsSection({
   runnerRepositoryFilter,
   runnerSpecFilter,
   runnerSpecNames,
+  requestLookup,
+  requestQuery,
   onRefresh,
   onResetCreateRunnerForm,
   onCreateRunnerOpenChange,
@@ -83,6 +85,7 @@ export function RunnerRequestsSection({
   onStatusFilterChange,
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
+  onRequestLookupChange,
   onSearchRepositories,
   onLoadMore,
   onLookupRunnerRequest,
@@ -107,6 +110,8 @@ export function RunnerRequestsSection({
   runnerRepositoryFilter: string
   runnerSpecFilter: string
   runnerSpecNames: string[]
+  requestLookup: string
+  requestQuery: string
   onRefresh: () => void
   onResetCreateRunnerForm: () => void
   onCreateRunnerOpenChange: (open: boolean) => void
@@ -118,6 +123,7 @@ export function RunnerRequestsSection({
   onStatusFilterChange: (value: RunnerDisplayStatus | "all") => void
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
+  onRequestLookupChange: (value: string) => void
   onSearchRepositories: (query: string) => Promise<{ repositories: string[]; hasMore: boolean }>
   onLoadMore: () => Promise<boolean>
   onLookupRunnerRequest: (identifier: string) => void
@@ -126,7 +132,6 @@ export function RunnerRequestsSection({
   onStopRunner: (id: string) => void
 }) {
   const { t, i18n } = useTranslation()
-  const [requestIdentifier, setRequestIdentifier] = useState("")
   const [repositoryOpen, setRepositoryOpen] = useState(false)
   const [repositoryQuery, setRepositoryQuery] = useState("")
   const [repositoryOptions, setRepositoryOptions] = useState<string[]>([])
@@ -319,7 +324,7 @@ export function RunnerRequestsSection({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t("admin.allStatuses")}</SelectItem>
-                  {(["queued", "creating", "running", "stopping", "completed", "unmatched", "failed"] as RunnerDisplayStatus[]).map((status) => (
+                  {runnerDisplayStatuses.map((status) => (
                     <SelectItem key={status} value={status}>
                       {runnerStatusLabel(status)}
                     </SelectItem>
@@ -424,7 +429,7 @@ export function RunnerRequestsSection({
                 className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1"
                 onSubmit={(event) => {
                   event.preventDefault()
-                  const identifier = requestIdentifier.trim()
+                  const identifier = requestLookup.trim()
                   if (identifier) onLookupRunnerRequest(identifier)
                 }}
               >
@@ -433,12 +438,12 @@ export function RunnerRequestsSection({
                 </label>
                 <Input
                   id="runner-request-lookup"
-                  value={requestIdentifier}
-                  onChange={(event) => setRequestIdentifier(event.target.value)}
+                  value={requestLookup}
+                  onChange={(event) => onRequestLookupChange(event.target.value)}
                   placeholder={t("admin.runnerRequestPlaceholder")}
                   autoComplete="off"
                 />
-                <Button type="submit" variant="outline" disabled={!requestIdentifier.trim()}>
+                <Button type="submit" variant="outline" disabled={!requestLookup.trim()}>
                   <Search />
                   {t("admin.openRunnerRequest")}
                 </Button>
@@ -502,7 +507,7 @@ export function RunnerRequestsSection({
                     <TableCell>
                       <a
                         className="font-medium text-primary underline-offset-4 hover:underline"
-                        href={`/admin/runner_requests/${encodeURIComponent(runner.id)}`}
+                        href={adminRunnerRequestDetailPath(runner.id, requestQuery)}
                         onClick={(event) => openRunnerRequest(event, runner)}
                       >
                         {runner.runner_name || runner.id}

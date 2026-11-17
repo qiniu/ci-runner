@@ -1,5 +1,5 @@
 import { githubContextFromPath } from "@/github-context-routes"
-import { adminSections, githubInstallationIDFromAdminPath, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
+import { adminSections, githubInstallationIDFromAdminPath, runnerDisplayStatuses, runnerRequestIdentifierFromAdminPath, type AdminSection, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
 import { isSiteDocumentPath } from "@/site-doc-routes"
 
 // The Jobs home only needs enough rows to paint the first viewport. Older
@@ -12,10 +12,17 @@ export const adminRunnerRequestPageSize = 100
 export const adminRunnerPollPageBudget = 5
 export const adminRunnerRefreshWindow = adminRunnerRequestPageSize * adminRunnerPollPageBudget
 
-export interface AdminRunnerRequestListOptions {
+interface AdminRunnerRequestFilters {
   status: RunnerDisplayStatus | "all"
   repository: string
   runnerSpec: string
+}
+
+export interface AdminRunnerRequestSearch extends AdminRunnerRequestFilters {
+  lookup: string
+}
+
+export interface AdminRunnerRequestListOptions extends AdminRunnerRequestFilters {
   limit?: number
   cursor?: string | null
 }
@@ -31,14 +38,40 @@ export interface AdminRunnerPollResult extends AdminRunnerPage {
   preservePagination: boolean
 }
 
+export function adminRunnerRequestSearchFromURL(search: string): AdminRunnerRequestSearch {
+  const query = new URLSearchParams(search)
+  const status = query.get("status")
+  return {
+    status: runnerDisplayStatuses.find((value) => value === status) ?? "all",
+    repository: query.get("repository_full_name")?.trim() || "all",
+    runnerSpec: query.get("runner_spec_name")?.trim() || "all",
+    lookup: query.get("runner") ?? "",
+  }
+}
+
+function setAdminRunnerRequestFilters(query: URLSearchParams, filters: AdminRunnerRequestFilters): void {
+  if (filters.status !== "all") query.set("status", filters.status)
+  if (filters.repository !== "all") query.set("repository_full_name", filters.repository)
+  if (filters.runnerSpec !== "all") query.set("runner_spec_name", filters.runnerSpec)
+}
+
+export function adminRunnerRequestSearch(values: AdminRunnerRequestSearch): string {
+  const query = new URLSearchParams()
+  setAdminRunnerRequestFilters(query, values)
+  if (values.lookup) query.set("runner", values.lookup)
+  return query.size ? `?${query}` : ""
+}
+
+export function adminRunnerRequestDetailPath(id: string, search = ""): string {
+  return `/admin/runner_requests/${encodeURIComponent(id)}${search}`
+}
+
 export function adminRunnerRequestsPath(options: AdminRunnerRequestListOptions): string {
   const query = new URLSearchParams({
     limit: String(options.limit ?? adminRunnerRequestPageSize),
   })
   if (options.cursor) query.set("cursor", options.cursor)
-  if (options.status !== "all") query.set("status", options.status)
-  if (options.repository !== "all") query.set("repository_full_name", options.repository)
-  if (options.runnerSpec !== "all") query.set("runner_spec_name", options.runnerSpec)
+  setAdminRunnerRequestFilters(query, options)
   return `/runner_requests?${query.toString()}`
 }
 

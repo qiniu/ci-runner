@@ -1,5 +1,6 @@
 export type RunnerStatus = "queued" | "creating" | "running" | "stopping" | "completed" | "failed"
 export type RunnerDisplayStatus = RunnerStatus | "unmatched"
+export const runnerDisplayStatuses = ["queued", "creating", "running", "stopping", "completed", "unmatched", "failed"] as const satisfies readonly RunnerDisplayStatus[]
 
 export type RunnerState = {
   id: string
