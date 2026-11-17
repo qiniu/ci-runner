@@ -1,6 +1,8 @@
 import { Activity, ClipboardList, CloudCog, Github, ListTree, ScrollText, Settings2, Stethoscope, UsersRound } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
+import { adminSectionPath, type AdminSection } from "@/admin-types"
+import { AppLink } from "@/components/app-link"
 import { QiniuRunnerLogo } from "@/components/qiniu-runner-logo"
 import {
   Sidebar,
@@ -13,15 +15,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
-type AppSidebarProps = {
-  section: string
-  onSectionChange: (section: string) => void
-}
-
-export function AppSidebar({
-  section,
-  onSectionChange,
-}: AppSidebarProps) {
+export function AppSidebar({ section }: { section: AdminSection }) {
   const { t } = useTranslation()
   const items = [
     { id: "overview", label: t("sidebar.overview"), icon: Activity },
@@ -33,7 +27,7 @@ export function AppSidebar({
     { id: "match", label: t("sidebar.matchTest"), icon: ClipboardList },
     { id: "audit", label: t("sidebar.audit"), icon: ScrollText },
     { id: "diagnostics", label: t("sidebar.diagnostics"), icon: Stethoscope },
-  ]
+  ] as const
 
   return (
     <Sidebar collapsible="offcanvas">
@@ -55,15 +49,18 @@ export function AppSidebar({
             <SidebarMenu>
               {items.map((item) => {
                 const Icon = item.icon
+                const isActive = section === item.id
                 return (
                   <SidebarMenuItem key={item.id}>
                     <SidebarMenuButton
-                      isActive={section === item.id}
+                      asChild
+                      isActive={isActive}
                       className="data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:shadow-sm"
-                      onClick={() => onSectionChange(item.id)}
                     >
-                      <Icon className="text-sidebar-primary" />
-                      <span className="font-medium">{item.label}</span>
+                      <AppLink href={adminSectionPath(item.id)} aria-current={isActive ? "location" : undefined}>
+                        <Icon className="text-sidebar-primary" />
+                        <span className="font-medium">{item.label}</span>
+                      </AppLink>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )

@@ -440,6 +440,10 @@ export const adminSections = [
 
 export type AdminSection = (typeof adminSections)[number]
 
+export function adminSectionPath(section: AdminSection): string {
+  return section === "overview" ? "/admin/" : `/admin/${section}`
+}
+
 export function runnerRequestIdentifierFromAdminPath(path: string): string {
   const match = path.match(/^\/admin\/runner_requests\/([^/]+)$/)
   if (!match) return ""

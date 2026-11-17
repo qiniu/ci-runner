@@ -28,6 +28,7 @@ import {
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import {
+  adminSectionPath,
   adminSections,
   githubInstallationIDFromAdminPath,
   runnerRequestIdentifierFromAdminPath,
@@ -258,7 +259,7 @@ function App() {
     const section = adminSections.includes(next as AdminSection) ? (next as AdminSection) : "overview"
     invalidateRunnerRequestPage()
     setSectionState(section)
-    const nextPath = section === "overview" ? "/admin/" : `/admin/${section}`
+    const nextPath = adminSectionPath(section)
     if (window.location.pathname !== nextPath) {
       window.history.pushState(null, "", nextPath)
       setLocationPath(nextPath)
@@ -1419,10 +1420,7 @@ function App() {
   return (
     <SandboxRegionsContext.Provider value={sandboxRegions}>
     <SidebarProvider>
-      <AppSidebar
-        section={section}
-        onSectionChange={setSection}
-      />
+      <AppSidebar section={section} />
       <SidebarInset className="min-h-0 overflow-hidden">
         <SiteHeader authSession={authSession} onSignOut={signOut} />
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
