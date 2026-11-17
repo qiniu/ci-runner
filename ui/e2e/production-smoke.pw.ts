@@ -1838,6 +1838,7 @@ test("ignores an old deployment reauthentication failure after navigation", asyn
 
 test("deployment terminal closes on transport loss and requires explicit new session", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  await page.setViewportSize({ width: 1440, height: 900 })
   const deployment = { id: "terminal-resume", repository_full_name: "fixture-user/project", ref: "refs/heads/main", commit_sha: "a".repeat(40), status: "running", sandbox_id: "same-sandbox", revision_number: 1, expires_at: new Date(Date.now() + 3600000).toISOString() }
   let creates = 0
   let closeSocket: () => void = () => {}
@@ -1869,6 +1870,13 @@ test("deployment terminal closes on transport loss and requires explicit new ses
   await expect(page.getByRole("alert")).toContainText("disconnected")
   await expect(page.locator(".xterm-rows")).toContainText("FINAL OUTPUT")
   await expect(page.getByText("Connect when you need an interactive shell.", { exact: true })).toHaveCount(0)
+  const screen = page.locator(".xterm-screen")
+  expect(await screen.evaluate((element) => element.clientWidth)).toBeGreaterThan(390)
+  await page.setViewportSize({ width: 390, height: 900 })
+  await expect.poll(() => screen.evaluate((element) =>
+    element.getBoundingClientRect().right <= element.closest(".deployment-console")!.getBoundingClientRect().right
+  )).toBe(true)
+  await expect(page.locator(".xterm-rows")).toContainText("FINAL OUTPUT")
   expect(creates).toBe(1)
   await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(page.locator(".xterm-rows")).toContainText("SESSION 2")

@@ -134,9 +134,10 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
 
   const resizeTerminal = useCallback(() => {
     const term = terminalRef.current
-    const socket = socketRef.current
-    if (!terminalSession || !term || !fitRef.current || !socket) return
+    if (!term || !fitRef.current) return
     fitRef.current.fit()
+    const socket = socketRef.current
+    if (!terminalSession || socket?.readyState !== WebSocket.OPEN) return
     if (resizeRef.current !== null) window.clearTimeout(resizeRef.current)
     resizeRef.current = window.setTimeout(() => {
       resizeRef.current = null
@@ -146,10 +147,10 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
     }, 250)
   }, [terminalSession])
   useEffect(() => {
-    if (!terminalSession) return
+    if (!terminalHasHistory) return
     const observer = new ResizeObserver(resizeTerminal)
     if (terminalEl.current) observer.observe(terminalEl.current)
     return () => observer.disconnect()
-  }, [resizeTerminal, terminalSession])
+  }, [resizeTerminal, terminalHasHistory])
   return { terminalEl, terminalSession, terminalError, terminalConnecting, terminalHasHistory, connectTerminal, closeTerminalSession }
 }
