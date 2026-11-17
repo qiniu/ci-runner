@@ -65,7 +65,7 @@ func TestResolveUnknownCreationEndpoint(t *testing.T) {
 
 func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 	t.Helper()
-	for _, scenario := range []string{"success", "not admin", "not authenticated", "no attestation", "conflicting attestations", "short reason", "long reason", "GitHub unavailable", "job lookup error", "wrong job", "runner lookup error", "malformed runner list", "malformed runner", "stale version", "stale attempt", "recent", "sandbox exists", "lookup error", "job running", "github runner exists", "receipt during verification", "audit failure", "lease lost"} {
+	for _, scenario := range []string{"success", "not admin", "not authenticated", "no attestation", "conflicting attestations", "short reason", "long reason", "GitHub unavailable", "job lookup error", "wrong job", "runner lookup error", "malformed runner list", "truncated runner list", "malformed runner", "stale version", "stale attempt", "recent", "sandbox exists", "lookup error", "job running", "github runner exists", "receipt during verification", "audit failure", "lease lost"} {
 		t.Run(scenario, func(t *testing.T) {
 			store := state.New(t.TempDir())
 			_, _, err := store.EnsureAccountForOAuthIdentity(state.OAuthIdentity{OAuthProvider: "github", OAuthSubject: "12345", OAuthLogin: "octocat"}, "admin")
@@ -157,6 +157,10 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 						writeJSON(w, 200, map[string]any{})
 						return
 					}
+					if scenario == "truncated runner list" {
+						writeJSON(w, 200, map[string]any{"total_count": 1, "runners": []any{}})
+						return
+					}
 					runners := []map[string]any{}
 					if scenario == "github runner exists" {
 						runners = append(runners, map[string]any{"id": 77, "name": "e2b-123"})
@@ -164,7 +168,7 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 					if scenario == "malformed runner" {
 						runners = append(runners, map[string]any{"id": 77})
 					}
-					writeJSON(w, 200, map[string]any{"runners": runners})
+					writeJSON(w, 200, map[string]any{"total_count": len(runners), "runners": runners})
 				default:
 					t.Errorf("unexpected remote call %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(500)

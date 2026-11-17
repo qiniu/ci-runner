@@ -407,6 +407,7 @@ export function UserDashboard({
       ) : (
         <PullRequestsPage
           groups={groups}
+          isJobsHome={locationPath === "/jobs" && !sourceContext && !selectedKey && !selectedJobID}
           hasInstallations={hasInstallations}
           selected={selected}
           selectedJobGroup={selectedJobGroup}
@@ -1236,6 +1237,7 @@ function SandboxAPIKeyCard({
 
 function PullRequestsPage({
   groups,
+  isJobsHome,
   hasInstallations,
   selected,
   selectedJobGroup,
@@ -1257,6 +1259,7 @@ function PullRequestsPage({
   onLoadRunnerHistory,
 }: {
   groups: BuildGroup[]
+  isJobsHome: boolean
   hasInstallations: boolean
   selected: BuildGroup | undefined
   selectedJobGroup: RunnerJobGroup | null
@@ -1289,7 +1292,7 @@ function PullRequestsPage({
   const selectedStatus = selected ? buildGroupStatus(selected) : null
   const visibleHistoryTotal = Math.min(runnerTotal, userRunnerHistoryWindow)
   const olderRunnerCount = Math.max(0, visibleHistoryTotal - runnerCount)
-  const showEmptyState = !selected && !groups.length && !olderRunnerCount && !loadingJobs && !loadingGitHubApp && !jobsLoadFailed
+  const showEmptyState = isJobsHome && runnerCount === 0 && runnerTotal === 0 && !loadingJobs && !loadingGitHubApp && !jobsLoadFailed
   const loadOlderJobsControl = olderRunnerCount > 0 ? (
     <div className="border-b p-3">
       <Button
@@ -1397,7 +1400,7 @@ function PullRequestsPage({
                 </div>
               ) : (
                 <>
-                  <div className="p-4 text-sm text-muted-foreground">{t("user.noMatchingJobs")}</div>
+                  <div className="p-4 text-sm text-muted-foreground">{t(olderRunnerCount ? "user.noMatchingJobs" : "user.noJobsMatchFilters")}</div>
                   {loadOlderJobsControl}
                 </>
               )}
@@ -1585,9 +1588,9 @@ function RunnerJobLogPanel({
   const [activeTab, setActiveTab] = useState("runner-logs")
   const endpoint = `/user/runner_requests/${encodeURIComponent(job.id)}`
   const terminalAvailable = isTerminalAvailable(job)
-  const { terminalEl, terminalSession, terminalError, terminalConnecting, connectTerminal } = useSandboxTerminal({
+  const { terminalEl, terminalSession, terminalError, terminalConnecting, terminalHasHistory, connectTerminal } = useSandboxTerminal({
     endpoint,
-    available: terminalAvailable,
+    available: terminalAvailable && activeTab === "web-console",
     request,
     connectingMessage: t("user.connectingConsole"),
     streamDisconnectedMessage: t("user.consoleDisconnected"),
@@ -1628,7 +1631,7 @@ function RunnerJobLogPanel({
             {terminalAvailable ? (
               <div className="relative min-h-0 flex-1 p-2">
                 <div ref={terminalEl} className="h-full min-h-0 overflow-hidden rounded-md" />
-                {!terminalSession ? (
+                {!terminalHasHistory && !terminalConnecting ? (
                   <div className="absolute inset-2 flex items-center justify-center rounded-md bg-[#111318] text-sm text-slate-300">
                     {t("user.connectInteractiveShell")}
                   </div>

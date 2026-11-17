@@ -140,12 +140,16 @@ func TestTerminalSocketLifecycle(t *testing.T) {
 			if err = c.ReadJSON(&out); err != nil || string(out.Data) != "terminal ready\n" {
 				t.Fatalf("output %+v %v", out, err)
 			}
-			_ = c.WriteJSON(terminalFrame{Type: "input", Data: "echo first\n"})
+			// This valid decoded payload expands to six times its size on the wire.
+			wantInput := strings.Repeat("\x01", terminalInputMaxBytes)
+			if err := c.WriteJSON(terminalFrame{Type: "input", Data: wantInput}); err != nil {
+				t.Fatal(err)
+			}
 			_ = c.WriteJSON(terminalFrame{Type: "resize", Rows: 41, Cols: 121})
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
 				f.fake.terminal.mu.Lock()
-				ok := f.fake.terminal.input == "echo first\n" && f.fake.terminal.resized.Rows == 41
+				ok := f.fake.terminal.input == wantInput && f.fake.terminal.resized.Rows == 41
 				f.fake.terminal.mu.Unlock()
 				if ok {
 					break
@@ -155,8 +159,8 @@ func TestTerminalSocketLifecycle(t *testing.T) {
 			f.fake.terminal.mu.Lock()
 			input, size := f.fake.terminal.input, f.fake.terminal.resized
 			f.fake.terminal.mu.Unlock()
-			if input != "echo first\n" || size.Cols != 121 {
-				t.Fatalf("input/resize %q %+v", input, size)
+			if input != wantInput || size.Cols != 121 {
+				t.Fatalf("input matched=%v, resize=%+v", input == wantInput, size)
 			}
 			_ = c.Close()
 			closed := waitTerminalClosed(t, f, id)

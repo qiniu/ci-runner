@@ -882,6 +882,7 @@ export const en = {
     checkRepositoryReadiness: "Check repository readiness",
     runFirstWorkflow: "Run your first workflow",
     noMatchingJobs: "No matching jobs in the latest page. Load older jobs to continue.",
+    noJobsMatchFilters: "No jobs match the current filters.",
     branch: "Branch",
     commit: "Commit",
     lastUpdated: "Last updated",

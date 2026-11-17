@@ -1672,6 +1672,8 @@ test("keeps deployment path IDs and readable source filters through history", as
   await expect(page.locator("main aside button").filter({ hasText: repository })).toHaveCount(2)
   await expect(page.getByText("fixture/repository-2", { exact: true })).toHaveCount(0)
   await page.goto(`/github/${repository}/jobs?branch=missing`, { waitUntil: "networkidle" })
+  await expect(page.getByText("No jobs match the current filters.", { exact: true })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Run your first workflow" })).toHaveCount(0)
   await expect(page.locator("main aside button").filter({ hasText: repository })).toHaveCount(0)
   await expect(page.getByRole("link", { name: "Deploy this commit", exact: true })).toHaveCount(0)
   await page.goto(`/github/${repository}/branch/example%2Fvite/jobs?commit=${sha}&job=${selected.id}`, { waitUntil: "networkidle" })
@@ -1845,7 +1847,10 @@ test("deployment terminal closes on transport loss and requires explicit new ses
     socket.send(JSON.stringify({ type: "ready", session_id: `session-${creates}`, pid: 99, sandbox_id: "same-sandbox" }))
     socket.send(JSON.stringify({ type: "output", data: Buffer.from(`SESSION ${creates}\r\n`).toString("base64") }))
     socket.onMessage(data => input.push(String(data)))
-    closeSocket = () => socket.close()
+    closeSocket = () => {
+      socket.send(JSON.stringify({ type: "output", data: Buffer.from("FINAL OUTPUT\r\n").toString("base64") }))
+      void socket.close()
+    }
   })
   await page.route("**/auth/session", route => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
   await page.route("**/user/**", route => {
@@ -1862,9 +1867,12 @@ test("deployment terminal closes on transport loss and requires explicit new ses
   await expect(page.locator(".xterm-rows")).toContainText("SESSION 1")
   closeSocket()
   await expect(page.getByRole("alert")).toContainText("disconnected")
+  await expect(page.locator(".xterm-rows")).toContainText("FINAL OUTPUT")
+  await expect(page.getByText("Connect when you need an interactive shell.", { exact: true })).toHaveCount(0)
   expect(creates).toBe(1)
   await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(page.locator(".xterm-rows")).toContainText("SESSION 2")
+  await expect(page.locator(".xterm-rows")).not.toContainText("FINAL OUTPUT")
   expect(creates).toBe(2)
   expect(input.every(data => JSON.parse(data).type === "resize")).toBe(true)
 })

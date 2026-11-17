@@ -905,6 +905,8 @@ func (c *Client) queryRunners(ctx context.Context, repositoryFullName, runnerGro
 		nextURL += "&name=" + url.QueryEscape(runnerName)
 	}
 	var runners []Runner
+	totalCount := -1
+	seenIDs := make(map[int64]struct{})
 	for nextURL != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 		if err != nil {
@@ -924,21 +926,38 @@ func (c *Client) queryRunners(ctx context.Context, repositoryFullName, runnerGro
 			return nil, fmt.Errorf("github list runners: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 		var out struct {
-			Runners []Runner `json:"runners"`
+			Runners    []Runner        `json:"runners"`
+			TotalCount json.RawMessage `json:"total_count"`
 		}
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, err
 		}
-		if strict && out.Runners == nil {
-			return nil, fmt.Errorf("github list runners: missing runners array")
-		}
-		for _, runner := range out.Runners {
-			if strict && (runner.ID <= 0 || strings.TrimSpace(runner.Name) == "") {
-				return nil, fmt.Errorf("github list runners: invalid runner identity")
+		nextURL = nextLink(resp.Header.Get("Link"))
+		if strict {
+			var count *int
+			if err := json.Unmarshal(out.TotalCount, &count); err != nil || count == nil || *count < 0 || out.Runners == nil {
+				return nil, fmt.Errorf("github list runners: invalid total_count or runners array")
+			}
+			if totalCount != -1 && totalCount != *count {
+				return nil, fmt.Errorf("github list runners: total_count changed during pagination")
+			}
+			totalCount = *count
+			loaded := len(runners) + len(out.Runners)
+			if loaded > totalCount || (nextURL == "" && loaded != totalCount) ||
+				(nextURL != "" && (loaded == totalCount || len(out.Runners) == 0)) {
+				return nil, fmt.Errorf("github list runners: incomplete or inconsistent pagination")
+			}
+			for _, runner := range out.Runners {
+				if runner.ID <= 0 || strings.TrimSpace(runner.Name) == "" {
+					return nil, fmt.Errorf("github list runners: invalid runner identity")
+				}
+				if _, exists := seenIDs[runner.ID]; exists {
+					return nil, fmt.Errorf("github list runners: duplicate runner ID")
+				}
+				seenIDs[runner.ID] = struct{}{}
 			}
 		}
 		runners = append(runners, out.Runners...)
-		nextURL = nextLink(resp.Header.Get("Link"))
 	}
 	result = "success"
 	return runners, nil

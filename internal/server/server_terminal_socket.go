@@ -101,6 +101,12 @@ type terminalFrame struct {
 	Rows uint32 `json:"rows,omitempty"`
 }
 
+const (
+	terminalInputMaxBytes = 4096
+	// A single input byte can take six bytes as a JSON escape (e.g. \u0000).
+	terminalFrameMaxBytes = 6*terminalInputMaxBytes + 128
+)
+
 func decodeTerminalFrame(raw []byte) (terminalFrame, error) {
 	var frame terminalFrame
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -113,7 +119,7 @@ func decodeTerminalFrame(raw []byte) (terminalFrame, error) {
 	}
 	switch frame.Type {
 	case "input":
-		if len(frame.Data) > 4096 || frame.Cols != 0 || frame.Rows != 0 {
+		if len(frame.Data) > terminalInputMaxBytes || frame.Cols != 0 || frame.Rows != 0 {
 			return frame, errors.New("invalid input")
 		}
 	case "resize":
@@ -160,7 +166,7 @@ func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 	defer conn.Close()
-	conn.SetReadLimit(8192)
+	conn.SetReadLimit(terminalFrameMaxBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(20 * time.Second)) })
 	ctx, cancel := context.WithCancel(r.Context())

@@ -17,7 +17,7 @@ import (
 )
 
 func TestRunnerRegistrationLookupReadOnly(t *testing.T) {
-	for _, scenario := range []string{"found", "absent", "organization", "pagination", "forbidden", "not found API", "rate limited", "malformed", "null row", "missing name", "invalid ID", "anonymous", "user", "missing request", "missing target"} {
+	for _, scenario := range []string{"found", "absent", "organization", "pagination", "forbidden", "not found API", "rate limited", "malformed", "missing count", "truncated page", "repeated runner", "changing count", "null row", "missing name", "invalid ID", "anonymous", "user", "missing request", "missing target"} {
 		t.Run(scenario, func(t *testing.T) {
 			store := state.New(t.TempDir())
 			_, st, err := store.CreateRequest(state.RunnerRequest{ID: "123", RunnerName: "e2b-123", RepositoryFullName: "o/r"}, nil)
@@ -59,21 +59,35 @@ func TestRunnerRegistrationLookupReadOnly(t *testing.T) {
 					http.Error(w, "secret-canary", http.StatusTooManyRequests)
 				case "malformed":
 					fmt.Fprint(w, `{}`)
+				case "missing count":
+					fmt.Fprint(w, `{"runners":[]}`)
+				case "truncated page":
+					fmt.Fprint(w, `{"total_count":1,"runners":[]}`)
 				case "null row":
-					fmt.Fprint(w, `{"runners":[null]}`)
+					fmt.Fprint(w, `{"total_count":1,"runners":[null]}`)
 				case "missing name":
-					fmt.Fprint(w, `{"runners":[{"id":42}]}`)
+					fmt.Fprint(w, `{"total_count":1,"runners":[{"id":42}]}`)
 				case "invalid ID":
-					fmt.Fprint(w, `{"runners":[{"id":0,"name":"e2b-123"}]}`)
+					fmt.Fprint(w, `{"total_count":1,"runners":[{"id":0,"name":"e2b-123"}]}`)
 				case "absent":
-					fmt.Fprint(w, `{"runners":[{"id":12,"name":"e2b-123-other"}]}`)
+					fmt.Fprint(w, `{"total_count":1,"runners":[{"id":12,"name":"e2b-123-other"}]}`)
 				default:
-					if scenario == "pagination" && r.URL.Query().Get("page") == "" {
-						w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?name=e2b-123&page=2>; rel="next"`, r.Host, path))
-						fmt.Fprint(w, `{"runners":[]}`)
-						return
+					if scenario == "pagination" || scenario == "repeated runner" || scenario == "changing count" {
+						if r.URL.Query().Get("page") == "" {
+							w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?name=e2b-123&page=2>; rel="next"`, r.Host, path))
+							fmt.Fprint(w, `{"total_count":2,"runners":[{"id":12,"name":"e2b-123-other"}]}`)
+							return
+						}
+						if scenario == "repeated runner" {
+							fmt.Fprint(w, `{"total_count":2,"runners":[{"id":12,"name":"e2b-123-other"}]}`)
+							return
+						}
 					}
-					fmt.Fprint(w, `{"runners":[{"id":42,"name":"e2b-123","status":"offline","busy":false,"labels":[{"name":"secret-canary"}]}]}`)
+					count := 1
+					if scenario == "pagination" {
+						count = 2
+					}
+					fmt.Fprintf(w, `{"total_count":%d,"runners":[{"id":42,"name":"e2b-123","status":"offline","busy":false,"labels":[{"name":"secret-canary"}]}]}`, count)
 				}
 			}))
 			defer gh.Close()
@@ -98,7 +112,7 @@ func TestRunnerRegistrationLookupReadOnly(t *testing.T) {
 			srv.ServeHTTP(rec, req)
 			wantCode := 200
 			switch scenario {
-			case "forbidden", "not found API", "rate limited", "malformed", "null row", "missing name", "invalid ID":
+			case "forbidden", "not found API", "rate limited", "malformed", "missing count", "truncated page", "repeated runner", "changing count", "null row", "missing name", "invalid ID":
 				wantCode = 502
 			case "anonymous", "user":
 				wantCode = 401
@@ -140,7 +154,7 @@ func TestRunnerRegistrationLookupReadOnly(t *testing.T) {
 			if wantCode == 401 || wantCode == 404 || wantCode == 409 {
 				wantCalls = 0
 			}
-			if scenario == "pagination" {
+			if scenario == "pagination" || scenario == "repeated runner" || scenario == "changing count" {
 				wantCalls = 2
 			}
 			if calls.Load() != wantCalls {

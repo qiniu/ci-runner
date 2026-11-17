@@ -882,6 +882,7 @@ export const zh = {
     checkRepositoryReadiness: "检查仓库就绪状态",
     runFirstWorkflow: "运行第一个工作流",
     noMatchingJobs: "最近一页没有匹配的任务。请加载更早的任务继续查看。",
+    noJobsMatchFilters: "没有符合当前筛选条件的任务。",
     branch: "分支",
     commit: "提交",
     lastUpdated: "最后更新",

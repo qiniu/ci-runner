@@ -19,6 +19,7 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
   const [terminalSession, setTerminalSession] = useState<SandboxTerminalSession | null>(null)
   const [terminalError, setTerminalError] = useState("")
   const [terminalConnecting, setTerminalConnecting] = useState(false)
+  const [terminalHasHistory, setTerminalHasHistory] = useState(false)
   const terminalEl = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -26,18 +27,27 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
   const timerRef = useRef<number | null>(null)
   const resizeRef = useRef<number | null>(null)
   const generation = useRef(0)
+  const connectingRef = useRef(false)
 
-  const closeTerminalSession = useCallback(() => {
+  const finishTerminalSession = useCallback((keepHistory: boolean) => {
     generation.current++
+    connectingRef.current = false
     const socket = socketRef.current
     socketRef.current = null
     socket?.close()
     if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     if (resizeRef.current !== null) window.clearTimeout(resizeRef.current)
     timerRef.current = resizeRef.current = null
-    terminalRef.current?.dispose()
-    terminalRef.current = null
-    fitRef.current = null
+    if (keepHistory && terminalRef.current) {
+      terminalRef.current.options.disableStdin = true
+      terminalRef.current.options.cursorBlink = false
+      terminalRef.current.blur()
+    } else {
+      terminalRef.current?.dispose()
+      terminalRef.current = null
+      fitRef.current = null
+      setTerminalHasHistory(false)
+    }
     setTerminalSession(null)
     setTerminalConnecting(false)
   }, [])
@@ -46,19 +56,24 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
     // The endpoint/lifecycle owns this external socket; tear it down before
     // another resource can render or send input through it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    closeTerminalSession()
-    return closeTerminalSession
-  }, [endpoint, available, closeTerminalSession])
+    finishTerminalSession(false)
+    return () => finishTerminalSession(false)
+  }, [endpoint, available, finishTerminalSession])
+
+  const closeTerminalSession = useCallback(() => finishTerminalSession(true), [finishTerminalSession])
 
   const connectTerminal = useCallback(async () => {
-    if (!available || terminalRef.current) return
+    if (!available || connectingRef.current || socketRef.current) return
+    finishTerminalSession(false)
     const attempt = ++generation.current
+    connectingRef.current = true
     setTerminalConnecting(true)
     setTerminalError("")
+    let ready = false
     const fail = (message: string) => {
       if (generation.current !== attempt) return
       setTerminalError(message)
-      closeTerminalSession()
+      finishTerminalSession(ready)
     }
     try {
       const fontFamily = terminalEl.current
@@ -82,7 +97,6 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
       if (generation.current !== attempt) return
       const socket = new WebSocket(url)
       socketRef.current = socket
-      let ready = false
       timerRef.current = window.setTimeout(() => fail(connectErrorMessage), 25_000)
       socket.onmessage = (event) => {
         if (socketRef.current !== socket) return
@@ -90,10 +104,12 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
           const frame = JSON.parse(event.data as string)
           if (frame.type === "ready" && !ready && typeof frame.session_id === "string") {
             ready = true
+            connectingRef.current = false
             if (timerRef.current !== null) window.clearTimeout(timerRef.current)
             timerRef.current = null
             setTerminalSession({ session_id: frame.session_id, pid: frame.pid, sandbox_id: frame.sandbox_id })
             setTerminalConnecting(false)
+            setTerminalHasHistory(true)
             term.focus()
           } else if (frame.type === "output" && ready && typeof frame.data === "string") {
             // Decode bytes, not UTF-8 fragments: xterm retains split codepoints.
@@ -114,7 +130,7 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
         socket.send(JSON.stringify({ type: "input", data }))
       })
     } catch (error) { fail(error instanceof Error ? error.message : connectErrorMessage) }
-  }, [available, closeTerminalSession, connectErrorMessage, connectingMessage, endpoint, request, streamDisconnectedMessage])
+  }, [available, connectErrorMessage, connectingMessage, endpoint, finishTerminalSession, request, streamDisconnectedMessage])
 
   const resizeTerminal = useCallback(() => {
     const term = terminalRef.current
@@ -135,5 +151,5 @@ export function useSandboxTerminal({ endpoint, available, request, connectingMes
     if (terminalEl.current) observer.observe(terminalEl.current)
     return () => observer.disconnect()
   }, [resizeTerminal, terminalSession])
-  return { terminalEl, terminalSession, terminalError, terminalConnecting, connectTerminal, closeTerminalSession }
+  return { terminalEl, terminalSession, terminalError, terminalConnecting, terminalHasHistory, connectTerminal, closeTerminalSession }
 }
