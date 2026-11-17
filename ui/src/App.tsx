@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { AppLink } from "@/components/app-link"
 import { AccountsSection } from "@/components/accounts-section"
 import { AuditSection, DiagnosticsSection, MatchSection, OverviewSection, RunnerRequestSection } from "@/components/admin-sections"
 import { AccessDeniedPage, NotFoundPage, SessionErrorPage, SessionLoadingPage, SignInPage } from "@/components/auth-pages"
@@ -1400,20 +1401,29 @@ function App() {
         <SiteHeader authSession={authSession} onSignOut={signOut} />
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
           {section === "overview" || (section === "runner_requests" && !runnerRequestIdentifier) ? (
-            <div className="shrink-0 overflow-x-auto">
-              <div className="grid min-w-[980px] grid-cols-6 gap-4">
-                {metrics.map((metric) => (
-                  <Card key={metric.id} className="gap-3 py-5">
-                    <CardHeader className="px-5">
-                      <CardDescription>{metric.label}</CardDescription>
-                      <CardTitle className="text-3xl">{metric.value}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="px-5 text-xs text-muted-foreground">
-                      {metric.description}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+            <div className="grid shrink-0 grid-cols-3 gap-2 xl:grid-cols-6 xl:gap-4">
+              {metrics.map((metric) => {
+                const isActive = isRunnerRequestList && runnerStatusFilter === metric.id
+                const search = adminRunnerRequestSearch({ ...runnerRequestSearch, status: metric.id })
+                return (
+                  <AppLink
+                    key={metric.id}
+                    href={adminSectionPath("runner_requests") + search}
+                    aria-current={isActive ? "location" : undefined}
+                    className="group min-w-0 rounded-xl focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <Card className={`h-full gap-2 py-2 transition-colors group-hover:border-primary/50 xl:gap-3 xl:py-5 ${isActive ? "border-primary bg-primary/5" : ""}`}>
+                      <CardHeader className="px-2.5 xl:px-5">
+                        <CardDescription className="break-words text-xs xl:text-sm">{metric.label}</CardDescription>
+                        <CardTitle className="text-lg tabular-nums xl:text-3xl">{metric.value}</CardTitle>
+                      </CardHeader>
+                      <CardContent className="hidden px-5 text-xs text-muted-foreground xl:block">
+                        {metric.description}
+                      </CardContent>
+                    </Card>
+                  </AppLink>
+                )
+              })}
             </div>
           ) : null}
 

@@ -103,7 +103,7 @@ describe("RunnerRequestsSection", () => {
     expect(html).toContain(">101445685709</a>")
   })
 
-  test("keeps row values on one line and omits the redundant request ID under Runner", async () => {
+  test("shows the repository with the Runner on small screens without repeating the request ID", async () => {
     await i18n.changeLanguage("en")
     const html = renderRunnerRequests({
       id: "101445685709",
@@ -115,7 +115,7 @@ describe("RunnerRequestsSection", () => {
       created_at: "2026-09-06T07:04:57Z",
     })
 
-    expect(html).not.toContain("whitespace-normal")
+    expect(html).toContain('class="break-all text-xs text-muted-foreground md:hidden">xgo-dev/llgo</div>')
     expect(html).not.toContain('<div class="truncate text-xs text-muted-foreground">101445685709</div>')
     expect(html).toContain(">e2b-101445685709</a>")
   })
@@ -161,7 +161,7 @@ describe("RunnerRequestsSection", () => {
     expect(html).not.toContain("max-h-[calc(100vh-18rem)]")
   })
 
-  test("keeps every request field visible and scrolls horizontally when needed", async () => {
+  test("keeps the full table at the desktop breakpoint with a compact mobile layout", async () => {
     await i18n.changeLanguage("en")
     const html = renderRunnerRequests({
       id: "101445685709",
@@ -177,9 +177,9 @@ describe("RunnerRequestsSection", () => {
       created_at: "2026-09-06T07:04:57Z",
     })
     expect(html).toContain('data-slot="table-container" class="relative w-full overflow-x-auto"')
-    expect(html).toContain("min-w-max")
-    expect(html).not.toMatch(/<th[^>]*class="[^"]*\bhidden\b/)
-    expect(html).not.toMatch(/<td[^>]*class="[^"]*\bhidden\b/)
+    expect(html).toContain("table-fixed md:min-w-max md:table-auto")
+    expect(html).toMatch(/<th[^>]*class="[^"]*hidden md:table-cell[^"]*"[^>]*>Repository/)
+    expect(html).toContain("101445685709</a>")
     expect(html).not.toMatch(/<td[^>]*class="[^"]*\btruncate\b/)
   })
 

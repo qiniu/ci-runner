@@ -372,19 +372,19 @@ export function RunnerRequestsSection({
               {pollingPaused ? t("admin.runnerRequestPollingPaused") : null}
             </p>
           ) : null}
-          <Table className="min-w-max">
+          <Table className="table-fixed md:min-w-max md:table-auto">
             <TableHeader ref={tableHeaderRef} className="relative z-10 bg-background will-change-transform">
               <TableRow>
-                <TableHead className="min-w-24">{t("common.status")}</TableHead>
-                <TableHead>{t("common.repository")}</TableHead>
-                <TableHead>{t("common.runnerSpec")}</TableHead>
-                <TableHead>{t("user.requestedLabels")}</TableHead>
-                <TableHead className="min-w-44">{t("common.runner")}</TableHead>
-                <TableHead>{t("common.sandbox")}</TableHead>
-                <TableHead className="min-w-32">{t("admin.githubJob")}</TableHead>
-                <TableHead className="min-w-36">{t("common.created")}</TableHead>
-                <TableHead className="min-w-36">{t("common.updated")}</TableHead>
-                <TableHead className="min-w-24" />
+                <TableHead className="w-24 md:w-auto md:min-w-24">{t("common.status")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.repository")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.runnerSpec")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("user.requestedLabels")}</TableHead>
+                <TableHead className="md:min-w-44">{t("common.runner")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.sandbox")}</TableHead>
+                <TableHead className="hidden min-w-32 md:table-cell">{t("admin.githubJob")}</TableHead>
+                <TableHead className="hidden min-w-36 md:table-cell">{t("common.created")}</TableHead>
+                <TableHead className="hidden min-w-36 md:table-cell">{t("common.updated")}</TableHead>
+                <TableHead className="hidden min-w-24 md:table-cell" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -404,32 +404,35 @@ export function RunnerRequestsSection({
                     <TableCell>
                       <StatusBadge status={runnerDisplayStatus(runner)} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div>{runner.repository_full_name || "-"}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {runner.runner_spec_name || "-"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div
                         className="font-mono text-xs text-muted-foreground"
                       >
                         {runner.requested_labels?.join(", ") || "-"}
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="max-md:whitespace-normal">
+                      {runner.repository_full_name ? (
+                        <div className="break-all text-xs text-muted-foreground md:hidden">{runner.repository_full_name}</div>
+                      ) : null}
                       <a
-                        className="font-medium text-primary underline-offset-4 hover:underline"
+                        className="font-medium text-primary underline-offset-4 hover:underline max-md:break-all"
                         href={adminRunnerRequestDetailPath(runner.id, requestQuery)}
                         onClick={(event) => openRunnerRequest(event, runner)}
                       >
                         {runner.runner_name || runner.id}
                       </a>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div>{runner.sandbox_id || "-"}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {runner.github_job_url ? (
                         <a
                           className="font-mono text-primary underline-offset-4 hover:underline"
@@ -444,13 +447,13 @@ export function RunnerRequestsSection({
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {formatTime(runner.created_at, i18n.resolvedLanguage)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {formatTime(runner.updated_at, i18n.resolvedLanguage)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div className="flex gap-2">
                         {runnerDisplayStatus(runner) === "failed" ? (
                           <Button

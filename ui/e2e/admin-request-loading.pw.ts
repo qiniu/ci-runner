@@ -137,6 +137,35 @@ test("admin request filters and exact lookup survive refresh and detail navigati
   await expect(page).toHaveURL((url) => !url.searchParams.has("runner") && url.searchParams.get("runner_spec_name") === spec)
 })
 
+test("admin metrics link to filtered requests with a visible Runner link on mobile", async ({ page }) => {
+  await setup(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const failed = { ...rows("failed", 1)[0], status: "failed" }
+  await page.route("**/runner_request_metrics", (route) => route.fulfill({
+    json: { queued: 0, creating: 0, running: 0, stopping: 0, completed: 0, failed: 1, unmatched: 0, runner_specs: 0 },
+  }))
+  await page.route((url) => url.pathname === "/runner_requests", (route) => route.fulfill({
+    json: { items: [failed], has_more: false },
+  }))
+
+  await page.goto("/admin/")
+  const failedMetric = page.getByRole("link", { name: /Failed/ })
+  await expect(failedMetric).toHaveAttribute("href", "/admin/runner_requests?status=failed")
+  const filtered = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return url.pathname === "/runner_requests" && url.searchParams.get("status") === "failed"
+  })
+  await failedMetric.click()
+  await filtered
+  await expect(failedMetric).toHaveAttribute("aria-current", "location")
+  const table = page.getByRole("table")
+  await expect(table.getByText(failed.repository_full_name, { exact: true }).filter({ visible: true })).toBeVisible()
+  await expect(table.getByRole("link", { name: failed.runner_name })).toBeInViewport()
+  await expect(table.getByRole("columnheader", { name: "Sandbox" })).toHaveCount(0)
+  const overflow = await page.locator('[data-slot="table-container"]').evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+})
+
 test("admin unexpanded list refreshes only its latest page as new requests arrive", async ({ page }) => {
   await setup(page)
   const cursors: Array<string | null> = []

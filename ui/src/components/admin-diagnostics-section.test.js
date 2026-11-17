@@ -138,6 +138,11 @@ describe("admin diagnostics", () => {
       diagnosis: { state: { ...runnerState, id }, github_job: { lookup_status: "unavailable" }, findings: [], events: [] }, request,
     })
     await act(async () => root.render(render("123")))
+    const disclosure = container.querySelector("details")
+    expect(disclosure.open).toBe(false)
+    expect(disclosure.querySelector("button").textContent).toContain("Check registration")
+    expect(container.textContent.indexOf("Run history")).toBeLessThan(container.textContent.indexOf("Request context"))
+    disclosure.open = true
     await click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Check registration")))
     await act(async () => root.render(render("456")))
     expect(oldSignal.aborted).toBe(true)
