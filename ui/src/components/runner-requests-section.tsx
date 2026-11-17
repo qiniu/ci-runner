@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react"
-import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react"
+import { Check, ChevronsUpDown, LoaderCircle, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
@@ -15,14 +15,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -55,7 +47,6 @@ function verticalScrollContainer(element: HTMLElement) {
 }
 
 export function RunnerRequestsSection({
-  hasAccess,
   loading,
   error,
   windowReset,
@@ -63,11 +54,6 @@ export function RunnerRequestsSection({
   runners,
   hasMore,
   loadingMore,
-  createID,
-  createRepository,
-  createRunnerSpec,
-  createLabels,
-  createRunnerOpen,
   runnerStatusFilter,
   runnerRepositoryFilter,
   runnerSpecFilter,
@@ -75,13 +61,6 @@ export function RunnerRequestsSection({
   requestLookup,
   requestQuery,
   onRefresh,
-  onResetCreateRunnerForm,
-  onCreateRunnerOpenChange,
-  onCreateRunnerSubmit,
-  onCreateIDChange,
-  onCreateRepositoryChange,
-  onCreateRunnerSpecChange,
-  onCreateLabelsChange,
   onStatusFilterChange,
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
@@ -93,7 +72,6 @@ export function RunnerRequestsSection({
   onRetryRunner,
   onStopRunner,
 }: {
-  hasAccess: boolean
   loading: boolean
   error?: string
   windowReset?: boolean
@@ -101,11 +79,6 @@ export function RunnerRequestsSection({
   runners: RunnerState[]
   hasMore: boolean
   loadingMore: boolean
-  createID: string
-  createRepository: string
-  createRunnerSpec: string
-  createLabels: string
-  createRunnerOpen: boolean
   runnerStatusFilter: RunnerDisplayStatus | "all"
   runnerRepositoryFilter: string
   runnerSpecFilter: string
@@ -113,13 +86,6 @@ export function RunnerRequestsSection({
   requestLookup: string
   requestQuery: string
   onRefresh: () => void
-  onResetCreateRunnerForm: () => void
-  onCreateRunnerOpenChange: (open: boolean) => void
-  onCreateRunnerSubmit: (event: FormEvent<HTMLFormElement>) => void
-  onCreateIDChange: (value: string) => void
-  onCreateRepositoryChange: (value: string) => void
-  onCreateRunnerSpecChange: (value: string) => void
-  onCreateLabelsChange: (value: string) => void
   onStatusFilterChange: (value: RunnerDisplayStatus | "all") => void
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
@@ -242,78 +208,12 @@ export function RunnerRequestsSection({
       <Card className="min-w-0 gap-0 py-0">
         <CardHeader className="border-b px-5 py-4">
           <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle>{t("sidebar.runnerRequests")}</CardTitle>
-                <CardDescription>
-                  {t("admin.requestsDescription")}
-                </CardDescription>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    onResetCreateRunnerForm()
-                    onCreateRunnerOpenChange(true)
-                  }}
-                  disabled={!hasAccess}
-                >
-                  <Plus />
-                  {t("admin.createRunnerRequest")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={onRefresh}
-                  disabled={loading}
-                  title={t("common.refresh")}
-                >
-                  <RefreshCw className={cn(loading && "animate-spin")} />
-                </Button>
-              </div>
+            <div>
+              <CardTitle>{t("sidebar.runnerRequests")}</CardTitle>
+              <CardDescription>
+                {t("admin.requestsDescription")}
+              </CardDescription>
             </div>
-            <Dialog open={createRunnerOpen} onOpenChange={onCreateRunnerOpenChange}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>{t("admin.createRunnerRequest")}</DialogTitle>
-                  <DialogDescription>
-                    {t("admin.createRunnerRequestDescription")}
-                  </DialogDescription>
-                </DialogHeader>
-                <form className="grid gap-3" onSubmit={onCreateRunnerSubmit}>
-                  <Input
-                    value={createID}
-                    onChange={(event) => onCreateIDChange(event.target.value)}
-                    placeholder={t("admin.optionalID")}
-                  />
-                  <Input
-                    value={createRepository}
-                    onChange={(event) => onCreateRepositoryChange(event.target.value)}
-                    placeholder="owner/repo"
-                    required
-                  />
-                  <Input
-                    value={createRunnerSpec}
-                    onChange={(event) => onCreateRunnerSpecChange(event.target.value)}
-                    placeholder={t("admin.optionalRunnerSpec")}
-                  />
-                  <Input
-                    value={createLabels}
-                    onChange={(event) => onCreateLabelsChange(event.target.value)}
-                    placeholder="self-hosted,e2b"
-                  />
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => onCreateRunnerOpenChange(false)}>
-                      {t("common.cancel")}
-                    </Button>
-                    <Button type="submit" disabled={!hasAccess}>
-                      {t("admin.createRunnerRequest")}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
             <div
               data-testid="runner-request-toolbar"
               className="grid gap-2 md:grid-cols-3 xl:grid-cols-[minmax(140px,180px)_minmax(180px,240px)_minmax(180px,240px)_minmax(360px,1fr)]"
@@ -425,29 +325,42 @@ export function RunnerRequestsSection({
                   ))}
                 </SelectContent>
               </Select>
-              <form
-                className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  const identifier = requestLookup.trim()
-                  if (identifier) onLookupRunnerRequest(identifier)
-                }}
-              >
-                <label className="sr-only" htmlFor="runner-request-lookup">
-                  {t("admin.runnerRequestID")}
-                </label>
-                <Input
-                  id="runner-request-lookup"
-                  value={requestLookup}
-                  onChange={(event) => onRequestLookupChange(event.target.value)}
-                  placeholder={t("admin.runnerRequestPlaceholder")}
-                  autoComplete="off"
-                />
-                <Button type="submit" variant="outline" disabled={!requestLookup.trim()}>
-                  <Search />
-                  {t("admin.openRunnerRequest")}
+              <div className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1">
+                <form
+                  className="flex min-w-0 flex-1 gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const identifier = requestLookup.trim()
+                    if (identifier) onLookupRunnerRequest(identifier)
+                  }}
+                >
+                  <label className="sr-only" htmlFor="runner-request-lookup">
+                    {t("admin.runnerRequestID")}
+                  </label>
+                  <Input
+                    id="runner-request-lookup"
+                    value={requestLookup}
+                    onChange={(event) => onRequestLookupChange(event.target.value)}
+                    placeholder={t("admin.runnerRequestPlaceholder")}
+                    autoComplete="off"
+                  />
+                  <Button type="submit" variant="outline" disabled={!requestLookup.trim()}>
+                    <Search />
+                    {t("admin.openRunnerRequest")}
+                  </Button>
+                </form>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  title={t("common.refresh")}
+                >
+                  <RefreshCw className={cn(loading && "animate-spin")} />
                 </Button>
-              </form>
+              </div>
             </div>
           </div>
         </CardHeader>

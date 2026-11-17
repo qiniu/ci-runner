@@ -496,7 +496,7 @@ Runner Spec 或对应的 audit event。启动和匹配仍兼容旧库中的此�
 不会自动重命名或删除这些记录，也不保证其单资源管理 URL 能通过反向代理的路径
 规范化。
 
-手动创建一个 runner：
+需要手动将 Runner 请求加入队列时，调用管理员 API：
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:25500/runner_requests \

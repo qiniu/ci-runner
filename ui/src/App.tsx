@@ -178,11 +178,6 @@ function App() {
   })
   const [runnerSpecs, setRunnerSpecs] = useState<RunnerSpec[]>([])
   const [loading, setLoading] = useState(false)
-  const [createID, setCreateID] = useState("")
-  const [createRepository, setCreateRepository] = useState("")
-  const [createRunnerSpec, setCreateRunnerSpec] = useState("")
-  const [createLabels, setCreateLabels] = useState("self-hosted,e2b")
-  const [createRunnerOpen, setCreateRunnerOpen] = useState(false)
   const [matchRepository, setMatchRepository] = useState("")
   const [matchLabels, setMatchLabels] = useState("self-hosted,e2b")
   const [matchResult, setMatchResult] = useState<RunnerSpecMatch | null>(null)
@@ -1197,50 +1192,6 @@ function App() {
     setUserSelectedKey("")
   }
 
-  const resetCreateRunnerForm = () => {
-    setCreateID("")
-    setCreateRepository("")
-    setCreateRunnerSpec("")
-    setCreateLabels("self-hosted,e2b")
-  }
-
-  const createRunner = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!hasAccess) {
-      toast.error(t("app.adminRequired"))
-      return
-    }
-    const body: {
-      id?: string
-      repository_full_name?: string
-      runner_spec_name?: string
-      labels?: string[]
-    } = {}
-    const repository = createRepository.trim()
-    if (!repository || repository.includes("*")) {
-      toast.error(t("app.repositoryFormatRequired"))
-      return
-    }
-    if (createID.trim()) body.id = createID.trim()
-    body.repository_full_name = repository
-    if (createRunnerSpec.trim()) body.runner_spec_name = createRunnerSpec.trim()
-    const labels = parseLabels(createLabels)
-    if (labels.length > 0) body.labels = labels
-    try {
-      const runner = (await request("/runner_requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })) as RunnerState
-      resetCreateRunnerForm()
-      setCreateRunnerOpen(false)
-      toast.success(t("app.runnerQueued", { id: runner.id }))
-      await reloadAdminRunnerRequests()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("app.createRunnerFailed"))
-    }
-  }
-
   const stopRunner = async (id: string) => {
     try {
       const runner = (await request(`/runner_requests/${encodeURIComponent(id)}`, {
@@ -1499,7 +1450,6 @@ function App() {
 
           {section === "runner_requests" && !runnerRequestIdentifier ? (
             <RunnerRequestsSection
-              hasAccess={hasAccess}
               loading={loading}
               error={runnerRequestError}
               windowReset={runnerWindowReset}
@@ -1507,11 +1457,6 @@ function App() {
               runners={runners}
               hasMore={runnerRequestHasMore}
               loadingMore={loadingMoreRunnerRequests}
-              createID={createID}
-              createRepository={createRepository}
-              createRunnerSpec={createRunnerSpec}
-              createLabels={createLabels}
-              createRunnerOpen={createRunnerOpen}
               runnerStatusFilter={runnerStatusFilter}
               runnerRepositoryFilter={runnerRepositoryFilter}
               runnerSpecFilter={runnerSpecFilter}
@@ -1519,13 +1464,6 @@ function App() {
               requestLookup={runnerLookup}
               requestQuery={runnerRequestQuery}
               onRefresh={refreshAdminRunnerRequests}
-              onResetCreateRunnerForm={resetCreateRunnerForm}
-              onCreateRunnerOpenChange={setCreateRunnerOpen}
-              onCreateRunnerSubmit={createRunner}
-              onCreateIDChange={setCreateID}
-              onCreateRepositoryChange={setCreateRepository}
-              onCreateRunnerSpecChange={setCreateRunnerSpec}
-              onCreateLabelsChange={setCreateLabels}
               onStatusFilterChange={(status) => updateRunnerRequestSearch({ status })}
               onRepositoryFilterChange={(repository) => updateRunnerRequestSearch({ repository })}
               onRunnerSpecFilterChange={(runnerSpec) => updateRunnerRequestSearch({ runnerSpec })}

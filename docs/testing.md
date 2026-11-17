@@ -518,7 +518,7 @@ and matching continue to tolerate historical rows with those names, but
 runnerd does not rename or delete them automatically and their single-resource
 management URLs are not guaranteed to survive reverse-proxy path normalization.
 
-Manually create a runner:
+To enqueue a runner manually, use the administrator API:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:25500/runner_requests \
