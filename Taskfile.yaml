@@ -231,6 +231,7 @@ tasks:
           -d none -s \
           -r '\.go$' \
           -R '\.git/' \
+          -R '^\.gstack/' \
           -R '\.worktrees/' \
           -R 'bin/' \
           -R 'dist/' \
