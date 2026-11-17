@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page, type Route } from "@playwright/test"
 
 import type { RunnerJobGroup, RunnerState } from "../src/admin-types"
 import { getLocalAuthSessionRoute } from "./production-smoke-support"
@@ -85,6 +85,22 @@ test("serves the custom template guide from the production bundle", async ({ pag
 
   await page.waitForTimeout(postRenderObservationMs)
   diagnostics.expectClean()
+})
+
+test("gives an empty Jobs workspace one clear pair of next steps", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  await page.addInitScript(() => localStorage.setItem("runnerd:language", "en"))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/runner_requests?*", (route) => route.fulfill({ headers: { "X-Total-Count": "0" }, json: [] }))
+  await page.route("**/user/github-app", (route) => route.fulfill({ json: {
+    installations: [{ id: 1, account_login: "fixture-user", account_type: "User", repositories: ["fixture-user/project"] }],
+  } }))
+  await page.route("**/user/onboarding/product-tour", (route) => route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } }))
+  await page.goto("/jobs")
+  await expect(page.getByRole("heading", { name: "No jobs yet", exact: true })).toHaveCount(1)
+  await expect(page.getByRole("link", { name: "Check repository readiness" })).toHaveAttribute("href", "/repositories")
+  await expect(page.getByRole("link", { name: "Run your first workflow" })).toHaveAttribute("href", "/docs/guides/workflow")
 })
 
 test("keeps Jobs polling and independent retries working around manual history loading", async ({ page }) => {
@@ -646,6 +662,39 @@ test("reports a preferences failure without treating GitHub accounts as failed",
   await page.goto("/account/preferences", { waitUntil: "domcontentloaded" })
   await expect(page.getByText("Could not load preferences. Try again.")).toBeVisible()
   await expect(page.getByRole("heading", { name: "alice", exact: true })).toBeVisible()
+})
+
+test("keeps all settings sections reachable when switching scope on mobile", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  await page.addInitScript(() => localStorage.setItem("runnerd:language", "en"))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/github-app*", (route) => route.fulfill({ json: {
+    settings_manageability: true,
+    installations: [
+      { id: 1, account_login: "fixture-user", account_type: "User", manageable: true, repositories: [] },
+      { id: 2, account_login: "fixture-org", account_type: "Organization", manageable: true, repositories: [] },
+      { id: 3, account_login: "read-only-org", account_type: "Organization", manageable: false, repositories: [] },
+    ],
+  } }))
+  await page.route("**/user/preferences?*", (route) => route.fulfill({ json: { cache: { configured: false }, sandbox: { manageable: true } } }))
+  await page.route("**/user/preferences", (route) => route.fulfill({ json: { cache: { configured: false }, sandbox: { manageable: true } } }))
+  await page.route("**/user/sandbox/instances?*", (route) => route.fulfill({ json: [] }))
+  await page.route("**/user/onboarding/product-tour", (route) => route.fulfill({ json: { version: 1, status: "completed", tour_seen: true } }))
+  await page.goto("/account/preferences")
+
+  const scope = page.getByRole("combobox", { name: "Account or organization" })
+  await expect(scope).toHaveText("fixture-user")
+  await scope.click()
+  await expect(page.getByRole("option", { name: "read-only-org" })).toHaveCount(0)
+  await page.getByRole("option", { name: "fixture-org" }).click()
+  await expect(page).toHaveURL(/\/organizations\/fixture-org\/preferences$/)
+  await expect(scope).toHaveText("fixture-org")
+  const instances = page.getByRole("tab", { name: "Sandbox Instances", exact: true })
+  await expect(instances).toBeInViewport({ ratio: 1 })
+  await instances.click()
+  await expect(page).toHaveURL(/\/organizations\/fixture-org\/sandbox-instances$/)
+  await expect(instances).toHaveAttribute("aria-selected", "true")
 })
 
 test("filters the platform spec directory to enabled published public entries", async ({ page }) => {
@@ -1272,6 +1321,52 @@ test("navigates repository workspaces independently of history and retains selec
   await page.reload({ waitUntil: "networkidle" })
   await expect(navigation.locator('a[aria-current="page"]')).toContainText("active-two")
   diagnostics.expectClean()
+})
+
+test("explains deployment prerequisites, catalog loading, and advanced defaults", async ({ page }) => {
+  test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+  await page.addInitScript(() => localStorage.setItem("runnerd:language", "en"))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { authenticated: true, oauth_enabled: true, login: "fixture-user", role: "user" } }))
+  await page.route("**/user/github-app", (route) => route.fulfill({ json: {
+    installations: [{ id: 1, account_login: "fixture-user", account_type: "User", manageable: true, repositories: ["fixture-user/project"] }],
+  } }))
+  await page.route("**/user/github-app/installations/1/repositories", (route) => route.fulfill({ json: { repositories: ["fixture-user/project"] } }))
+  const refs: Route[] = []
+  const templates: Route[] = []
+  await page.route("**/user/deployment-refs?*", (route) => { refs.push(route) })
+  await page.route("**/user/deployment-templates?*", (route) => { templates.push(route) })
+  await page.goto("/deployments/new")
+
+  const reference = page.locator("#deployment-ref")
+  const template = page.locator("#deployment-template")
+  await expect(reference).toHaveText("Choose a repository first")
+  await expect(template).toHaveText("Choose a repository first")
+  await expect(page.getByRole("button", { name: "Refresh versions" })).toHaveCount(0)
+  expect(refs).toHaveLength(0)
+  expect(templates).toHaveLength(0)
+
+  await chooseDeploymentOption(page, "deployment-repository", "fixture-user/project")
+  await expect(reference).toHaveText("Loading versions...")
+  await expect(template).toHaveText("Loading templates...")
+  await expect.poll(() => refs.length).toBe(1)
+  await expect.poll(() => templates.length).toBe(1)
+  await refs[0].fulfill({ json: { refs: [], has_more: false } })
+  await templates[0].fulfill({ status: 503, json: { error: "fixture catalog unavailable" } })
+  await expect(reference).toHaveText("No branches or tags available")
+  await expect(template).toHaveText("Unable to load deployment templates")
+  await expect(page.getByRole("alert")).toContainText("fixture catalog unavailable")
+  await page.getByRole("button", { name: "Refresh templates" }).click()
+  await expect.poll(() => templates.length).toBe(2)
+  await templates[1].fulfill({ json: { templates: [{ template_id: "fixture-template", names: ["Ubuntu"] }] } })
+  await expect(template).toBeEnabled()
+
+  await expect(page.locator("#deployment-ttl")).toBeHidden()
+  const advanced = page.locator("summary").filter({ hasText: "Advanced settings" })
+  await expect(advanced).toContainText("3600 seconds · .qiniu/deploy.yaml")
+  await advanced.click()
+  await expect(page.locator("#deployment-ttl")).toHaveValue("3600")
+  await expect(page.locator("#deployment-config")).toHaveValue(".qiniu/deploy.yaml")
 })
 
 test("separates deployment list, creation, and refreshable detail pages", async ({ page }, testInfo) => {

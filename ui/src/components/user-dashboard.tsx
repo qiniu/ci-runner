@@ -25,6 +25,7 @@ import { formatRunnerDuration, formatTime, runnerStatusLabel } from "@/admin-for
 import appI18n, { type AppTFunction } from "@/i18n"
 import { userRunnerHistoryWindow } from "@/app-load-policy"
 import { AccountMenu } from "@/components/account-menu"
+import { AppLink } from "@/components/app-link"
 import { RunnerEventTimeline } from "@/components/runner-event-timeline"
 import { workflowRunURL } from "@/components/runner-github-links"
 import { RepositoryReadinessPage } from "@/components/repository-readiness-page"
@@ -580,7 +581,30 @@ function AccountsPage({
       </section>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="min-h-0 border-r bg-muted/20">
+        {settingsInstallations.length ? (
+          <div className="space-y-2 border-b bg-muted/20 p-4 lg:hidden">
+            <Label htmlFor="settings-scope">{t("user.settingsScope")}</Label>
+            <Select
+              value={selected ? String(selected.id) : ""}
+              onValueChange={(id) => {
+                const installation = settingsInstallations.find((item) => String(item.id) === id)
+                if (installation) onNavigateAccountSettings(installation.account_login, route.tab)
+              }}
+            >
+              <SelectTrigger id="settings-scope" className="w-full">
+                <SelectValue placeholder={t("user.settingsScope")} />
+              </SelectTrigger>
+              <SelectContent>
+                {settingsInstallations.map((installation) => (
+                  <SelectItem key={installation.id} value={String(installation.id)}>
+                    {installation.account_login || "GitHub App"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+        <aside className="hidden min-h-0 border-r bg-muted/20 lg:block">
           <div className="flex h-full flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto">
               {settingsInstallations.length ? (
@@ -630,7 +654,7 @@ function AccountsPage({
             </div>
           ) : selected ? (
             <div className="space-y-4">
-              <div className="flex items-center gap-3">
+              <div className="hidden items-center gap-3 lg:flex">
                 <AccountAvatar installation={selected} size="lg" />
                 <div className="min-w-0">
                   <h2 className="truncate text-2xl font-semibold">{accountDisplayName(selected)}</h2>
@@ -643,37 +667,22 @@ function AccountsPage({
                 onValueChange={(value) => onNavigateAccountSettings(selected.account_login, value as AccountSettingsTab)}
                 className="gap-4"
               >
-                <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
-                  <TabsTrigger
-                    value="preferences"
-                    className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-                  >
+                <TabsList variant="line" className="flex-wrap gap-x-4 gap-y-0 lg:gap-x-8">
+                  <TabsTrigger value="preferences" variant="line">
                     {t("user.sandboxService")}
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="runner-specs"
-                    className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-                  >
+                  <TabsTrigger value="runner-specs" variant="line">
                     {t("user.customRunnerSpecs")}
                   </TabsTrigger>
                   {selected.account_type?.toLowerCase() === "organization" && (
-                    <TabsTrigger
-                      value="fork-sponsorship"
-                      className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-                    >
+                    <TabsTrigger value="fork-sponsorship" variant="line">
                       {t("user.forkSponsorship")}
                     </TabsTrigger>
                   )}
-                  <TabsTrigger
-                    value="sandbox-templates"
-                    className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-                  >
+                  <TabsTrigger value="sandbox-templates" variant="line">
                     {t("user.sandboxTemplates")}
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="sandbox-instances"
-                    className="ml-8 h-10 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0 py-2 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-                  >
+                  <TabsTrigger value="sandbox-instances" variant="line">
                     {t("user.sandboxInstances")}
                   </TabsTrigger>
                 </TabsList>
@@ -1280,6 +1289,7 @@ function PullRequestsPage({
   const selectedStatus = selected ? buildGroupStatus(selected) : null
   const visibleHistoryTotal = Math.min(runnerTotal, userRunnerHistoryWindow)
   const olderRunnerCount = Math.max(0, visibleHistoryTotal - runnerCount)
+  const showEmptyState = !selected && !groups.length && !olderRunnerCount && !loadingJobs && !loadingGitHubApp && !jobsLoadFailed
   const loadOlderJobsControl = olderRunnerCount > 0 ? (
     <div className="border-b p-3">
       <Button
@@ -1294,17 +1304,48 @@ function PullRequestsPage({
     </div>
   ) : null
 
+  const heading = (
+    <section className="border-b bg-muted/35 px-4 py-4 lg:px-6">
+      <h1 className="text-xl font-semibold">{t("user.jobs")}</h1>
+      <p className="mt-1 text-sm text-muted-foreground">{t("user.jobsDescription")}</p>
+    </section>
+  )
+
+  if (showEmptyState) {
+    return (
+      <>
+        {heading}
+        <section className="flex min-h-0 flex-1 items-start justify-center p-4 sm:p-8">
+          <Card className="w-full max-w-lg">
+            <CardHeader>
+              <h2 className="font-semibold">{t("user.jobsEmptyTitle")}</h2>
+              <CardDescription>
+                {t(accountsLoadFailed ? "user.accountsLoadFailed" : hasInstallations ? "user.jobsEmptyDescription" : "user.jobsEmptyConnectDescription")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button asChild><AppLink href="/repositories">{t("user.checkRepositoryReadiness")}</AppLink></Button>
+              <Button asChild variant="outline"><AppLink href="/docs/guides/workflow">{t("user.runFirstWorkflow")}</AppLink></Button>
+              {accountsLoadFailed ? (
+                <Button type="button" variant="ghost" onClick={onRetryJobs}>{t("user.tryAgain")}</Button>
+              ) : !hasInstallations && canSyncGitHubInstallations ? (
+                <SyncGitHubInstallationsButton
+                  isSyncing={syncingGitHubInstallations}
+                  label={t("user.syncAccounts")}
+                  loadingLabel={t("user.syncing")}
+                  onSync={onSyncGitHubInstallations}
+                />
+              ) : null}
+            </CardContent>
+          </Card>
+        </section>
+      </>
+    )
+  }
+
   return (
     <>
-      <section className="border-b bg-muted/35 px-4 py-4 lg:px-6">
-        <div>
-          <h1 className="text-xl font-semibold">{t("user.jobs")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t("user.jobsDescription")}
-          </p>
-        </div>
-      </section>
-
+      {heading}
       <div className="grid min-h-0 flex-1 xl:grid-cols-[360px_minmax(0,1fr)] xl:overflow-hidden">
         <aside className="min-h-0 border-r bg-muted/20">
           <div className="flex h-full flex-col">
@@ -1356,13 +1397,7 @@ function PullRequestsPage({
                 </div>
               ) : (
                 <>
-                  <div className="p-4 text-sm text-muted-foreground">
-                    {hasInstallations || accountsLoadFailed ? (
-                      olderRunnerCount > 0 ? t("user.noMatchingJobs") : t("user.noJobsYet")
-                    ) : (
-                      t("user.syncToTrackJobs")
-                    )}
-                  </div>
+                  <div className="p-4 text-sm text-muted-foreground">{t("user.noMatchingJobs")}</div>
                   {loadOlderJobsControl}
                 </>
               )}
@@ -1443,40 +1478,13 @@ function PullRequestsPage({
               <div className="h-5 w-3/5 rounded-md bg-muted/50 motion-safe:animate-pulse" />
               <div className="h-48 rounded-lg border bg-muted/20 motion-safe:animate-pulse" />
             </div>
-          ) : (
+          ) : groups.length ? (
             <div className="p-4 lg:p-6">
-              {groups.length ? (
-                <div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
-                  {t("user.groupNotFound")}
-                </div>
-              ) : hasInstallations || accountsLoadFailed ? (
-                <div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
-                  {t("user.noRunnerJobs")}
-                </div>
-              ) : (
-                <div className="rounded-lg border bg-muted/30 p-6">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <h2 className="text-base font-semibold">{t("user.syncExistingAccounts")}</h2>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {canSyncGitHubInstallations
-                          ? t("user.syncHelp")
-                          : t("user.setupAuth")}
-                      </p>
-                    </div>
-                    {canSyncGitHubInstallations ? (
-                      <SyncGitHubInstallationsButton
-                        isSyncing={syncingGitHubInstallations}
-                        label={t("user.syncAccounts")}
-                        loadingLabel={t("user.syncing")}
-                        onSync={onSyncGitHubInstallations}
-                      />
-                    ) : null}
-                  </div>
-                </div>
-              )}
+              <div className="rounded-lg border bg-muted/30 p-6 text-sm text-muted-foreground">
+                {t("user.groupNotFound")}
+              </div>
             </div>
-          )}
+          ) : null}
         </section>
       </div>
     </>

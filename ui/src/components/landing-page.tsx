@@ -69,7 +69,8 @@ const workflowSteps = [
 ] as const
 
 export function LandingPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const chinese = i18n.resolvedLanguage === "zh"
   return (
     <div className="min-h-screen overflow-x-hidden bg-white text-[#0a0d12] transition-colors duration-300 dark:bg-[#050d12] dark:text-[#edf8fc]">
       <a
@@ -135,11 +136,21 @@ export function LandingPage() {
 
             <h1
               aria-label={t("landing.heroLabel")}
-              className="max-w-[760px] text-[clamp(3rem,5.4vw,5.8rem)] font-semibold leading-[0.94] tracking-[-0.065em] text-white"
+              className={`max-w-[760px] font-semibold text-white ${chinese
+                ? "text-[clamp(1.5rem,8vw,3.5rem)] leading-[1.06] tracking-tight lg:text-[clamp(2.25rem,3.5vw,4rem)]"
+                : "text-[clamp(3rem,5.4vw,5.8rem)] leading-[0.94] tracking-[-0.065em]"}`}
             >
               {t("landing.heroPrefix")}
-              <span className="mt-2 block text-[#27c5f5]">{t("landing.heroPoweredBy")}</span>
-              <span className="mt-2 block">{t("landing.heroSandbox")}</span>
+              {chinese ? (
+                <span className="mt-2 block text-balance break-keep">
+                  <span className="text-[#27c5f5]">{t("landing.heroPoweredBy")}</span>{"\u00a0"}{t("landing.heroSandbox")}
+                </span>
+              ) : (
+                <>
+                  <span className="mt-2 block text-[#27c5f5]">{t("landing.heroPoweredBy")}</span>
+                  <span className="mt-2 block">{t("landing.heroSandbox")}</span>
+                </>
+              )}
             </h1>
 
             <p className="mt-8 max-w-xl text-base leading-7 text-[#c5d7e1] sm:text-lg sm:leading-8">
