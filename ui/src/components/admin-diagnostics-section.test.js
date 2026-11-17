@@ -344,7 +344,7 @@ describe("admin diagnostics", () => {
 
     expect(detailsGrid?.classList.contains("grid")).toBe(true)
     expect(detailsGrid?.classList.contains("grid-cols-1")).toBe(true)
-    expect(detailsGrid?.classList.contains("xl:grid-cols-2")).toBe(true)
+    expect(detailsGrid?.classList.contains("xl:grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]")).toBe(true)
   })
 
   test("refreshes the diagnosis after retrying a failed request", async () => {

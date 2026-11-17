@@ -62,10 +62,16 @@ export function StatusBadge({ status }: { status: RunnerDisplayStatus }) {
   )
 }
 
-export function Detail({ label, value }: { label: string; value: ReactNode }) {
+export function Detail({ label, value, alignLabels = false }: {
+  label: string
+  value: ReactNode
+  alignLabels?: boolean
+}) {
   return (
-    <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
-      <div className="text-muted-foreground">{label}</div>
+    <div className={alignLabels
+      ? "grid min-w-0 items-baseline gap-y-0.5 text-sm sm:col-span-2 sm:grid-cols-subgrid"
+      : "grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm"}>
+      <div className={alignLabels ? "whitespace-nowrap text-muted-foreground" : "text-muted-foreground"}>{label}</div>
       <div className="min-w-0 break-words font-medium">{value}</div>
     </div>
   )

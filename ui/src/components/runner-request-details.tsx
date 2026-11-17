@@ -1,16 +1,17 @@
 import { ExternalLink } from "lucide-react"
+import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
 import { formatRunnerCleanupDuration, formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
 import type { RunnerState } from "@/admin-types"
-import { Detail } from "@/components/admin-shared"
+import { Detail as AdminDetail } from "@/components/admin-shared"
 import type { AppTFunction } from "@/i18n"
 
 export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
   const { t, i18n } = useTranslation()
 
   return (
-    <div className="grid grid-cols-1 gap-x-10 gap-y-2 xl:grid-cols-2">
+    <div className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-[max-content_minmax(0,1fr)] xl:grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)] xl:gap-x-5">
       <Detail label="ID" value={runner.id} />
       <Detail label={t("common.status")} value={runnerStatusLabel(runnerDisplayStatus(runner))} />
       <Detail label={t("common.repository")} value={runner.repository_full_name || "-"} />
@@ -65,6 +66,10 @@ export function RunnerRequestDetails({ runner }: { runner: RunnerState }) {
       <Detail label={t("admin.error")} value={runner.error || "-"} />
     </div>
   )
+}
+
+function Detail({ label, value }: { label: string; value: ReactNode }) {
+  return <AdminDetail label={label} value={value} alignLabels />
 }
 
 function terminationSourceDisplay(source: string | undefined, t: AppTFunction) {
