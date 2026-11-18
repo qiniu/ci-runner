@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { AppLink } from "@/components/app-link"
 import { AccountsSection } from "@/components/accounts-section"
 import { AuditSection, DiagnosticsSection, MatchSection, OverviewSection, RunnerRequestSection } from "@/components/admin-sections"
 import { AccessDeniedPage, NotFoundPage, SessionErrorPage, SessionLoadingPage, SignInPage } from "@/components/auth-pages"
@@ -28,6 +29,7 @@ import {
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import {
+  adminSectionPath,
   adminSections,
   githubInstallationIDFromAdminPath,
   runnerRequestIdentifierFromAdminPath,
@@ -42,7 +44,6 @@ import {
   type ProductTourOnboarding,
   type RunnerSpec,
   type RunnerSpecMatch,
-  type RunnerDisplayStatus,
   type RunnerRequestMetrics,
   type RunnerState,
   type SyncedGitHubInstallations,
@@ -51,7 +52,10 @@ import {
 import {
   adminDataResources,
   adminPollingResources,
+  adminRunnerRequestDetailPath,
   adminRunnerRequestPageSize,
+  adminRunnerRequestSearch,
+  adminRunnerRequestSearchFromURL,
   adminRunnerRefreshWindow,
   adminRunnerRequestsPath,
   appRouteAccess,
@@ -74,6 +78,7 @@ import {
   userRunnerRequestsPath,
   type AdminDataResource,
   type AdminRunnerPage,
+  type AdminRunnerRequestSearch,
   type AuthSessionCheckStatus,
 } from "@/app-load-policy"
 import { useRunnerCatalog } from "@/hooks/use-runner-catalog"
@@ -174,14 +179,6 @@ function App() {
   })
   const [runnerSpecs, setRunnerSpecs] = useState<RunnerSpec[]>([])
   const [loading, setLoading] = useState(false)
-  const [createID, setCreateID] = useState("")
-  const [createRepository, setCreateRepository] = useState("")
-  const [createRunnerSpec, setCreateRunnerSpec] = useState("")
-  const [createLabels, setCreateLabels] = useState("self-hosted,e2b")
-  const [createRunnerOpen, setCreateRunnerOpen] = useState(false)
-  const [runnerStatusFilter, setRunnerStatusFilter] = useState<RunnerDisplayStatus | "all">("all")
-  const [runnerRepositoryFilter, setRunnerRepositoryFilter] = useState("all")
-  const [runnerSpecFilter, setRunnerSpecFilter] = useState("all")
   const [matchRepository, setMatchRepository] = useState("")
   const [matchLabels, setMatchLabels] = useState("self-hosted,e2b")
   const [matchResult, setMatchResult] = useState<RunnerSpecMatch | null>(null)
@@ -218,6 +215,10 @@ function App() {
   const runnerRequestHasMoreRef = useRef(true)
   const [sandboxRegions, setSandboxRegions] = useState<SandboxRegion[]>([])
   const runnerRequestIdentifier = runnerRequestIdentifierFromAdminPath(locationPath)
+  const isRunnerRequestList = locationPath === adminSectionPath("runner_requests")
+  const runnerRequestSearch = adminRunnerRequestSearchFromURL(section === "runner_requests" ? locationSearch : "")
+  const { status: runnerStatusFilter, repository: runnerRepositoryFilter, runnerSpec: runnerSpecFilter, lookup: runnerLookup } = runnerRequestSearch
+  const runnerRequestQuery = adminRunnerRequestSearch(runnerRequestSearch)
   const githubInstallationID = githubInstallationIDFromAdminPath(locationPath)
   const currentAccount = authSession.login ?? ""
   const requestAccountRef = useRef(currentAccount)
@@ -254,22 +255,39 @@ function App() {
     })
   }, [])
 
-  const setSection = useCallback((next: string) => {
+  const setSection = useCallback((next: string, search = "") => {
     const section = adminSections.includes(next as AdminSection) ? (next as AdminSection) : "overview"
     invalidateRunnerRequestPage()
     setSectionState(section)
-    const nextPath = section === "overview" ? "/admin/" : `/admin/${section}`
-    if (window.location.pathname !== nextPath) {
-      window.history.pushState(null, "", nextPath)
+    const nextPath = adminSectionPath(section)
+    if (window.location.pathname + window.location.search !== nextPath + search) {
+      window.history.pushState(null, "", nextPath + search)
       setLocationPath(nextPath)
-      setLocationSearch("")
+      setLocationSearch(search)
     }
   }, [invalidateRunnerRequestPage])
+
+  const updateRunnerRequestSearch = (changes: Partial<AdminRunnerRequestSearch>, replace = false) => {
+    const currentSearch = window.location.search
+    const nextSearch = adminRunnerRequestSearch({ ...adminRunnerRequestSearchFromURL(currentSearch), ...changes })
+    if (currentSearch === nextSearch) return
+    const url = window.location.pathname + nextSearch
+    if (replace) {
+      runnerRequestLookupGeneration.current += 1
+      window.history.replaceState(null, "", url)
+    } else {
+      window.history.pushState(null, "", url)
+    }
+    setLocationSearch(nextSearch)
+  }
 
   const openRunnerRequest = useCallback((identifier: string) => {
     runnerRequestLookupGeneration.current += 1
     invalidateRunnerRequestPage()
-    const nextPath = `/admin/runner_requests/${encodeURIComponent(identifier)}`
+    const search = window.location.pathname === adminSectionPath("runner_requests")
+      ? adminRunnerRequestSearch(adminRunnerRequestSearchFromURL(window.location.search))
+      : ""
+    const nextPath = adminRunnerRequestDetailPath(identifier, search)
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
     }
@@ -290,7 +308,7 @@ function App() {
   }, [invalidateRunnerRequestPage])
 
   const canonicalizeRunnerRequestID = useCallback((id: string) => {
-    const nextPath = `/admin/runner_requests/${encodeURIComponent(id)}`
+    const nextPath = adminRunnerRequestDetailPath(id, window.location.search)
     if (window.location.pathname + window.location.search === nextPath) return
     window.history.replaceState(null, "", nextPath)
   }, [])
@@ -359,12 +377,13 @@ function App() {
       Array.from(
         new Set(
           [
+            runnerSpecFilter === "all" ? "" : runnerSpecFilter,
             ...runnerSpecs.map((runnerSpec) => runnerSpec.name),
             ...runners.map((runner) => runner.runner_spec_name || ""),
           ].filter(Boolean)
         )
       ).sort(),
-    [runnerSpecs, runners]
+    [runnerSpecFilter, runnerSpecs, runners]
   )
 
   const hasAccess = authSession.authenticated && authSession.role === "admin"
@@ -614,7 +633,8 @@ function App() {
     }))
   }, [adminResourceLoader, hasAccess, isAdminRoute, request, requestAdminRunnerPage, requestAdminRunnerPoll, runnerRequestIdentifier, section])
 
-  const resetAdminRunnerRequestList = useCallback(() => {
+  useEffect(() => {
+    if (!isRunnerRequestList) return
     adminResourceLoader.reset()
     invalidateRunnerRequestPage()
     setRunnerRequestError("")
@@ -624,7 +644,7 @@ function App() {
     setRunners([])
     setRunnerRequestCursor(null)
     setRunnerRequestHasMore(true)
-  }, [adminResourceLoader, invalidateRunnerRequestPage])
+  }, [adminResourceLoader, invalidateRunnerRequestPage, isRunnerRequestList, runnerRepositoryFilter, runnerSpecFilter, runnerStatusFilter])
 
   const reloadAdminRunnerRequests = useCallback(async () => {
     adminResourceLoader.reset()
@@ -987,6 +1007,7 @@ function App() {
 
   useEffect(() => {
     const handlePopState = () => {
+      runnerRequestLookupGeneration.current += 1
       setLocationPath(window.location.pathname)
       setLocationSearch(window.location.search)
       setUserSelectedKey(userJobsGroupKeyFromLocation(window.location.pathname, window.location.search))
@@ -1170,50 +1191,6 @@ function App() {
     setRepositoryErrors({})
     setLoadingRepositoriesFor(null)
     setUserSelectedKey("")
-  }
-
-  const resetCreateRunnerForm = () => {
-    setCreateID("")
-    setCreateRepository("")
-    setCreateRunnerSpec("")
-    setCreateLabels("self-hosted,e2b")
-  }
-
-  const createRunner = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!hasAccess) {
-      toast.error(t("app.adminRequired"))
-      return
-    }
-    const body: {
-      id?: string
-      repository_full_name?: string
-      runner_spec_name?: string
-      labels?: string[]
-    } = {}
-    const repository = createRepository.trim()
-    if (!repository || repository.includes("*")) {
-      toast.error(t("app.repositoryFormatRequired"))
-      return
-    }
-    if (createID.trim()) body.id = createID.trim()
-    body.repository_full_name = repository
-    if (createRunnerSpec.trim()) body.runner_spec_name = createRunnerSpec.trim()
-    const labels = parseLabels(createLabels)
-    if (labels.length > 0) body.labels = labels
-    try {
-      const runner = (await request("/runner_requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })) as RunnerState
-      resetCreateRunnerForm()
-      setCreateRunnerOpen(false)
-      toast.success(t("app.runnerQueued", { id: runner.id }))
-      await reloadAdminRunnerRequests()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("app.createRunnerFailed"))
-    }
   }
 
   const stopRunner = async (id: string) => {
@@ -1419,28 +1396,34 @@ function App() {
   return (
     <SandboxRegionsContext.Provider value={sandboxRegions}>
     <SidebarProvider>
-      <AppSidebar
-        section={section}
-        onSectionChange={setSection}
-      />
+      <AppSidebar section={section} />
       <SidebarInset className="min-h-0 overflow-hidden">
         <SiteHeader authSession={authSession} onSignOut={signOut} />
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:gap-6 lg:p-6">
           {section === "overview" || (section === "runner_requests" && !runnerRequestIdentifier) ? (
-            <div className="shrink-0 overflow-x-auto">
-              <div className="grid min-w-[980px] grid-cols-6 gap-4">
-                {metrics.map((metric) => (
-                  <Card key={metric.id} className="gap-3 py-5">
-                    <CardHeader className="px-5">
-                      <CardDescription>{metric.label}</CardDescription>
-                      <CardTitle className="text-3xl">{metric.value}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="px-5 text-xs text-muted-foreground">
-                      {metric.description}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+            <div className="grid shrink-0 grid-cols-3 gap-2 xl:grid-cols-6 xl:gap-4">
+              {metrics.map((metric) => {
+                const isActive = isRunnerRequestList && runnerStatusFilter === metric.id
+                const search = adminRunnerRequestSearch({ ...runnerRequestSearch, status: metric.id })
+                return (
+                  <AppLink
+                    key={metric.id}
+                    href={adminSectionPath("runner_requests") + search}
+                    aria-current={isActive ? "location" : undefined}
+                    className="group min-w-0 rounded-xl focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <Card className={`h-full gap-2 py-2 transition-colors group-hover:border-primary/50 xl:gap-3 xl:py-5 ${isActive ? "border-primary bg-primary/5" : ""}`}>
+                      <CardHeader className="px-2.5 xl:px-5">
+                        <CardDescription className="break-words text-xs xl:text-sm">{metric.label}</CardDescription>
+                        <CardTitle className="text-lg tabular-nums xl:text-3xl">{metric.value}</CardTitle>
+                      </CardHeader>
+                      <CardContent className="hidden px-5 text-xs text-muted-foreground xl:block">
+                        {metric.description}
+                      </CardContent>
+                    </Card>
+                  </AppLink>
+                )
+              })}
             </div>
           ) : null}
 
@@ -1467,7 +1450,7 @@ function App() {
             <RunnerRequestSection
               identifier={runnerRequestIdentifier}
               request={request}
-              onBackToRunnerRequests={() => setSection("runner_requests")}
+              onBackToRunnerRequests={() => setSection("runner_requests", runnerRequestQuery)}
               onResolvedRequestID={canonicalizeRunnerRequestID}
               onCopyRunnerID={(id) => void copyRunnerID(id)}
               onRetryRunner={retryRunner}
@@ -1477,7 +1460,6 @@ function App() {
 
           {section === "runner_requests" && !runnerRequestIdentifier ? (
             <RunnerRequestsSection
-              hasAccess={hasAccess}
               loading={loading}
               error={runnerRequestError}
               windowReset={runnerWindowReset}
@@ -1485,35 +1467,17 @@ function App() {
               runners={runners}
               hasMore={runnerRequestHasMore}
               loadingMore={loadingMoreRunnerRequests}
-              createID={createID}
-              createRepository={createRepository}
-              createRunnerSpec={createRunnerSpec}
-              createLabels={createLabels}
-              createRunnerOpen={createRunnerOpen}
               runnerStatusFilter={runnerStatusFilter}
               runnerRepositoryFilter={runnerRepositoryFilter}
               runnerSpecFilter={runnerSpecFilter}
               runnerSpecNames={runnerSpecNames}
+              requestLookup={runnerLookup}
+              requestQuery={runnerRequestQuery}
               onRefresh={refreshAdminRunnerRequests}
-              onResetCreateRunnerForm={resetCreateRunnerForm}
-              onCreateRunnerOpenChange={setCreateRunnerOpen}
-              onCreateRunnerSubmit={createRunner}
-              onCreateIDChange={setCreateID}
-              onCreateRepositoryChange={setCreateRepository}
-              onCreateRunnerSpecChange={setCreateRunnerSpec}
-              onCreateLabelsChange={setCreateLabels}
-              onStatusFilterChange={(value) => {
-                setRunnerStatusFilter(value)
-                resetAdminRunnerRequestList()
-              }}
-              onRepositoryFilterChange={(value) => {
-                setRunnerRepositoryFilter(value)
-                resetAdminRunnerRequestList()
-              }}
-              onRunnerSpecFilterChange={(value) => {
-                setRunnerSpecFilter(value)
-                resetAdminRunnerRequestList()
-              }}
+              onStatusFilterChange={(status) => updateRunnerRequestSearch({ status })}
+              onRepositoryFilterChange={(repository) => updateRunnerRequestSearch({ repository })}
+              onRunnerSpecFilterChange={(runnerSpec) => updateRunnerRequestSearch({ runnerSpec })}
+              onRequestLookupChange={(lookup) => updateRunnerRequestSearch({ lookup }, true)}
               onSearchRepositories={searchRunnerRequestRepositories}
               onLoadMore={loadMoreAdminRunnerRequests}
               onLookupRunnerRequest={(identifier) => void lookupRunnerRequest(identifier)}

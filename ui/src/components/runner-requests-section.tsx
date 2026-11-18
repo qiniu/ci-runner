@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react"
-import { Check, ChevronsUpDown, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react"
+import { Check, ChevronsUpDown, LoaderCircle, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { formatTime, runnerDisplayStatus, runnerStatusLabel } from "@/admin-format"
-import { activeStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
-import { createAutomaticPageLoadGate } from "@/app-load-policy"
+import { activeStatuses, runnerDisplayStatuses, type RunnerDisplayStatus, type RunnerState } from "@/admin-types"
+import { adminRunnerRequestDetailPath, createAutomaticPageLoadGate } from "@/app-load-policy"
 import { StatusBadge } from "@/components/admin-shared"
 import { stickyTableHeaderOffset } from "@/components/runner-request-table"
 import { Button } from "@/components/ui/button"
@@ -15,14 +15,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -55,7 +47,6 @@ function verticalScrollContainer(element: HTMLElement) {
 }
 
 export function RunnerRequestsSection({
-  hasAccess,
   loading,
   error,
   windowReset,
@@ -63,26 +54,17 @@ export function RunnerRequestsSection({
   runners,
   hasMore,
   loadingMore,
-  createID,
-  createRepository,
-  createRunnerSpec,
-  createLabels,
-  createRunnerOpen,
   runnerStatusFilter,
   runnerRepositoryFilter,
   runnerSpecFilter,
   runnerSpecNames,
+  requestLookup,
+  requestQuery,
   onRefresh,
-  onResetCreateRunnerForm,
-  onCreateRunnerOpenChange,
-  onCreateRunnerSubmit,
-  onCreateIDChange,
-  onCreateRepositoryChange,
-  onCreateRunnerSpecChange,
-  onCreateLabelsChange,
   onStatusFilterChange,
   onRepositoryFilterChange,
   onRunnerSpecFilterChange,
+  onRequestLookupChange,
   onSearchRepositories,
   onLoadMore,
   onLookupRunnerRequest,
@@ -90,7 +72,6 @@ export function RunnerRequestsSection({
   onRetryRunner,
   onStopRunner,
 }: {
-  hasAccess: boolean
   loading: boolean
   error?: string
   windowReset?: boolean
@@ -98,26 +79,17 @@ export function RunnerRequestsSection({
   runners: RunnerState[]
   hasMore: boolean
   loadingMore: boolean
-  createID: string
-  createRepository: string
-  createRunnerSpec: string
-  createLabels: string
-  createRunnerOpen: boolean
   runnerStatusFilter: RunnerDisplayStatus | "all"
   runnerRepositoryFilter: string
   runnerSpecFilter: string
   runnerSpecNames: string[]
+  requestLookup: string
+  requestQuery: string
   onRefresh: () => void
-  onResetCreateRunnerForm: () => void
-  onCreateRunnerOpenChange: (open: boolean) => void
-  onCreateRunnerSubmit: (event: FormEvent<HTMLFormElement>) => void
-  onCreateIDChange: (value: string) => void
-  onCreateRepositoryChange: (value: string) => void
-  onCreateRunnerSpecChange: (value: string) => void
-  onCreateLabelsChange: (value: string) => void
   onStatusFilterChange: (value: RunnerDisplayStatus | "all") => void
   onRepositoryFilterChange: (value: string) => void
   onRunnerSpecFilterChange: (value: string) => void
+  onRequestLookupChange: (value: string) => void
   onSearchRepositories: (query: string) => Promise<{ repositories: string[]; hasMore: boolean }>
   onLoadMore: () => Promise<boolean>
   onLookupRunnerRequest: (identifier: string) => void
@@ -126,7 +98,6 @@ export function RunnerRequestsSection({
   onStopRunner: (id: string) => void
 }) {
   const { t, i18n } = useTranslation()
-  const [requestIdentifier, setRequestIdentifier] = useState("")
   const [repositoryOpen, setRepositoryOpen] = useState(false)
   const [repositoryQuery, setRepositoryQuery] = useState("")
   const [repositoryOptions, setRepositoryOptions] = useState<string[]>([])
@@ -237,78 +208,12 @@ export function RunnerRequestsSection({
       <Card className="min-w-0 gap-0 py-0">
         <CardHeader className="border-b px-5 py-4">
           <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle>{t("sidebar.runnerRequests")}</CardTitle>
-                <CardDescription>
-                  {t("admin.requestsDescription")}
-                </CardDescription>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    onResetCreateRunnerForm()
-                    onCreateRunnerOpenChange(true)
-                  }}
-                  disabled={!hasAccess}
-                >
-                  <Plus />
-                  {t("admin.createRunnerRequest")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={onRefresh}
-                  disabled={loading}
-                  title={t("common.refresh")}
-                >
-                  <RefreshCw className={cn(loading && "animate-spin")} />
-                </Button>
-              </div>
+            <div>
+              <CardTitle>{t("sidebar.runnerRequests")}</CardTitle>
+              <CardDescription>
+                {t("admin.requestsDescription")}
+              </CardDescription>
             </div>
-            <Dialog open={createRunnerOpen} onOpenChange={onCreateRunnerOpenChange}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>{t("admin.createRunnerRequest")}</DialogTitle>
-                  <DialogDescription>
-                    {t("admin.createRunnerRequestDescription")}
-                  </DialogDescription>
-                </DialogHeader>
-                <form className="grid gap-3" onSubmit={onCreateRunnerSubmit}>
-                  <Input
-                    value={createID}
-                    onChange={(event) => onCreateIDChange(event.target.value)}
-                    placeholder={t("admin.optionalID")}
-                  />
-                  <Input
-                    value={createRepository}
-                    onChange={(event) => onCreateRepositoryChange(event.target.value)}
-                    placeholder="owner/repo"
-                    required
-                  />
-                  <Input
-                    value={createRunnerSpec}
-                    onChange={(event) => onCreateRunnerSpecChange(event.target.value)}
-                    placeholder={t("admin.optionalRunnerSpec")}
-                  />
-                  <Input
-                    value={createLabels}
-                    onChange={(event) => onCreateLabelsChange(event.target.value)}
-                    placeholder="self-hosted,e2b"
-                  />
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => onCreateRunnerOpenChange(false)}>
-                      {t("common.cancel")}
-                    </Button>
-                    <Button type="submit" disabled={!hasAccess}>
-                      {t("admin.createRunnerRequest")}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
             <div
               data-testid="runner-request-toolbar"
               className="grid gap-2 md:grid-cols-3 xl:grid-cols-[minmax(140px,180px)_minmax(180px,240px)_minmax(180px,240px)_minmax(360px,1fr)]"
@@ -319,7 +224,7 @@ export function RunnerRequestsSection({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t("admin.allStatuses")}</SelectItem>
-                  {(["queued", "creating", "running", "stopping", "completed", "unmatched", "failed"] as RunnerDisplayStatus[]).map((status) => (
+                  {runnerDisplayStatuses.map((status) => (
                     <SelectItem key={status} value={status}>
                       {runnerStatusLabel(status)}
                     </SelectItem>
@@ -420,29 +325,42 @@ export function RunnerRequestsSection({
                   ))}
                 </SelectContent>
               </Select>
-              <form
-                className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  const identifier = requestIdentifier.trim()
-                  if (identifier) onLookupRunnerRequest(identifier)
-                }}
-              >
-                <label className="sr-only" htmlFor="runner-request-lookup">
-                  {t("admin.runnerRequestID")}
-                </label>
-                <Input
-                  id="runner-request-lookup"
-                  value={requestIdentifier}
-                  onChange={(event) => setRequestIdentifier(event.target.value)}
-                  placeholder={t("admin.runnerRequestPlaceholder")}
-                  autoComplete="off"
-                />
-                <Button type="submit" variant="outline" disabled={!requestIdentifier.trim()}>
-                  <Search />
-                  {t("admin.openRunnerRequest")}
+              <div className="flex min-w-0 gap-2 md:col-span-3 xl:col-span-1">
+                <form
+                  className="flex min-w-0 flex-1 gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const identifier = requestLookup.trim()
+                    if (identifier) onLookupRunnerRequest(identifier)
+                  }}
+                >
+                  <label className="sr-only" htmlFor="runner-request-lookup">
+                    {t("admin.runnerRequestID")}
+                  </label>
+                  <Input
+                    id="runner-request-lookup"
+                    value={requestLookup}
+                    onChange={(event) => onRequestLookupChange(event.target.value)}
+                    placeholder={t("admin.runnerRequestPlaceholder")}
+                    autoComplete="off"
+                  />
+                  <Button type="submit" variant="outline" disabled={!requestLookup.trim()}>
+                    <Search />
+                    {t("admin.openRunnerRequest")}
+                  </Button>
+                </form>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  title={t("common.refresh")}
+                >
+                  <RefreshCw className={cn(loading && "animate-spin")} />
                 </Button>
-              </form>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -454,19 +372,19 @@ export function RunnerRequestsSection({
               {pollingPaused ? t("admin.runnerRequestPollingPaused") : null}
             </p>
           ) : null}
-          <Table className="min-w-max">
+          <Table className="table-fixed md:min-w-max md:table-auto">
             <TableHeader ref={tableHeaderRef} className="relative z-10 bg-background will-change-transform">
               <TableRow>
-                <TableHead className="min-w-24">{t("common.status")}</TableHead>
-                <TableHead>{t("common.repository")}</TableHead>
-                <TableHead>{t("common.runnerSpec")}</TableHead>
-                <TableHead>{t("user.requestedLabels")}</TableHead>
-                <TableHead className="min-w-44">{t("common.runner")}</TableHead>
-                <TableHead>{t("common.sandbox")}</TableHead>
-                <TableHead className="min-w-32">{t("admin.githubJob")}</TableHead>
-                <TableHead className="min-w-36">{t("common.created")}</TableHead>
-                <TableHead className="min-w-36">{t("common.updated")}</TableHead>
-                <TableHead className="min-w-24" />
+                <TableHead className="w-24 md:w-auto md:min-w-24">{t("common.status")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.repository")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.runnerSpec")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("user.requestedLabels")}</TableHead>
+                <TableHead className="md:min-w-44">{t("common.runner")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("common.sandbox")}</TableHead>
+                <TableHead className="hidden min-w-32 md:table-cell">{t("admin.githubJob")}</TableHead>
+                <TableHead className="hidden min-w-36 md:table-cell">{t("common.created")}</TableHead>
+                <TableHead className="hidden min-w-36 md:table-cell">{t("common.updated")}</TableHead>
+                <TableHead className="hidden min-w-24 md:table-cell" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -486,32 +404,35 @@ export function RunnerRequestsSection({
                     <TableCell>
                       <StatusBadge status={runnerDisplayStatus(runner)} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div>{runner.repository_full_name || "-"}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {runner.runner_spec_name || "-"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div
                         className="font-mono text-xs text-muted-foreground"
                       >
                         {runner.requested_labels?.join(", ") || "-"}
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="max-md:whitespace-normal">
+                      {runner.repository_full_name ? (
+                        <div className="break-all text-xs text-muted-foreground md:hidden">{runner.repository_full_name}</div>
+                      ) : null}
                       <a
-                        className="font-medium text-primary underline-offset-4 hover:underline"
-                        href={`/admin/runner_requests/${encodeURIComponent(runner.id)}`}
+                        className="font-medium text-primary underline-offset-4 hover:underline max-md:break-all"
+                        href={adminRunnerRequestDetailPath(runner.id, requestQuery)}
                         onClick={(event) => openRunnerRequest(event, runner)}
                       >
                         {runner.runner_name || runner.id}
                       </a>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div>{runner.sandbox_id || "-"}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {runner.github_job_url ? (
                         <a
                           className="font-mono text-primary underline-offset-4 hover:underline"
@@ -526,13 +447,13 @@ export function RunnerRequestsSection({
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {formatTime(runner.created_at, i18n.resolvedLanguage)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {formatTime(runner.updated_at, i18n.resolvedLanguage)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div className="flex gap-2">
                         {runnerDisplayStatus(runner) === "failed" ? (
                           <Button

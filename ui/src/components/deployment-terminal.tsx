@@ -11,7 +11,7 @@ type Props = {
 
 export default function DeploymentTerminal({ endpoint, request }: Props) {
   const { t } = useTranslation()
-  const { terminalEl, terminalSession, terminalConnecting, terminalError, connectTerminal, closeTerminalSession } = useSandboxTerminal({
+  const { terminalEl, terminalSession, terminalConnecting, terminalHasHistory, terminalError, connectTerminal, closeTerminalSession } = useSandboxTerminal({
     endpoint,
     available: true,
     request,
@@ -34,7 +34,7 @@ export default function DeploymentTerminal({ endpoint, request }: Props) {
     <div>
       <div className="relative p-2">
         <div ref={terminalEl} className="deployment-console h-[400px] min-w-0 overflow-hidden" />
-        {!terminalSession && !terminalConnecting ? <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-sm text-slate-400">{t("user.connectInteractiveShell")}</p> : null}
+        {!terminalHasHistory && !terminalConnecting ? <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-sm text-slate-400">{t("user.connectInteractiveShell")}</p> : null}
       </div>
       {terminalError ? <p role="alert" className="border-t border-red-400/15 bg-red-500/10 px-4 py-3 text-sm text-red-100">{terminalError}</p> : null}
     </div>

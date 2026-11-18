@@ -8,6 +8,8 @@ import sys
 
 child, master = pty.fork()
 if child == 0:
+    os.environ.pop("ENV", None)
+    os.environ["PS1"] = "__PTY_READY__ "
     os.execl("/bin/sh", "sh", "-i")
 
 cleaned = False

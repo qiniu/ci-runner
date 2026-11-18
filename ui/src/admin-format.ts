@@ -3,6 +3,7 @@ import {
   type Metric,
   type RunnerRequestMetrics,
   type RunnerState,
+  type RunnerStatus,
   type RunnerDisplayStatus,
 } from "@/admin-types"
 import i18n from "@/i18n"
@@ -36,7 +37,7 @@ export function runnerDisplayStatus(runner: RunnerState): RunnerDisplayStatus {
 export function runnerMetrics(
   stats: RunnerRequestMetrics,
   t: AppTFunction,
-): Metric[] {
+): (Metric & { id: RunnerStatus })[] {
   return [
     {
       id: "queued",

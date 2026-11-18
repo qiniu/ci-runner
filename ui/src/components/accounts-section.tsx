@@ -266,14 +266,14 @@ export function AccountsSection({ request }: { request: RequestFunction }) {
 
   return (
     <>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:gap-4 xl:grid-cols-4">
         {accountMetrics(stats, t).map((metric) => (
-          <Card key={metric.id} className="gap-3 py-5">
-            <CardHeader className="px-5">
-              <CardDescription>{metric.label}</CardDescription>
-              <CardTitle className="text-3xl tabular-nums">{metric.value}</CardTitle>
+          <Card key={metric.id} className="gap-2 py-2 lg:gap-3 lg:py-5">
+            <CardHeader className="px-3 lg:px-5">
+              <CardDescription className="text-xs lg:text-sm">{metric.label}</CardDescription>
+              <CardTitle className="text-lg tabular-nums lg:text-3xl">{metric.value}</CardTitle>
             </CardHeader>
-            <CardContent className="px-5 text-xs text-muted-foreground">
+            <CardContent className="hidden px-5 text-xs text-muted-foreground lg:block">
               {metric.description}
             </CardContent>
           </Card>

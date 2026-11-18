@@ -3,8 +3,9 @@
 Jobs and Deploy share one WebSocket for terminal input, output and resize. The
 opening request owns the connection and remote stream. No node-local session
 index, peer forwarding, sticky routing or `terminal_peer_origin` is needed.
-Each explicit Connect creates a new ID and shell. Disconnect ends that session;
-reopening does not restore its variables, directory or output, or replay input.
+Disconnect ends the shell. Received output remains available as read-only
+scrollback while the same terminal pane stays open. Each explicit Connect
+opens a fresh terminal and shell with a new ID. Browser input is never replayed.
 The underlying Job/Deploy and Sandbox continue independently.
 
 ## Protocol and authorization

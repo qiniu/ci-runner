@@ -25,7 +25,7 @@ func TestFindRunnerByNameUsesAppInstallation(t *testing.T) {
 					if r.Header.Get("Authorization") != "token installation-token" || r.URL.Query().Get("name") != "e2b-123" {
 						t.Error("wrong auth or name filter")
 					}
-					fmt.Fprint(w, `{"runners":[{"id":12,"name":"e2b-123","status":"online","busy":true}]}`)
+					fmt.Fprint(w, `{"total_count":1,"runners":[{"id":12,"name":"e2b-123","status":"online","busy":true}]}`)
 				default:
 					t.Errorf("unexpected operation %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(500)

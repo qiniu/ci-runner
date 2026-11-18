@@ -1,5 +1,5 @@
 import { deploymentPrefillFromSearch } from "@/github-context-routes"
-import { Loader2, Plus, RefreshCw } from "lucide-react"
+import { ChevronDown, Loader2, Plus, RefreshCw } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -41,7 +41,7 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
   const [source, setSource] = useState<"branch" | "tag" | "pull_request">(prefill?.source ?? "branch")
   const [referenceCatalog, setReferenceCatalog] = useState<{ key: string; refs: string[]; page: number; hasMore: boolean } | null>(null)
   const [loadingReferences, setLoadingReferences] = useState(false)
-  const [referenceError, setReferenceError] = useState<string | null>(null)
+  const [referenceFailure, setReferenceFailure] = useState<{ key: string; message: string } | null>(null)
   const [referenceReload, setReferenceReload] = useState(0)
   const referenceEpoch = useRef(0)
   const [repositoryScopeID, setRepositoryScopeID] = useState(initialInstallation ? String(initialInstallation.id) : "")
@@ -51,7 +51,7 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
   const [templateCatalog, setTemplateCatalog] = useState<{ key: string; templates: DeploymentTemplate[]; region?: string } | null>(null)
   const [templateID, setTemplateID] = useState("")
   const [loadingTemplates, setLoadingTemplates] = useState(false)
-  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [templateFailure, setTemplateFailure] = useState<{ key: string; message: string } | null>(null)
   const [templateReload, setTemplateReload] = useState(0)
   const availableInstallations = useMemo(
     () => githubApp?.installations ?? [],
@@ -67,6 +67,12 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
   const references = prefilledRef && !catalogReferences.includes(prefilledRef) ? [prefilledRef, ...catalogReferences] : catalogReferences
   const selectedRef = references.includes(ref) ? ref : ""
   const currentRepositories = repositoryScopeID === installationID ? repositories : selectedInstallation?.repositories ?? []
+  const repositoryIsCurrent = currentRepositories.includes(repository)
+  const canDiscover = Boolean(selectedInstallation && repository && repositoryIsCurrent)
+  const referenceError = referenceFailure?.key === referenceKey ? referenceFailure.message : null
+  const templateError = templateFailure?.key === templateKey ? templateFailure.message : null
+  const referencesPending = canDiscover && (loadingReferences || (referenceCatalog?.key !== referenceKey && !referenceError))
+  const templatesPending = canDiscover && (loadingTemplates || (templateCatalog?.key !== templateKey && !templateError))
   const referenceErrorMessage = useCallback((cause: unknown) => {
     if (cause instanceof Error && (cause as RequestError).code === "deployment_repository_contents_required") return t("user.deploymentContentsRequired")
     return cause instanceof Error ? cause.message : t("user.deploymentReferencesFailed")
@@ -109,15 +115,13 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
   }, [request, selectedInstallation, currentLogin])
 
   const referencePath = useCallback((page: number) => `/user/deployment-refs?${new URLSearchParams({ installation_id: installationID, repository_full_name: repository, source, page: String(page) })}`, [installationID, repository, source])
-  const repositoryIsCurrent = currentRepositories.includes(repository)
   useEffect(() => {
     const epoch = ++referenceEpoch.current
     setReferenceCatalog(null)
     if (prefilledRef) setRef(prefilledRef)
-    setReferenceError(null)
-    const enabled = Boolean(installationID && repository && repositoryIsCurrent)
-    setLoadingReferences(enabled)
-    if (!enabled) return
+    setReferenceFailure(null)
+    setLoadingReferences(canDiscover)
+    if (!canDiscover) return
     request(referencePath(1))
       .then((response) => {
         if (epoch !== referenceEpoch.current) return
@@ -126,23 +130,25 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
         setReferenceCatalog({ key: referenceKey, refs: next, page: 1, hasMore: Boolean(data.has_more) })
         setRef((current) => prefilledRef || (next.includes(current) ? current : next.includes("main") ? "main" : next[0] ?? ""))
       })
-      .catch((cause) => { if (epoch === referenceEpoch.current) setReferenceError(referenceErrorMessage(cause)) })
+      .catch((cause) => {
+        if (epoch === referenceEpoch.current) setReferenceFailure({ key: referenceKey, message: referenceErrorMessage(cause) })
+      })
       .finally(() => { if (epoch === referenceEpoch.current) setLoadingReferences(false) })
     return () => { referenceEpoch.current += 1 }
-  }, [request, referencePath, referenceKey, repositoryIsCurrent, installationID, repository, referenceReload, referenceErrorMessage, prefilledRef])
+  }, [request, referencePath, referenceKey, canDiscover, referenceReload, referenceErrorMessage, prefilledRef])
 
   async function loadMoreReferences() {
     if (loadingReferences || referenceCatalog?.key !== referenceKey || !referenceCatalog.hasMore) return
     const epoch = referenceEpoch.current
     setLoadingReferences(true)
-    setReferenceError(null)
+    setReferenceFailure(null)
     try {
       const page = referenceCatalog.page + 1
       const data = await request(referencePath(page)) as { refs?: string[]; has_more?: boolean }
       if (epoch !== referenceEpoch.current) return
       setReferenceCatalog({ key: referenceKey, refs: [...new Set([...referenceCatalog.refs, ...(data.refs ?? [])])], page, hasMore: Boolean(data.has_more) })
     } catch (cause) {
-      if (epoch === referenceEpoch.current) setReferenceError(referenceErrorMessage(cause))
+      if (epoch === referenceEpoch.current) setReferenceFailure({ key: referenceKey, message: referenceErrorMessage(cause) })
     } finally {
       if (epoch === referenceEpoch.current) setLoadingReferences(false)
     }
@@ -152,9 +158,9 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
     let cancelled = false
     setTemplateCatalog(null)
     setTemplateID("")
-    setTemplateError(null)
-    setLoadingTemplates(Boolean(installationID && repository))
-    if (!installationID || !repository) return
+    setTemplateFailure(null)
+    setLoadingTemplates(canDiscover)
+    if (!canDiscover) return
     request(`/user/deployment-templates?${new URLSearchParams({ installation_id: installationID, repository_full_name: repository })}`)
       .then((response) => {
         if (cancelled) return
@@ -167,15 +173,20 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
         setTemplateID(preferred?.template_id ?? "")
       })
       .catch((cause) => {
-        if (!cancelled) setTemplateError(cause instanceof Error ? cause.message : t("user.deploymentTemplatesFailed"))
+        if (!cancelled) setTemplateFailure({
+          key: templateKey,
+          message: cause instanceof Error ? cause.message : t("user.deploymentTemplatesFailed"),
+        })
       })
       .finally(() => { if (!cancelled) setLoadingTemplates(false) })
     return () => { cancelled = true }
-  }, [request, installationID, repository, templateKey, currentLogin, templateReload, t])
+  }, [request, installationID, repository, templateKey, canDiscover, templateReload, t])
+
+  const cannotSubmit = !canDiscover || !selectedRef || referencesPending || !selectedTemplate || templatesPending || submitting
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (!installationID || !repositoryIsCurrent || !repository || !selectedRef || loadingReferences || !selectedTemplate || loadingTemplates || submitting) return
+    if (cannotSubmit || !selectedTemplate) return
     setSubmitting(true)
     try {
       const created = await request("/user/deployments", {
@@ -213,6 +224,16 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
     setCommitSHA("")
     change()
   }
+
+  const referencePrompt = source === "pull_request" ? "user.deploymentSelectPullRequest" : source === "branch" ? "user.deploymentSelectBranch" : "user.deploymentSelectTag"
+  const referencePlaceholder = !canDiscover ? "user.deploymentChooseRepositoryFirst"
+    : referencesPending ? "user.deploymentReferencesLoading"
+    : referenceError ? "user.deploymentReferencesFailed"
+    : references.length ? referencePrompt
+    : source === "pull_request" ? "user.deploymentPullRequestsEmpty" : "user.deploymentReferencesEmpty"
+  const templatePlaceholder = !canDiscover ? "user.deploymentChooseRepositoryFirst"
+    : templatesPending ? "user.deploymentTemplatesLoading"
+    : templateError ? "user.deploymentTemplatesFailed" : "user.deploymentTemplatesEmpty"
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -257,33 +278,57 @@ export function UserDeploymentCreateSection({ githubApp, currentLogin, loadingGi
                 </div>
                 {source === "pull_request" ? <p className="text-sm text-muted-foreground">{t("user.deploymentPullRequestHint")}</p> : null}
                 <div className="space-y-2">
-                  <Label htmlFor="deployment-ref">{t(source === "pull_request" ? "user.deploymentSelectPullRequest" : source === "branch" ? "user.deploymentSelectBranch" : "user.deploymentSelectTag")}</Label>
-                  <Select name="deployment-ref" value={selectedRef} onValueChange={(value) => { if (value) changeSourceSelection(() => setRef(value)) }} disabled={loadingReferences || references.length === 0}>
-                    <SelectTrigger id="deployment-ref" className="w-full"><SelectValue placeholder={loadingReferences ? t("user.deploymentReferencesLoading") : t("user.deploymentReferencesEmpty")} /></SelectTrigger>
+                  <Label htmlFor="deployment-ref">{t(referencePrompt)}</Label>
+                  <Select name="deployment-ref" value={canDiscover ? selectedRef : ""} onValueChange={(value) => { if (value) changeSourceSelection(() => setRef(value)) }} disabled={!canDiscover || referencesPending || references.length === 0}>
+                    <SelectTrigger id="deployment-ref" className="w-full"><SelectValue placeholder={t(referencePlaceholder)} /></SelectTrigger>
                     <SelectContent>
                       {references.map((name) => <SelectItem key={name} value={name}>{source === "pull_request" ? `#${name}` : name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   {referenceError ? <p role="alert" className="text-sm text-destructive">{referenceError}</p> : null}
-                  <div className="flex gap-2"><Button type="button" variant="ghost" size="sm" disabled={loadingReferences} onClick={() => setReferenceReload((value) => value + 1)}><RefreshCw className="h-3.5 w-3.5" />{t("user.deploymentReferencesRefresh")}</Button>{referenceCatalog?.key === referenceKey && referenceCatalog.hasMore ? <Button type="button" variant="ghost" size="sm" disabled={loadingReferences} onClick={() => void loadMoreReferences()}>{t("user.deploymentReferencesMore")}</Button> : null}</div>
+                  {canDiscover ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="ghost" size="sm" disabled={referencesPending} onClick={() => setReferenceReload((value) => value + 1)}>
+                        <RefreshCw className="h-3.5 w-3.5" />{t("user.deploymentReferencesRefresh")}
+                      </Button>
+                      {referenceCatalog?.key === referenceKey && referenceCatalog.hasMore ? (
+                        <Button type="button" variant="ghost" size="sm" disabled={referencesPending} onClick={() => void loadMoreReferences()}>{t("user.deploymentReferencesMore")}</Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {commitSHA ? <div className="space-y-1 rounded-md bg-muted/50 p-3 text-sm"><p>{t("user.deploymentPinnedCommit")}</p><code className="block break-all font-mono text-xs">{commitSHA}</code><p className="text-xs text-muted-foreground">{t("user.deploymentPinnedCommitHint")}</p><Button type="button" variant="ghost" size="sm" onClick={() => setCommitSHA("")}>{t("user.deploymentUseLatest")}</Button></div> : null}
                 {prefillActive && !loadingGitHubApp && !loadingRepositories && !repositoryIsCurrent ? <p role="alert" className="text-sm text-destructive">{t("user.deploymentPrefillUnavailable")}</p> : null}
-                <div className="space-y-2"><Label htmlFor="deployment-ttl">{t("user.deploymentTTL")}</Label><Input id="deployment-ttl" type="number" min={300} max={86400} step={60} value={ttlSeconds} onChange={(event) => setTTLSeconds(event.target.value)} /></div>
                 <div className="space-y-2">
                   <Label htmlFor="deployment-template">{t("user.deploymentTemplate")}</Label>
-                  <Select name="deployment-template" value={selectedTemplate?.template_id ?? ""} onValueChange={(value) => { if (value) setTemplateID(value) }} disabled={loadingTemplates || templates.length === 0}>
-                    <SelectTrigger id="deployment-template" className="w-full"><SelectValue placeholder={loadingTemplates ? t("user.deploymentTemplatesLoading") : t("user.deploymentTemplatesEmpty")} /></SelectTrigger>
+                  <Select name="deployment-template" value={canDiscover ? selectedTemplate?.template_id ?? "" : ""} onValueChange={(value) => { if (value) setTemplateID(value) }} disabled={!canDiscover || templatesPending || templates.length === 0}>
+                    <SelectTrigger id="deployment-template" className="w-full"><SelectValue placeholder={t(templatePlaceholder)} /></SelectTrigger>
                     <SelectContent>
                       {templates.map((item) => <SelectItem key={item.template_id} value={item.template_id}>{templateName(item)} · {item.template_id}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   {templateCatalog?.key === templateKey && templateCatalog.region ? <p className="text-xs text-muted-foreground">{templateCatalog.region}</p> : null}
                   {templateError ? <div role="alert" className="space-y-1 text-sm"><p className="text-destructive">{templateError}</p>{selectedInstallation?.manageable !== false ? <AppLink className="text-primary underline" href={selectedInstallation?.account_type?.toLowerCase() === "organization" ? `/organizations/${encodeURIComponent(selectedInstallation.account_login ?? "")}/preferences` : "/account/preferences"}>{t("user.deploymentPreferences")}</AppLink> : null}</div> : null}
-                  <Button type="button" variant="ghost" size="sm" disabled={loadingTemplates} onClick={() => setTemplateReload((value) => value + 1)}><RefreshCw className="h-3.5 w-3.5" />{t("user.deploymentTemplatesRefresh")}</Button>
+                  {canDiscover ? (
+                    <Button type="button" variant="ghost" size="sm" disabled={templatesPending} onClick={() => setTemplateReload((value) => value + 1)}>
+                      <RefreshCw className="h-3.5 w-3.5" />{t("user.deploymentTemplatesRefresh")}
+                    </Button>
+                  ) : null}
                 </div>
-                <div className="space-y-2"><Label htmlFor="deployment-config">{t("user.deploymentConfigPath")}</Label><Input id="deployment-config" value={configPath} onChange={(event) => setConfigPath(event.target.value)} /></div>
-                <Button type="submit" className="w-full" disabled={submitting || !repositoryIsCurrent || !repository || !installationID || loadingReferences || !selectedRef || loadingTemplates || !selectedTemplate}>{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}{submitting ? t("user.creatingDeployment") : t("user.createDeployment")}</Button>
+                <details className="group rounded-lg border" onInvalid={(event) => { event.currentTarget.open = true }}>
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-3 py-2 marker:content-none hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring">
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">{t("user.deploymentAdvancedSettings")}</span>
+                      <span className="block break-all text-xs text-muted-foreground">{t("user.deploymentAdvancedSummary", { seconds: ttlSeconds || "3600", path: configPath.trim() || ".qiniu/deploy.yaml" })}</span>
+                    </span>
+                    <ChevronDown className="size-4 shrink-0 text-muted-foreground group-open:rotate-180" />
+                  </summary>
+                  <div className="grid gap-3 border-t p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                    <div className="space-y-2"><Label htmlFor="deployment-ttl">{t("user.deploymentTTL")}</Label><Input id="deployment-ttl" type="number" min={300} max={86400} step={60} value={ttlSeconds} onChange={(event) => setTTLSeconds(event.target.value)} /></div>
+                    <div className="space-y-2"><Label htmlFor="deployment-config">{t("user.deploymentConfigPath")}</Label><Input id="deployment-config" value={configPath} onChange={(event) => setConfigPath(event.target.value)} /></div>
+                  </div>
+                </details>
+                <Button type="submit" className="w-full" disabled={cannotSubmit}>{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}{submitting ? t("user.creatingDeployment") : t("user.createDeployment")}</Button>
               </form>
             )}
           </CardContent>

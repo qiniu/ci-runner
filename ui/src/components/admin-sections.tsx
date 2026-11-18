@@ -598,13 +598,13 @@ export function RunnerRequestDiagnosisResult({
         </div>
       </section>
 
-      {request ? (
-        <RunnerRegistrationLookup
-          key={JSON.stringify([state.id, state.runner_name, state.runner_group, diagnosis.creation_attempt_id])}
-          id={state.id}
-          request={request}
-        />
-      ) : null}
+      <RunnerEventTimeline
+        key={state.id}
+        endpoint={`/runner_requests/${encodeURIComponent(state.id)}/events`}
+        request={request}
+        initialEvents={diagnosis.events}
+        refreshRevision={activityRefreshRevision}
+      />
 
       {state.status === "running" && state.sandbox_id && state.process_pid && onRunNetworkDiagnostic ? (
         <RunnerNetworkDiagnostic
@@ -623,18 +623,17 @@ export function RunnerRequestDiagnosisResult({
           </div>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
-        <div className="border-t bg-background/70 p-4">
+        <div className="space-y-4 border-t bg-background/70 p-4">
           <RunnerRequestDetails runner={state} />
+          {request ? (
+            <RunnerRegistrationLookup
+              key={JSON.stringify([state.id, state.runner_name, state.runner_group, diagnosis.creation_attempt_id])}
+              id={state.id}
+              request={request}
+            />
+          ) : null}
         </div>
       </details>
-
-      <RunnerEventTimeline
-        key={state.id}
-        endpoint={`/runner_requests/${encodeURIComponent(state.id)}/events`}
-        request={request}
-        initialEvents={diagnosis.events}
-        refreshRevision={activityRefreshRevision}
-      />
     </div>
   )
 }

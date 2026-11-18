@@ -62,6 +62,110 @@ test("admin filter changes ignore an older slow response", async ({ page }) => {
   await expect(page.getByRole("link", { name: "filtered-0", exact: true })).toBeVisible()
 })
 
+test("admin request filters and exact lookup survive refresh and detail navigation", async ({ page }) => {
+  await setup(page)
+  const repository = "fixture/repository-with-a-long-runner-request-name"
+  const spec = "fixture-spec"
+  const lookup = " e2b-fixture+1 "
+  const runner = { ...rows("request", 1)[0], repository_full_name: repository, runner_spec_name: spec }
+  const listQueries: URLSearchParams[] = []
+  let lookups = 0
+  await page.route("**/runner_request_metrics", (route) => route.fulfill({ json: {} }))
+  await page.route("**/runner_specs", (route) => route.fulfill({ json: [{ name: spec }] }))
+  await page.route("**/runner_request_repositories?*", (route) => route.fulfill({ json: { repositories: [repository], has_more: false } }))
+  await page.route((url) => url.pathname === "/runner_requests", (route) => {
+    listQueries.push(new URL(route.request().url()).searchParams)
+    return route.fulfill({ json: { items: [runner], has_more: false } })
+  })
+  await page.route("**/runner_requests_lookup/*", (route) => {
+    lookups++
+    expect(decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!)).toBe(lookup.trim())
+    return route.fulfill({ json: runner })
+  })
+  await page.route(`**/runner_requests/${runner.id}/diagnostics`, (route) => route.fulfill({
+    json: { state: runner, github_job: { lookup_status: "unavailable" }, findings: [], events: [] },
+  }))
+  await page.route(`**/runner_requests/${runner.id}/events*`, (route) => route.fulfill({ json: { events: [], has_more: false } }))
+
+  const listPath = "/admin/runner_requests"
+  await page.goto(listPath)
+  const toolbar = page.getByTestId("runner-request-toolbar")
+  const statusSelect = toolbar.getByRole("combobox").first()
+  const repositorySelect = toolbar.getByRole("combobox").nth(1)
+  const specSelect = toolbar.getByRole("combobox").last()
+  const lookupInput = toolbar.getByRole("textbox", { name: "Runner Name / Request ID" })
+  await statusSelect.click()
+  await page.getByRole("option", { name: "Running", exact: true }).click()
+  await repositorySelect.click()
+  await page.getByRole("option", { name: repository, exact: true }).click()
+  await specSelect.click()
+  await page.getByRole("option", { name: spec, exact: true }).click()
+  await lookupInput.fill(lookup)
+
+  const search = "?" + new URLSearchParams({
+    status: "running", repository_full_name: repository, runner_spec_name: spec, runner: lookup,
+  })
+  await expect(page).toHaveURL(listPath + search)
+  await page.reload()
+  await expect(statusSelect).toHaveText("Running")
+  await expect(repositorySelect).toHaveText(repository)
+  await expect(specSelect).toHaveText(spec)
+  await expect(lookupInput).toHaveValue(lookup)
+  const detailPath = `${listPath}/${runner.id}`
+  await expect(page.getByRole("link", { name: runner.runner_name, exact: true })).toHaveAttribute("href", detailPath + search)
+  expect(Object.fromEntries(listQueries.at(-1)!)).toEqual({
+    limit: "100", status: "running", repository_full_name: repository, runner_spec_name: spec,
+  })
+  expect(lookups).toBe(0)
+
+  await toolbar.getByRole("button", { name: "Open request" }).click()
+  await expect(page).toHaveURL(detailPath + search)
+  expect(lookups).toBe(1)
+  await page.goBack()
+  await expect(page).toHaveURL(listPath + search)
+  await expect(lookupInput).toHaveValue(lookup)
+  await page.goForward()
+  await page.reload()
+  await page.getByRole("button", { name: "Back to Runner requests" }).click()
+  await expect(page).toHaveURL(listPath + search)
+  await expect(lookupInput).toHaveValue(lookup)
+  await expect(specSelect).toHaveText(spec)
+  await page.setViewportSize({ width: 375, height: 812 })
+  await expect(repositorySelect).toBeVisible()
+  await expect(lookupInput).toBeVisible()
+  await lookupInput.clear()
+  await expect(page).toHaveURL((url) => !url.searchParams.has("runner") && url.searchParams.get("runner_spec_name") === spec)
+})
+
+test("admin metrics link to filtered requests with a visible Runner link on mobile", async ({ page }) => {
+  await setup(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const failed = { ...rows("failed", 1)[0], status: "failed" }
+  await page.route("**/runner_request_metrics", (route) => route.fulfill({
+    json: { queued: 0, creating: 0, running: 0, stopping: 0, completed: 0, failed: 1, unmatched: 0, runner_specs: 0 },
+  }))
+  await page.route((url) => url.pathname === "/runner_requests", (route) => route.fulfill({
+    json: { items: [failed], has_more: false },
+  }))
+
+  await page.goto("/admin/")
+  const failedMetric = page.getByRole("link", { name: /Failed/ })
+  await expect(failedMetric).toHaveAttribute("href", "/admin/runner_requests?status=failed")
+  const filtered = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return url.pathname === "/runner_requests" && url.searchParams.get("status") === "failed"
+  })
+  await failedMetric.click()
+  await filtered
+  await expect(failedMetric).toHaveAttribute("aria-current", "location")
+  const table = page.getByRole("table")
+  await expect(table.getByText(failed.repository_full_name, { exact: true }).filter({ visible: true })).toBeVisible()
+  await expect(table.getByRole("link", { name: failed.runner_name })).toBeInViewport()
+  await expect(table.getByRole("columnheader", { name: "Sandbox" })).toHaveCount(0)
+  const overflow = await page.locator('[data-slot="table-container"]').evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+})
+
 test("admin unexpanded list refreshes only its latest page as new requests arrive", async ({ page }) => {
   await setup(page)
   const cursors: Array<string | null> = []

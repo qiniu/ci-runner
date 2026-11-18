@@ -1,5 +1,6 @@
 export type RunnerStatus = "queued" | "creating" | "running" | "stopping" | "completed" | "failed"
 export type RunnerDisplayStatus = RunnerStatus | "unmatched"
+export const runnerDisplayStatuses = ["queued", "creating", "running", "stopping", "completed", "unmatched", "failed"] as const satisfies readonly RunnerDisplayStatus[]
 
 export type RunnerState = {
   id: string
@@ -439,6 +440,10 @@ export const adminSections = [
 ] as const
 
 export type AdminSection = (typeof adminSections)[number]
+
+export function adminSectionPath(section: AdminSection): string {
+  return section === "overview" ? "/admin/" : `/admin/${section}`
+}
 
 export function runnerRequestIdentifierFromAdminPath(path: string): string {
   const match = path.match(/^\/admin\/runner_requests\/([^/]+)$/)
