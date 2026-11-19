@@ -725,6 +725,35 @@ test("filters the platform spec directory to enabled published public entries", 
   diagnostics.expectClean()
 })
 
+for (const viewport of [{ width: 1603, height: 1565 }, { width: 390, height: 844 }]) {
+  test(`scrolls the admin account list to pagination at ${viewport.width}px`, async ({ page }) => {
+    test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
+    await page.setViewportSize(viewport)
+    const accounts = Array.from({ length: 21 }, (_, i) => ({ id: i + 1, role: "user" }))
+    await page.route("**/auth/session", (route) => route.fulfill({ json: {
+      authenticated: true, oauth_enabled: true, login: "fixture-admin", role: "admin",
+    } }))
+    await page.route("**/admin/api/accounts?*", (route) => {
+      const params = new URL(route.request().url()).searchParams
+      const offset = Number(params.get("offset"))
+      return route.fulfill({ json: {
+        accounts: accounts.slice(offset, offset + Number(params.get("limit"))),
+        total: accounts.length,
+        stats: { total_accounts: 21, admin_accounts: 0, user_accounts: 21, oauth_identities: 0 },
+      } })
+    })
+
+    await page.goto("/admin/accounts")
+    const next = page.getByRole("button", { name: "Next account page" })
+    await page.getByText("@account-1", { exact: true }).hover()
+    await page.mouse.wheel(0, 2500)
+    await expect(page.getByText("@account-20", { exact: true })).toBeInViewport()
+    await expect(next).toBeInViewport({ ratio: 1 })
+    await next.click()
+    await expect(page.getByText("@account-21", { exact: true })).toBeInViewport()
+  })
+}
+
 test("checks template visibility independently of reference type and preserves runtime bindings", async ({ page }) => {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixture coverage only")
   const diagnostics = observeBrowserDiagnostics(page)

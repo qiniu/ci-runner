@@ -280,7 +280,7 @@ export function AccountsSection({ request }: { request: RequestFunction }) {
         ))}
       </div>
 
-      <Card className="min-w-0 gap-0 overflow-hidden py-0">
+      <Card className="min-w-0 shrink-0 gap-0 overflow-hidden py-0">
         <CardHeader className="border-b px-5 py-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
