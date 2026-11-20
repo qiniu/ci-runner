@@ -352,10 +352,14 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 	}
 	report.Totals = current.totals()
 	report.Previous = previous.totals()
-	// Include empty periods, with week buckets starting on Monday.
+	// Iterate civil dates in UTC so a missing local midnight cannot normalize
+	// to the previous date and shift all later buckets. The last included
+	// instant preserves the exclusive end while including an unfinished date.
+	firstDate := reportCalendarDate(window.Start, window.Location)
+	lastDate := reportCalendarDate(window.End.Add(-time.Nanosecond), window.Location)
 	seen := map[string]bool{}
-	for day := window.Start; day.Before(window.End); day = day.AddDate(0, 0, 1) {
-		key := reportBucketDate(day, window.Location, q.Grain)
+	for day := firstDate; !day.After(lastDate); day = day.AddDate(0, 0, 1) {
+		key := reportBucketDate(day, time.UTC, q.Grain)
 		if seen[key] {
 			continue
 		}
@@ -369,13 +373,19 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 	return report, nil
 }
 
+// The UTC value represents a local calendar label, not an execution instant.
+func reportCalendarDate(t time.Time, loc *time.Location) time.Time {
+	year, month, day := t.In(loc).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
 func reportBucketDate(t time.Time, loc *time.Location, grain string) string {
-	t = t.In(loc)
+	t = reportCalendarDate(t, loc)
 	switch grain {
 	case "week":
 		t = t.AddDate(0, 0, -(int(t.Weekday())+6)%7)
 	case "month":
-		t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, loc)
+		t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 	}
 	return t.Format(time.DateOnly)
 }

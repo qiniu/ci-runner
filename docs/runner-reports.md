@@ -56,7 +56,9 @@ runtime totals without valid samples display as unavailable.
   time when today is unfinished.
 - `queued_at ∈ [from,to)` selects the cohort. All metrics and trend buckets describe
   that cohort as observed during one database SELECT. Day/week/month buckets use
-  the same timezone; weeks start Monday. Empty periods are included. Requests
+  the same timezone; weeks start Monday. Empty periods are included. Calendar
+  labels advance independently of local midnight instants, so midnight DST jumps
+  cannot omit an unfinished final date or shift week/month buckets. Requests
   that finish later can change past-date metrics on refresh.
 - The prior cohort is shifted backward by the selected number of calendar dates.
   An unfinished current period is compared with the corresponding local clock

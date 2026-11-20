@@ -416,3 +416,57 @@ func verifyReportGlobalSpecIdentity(t *testing.T, s *DBStore) {
 func TestRunnerReportGlobalSpecIdentity(t *testing.T) {
 	verifyReportGlobalSpecIdentity(t, reportTestStore(t))
 }
+
+func TestRunnerReportTrendAcrossMidnightDST(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, from, to, observed string
+		days, weeks, months            int
+		lastDay, lastWeek, lastMonth   string
+	}{
+		{"Havana unfinished date", "America/Havana", "2026-03-01", "2026-03-10", "2026-03-09T12:00:00Z", 9, 3, 1, "2026-03-09", "2026-03-09", "2026-03-01"},
+		{"Havana exclusive midnight", "America/Havana", "2026-03-01", "2026-03-09", "2026-03-09T04:00:00Z", 8, 2, 1, "2026-03-08", "2026-03-02", "2026-03-01"},
+		{"Sao Paulo month start", "America/Sao_Paulo", "2015-10-30", "2015-11-03", "2015-11-02T12:00:00Z", 4, 2, 2, "2015-11-02", "2015-11-02", "2015-11-01"},
+		{"Havana repeated midnight", "America/Havana", "2026-10-31", "2026-11-03", "2026-11-02T12:00:00Z", 3, 2, 2, "2026-11-02", "2026-11-02", "2026-11-01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := reportTestStore(t)
+			db, _ := s.dbOrEnsure()
+			now := reportTime(tc.observed)
+			queued := now.Add(-time.Hour)
+			row := runnerRequestRecord{ID: "dst", RunnerName: "dst", Source: "fixture", LabelsJSON: "[]", QueuedAt: queued, UpdatedAt: now, Status: StatusCompleted, RunningAt: reportPtr(queued.Add(time.Minute)), CompletedAt: reportPtr(queued.Add(11 * time.Minute))}
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			for _, grain := range []struct {
+				name  string
+				count int
+				last  string
+			}{{"day", tc.days, tc.lastDay}, {"week", tc.weeks, tc.lastWeek}, {"month", tc.months, tc.lastMonth}} {
+				t.Run(grain.name, func(t *testing.T) {
+					report, err := s.ReadRunnerReport(context.Background(), RunnerReportQuery{From: tc.from, To: tc.to, Timezone: tc.zone, Grain: grain.name}, now)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(report.Trend) != grain.count || report.Trend[len(report.Trend)-1].Date != grain.last {
+						t.Fatalf("trend dates: %+v", report.Trend)
+					}
+					var requests, samples int64
+					var seconds float64
+					previous := ""
+					for _, bucket := range report.Trend {
+						if bucket.Date <= previous {
+							t.Fatalf("duplicate or unordered date %s", bucket.Date)
+						}
+						previous = bucket.Date
+						requests += bucket.Requests
+						samples += bucket.Runtime.Samples
+						seconds += bucket.Runtime.Seconds
+					}
+					if report.Totals.Requests != 1 || requests != report.Totals.Requests || samples != report.Totals.Runtime.Samples || seconds != report.Totals.Runtime.Seconds {
+						t.Fatalf("trend does not reconcile: requests=%d samples=%d seconds=%v totals=%+v", requests, samples, seconds, report.Totals)
+					}
+				})
+			}
+		})
+	}
+}
