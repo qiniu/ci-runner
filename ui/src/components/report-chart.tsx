@@ -82,5 +82,5 @@ export default function ReportChart({
       { notMerge: true },
     )
   }, [option, resolvedTheme])
-  return <div ref={container} className="h-64 min-w-0" role="img" aria-label={label} />
+  return <div ref={container} className="h-48 min-w-0" role="img" aria-label={label} />
 }

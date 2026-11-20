@@ -180,10 +180,12 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
       },
     })
   })
-  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.setViewportSize({ width: 1603, height: 1565 })
   await page.goto(`/admin/reports?${search}`)
   await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
-  await page.screenshot({ path: testInfo.outputPath("reports-desktop.png"), fullPage: true })
+  await page
+    .locator("section[aria-labelledby=reports-title]")
+    .screenshot({ path: testInfo.outputPath("reports-desktop.png"), animations: "disabled" })
   await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
   await page.screenshot({
     path: testInfo.outputPath("reports-desktop-distribution.png"),
@@ -192,7 +194,9 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   const donut = page.getByRole("img", { name: "Runner spec · Requests chart", exact: true })
   await expect(donut.locator("svg path").first()).toBeVisible()
   const donutSize = await donut.boundingBox()
-  await donut.hover({ position: { x: donutSize!.width / 2 + 80, y: donutSize!.height / 2 } })
+  await donut.hover({
+    position: { x: donutSize!.width / 2 + donutSize!.height * 0.32, y: donutSize!.height / 2 },
+  })
   await expect(donut.locator("svg")).toContainText("ubuntu-24.04 · global")
   await page.screenshot({ path: testInfo.outputPath("reports-chart-tooltip.png"), animations: "disabled" })
   await page
@@ -215,10 +219,9 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   await page.keyboard.press("ArrowDown")
   await page.keyboard.press("Enter")
   await page.screenshot({ path: testInfo.outputPath("reports-narrow.png"), fullPage: true })
-  await page.getByRole("button", { name: "Runtime calculation", exact: true }).focus()
-  await expect(page.getByRole("tooltip")).toBeVisible()
   await page.getByRole("button", { name: "Runtime calculation", exact: true }).scrollIntoViewIfNeeded()
-  await page.getByRole("button", { name: "Runtime calculation", exact: true }).hover()
+  await page.mouse.move(0, 0)
+  await page.getByRole("button", { name: "Runtime calculation", exact: true }).focus()
   await expect(page.getByRole("tooltip")).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath("reports-runtime-help-narrow.png"),

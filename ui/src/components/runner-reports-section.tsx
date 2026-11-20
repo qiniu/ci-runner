@@ -104,7 +104,7 @@ export function RunnerReportsSection({
   const selected: ReportQuery = report?.query ?? { ...defaults, ...filterQuery }
   const sort = urlState.get("sort") === "runtime" ? "runtime" : "requests"
   return (
-    <section className="min-w-0 space-y-6" aria-labelledby="reports-title">
+    <section className="min-w-0 space-y-4" aria-labelledby="reports-title">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 id="reports-title" className="text-xl font-semibold">
@@ -123,20 +123,27 @@ export function RunnerReportsSection({
           onNavigate(`?${new URLSearchParams(Object.entries(q).filter(([, value]) => Boolean(value)))}`)
         }
       />
-      <Card>
-        <CardContent className="space-y-3 pt-5">
-          <div>
-            <h2 className="font-semibold">{t("reports.active")}</h2>
-            <p className="text-sm text-muted-foreground">{t("reports.activeHelp")}</p>
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="flex items-center gap-1">
+            <h2 className="text-sm font-semibold">{t("reports.active")}</h2>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-6" aria-label={t("reports.activeHelp")}>
+                  <Info className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-72">{t("reports.activeHelp")}</TooltipContent>
+            </Tooltip>
           </div>
           <ResourceState resource={active} />
           {active.data && (
             <>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
                 {(["queued", "creating", "running", "stopping"] as const).map((status) => (
-                  <div key={status}>
+                  <div key={status} className="flex items-center gap-2">
                     <p className="text-sm text-muted-foreground">{t(`reports.${status}`)}</p>
-                    <p className="text-2xl font-semibold tabular-nums">
+                    <p className="text-lg font-semibold tabular-nums">
                       {active.data!.counts[status].toLocaleString()}
                     </p>
                   </div>
@@ -152,7 +159,7 @@ export function RunnerReportsSection({
       <ResourceState resource={overview} />
       {report && (
         <>
-          <div className="space-y-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 break-words text-xs text-muted-foreground">
             <p>
               {t("reports.window", {
                 from: report.window.start,
@@ -168,7 +175,7 @@ export function RunnerReportsSection({
             </p>
             <p>{t("reports.observed", { time: formatTime(report.observed_at, i18n.resolvedLanguage) })}</p>
           </div>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
             {(
               [
                 "requests",
@@ -193,17 +200,17 @@ export function RunnerReportsSection({
                       : "—"
                     : `${value >= previous ? "+" : ""}${(((value - previous) / previous) * 100).toFixed(1)}%`
               return (
-                <Card key={metric}>
-                  <CardContent className="pt-4">
+                <Card size="sm" key={metric}>
+                  <CardContent>
                     <p className="text-sm text-muted-foreground">{t(`reports.${metric}`)}</p>
-                    <p className="my-2 text-2xl font-semibold tabular-nums">
+                    <p className="my-1 text-2xl font-semibold tabular-nums">
                       {!available ? "—" : metric === "runtime" ? hours(value) : value.toLocaleString()}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {delta} · {t("reports.vsPrevious")}
                     </p>
                     {metric === "runtime" && (
-                      <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                      <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                         <span>{t("reports.runtimeRecords", { count: report.totals.runtime.samples })}</span>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -227,8 +234,12 @@ export function RunnerReportsSection({
           </div>
           <Trend report={report} />
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-semibold">{t("reports.distribution")}</h2>
+            <div>
+              <h2 className="font-semibold">{t("reports.distribution")}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">{t("reports.topGroups")}</p>
+            </div>
             <ReportSelect
+              inline
               label={t("reports.distributionMetric")}
               value={sort}
               onChange={(value) => navigate({ sort: value })}
@@ -238,7 +249,7 @@ export function RunnerReportsSection({
               ]}
             />
           </div>
-          <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+          <div className="grid min-w-0 gap-3 xl:grid-cols-3">
             {(["spec", "owner", "repository"] as const).map((d) => (
               <Distribution
                 key={`${d}-${revision}`}
@@ -262,13 +273,13 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
     [error, setError] = useState("")
   return (
     <form
-      className="space-y-3 rounded-lg border p-4"
+      className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[1fr_auto]"
       onSubmit={(e) => {
         e.preventDefault()
         onApply(draft)
       }}
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 lg:col-span-2">
         {[7, 30, 90].map((days) => (
           <Button
             type="button"
@@ -290,7 +301,7 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
           </Button>
         ))}
       </div>
-      <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid min-w-0 items-end gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {(["from", "to", "timezone", "repository"] as const).map((key) => (
           <div className="min-w-0 space-y-1.5" key={key}>
             <Label htmlFor={`report-${key}`}>{t(`reports.${key}`)}</Label>
@@ -309,7 +320,7 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
           options={(["day", "week", "month"] as const).map((g) => [g, t(`reports.${g}`)])}
         />
       </div>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-end gap-2">
         <Button type="submit">{t("reports.apply")}</Button>
         {(draft.owner || draft.spec || draft.repository) && (
           <Button
@@ -324,8 +335,8 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
             {t("reports.clearDimensions")}
           </Button>
         )}
-        <span className="text-xs text-muted-foreground">{t("reports.filterHelp")}</span>
       </div>
+      <p className="text-xs text-muted-foreground lg:col-span-2">{t("reports.filterHelp")}</p>
       {(draft.owner || draft.spec) && (
         <p className="text-sm text-muted-foreground">
           {t("reports.filtered", {
@@ -348,17 +359,19 @@ function ReportSelect({
   value,
   options,
   onChange,
+  inline = false,
 }: {
+  inline?: boolean
   label: string
   value: string
   options: string[][]
   onChange: (value: string) => void
 }) {
   return (
-    <div className="min-w-0 space-y-1.5">
+    <div className={inline ? "flex min-w-0 flex-wrap items-center gap-2" : "min-w-0 space-y-1.5"}>
       <span className="text-sm font-medium">{label}</span>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="w-full min-w-32" aria-label={label}>
+        <SelectTrigger className={inline ? "w-auto min-w-32" : "w-full min-w-32"} aria-label={label}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -411,11 +424,12 @@ function Trend({ report }: { report: RunnerReport }) {
             : null,
   }))
   return (
-    <Card>
-      <CardContent className="space-y-4 pt-5">
-        <div className="flex flex-wrap justify-between gap-3">
+    <Card size="sm">
+      <CardContent className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold">{t("reports.trend")}</h2>
           <ReportSelect
+            inline
             label={t("reports.metric")}
             value={metric}
             onChange={setMetric}
@@ -428,7 +442,7 @@ function Trend({ report }: { report: RunnerReport }) {
         </div>
         <Suspense
           fallback={
-            <p role="status" className="grid h-64 place-items-center text-sm text-muted-foreground">
+            <p role="status" className="grid h-48 place-items-center text-sm text-muted-foreground">
               {t("common.loading")}
             </p>
           }
@@ -548,11 +562,10 @@ function Distribution({
   const share = (value: number | null) =>
     value === null || total <= 0 ? "—" : `${((value / total) * 100).toFixed(1)}%`
   return (
-    <Card className={`min-w-0 ${dimension === "repository" ? "xl:col-span-2" : ""}`}>
-      <CardContent className="space-y-4 pt-5">
+    <Card size="sm" className="min-w-0">
+      <CardContent className="space-y-2">
         <div>
           <h3 className="font-semibold">{t(`reports.${dimension}`)}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">{t("reports.topGroups")}</p>
         </div>
         <ResourceState resource={groups} />
         {groups.data &&
@@ -563,7 +576,7 @@ function Distribution({
               {total > 0 ? (
                 <Suspense
                   fallback={
-                    <p role="status" className="grid h-64 place-items-center text-sm text-muted-foreground">
+                    <p role="status" className="grid h-48 place-items-center text-sm text-muted-foreground">
                       {t("common.loading")}
                     </p>
                   }
@@ -649,7 +662,7 @@ function Distribution({
                 })}
               </p>
               <ul
-                className="space-y-2"
+                className="space-y-1"
                 aria-label={t("reports.chartValues", { dimension: t(`reports.${dimension}`) })}
               >
                 {points.map((row, index) => (

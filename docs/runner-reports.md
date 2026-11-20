@@ -13,7 +13,10 @@ Charts load on demand, use the existing theme tokens, resize with their containe
 and expose values in text legends and a collapsible trend table. The runtime
 summary shows its valid record count with an accessible calculation tooltip;
 field-by-field coverage remains available in the API rather than a separate
-report-page panel.
+report-page panel. The compact layout uses shared small Cards: six summary
+metrics and three distribution charts fit side by side on wide screens, while
+narrow layouts wrap controls and stack charts. Chart legends, metric selectors,
+filters and the trend data table remain available.
 
 ## Metric contract
 
