@@ -239,6 +239,7 @@ export function createAutomaticPageLoadGate() {
 }
 
 const adminResourcesBySection: Record<AdminSection, readonly AdminDataResource[]> = {
+  reports: [],
   overview: ["runner_requests", "runner_request_metrics", "runner_specs"],
   accounts: [],
   github_accounts: [],

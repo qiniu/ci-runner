@@ -331,6 +331,7 @@ The built-in web UI provides:
 | Route | Description |
 | --- | --- |
 | `/admin/` | Dashboard with runnerd runtime diagnostics and metrics |
+| `/admin/reports` | Request-cohort usage, trends, coverage, spec/account/repository distributions and snapshot-consistent drilldowns; see [Runner usage reports](docs/runner-reports.md) |
 | `/admin/accounts` | Account management — list, search, and change roles |
 | `/admin/github_accounts` | GitHub App installation accounts reported live by GitHub |
 | `/admin/github_accounts/{installation_id}` | One GitHub App installation and its currently authorized repositories |
