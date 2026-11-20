@@ -64,13 +64,6 @@ export function RunnerReportsSection({
   const params = reportQueryParams(search)
   const query = params.toString()
   const overview = useReportResource<RunnerReport>(`/reports/overview?${query}`, request, revision)
-  const activeParams = new URLSearchParams(params)
-  activeParams.delete("snapshot")
-  const active = useReportResource<{ counts: Record<string, number>; observed_at: string }>(
-    `/reports/active?${activeParams}`,
-    request,
-    revision,
-  )
   const report = overview.data
   const urlState = new URLSearchParams(search)
   const navigate = (values: Record<string, string | null>) => {
@@ -123,39 +116,6 @@ export function RunnerReportsSection({
           onNavigate(`?${new URLSearchParams(Object.entries(q).filter(([, value]) => Boolean(value)))}`)
         }
       />
-      <Card size="sm">
-        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          <div className="flex items-center gap-1">
-            <h2 className="text-sm font-semibold">{t("reports.active")}</h2>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="size-6" aria-label={t("reports.activeHelp")}>
-                  <Info className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-72">{t("reports.activeHelp")}</TooltipContent>
-            </Tooltip>
-          </div>
-          <ResourceState resource={active} />
-          {active.data && (
-            <>
-              <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
-                {(["queued", "creating", "running", "stopping"] as const).map((status) => (
-                  <div key={status} className="flex items-center gap-2">
-                    <p className="text-sm text-muted-foreground">{t(`reports.${status}`)}</p>
-                    <p className="text-lg font-semibold tabular-nums">
-                      {active.data!.counts[status].toLocaleString()}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {t("reports.observed", { time: formatTime(active.data.observed_at, i18n.resolvedLanguage) })}
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
       <ResourceState resource={overview} />
       {report && (
         <>
@@ -411,18 +371,11 @@ function ResourceState({ resource }: { resource: { data?: unknown; error?: strin
 }
 function Trend({ report }: { report: RunnerReport }) {
   const { t } = useTranslation()
-  const [metric, setMetric] = useState("requests")
-  const points = report.trend.map((b) => ({
-    date: b.date,
-    value:
-      metric === "requests"
-        ? b.requests
-        : metric === "started"
-          ? b.started
-          : b.runtime.samples
-            ? b.runtime.seconds / 3600
-            : null,
-  }))
+  const [metric, setMetric] = useState("requests-runtime")
+  const combined = metric === "requests-runtime"
+  const seriesMetrics = combined
+    ? (["requests", "runtime"] as const)
+    : ([metric === "started" ? "started" : metric === "runtime" ? "runtime" : "requests"] as const)
   return (
     <Card size="sm">
       <CardContent className="space-y-2">
@@ -434,11 +387,26 @@ function Trend({ report }: { report: RunnerReport }) {
             value={metric}
             onChange={setMetric}
             options={[
+              ["requests-runtime", t("reports.requestsAndRuntime")],
               ["requests", t("reports.requests")],
               ["started", t("reports.started")],
               ["runtime", t("reports.runtime")],
             ]}
           />
+        </div>
+        <div
+          className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
+          aria-label={t("reports.trendLegend")}
+        >
+          {seriesMetrics.map((key) => (
+            <span key={key} className="inline-flex items-center gap-1.5">
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ background: key === "runtime" ? "var(--chart-1)" : "var(--chart-2)" }}
+              />
+              {t(`reports.${key}`)}
+            </span>
+          ))}
         </div>
         <Suspense
           fallback={
@@ -458,39 +426,43 @@ function Trend({ report }: { report: RunnerReport }) {
                 borderColor: colors.border,
                 textStyle: { color: colors.text },
                 valueFormatter: (value) =>
-                  value === null || value === undefined
+                  value === null || value === undefined || value === "-"
                     ? "—"
                     : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 }),
               },
-              grid: { left: 50, right: 15, top: 15, bottom: 35 },
+              grid: { left: 45, right: combined ? 45 : 15, top: 25, bottom: 30 },
               xAxis: {
                 type: "category",
-                data: points.map((p) => p.date),
+                data: report.trend.map((p) => p.date),
                 axisLabel: { color: colors.text, hideOverlap: true },
                 axisLine: { lineStyle: { color: colors.border } },
               },
-              yAxis: {
-                type: "value",
-                minInterval: metric === "runtime" ? undefined : 1,
+              yAxis: seriesMetrics.map((key, index) => ({
+                type: "value" as const,
+                position: index === 1 ? ("right" as const) : ("left" as const),
+                name: key === "runtime" ? t("reports.hoursAxis") : t("reports.requests"),
+                min: 0,
+                minInterval: key === "runtime" ? undefined : 1,
+                nameTextStyle: { color: key === "runtime" ? colors.series[0] : colors.series[1] },
                 axisLabel: { color: colors.text },
-                splitLine: { lineStyle: { color: colors.border } },
-              },
-              series: [
-                {
-                  type: "line",
-                  name:
-                    metric === "requests"
-                      ? t("reports.requests")
-                      : metric === "started"
-                        ? t("reports.started")
-                        : t("reports.runtime"),
-                  data: points.map((p) => p.value),
-                  connectNulls: false,
-                  symbolSize: 5,
-                  itemStyle: { color: colors.series[1] },
-                  areaStyle: { opacity: 0.08 },
-                },
-              ],
+                splitLine: { show: index === 0, lineStyle: { color: colors.border } },
+              })),
+              series: seriesMetrics.map((key, index) => ({
+                type: "line" as const,
+                name: t(`reports.${key}`),
+                yAxisIndex: index,
+                data: report.trend.map((bucket) =>
+                  key === "runtime"
+                    ? bucket.runtime.samples > 0
+                      ? bucket.runtime.seconds / 3600
+                      : null
+                    : bucket[key],
+                ),
+                connectNulls: false,
+                symbolSize: 5,
+                itemStyle: { color: key === "runtime" ? colors.series[0] : colors.series[1] },
+                lineStyle: { type: key === "runtime" ? ("dashed" as const) : ("solid" as const) },
+              })),
             })}
           />
         </Suspense>

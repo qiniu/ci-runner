@@ -51,11 +51,6 @@ async function setup(page: Page, language = "en") {
     }),
   )
   await page.route("**/reports/overview?*", (route) => route.fulfill({ json: report }))
-  await page.route("**/reports/active?*", (route) =>
-    route.fulfill({
-      json: { counts: { queued: 2, creating: 1, running: 3, stopping: 0 }, observed_at: report.observed_at },
-    }),
-  )
   await page.route("**/reports/*/groups?*", (route) =>
     route.fulfill({
       json: {
@@ -74,12 +69,13 @@ test("chart filtering and snapshot metric survive reload without fetching reques
   await setup(page)
   const detailRequests: string[] = []
   page.on("request", (request) => {
-    if (/\/reports\/[^/]+\/requests/.test(request.url())) detailRequests.push(request.url())
+    if (/\/reports\/(?:active|[^/]+\/requests)/.test(request.url())) detailRequests.push(request.url())
   })
   await page.goto(`/admin/reports?${search}&offset=20&dimension=spec`)
   await expect(page.getByRole("heading", { name: "Usage reports" })).toBeVisible()
   await expect(page.getByText("New · vs. previous period")).toBeVisible()
   await expect(page.getByText("Data coverage and valid samples", { exact: true })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: "Current backlog", exact: true })).toHaveCount(0)
   await expect(page.getByText("Based on 1 valid record", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Runtime calculation", exact: true }).focus()
   await expect(page.getByRole("tooltip")).toContainText("Runtime includes valid terminal requests only")
@@ -103,7 +99,7 @@ test("chart filtering and snapshot metric survive reload without fetching reques
   expect(detailRequests).toEqual([])
 })
 
-test("backlog loads independently and obsolete reports cannot replace new filters", async ({ page }) => {
+test("obsolete reports cannot replace new filters", async ({ page }) => {
   await setup(page)
   const pending: Route[] = []
   await page.route("**/reports/overview?*", (route) => {
@@ -111,7 +107,7 @@ test("backlog loads independently and obsolete reports cannot replace new filter
   })
   await page.goto(`/admin/reports?${search}`)
   await expect.poll(() => pending.length).toBe(1)
-  await expect(page.getByText("Running", { exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Usage reports", exact: true })).toBeVisible()
   await expect(page.getByRole("heading", { name: "Trend", exact: true })).toHaveCount(0)
   await page.getByLabel("Repository", { exact: true }).fill("new/repo")
   await page.getByRole("button", { name: "Apply filters" }).click()
@@ -141,6 +137,14 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
         trend: [42, 67, 55, 89, 120, 106, 78, 95, 145, 112, 150, 100, 75, 90].map((requests, index) => ({
           ...totals,
           requests,
+          runtime: {
+            seconds:
+              index === 4
+                ? 0
+                : [1260, 2880, 2520, 720, 0, 3240, 5400, 6120, 4320, 3600, 5400, 7200, 5760, 6840][index],
+            samples: index === 4 ? 0 : 1,
+            eligible: 1,
+          },
           date: `2026-11-${String(index + 1).padStart(2, "0")}`,
         })),
       },
@@ -260,7 +264,7 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   )
   await page.reload()
   await expect(page.getByRole("alert")).toHaveCount(1)
-  await expect(page.getByText("Running", { exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Usage reports", exact: true })).toBeVisible()
 })
 
 test("timezone-only URLs keep normalized dates when applying filters", async ({ page }) => {
@@ -299,7 +303,7 @@ test("Chinese charts label missing spec names and preserve localized observation
     (timestamp) => new Date(timestamp).toLocaleString("zh"),
     report.observed_at,
   )
-  await expect(page.getByText(`统计时点：${expected}`, { exact: true })).toHaveCount(2)
+  await expect(page.getByText(`统计时点：${expected}`, { exact: true })).toHaveCount(1)
 })
 
 test("charts show full-cohort Other and distinguish missing runtime from zero", async ({ page }) => {
@@ -353,4 +357,49 @@ test("charts show full-cohort Other and distinguish missing runtime from zero", 
   await expect(
     page.getByText("Recorded runtime is zero; there is no duration share to plot.", { exact: true }),
   ).toHaveCount(3)
+})
+
+test("trend defaults to request counts and runtime on separate axes and retains single metrics", async ({
+  page,
+}) => {
+  await setup(page)
+  await page.route("**/reports/overview?*", (route) =>
+    route.fulfill({
+      json: {
+        ...report,
+        totals: { ...totals, requests: 12, runtime: { seconds: 3600, samples: 2, eligible: 3 } },
+        trend: [
+          { ...totals, date: "2026-11-01", runtime: { seconds: 0, samples: 1, eligible: 1 } },
+          { ...totals, date: "2026-11-02", runtime: { seconds: 0, samples: 0, eligible: 1 } },
+          { ...totals, date: "2026-11-03", runtime: { seconds: 3600, samples: 1, eligible: 1 } },
+        ],
+      },
+    }),
+  )
+  await page.goto(`/admin/reports?${search}`)
+  const chart = page.getByRole("img", { name: "Trend", exact: true })
+  await expect(page.getByRole("combobox", { name: "Metric", exact: true })).toHaveText("Requests + runtime")
+  await expect(chart.locator("svg")).toContainText("Hours")
+  await expect(chart.locator("svg")).toContainText("Requests")
+  const legend = page.getByLabel("Trend legend", { exact: true })
+  await expect(legend).toContainText("Requests")
+  await expect(legend).toContainText("Recorded runtime (h)")
+  await page.getByText("View trend data table", { exact: true }).click()
+  await expect(page.getByRole("row").filter({ hasText: "2026-11-01" }).getByRole("cell").last()).toHaveText(
+    "0",
+  )
+  await expect(page.getByRole("row").filter({ hasText: "2026-11-02" }).getByRole("cell").last()).toHaveText(
+    "—",
+  )
+  await expect(page.getByRole("row").filter({ hasText: "2026-11-03" }).getByRole("cell").last()).toHaveText(
+    "1",
+  )
+  await page.getByRole("combobox", { name: "Metric", exact: true }).click()
+  await page.getByRole("option", { name: "Started requests", exact: true }).click()
+  await expect(legend).toHaveText("Started requests")
+  await expect(chart.locator("svg")).not.toContainText("Hours")
+  await page.getByRole("combobox", { name: "Metric", exact: true }).click()
+  await page.getByRole("option", { name: "Recorded runtime (h)", exact: true }).click()
+  await expect(legend).toHaveText("Recorded runtime (h)")
+  await expect(chart.locator("svg")).toContainText("Hours")
 })

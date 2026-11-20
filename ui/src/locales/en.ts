@@ -206,12 +206,6 @@ export const en = {
   reports: {
     title: "Usage reports",
     description: "Understand Runner demand, recorded usage and usage distribution. Requests are grouped by their queued date.",
-    active: "Current backlog",
-    activeHelp: "All queued, creating, running and stopping requests, regardless of date. Account, repository and spec filters still apply.",
-    queued: "Queued",
-    creating: "Creating",
-    running: "Running",
-    stopping: "Stopping",
     observed: "Observed {{time}}",
     window: "Cohort: [{{from}}, {{to}}) · {{timezone}}",
     comparison: "Previous period: [{{from}}, {{to}})",
@@ -260,6 +254,9 @@ export const en = {
     runtimeRecords_one: "Based on {{count}} valid record",
     runtimeRecords_other: "Based on {{count}} valid records",
     runtimeDefinition: "Runtime calculation",
+    requestsAndRuntime: "Requests + runtime",
+    hoursAxis: "Hours",
+    trendLegend: "Trend legend",
   },
   sidebar: {
     reports: "Usage reports",

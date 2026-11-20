@@ -2,7 +2,7 @@
 
 Administrators use `/admin/reports` to inspect request cohorts, recorded runtime,
 trends, and usage by Runner Spec, GitHub Installation owner, and repository.
-The overview uses Apache ECharts: a time-series line chart, spec and owner donut
+The overview uses Apache ECharts: a dual-axis time-series chart (request count and recorded runtime in hours), spec and owner donut
 charts, and horizontal repository bars. Distribution charts show the Top 5 by
 request count or recorded runtime, with all remaining groups combined as Other.
 Legends show exact values and full-cohort shares and allow filtering the entire
@@ -100,7 +100,8 @@ runtime totals without valid samples display as unavailable.
 
 Current backlog is a separate read of queued/creating/running/stopping requests,
 without the cohort date filter. Owner, repository and spec filters still apply.
-Its own observation time is visible. It is never added to historical totals.
+This API remains available for compatibility, but the report page does not fetch
+or display it. Inspect current lifecycle counts on Runner Requests instead.
 
 ## API and limits
 
@@ -181,7 +182,7 @@ Local verification on 2026-11-20:
   These single-machine measurements are not production latency guarantees.
 - Browser fixture coverage exercises URL restoration, chart metric selection and
   dimension filtering, full-cohort Other shares, missing versus zero runtime,
-  absence of request-detail fetches, independent backlog loading, obsolete-response
+  absence of request-detail and current-backlog fetches, dual-axis trend selection, obsolete-response
   isolation, and desktop / 390px layouts with long identities, a keyboard-operated
   shared Select, empty groups and expired-snapshot errors. Fixtures do not prove live service or
   production-data acceptance.
@@ -192,9 +193,10 @@ read-only navigation. Desktop and narrow screenshots were visually inspected,
 including the open Select, long group names and error states.
 
 The chart revision passed frontend lint, i18n/type checks and the production
-build, 364 frontend tests, the full Go race suite, and 57 production-bundle
-browser cases. The final report-only browser run also passed all 6 cases after
-adding multi-group chart, tooltip, dark-theme and narrow-layout evidence. A
+build, 364 frontend tests, the full Go race suite, and 58 production-bundle
+browser cases. The final report-only browser run also passed all 7 cases after
+adding multi-group chart, dual-axis trend, tooltip, dark-theme and narrow-layout
+evidence. The report page no longer requests current backlog. A
 focused race regression covers missing spec names without rewriting their saved
 identity. These browser screenshots use fixtures; the existing local signed-in
 browser and production-data rendering were not verified in this revision.

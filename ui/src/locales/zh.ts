@@ -206,12 +206,6 @@ export const zh = {
   reports: {
     title: "用量报表",
     description: "按请求入队日期观察 Runner 需求、已记录用量和用量分布。",
-    active: "当前积压",
-    activeHelp: "不受日期窗口限制；账户、仓库和规格筛选仍然生效。",
-    queued: "排队中",
-    creating: "创建中",
-    running: "运行中",
-    stopping: "停止中",
     observed: "统计时点：{{time}}",
     window: "请求批次：[{{from}}, {{to}}) · {{timezone}}",
     comparison: "前一周期：[{{from}}, {{to}})",
@@ -260,6 +254,9 @@ export const zh = {
     runtimeRecords_one: "基于 {{count}} 条有效记录",
     runtimeRecords_other: "基于 {{count}} 条有效记录",
     runtimeDefinition: "运行时长统计口径",
+    requestsAndRuntime: "请求数 + 运行时长",
+    hoursAxis: "小时",
+    trendLegend: "趋势图例",
   },
   sidebar: {
     reports: "用量报表",
