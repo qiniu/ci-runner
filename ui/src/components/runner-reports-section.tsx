@@ -401,7 +401,9 @@ function Trend({ report }: { report: RunnerReport }) {
           {seriesMetrics.map((key) => (
             <span key={key} className="inline-flex items-center gap-1.5">
               <span
-                className="size-2 shrink-0 rounded-full"
+                className={
+                  key === "runtime" ? "h-3 w-2 shrink-0 rounded-sm opacity-50" : "h-0.5 w-3 shrink-0"
+                }
                 style={{ background: key === "runtime" ? "var(--chart-1)" : "var(--chart-2)" }}
               />
               {t(`reports.${key}`)}
@@ -448,7 +450,14 @@ function Trend({ report }: { report: RunnerReport }) {
                 splitLine: { show: index === 0, lineStyle: { color: colors.border } },
               })),
               series: seriesMetrics.map((key, index) => ({
-                type: "line" as const,
+                ...(key === "runtime"
+                  ? {
+                      type: "bar" as const,
+                      barMaxWidth: 24,
+                      z: 1,
+                      itemStyle: { color: colors.series[0], opacity: 0.45 },
+                    }
+                  : { type: "line" as const, symbolSize: 5, z: 3, itemStyle: { color: colors.series[1] } }),
                 name: t(`reports.${key}`),
                 yAxisIndex: index,
                 data: report.trend.map((bucket) =>
@@ -459,9 +468,6 @@ function Trend({ report }: { report: RunnerReport }) {
                     : bucket[key],
                 ),
                 connectNulls: false,
-                symbolSize: 5,
-                itemStyle: { color: key === "runtime" ? colors.series[0] : colors.series[1] },
-                lineStyle: { type: key === "runtime" ? ("dashed" as const) : ("solid" as const) },
               })),
             })}
           />

@@ -2,7 +2,7 @@
 
 Administrators use `/admin/reports` to inspect request cohorts, recorded runtime,
 trends, and usage by Runner Spec, GitHub Installation owner, and repository.
-The overview uses Apache ECharts: a dual-axis time-series chart (request count and recorded runtime in hours), spec and owner donut
+The overview uses Apache ECharts: a dual-axis time-series chart (request-count lines over translucent recorded-runtime bars in hours), spec and owner donut
 charts, and horizontal repository bars. Distribution charts show the Top 5 by
 request count or recorded runtime, with all remaining groups combined as Other.
 Legends show exact values and full-cohort shares and allow filtering the entire
