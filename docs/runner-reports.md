@@ -10,7 +10,10 @@ report. Missing runtime samples remain unavailable, distinct from valid zero
 durations. Request rows belong in Runner Requests and are not loaded by this
 page; the snapshot request API and historical detail return links remain compatible.
 Charts load on demand, use the existing theme tokens, resize with their container,
-and expose values in text legends and a collapsible trend table.
+and expose values in text legends and a collapsible trend table. The runtime
+summary shows its valid record count with an accessible calculation tooltip;
+field-by-field coverage remains available in the API rather than a separate
+report-page panel.
 
 ## Metric contract
 
@@ -204,7 +207,7 @@ case. Real SQL compatibility requires `RUNNERD_CATALOG_BACKEND_TESTS=1` and
 
 Production data completeness, actual row/cardinality distributions, production
 query plans/latency and deployed browser acceptance remain **unverified**. Before
-operational rollout, inspect the displayed coverage with a representative approved
+operational rollout, inspect API coverage with a representative approved
 snapshot or a bounded read-only production query, record the range and sample
 size, and measure scheduler latency under the real workload. If legitimate ranges
 exceed the explicit cap or the cost is excessive, design bounded preaggregation or

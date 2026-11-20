@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { RefreshCw, Filter } from "lucide-react"
+import { RefreshCw, Filter, Info } from "lucide-react"
 import {
   reportDistribution,
   reportPreset,
@@ -18,6 +18,8 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 const ReportChart = lazy(() => import("@/components/report-chart"))
 
@@ -48,12 +50,6 @@ function useReportResource<T>(url: string, request: Request, revision = 0) {
 function hours(seconds: number) {
   return (seconds / 3600).toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
-function coverage(samples: number, total: number) {
-  return total
-    ? `${samples.toLocaleString()} / ${total.toLocaleString()} (${((samples / total) * 100).toFixed(1)}%)`
-    : "—"
-}
-
 export function RunnerReportsSection({
   search,
   request,
@@ -206,12 +202,29 @@ export function RunnerReportsSection({
                     <p className="text-xs text-muted-foreground">
                       {delta} · {t("reports.vsPrevious")}
                     </p>
+                    {metric === "runtime" && (
+                      <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                        <span>{t("reports.runtimeRecords", { count: report.totals.runtime.samples })}</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-6"
+                              aria-label={t("reports.runtimeDefinition")}
+                            >
+                              <Info className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-72">{t("reports.runtimeHelp")}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )
             })}
           </div>
-          <p className="text-sm text-muted-foreground">{t("reports.runtimeHelp")}</p>
           <Trend report={report} />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold">{t("reports.distribution")}</h2>
@@ -237,7 +250,6 @@ export function RunnerReportsSection({
               />
             ))}
           </div>
-          <Coverage report={report} />
         </>
       )}
     </section>
@@ -497,42 +509,6 @@ function Trend({ report }: { report: RunnerReport }) {
         </details>
       </CardContent>
     </Card>
-  )
-}
-function Coverage({ report }: { report: RunnerReport }) {
-  const { t } = useTranslation(),
-    totals = report.totals
-  const values = [
-    [t("reports.owner"), totals.mapped_accounts, totals.requests],
-    [t("reports.spec"), totals.known_specs, totals.requests],
-    [t("reports.creatingTime"), totals.creating_times, totals.requests],
-    [t("reports.runningTime"), totals.started, totals.requests],
-    [t("reports.stoppingTime"), totals.stopping_times, totals.requests],
-    [t("reports.terminalTime"), totals.terminal_times, totals.terminal],
-    [t("reports.jobResult"), totals.job_results, totals.job_result_eligible],
-  ] as const
-  return (
-    <details className="rounded-lg border p-4">
-      <summary className="cursor-pointer font-medium">
-        {t("reports.coverage")} ·{" "}
-        {t("reports.runtimeSamples", { value: coverage(totals.runtime.samples, totals.runtime.eligible) })}
-      </summary>
-      <p className="my-3 text-sm text-muted-foreground">{t("reports.coverageHelp")}</p>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {values.map(([label, n, denominator]) => (
-          <div key={label} className="text-sm">
-            <p className="text-muted-foreground">{label}</p>
-            <p>{coverage(n, denominator)}</p>
-          </div>
-        ))}
-        {(["runtime", "startup", "creation", "cleanup", "completion"] as const).map((metric) => (
-          <div className="text-sm" key={metric}>
-            <p className="text-muted-foreground">{t(`reports.${metric}`)}</p>
-            <p>{coverage(totals[metric].samples, totals[metric].eligible)}</p>
-          </div>
-        ))}
-      </div>
-    </details>
   )
 }
 const chartColors = [1, 2, 3, 4, 5].map((n) => `var(--chart-${n})`)

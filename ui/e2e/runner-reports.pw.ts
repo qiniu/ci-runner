@@ -79,6 +79,11 @@ test("chart filtering and snapshot metric survive reload without fetching reques
   await page.goto(`/admin/reports?${search}&offset=20&dimension=spec`)
   await expect(page.getByRole("heading", { name: "Usage reports" })).toBeVisible()
   await expect(page.getByText("New · vs. previous period")).toBeVisible()
+  await expect(page.getByText("Data coverage and valid samples", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Based on 1 valid record", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "Runtime calculation", exact: true }).focus()
+  await expect(page.getByRole("tooltip")).toContainText("Runtime includes valid terminal requests only")
+  await page.keyboard.press("Escape")
   await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
   await expect(page.getByRole("heading", { name: "Request drilldown" })).toHaveCount(0)
   await page.getByRole("combobox", { name: "Distribution metric" }).click()
@@ -210,6 +215,16 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   await page.keyboard.press("ArrowDown")
   await page.keyboard.press("Enter")
   await page.screenshot({ path: testInfo.outputPath("reports-narrow.png"), fullPage: true })
+  await page.getByRole("button", { name: "Runtime calculation", exact: true }).focus()
+  await expect(page.getByRole("tooltip")).toBeVisible()
+  await page.getByRole("button", { name: "Runtime calculation", exact: true }).scrollIntoViewIfNeeded()
+  await page.getByRole("button", { name: "Runtime calculation", exact: true }).hover()
+  await expect(page.getByRole("tooltip")).toBeVisible()
+  await page.screenshot({
+    path: testInfo.outputPath("reports-runtime-help-narrow.png"),
+    animations: "disabled",
+  })
+  await page.keyboard.press("Escape")
   await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
   await page.screenshot({
     path: testInfo.outputPath("reports-narrow-distribution.png"),
