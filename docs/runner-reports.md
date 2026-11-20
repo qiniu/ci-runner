@@ -70,7 +70,10 @@ runtime totals without valid samples display as unavailable.
   Current cached mappings are the available evidence, not complete historical
   ownership. Renames/transfers without evidence are not inferred.
 - Spec keys are canonical unpadded base64url JSON of `source`, `scope_type`,
-  `scope_id`, and `name`. The same name in different scopes stays separate. Deleted
+  `scope_id`, and `name`. Global specs normalize scope to empty/0 because saved
+  request scope identifies their consumer, not a different platform spec; global
+  spec filters therefore include all consuming scopes. Scoped-custom specs with
+  the same name in different scopes stay separate. Deleted
   specs, unknown sources and missing identities remain in totals and groups;
   current spec catalogs never overwrite history. A known spec requires a nonempty
   name and global source, or a supported scoped-custom identity with positive ID.

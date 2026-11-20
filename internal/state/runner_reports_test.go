@@ -255,6 +255,7 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			sdb, _ := s.dbOrEnsure()
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
+			verifyReportGlobalSpecIdentity(t, s)
 		})
 	}
 }
@@ -364,4 +365,54 @@ func TestRunnerReportSQLiteReaderIsReadOnlyAndKeepsPrimaryOpen(t *testing.T) {
 	if err := db.Exec("CREATE TABLE primary_remains_writable (id INTEGER)").Error; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func verifyReportGlobalSpecIdentity(t *testing.T, s *DBStore) {
+	t.Helper()
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := reportTime("2026-11-20T10:00:00Z")
+	for i, identity := range []reportSpecIdentity{
+		{Source: "global", Name: "shared"},
+		{Source: "global", ScopeType: "account", ScopeID: 7, Name: "shared"},
+		{Source: "global", ScopeType: "installation", ScopeID: 8, Name: "shared"},
+		{Source: "scoped_custom", ScopeType: "account", ScopeID: 7, Name: "shared"},
+		{Source: "scoped_custom", ScopeType: "installation", ScopeID: 8, Name: "shared"},
+	} {
+		id := fmt.Sprintf("scope-identity-%d", i)
+		row := runnerRequestRecord{ID: id, RunnerName: id, Source: "fixture", LabelsJSON: "[]", QueuedAt: now.Add(-time.Hour), UpdatedAt: now, Status: StatusRunning, ProfileName: identity.Name, ProfileSource: identity.Source, ProfileScopeType: identity.ScopeType, ProfileScopeID: identity.ScopeID, RepositoryFullName: "identity/scope"}
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := RunnerReportQuery{From: "2026-11-20", To: "2026-11-21", Timezone: "UTC", Grain: "day", Repository: "identity/scope"}
+	report, err := s.ReadRunnerReport(context.Background(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := report.Groups("spec", "requests")
+	if err != nil || len(groups) != 3 || groups[0].Requests != 3 || groups[0].Label != "shared · global" {
+		t.Fatalf("groups=%+v err=%v", groups, err)
+	}
+	for _, group := range groups {
+		q.Spec = group.Key
+		filtered, err := s.ReadRunnerReport(context.Background(), q, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		details, err := report.Requests("spec", group.Key)
+		if err != nil || int64(len(details)) != group.Requests || filtered.Totals.Requests != group.Requests {
+			t.Fatalf("filter/detail mismatch: %+v / %+v", group, filtered)
+		}
+		counts, err := s.ReadRunnerReportActive(context.Background(), q)
+		if err != nil || counts[StatusRunning] != group.Requests {
+			t.Fatalf("active filter: %+v %v", counts, err)
+		}
+	}
+}
+
+func TestRunnerReportGlobalSpecIdentity(t *testing.T) {
+	verifyReportGlobalSpecIdentity(t, reportTestStore(t))
 }

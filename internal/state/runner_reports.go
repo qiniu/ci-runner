@@ -88,7 +88,17 @@ type reportSpecIdentity struct {
 	Name      string `json:"name"`
 }
 
+func (v reportSpecIdentity) canonical() reportSpecIdentity {
+	// Global profiles are platform-wide; saved request scope identifies the
+	// consumer, whereas scoped_custom scope is part of the profile identity.
+	if v.Source == "global" {
+		v.ScopeType, v.ScopeID = "", 0
+	}
+	return v
+}
+
 func reportSpecKey(v reportSpecIdentity) string {
+	v = v.canonical()
 	b, _ := json.Marshal(v)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
@@ -224,7 +234,10 @@ func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
 		if err != nil {
 			return nil, err
 		}
-		query = query.Where("COALESCE(r.profile_source, '') = ? AND COALESCE(r.profile_scope_type, '') = ? AND COALESCE(r.profile_scope_id, 0) = ? AND COALESCE(r.profile_name, '') = ?", spec.Source, spec.ScopeType, spec.ScopeID, spec.Name)
+		query = query.Where("COALESCE(r.profile_source, '') = ? AND COALESCE(r.profile_name, '') = ?", spec.Source, spec.Name)
+		if spec.Source != "global" {
+			query = query.Where("COALESCE(r.profile_scope_type, '') = ? AND COALESCE(r.profile_scope_id, 0) = ?", spec.ScopeType, spec.ScopeID)
+		}
 	}
 	return query, nil
 }
@@ -380,10 +393,10 @@ func reportSeconds(start, end *time.Time, now time.Time) *float64 {
 }
 
 func (p reportProjection) request(now time.Time) ReportRequest {
-	identity := reportSpecIdentity{p.ProfileSource, p.ProfileScopeType, p.ProfileScopeID, p.ProfileName}
+	identity := (reportSpecIdentity{p.ProfileSource, p.ProfileScopeType, p.ProfileScopeID, p.ProfileName}).canonical()
 	label := p.ProfileName
-	if p.ProfileScopeType != "" {
-		label += fmt.Sprintf(" · %s:%d", p.ProfileScopeType, p.ProfileScopeID)
+	if identity.ScopeType != "" {
+		label += fmt.Sprintf(" · %s:%d", identity.ScopeType, identity.ScopeID)
 	}
 	if p.ProfileSource != "" {
 		label += " · " + p.ProfileSource

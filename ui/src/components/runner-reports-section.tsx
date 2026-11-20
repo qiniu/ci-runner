@@ -13,6 +13,7 @@ import {
   type ReportRow,
   type RunnerReport,
 } from "@/runner-reports"
+import { formatTime, runnerStatusLabel } from "@/admin-format"
 import { AppLink } from "@/components/app-link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -45,6 +46,10 @@ function useReportResource<T>(url: string, request: Request, revision = 0) {
   }, [url, request, revision, attempt])
   return { ...(state.url === url ? state : { url }), retry }
 }
+function reportStatusLabel(value: string) {
+  const status = (["queued", "creating", "running", "stopping", "completed", "failed"] as const).find(status => status === value)
+  return status ? runnerStatusLabel(status) : value
+}
 function hours(seconds: number) {
   return (seconds / 3600).toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
@@ -63,7 +68,7 @@ export function RunnerReportsSection({
   request: Request
   onNavigate: (search: string) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [revision, setRevision] = useState(0)
   const params = reportQueryParams(search)
   const query = params.toString()
@@ -103,7 +108,7 @@ export function RunnerReportsSection({
   }
   const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
   const filterQuery = Object.fromEntries([...params].filter(([key]) => key !== "snapshot"))
-  const selected: ReportQuery = { ...defaults, ...filterQuery }
+  const selected: ReportQuery = report?.query ?? { ...defaults, ...filterQuery }
   const dimension = urlState.get("dimension") || ""
   const sort = urlState.get("sort") === "runtime" ? "runtime" : "requests"
   return (
@@ -144,7 +149,7 @@ export function RunnerReportsSection({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                {t("reports.observed", { time: new Date(active.data.observed_at).toLocaleString() })}
+                {t("reports.observed", { time: formatTime(active.data.observed_at, i18n.resolvedLanguage) })}
               </p>
             </>
           )}
@@ -162,7 +167,7 @@ export function RunnerReportsSection({
               })}
             </p>
             <p>{t("reports.comparison", { from: report.window.previous_start, to: report.window.previous_end })}</p>
-            <p>{t("reports.observed", { time: new Date(report.observed_at).toLocaleString() })}</p>
+            <p>{t("reports.observed", { time: formatTime(report.observed_at, i18n.resolvedLanguage) })}</p>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {(["requests", "started", "rejected", "active_accounts", "active_repositories", "runtime"] as const).map(
@@ -661,7 +666,7 @@ function RequestRows({
                       <TableCell className="max-w-64 break-all whitespace-normal">
                         {row.spec_label || t("common.unknown")}
                       </TableCell>
-                      <TableCell>{row.status}</TableCell>
+                      <TableCell>{reportStatusLabel(row.status)}</TableCell>
                       <TableCell>{row.job_result === "unknown" ? t("common.unknown") : row.job_result}</TableCell>
                       <TableCell>{row.runtime_seconds === null ? "—" : hours(row.runtime_seconds)}</TableCell>
                     </TableRow>

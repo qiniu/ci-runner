@@ -52,9 +52,9 @@ const runner = {
   updated_at: report.observed_at,
 }
 
-async function setup(page: Page) {
+async function setup(page: Page, language = "en") {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixtures only")
-  await page.addInitScript(() => localStorage.setItem("runnerd:language", "en"))
+  await page.addInitScript(language => localStorage.setItem("runnerd:language", language), language)
   await page.route("**/auth/session", (route) =>
     route.fulfill({ json: { authenticated: true, role: "admin", login: "fixture-admin", oauth_enabled: true } }),
   )
@@ -177,4 +177,36 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   await page.reload()
   await expect(page.getByRole("alert")).toHaveCount(1)
   await expect(page.getByText("Running", { exact: true })).toBeVisible()
+})
+
+test("timezone-only URLs keep normalized dates when applying filters", async ({ page }) => {
+  await setup(page)
+  await page.clock.setFixedTime(new Date("2026-11-20T02:00:00Z"))
+  const normalized = { from: "2026-10-21", to: "2026-11-20", timezone: "America/New_York", grain: "day" }
+  const queries: URLSearchParams[] = []
+  await page.route("**/reports/overview?*", route => {
+    queries.push(new URL(route.request().url()).searchParams)
+    return route.fulfill({ json: { ...report, query: normalized } })
+  })
+  await page.goto("/admin/reports?timezone=America%2FNew_York")
+  await expect(page.getByLabel("Start date", { exact: true })).toHaveValue(normalized.from)
+  await expect(page.getByLabel("End date (exclusive)", { exact: true })).toHaveValue(normalized.to)
+  await page.getByRole("button", { name: "Apply filters", exact: true }).click()
+  await expect.poll(() => queries.at(-1)?.get("to")).toBe(normalized.to)
+  expect(queries.at(-1)?.get("from")).toBe(normalized.from)
+})
+
+test("Chinese reports localize statuses and both observation labels independently of browser locale", async ({ page }) => {
+  await setup(page, "zh")
+  await page.route("**/reports/*/requests?*", route => route.fulfill({ json: {
+    items: ["completed", "failed", "legacy_state"].map(status => ({ id: `request-${status}`, repository: longName, spec_label: "standard", status, job_result: "unknown", runtime_seconds: null })),
+    total: 3, offset: 0, snapshot: report.snapshot,
+  } }))
+  await page.goto(`/admin/reports?${search}`)
+  await expect(page.getByRole("heading", { name: "用量报表", exact: true })).toBeVisible()
+  await expect(page.getByRole("cell", { name: "已完成", exact: true })).toBeVisible()
+  await expect(page.getByRole("cell", { name: "失败", exact: true })).toBeVisible()
+  await expect(page.getByRole("cell", { name: "legacy_state", exact: true })).toBeVisible()
+  const expected = await page.evaluate(timestamp => new Date(timestamp).toLocaleString("zh"), report.observed_at)
+  await expect(page.getByText(`统计时点：${expected}`, { exact: true })).toHaveCount(2)
 })
