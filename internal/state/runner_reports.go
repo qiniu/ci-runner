@@ -45,20 +45,21 @@ func (q RunnerReportQuery) Window(now time.Time) (ReportWindow, error) {
 	if err != nil || q.Timezone == "" || q.Timezone == "Local" {
 		return ReportWindow{}, errors.New("timezone must be an IANA timezone")
 	}
-	start, err := time.ParseInLocation(time.DateOnly, q.From, loc)
+	start, err := time.Parse(time.DateOnly, q.From)
 	if err != nil {
 		return ReportWindow{}, errors.New("from must be YYYY-MM-DD")
 	}
-	end, err := time.ParseInLocation(time.DateOnly, q.To, loc)
+	end, err := time.Parse(time.DateOnly, q.To)
 	if err != nil {
 		return ReportWindow{}, errors.New("to must be YYYY-MM-DD (exclusive)")
 	}
-	days := int(time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC).Sub(time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)).Hours() / 24)
-	today := now.In(loc)
-	tomorrow := time.Date(today.Year(), today.Month(), today.Day()+1, 0, 0, 0, 0, loc)
-	if days < 1 || days > 366 || !start.Before(now) || end.After(tomorrow) {
+	// These UTC values are civil labels; do arithmetic before resolving offsets.
+	days := int(end.Sub(start).Hours() / 24)
+	tomorrow := reportCalendarDate(now, loc).AddDate(0, 0, 1)
+	if days < 1 || days > 366 || !start.Before(tomorrow) || end.After(tomorrow) {
 		return ReportWindow{}, errors.New("report range must be 1–366 calendar days and cannot extend past tomorrow")
 	}
+
 	if q.Grain != "day" && q.Grain != "week" && q.Grain != "month" {
 		return ReportWindow{}, errors.New("grain must be day, week or month")
 	}
@@ -75,10 +76,54 @@ func (q RunnerReportQuery) Window(now time.Time) (ReportWindow, error) {
 			return ReportWindow{}, err
 		}
 	}
+	previousStart, previousEnd := start.AddDate(0, 0, -days), end.AddDate(0, 0, -days)
+	start, err = resolveReportWallTime(start, loc)
+	if err != nil {
+		return ReportWindow{}, err
+	}
+	end, err = resolveReportWallTime(end, loc)
+	if err != nil {
+		return ReportWindow{}, err
+	}
 	if end.After(now) {
 		end = now.In(loc)
+		local := now.In(loc)
+		previousEnd = time.Date(local.Year(), local.Month(), local.Day()-days, local.Hour(), local.Minute(), local.Second(), local.Nanosecond(), time.UTC)
 	}
-	return ReportWindow{Start: start, End: end, PreviousStart: start.AddDate(0, 0, -days), PreviousEnd: end.AddDate(0, 0, -days), Location: loc}, nil
+	if !start.Before(end) || !start.Before(now) {
+		return ReportWindow{}, errors.New("report range must contain elapsed local time")
+	}
+	previousStart, err = resolveReportWallTime(previousStart, loc)
+	if err != nil {
+		return ReportWindow{}, err
+	}
+	previousEnd, err = resolveReportWallTime(previousEnd, loc)
+	if err != nil {
+		return ReportWindow{}, err
+	}
+	return ReportWindow{Start: start, End: end, PreviousStart: previousStart, PreviousEnd: previousEnd, Location: loc}, nil
+}
+
+// Resolve a civil wall-clock label to its earliest occurrence. For a gap, use
+// the first valid instant after the missing time; for a repeated time, use the
+// first occurrence. Zone intervals avoid time.Date's unspecified DST choice.
+func resolveReportWallTime(civil time.Time, loc *time.Location) (time.Time, error) {
+	// IANA offsets and date-line jumps fit within this surrounding four-day span.
+	limit := civil.Add(48 * time.Hour)
+	for cursor := civil.Add(-48 * time.Hour); cursor.Before(limit); {
+		local := cursor.In(loc)
+		_, offset := local.Zone()
+		_, zoneEnd := local.ZoneBounds()
+		candidate := civil.Add(-time.Duration(offset) * time.Second)
+		if candidate.Before(cursor) {
+			candidate = cursor
+		}
+		if zoneEnd.IsZero() || candidate.Before(zoneEnd) {
+			return candidate.In(loc), nil
+		}
+		cursor = zoneEnd
+	}
+	return time.Time{}, errors.New("cannot resolve report date in timezone")
 }
 
 type reportSpecIdentity struct {

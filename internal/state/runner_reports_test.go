@@ -470,3 +470,60 @@ func TestRunnerReportTrendAcrossMidnightDST(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerReportMissingMidnightBoundaries(t *testing.T) {
+	for _, tc := range []struct{ name, from, to, now, start, end, previousStart, previousEnd string }{
+		{"missing start", "2026-03-08", "2026-03-09", "2026-03-09T12:00:00Z", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z", "2026-03-07T05:00:00Z", "2026-03-08T05:00:00Z"},
+		{"missing end", "2026-03-07", "2026-03-08", "2026-03-09T12:00:00Z", "2026-03-07T05:00:00Z", "2026-03-08T05:00:00Z", "2026-03-06T05:00:00Z", "2026-03-07T05:00:00Z"},
+		{"missing comparison end", "2026-03-09", "2026-03-10", "2026-03-09T04:30:00Z", "2026-03-09T04:00:00Z", "2026-03-09T04:30:00Z", "2026-03-08T05:00:00Z", "2026-03-08T05:00:00Z"},
+		{"repeated start", "2026-11-01", "2026-11-02", "2026-11-02T12:00:00Z", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z", "2026-10-31T04:00:00Z", "2026-11-01T04:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := reportTime(tc.now)
+			q := RunnerReportQuery{From: tc.from, To: tc.to, Timezone: "America/Havana", Grain: "day"}
+			w, err := q.Window(now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !w.Start.Equal(reportTime(tc.start)) || !w.End.Equal(reportTime(tc.end)) || !w.PreviousStart.Equal(reportTime(tc.previousStart)) || !w.PreviousEnd.Equal(reportTime(tc.previousEnd)) {
+				t.Fatalf("unexpected boundaries: %+v", w)
+			}
+			s := reportTestStore(t)
+			db, _ := s.dbOrEnsure()
+			for id, when := range map[string]time.Time{"before": reportTime(tc.start).Add(-time.Second), "start": reportTime(tc.start), "last": reportTime(tc.end).Add(-time.Second), "end": reportTime(tc.end)} {
+				if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, Source: "fixture", LabelsJSON: "[]", QueuedAt: when, UpdatedAt: now, Status: StatusQueued}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, err := s.ReadRunnerReport(context.Background(), q, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Totals.Requests != 2 || len(r.Rows) != 2 || len(r.Trend) != 1 || r.Trend[0].Date != tc.from || r.Trend[0].Requests != 2 {
+				t.Fatalf("wrong cohort: %+v", r)
+			}
+		})
+	}
+}
+
+func TestRunnerReportWallClockResolution(t *testing.T) {
+	for _, tc := range []struct{ zone, civil, want string }{
+		{"UTC", "2026-03-08T00:00:00Z", "2026-03-08T00:00:00Z"},
+		{"Asia/Singapore", "2026-03-08T00:00:00Z", "2026-03-07T16:00:00Z"},
+		{"Asia/Kathmandu", "1986-01-01T00:00:00Z", "1985-12-31T18:30:00Z"},
+		{"Pacific/Apia", "2011-12-30T00:00:00Z", "2011-12-30T10:00:00Z"},
+		{"America/New_York", "2026-11-01T01:30:00Z", "2026-11-01T05:30:00Z"},
+		{"America/New_York", "2026-03-08T02:30:00Z", "2026-03-08T07:00:00Z"},
+	} {
+		t.Run(tc.zone+tc.civil, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := resolveReportWallTime(reportTime(tc.civil), loc)
+			if err != nil || !got.Equal(reportTime(tc.want)) {
+				t.Fatalf("resolved %v err=%v, want %s", got, err, tc.want)
+			}
+		})
+	}
+}

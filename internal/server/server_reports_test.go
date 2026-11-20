@@ -156,3 +156,21 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerReportDefaultsBeforeMidnightGap(t *testing.T) {
+	now, err := time.Parse(time.RFC3339, "2026-03-07T17:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := parseRunnerReportQuery(url.Values{"timezone": {"America/Havana"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.From != "2026-02-06" || q.To != "2026-03-08" {
+		t.Fatalf("default dates: %+v", q)
+	}
+	w, err := q.Window(now)
+	if err != nil || !w.End.Equal(now) {
+		t.Fatalf("default end=%+v err=%v", w, err)
+	}
+}

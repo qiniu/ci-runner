@@ -53,7 +53,12 @@ runtime totals without valid samples display as unavailable.
   `timezone` (default UTC). Default range: the last 30 calendar dates including
   today; presets: 7/30/90 days. Custom ranges: 1–366 dates, no later than tomorrow's
   local midnight. `Local` is rejected. The current range ends at the observation
-  time when today is unfinished.
+  time when today is unfinished. Date-count arithmetic uses the selected calendar
+  labels before timezone conversion. Missing midnights resolve to the first valid
+  instant after the gap; repeated wall times use their first occurrence. The same
+  rule applies to comparison boundaries (including a missing corresponding clock
+  time). A range containing no elapsed instants, such as one entirely skipped
+  local date, is rejected.
 - `queued_at ∈ [from,to)` selects the cohort. All metrics and trend buckets describe
   that cohort as observed during one database SELECT. Day/week/month buckets use
   the same timezone; weeks start Monday. Empty periods are included. Calendar
