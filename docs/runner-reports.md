@@ -2,10 +2,15 @@
 
 Administrators use `/admin/reports` to inspect request cohorts, recorded runtime,
 trends, and usage by Runner Spec, GitHub Installation owner, and repository.
-The overview includes paginated groups and request drilldowns. The request detail
-page returns to the original filters, group, page and snapshot. This is the first
-report surface; dedicated spec, account/repository and efficiency analysis remain
-future work.
+The overview uses Apache ECharts: a time-series line chart, spec and owner donut
+charts, and horizontal repository bars. Distribution charts show the Top 5 by
+request count or recorded runtime, with all remaining groups combined as Other.
+Legends show exact values and full-cohort shares and allow filtering the entire
+report. Missing runtime samples remain unavailable, distinct from valid zero
+durations. Request rows belong in Runner Requests and are not loaded by this
+page; the snapshot request API and historical detail return links remain compatible.
+Charts load on demand, use the existing theme tokens, resize with their container,
+and expose values in text legends and a collapsible trend table.
 
 ## Metric contract
 
@@ -110,8 +115,10 @@ zero-filled `trend`, `snapshot` and `expires_at`. Details return `items`, `total
 `offset` and `snapshot`. Totals are computed in the server over the entire bounded
 cohort, never over a browser page. Groups and request pages use the immutable
 current-cohort rows retained with that same snapshot. All group shares use full
-cohort denominators; the UI explicitly counts requests outside the displayed page.
-The request detail itself is live and may have changed since the report snapshot.
+cohort denominators; chart remainders subtract displayed groups from full totals,
+including runtime sample counts. A missing spec name is labeled Unknown while
+preserving its saved identity. The request detail itself is live and may have
+changed since the report snapshot.
 
 - Current and prior cohorts together: at most 100,000 requests. Read 100,001 to
   detect overflow, then return **422**, never a truncated total.
@@ -166,10 +173,11 @@ Local verification on 2026-11-20:
   that connection-pool blockage. Overflow at 100,001 is explicitly rejected.
   The scale test has a 10-second read deadline and a 500 ms local contention gate.
   These single-machine measurements are not production latency guarantees.
-- Browser fixture coverage exercises URL restoration, same-snapshot drilldown and
-  return, independent backlog loading, obsolete-response isolation, and desktop /
-  390px layouts with long identities, a keyboard-operated shared Select, empty
-  requests and expired-snapshot errors. Fixtures do not prove live service or
+- Browser fixture coverage exercises URL restoration, chart metric selection and
+  dimension filtering, full-cohort Other shares, missing versus zero runtime,
+  absence of request-detail fetches, independent backlog loading, obsolete-response
+  isolation, and desktop / 390px layouts with long identities, a keyboard-operated
+  shared Select, empty groups and expired-snapshot errors. Fixtures do not prove live service or
   production-data acceptance.
 
 The implementation reuses the shared Card, Button, Input, Label, Select and Table
@@ -177,13 +185,15 @@ components, following the GitHub App accounts page for headings, local errors an
 read-only navigation. Desktop and narrow screenshots were visually inspected,
 including the open Select, long group names and error states.
 
-The final local checks passed: `task lint`, `task ui-i18n-check`, `task test`
-(362 frontend tests and the full Go race suite), focused report race tests, and
-all 54 production-bundle browser cases. The browser run initially had one
-unrelated page-navigation 404 while another check rebuilt the same output
-folder; its trace recorded that document 404. The other 53 cases passed, and the
-single affected case passed when rerun after builds stopped. Future browser
-checks should run after build-producing checks, not concurrently with them.
+The chart revision passed frontend lint, i18n/type checks and the production
+build, 364 frontend tests, the full Go race suite, and 57 production-bundle
+browser cases. The final report-only browser run also passed all 6 cases after
+adding multi-group chart, tooltip, dark-theme and narrow-layout evidence. A
+focused race regression covers missing spec names without rewriting their saved
+identity. These browser screenshots use fixtures; the existing local signed-in
+browser and production-data rendering were not verified in this revision.
+Build-producing checks must finish before browser verification to avoid changing
+assets beneath a running preview server.
 
 Reproduce focused backend checks with `go test ./internal/state ./internal/server
 -run TestRunnerReport -count=1`. Set `RUNNERD_REPORT_SCALE_TEST=1` for the scale

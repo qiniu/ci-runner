@@ -450,10 +450,10 @@ func reportSeconds(start, end *time.Time, now time.Time) *float64 {
 func (p reportProjection) request(now time.Time) ReportRequest {
 	identity := (reportSpecIdentity{p.ProfileSource, p.ProfileScopeType, p.ProfileScopeID, p.ProfileName}).canonical()
 	label := p.ProfileName
-	if identity.ScopeType != "" {
+	if p.ProfileName != "" && identity.ScopeType != "" {
 		label += fmt.Sprintf(" · %s:%d", identity.ScopeType, identity.ScopeID)
 	}
-	if p.ProfileSource != "" {
+	if p.ProfileName != "" && p.ProfileSource != "" {
 		label += " · " + p.ProfileSource
 	}
 	row := ReportRequest{ID: p.ID, QueuedAt: p.QueuedAt, Repository: p.RepositoryFullName, Spec: reportSpecKey(identity), SpecLabel: label, Status: p.Status, JobResult: "unknown"}

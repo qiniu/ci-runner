@@ -1,26 +1,25 @@
-import { useCallback, useEffect, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { RefreshCw, ArrowRight, Filter } from "lucide-react"
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
+import { RefreshCw, Filter } from "lucide-react"
 import {
-  reportOffset,
+  reportDistribution,
   reportPreset,
   reportQueryParams,
   type ReportQuery,
   type ReportDimension,
   type ReportGroup,
   type ReportPage,
-  type ReportRow,
   type RunnerReport,
 } from "@/runner-reports"
-import { formatTime, runnerStatusLabel } from "@/admin-format"
-import { AppLink } from "@/components/app-link"
+import { formatTime } from "@/admin-format"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+
+const ReportChart = lazy(() => import("@/components/report-chart"))
 
 type Request = (url: string, options?: RequestInit) => Promise<unknown>
 type Resource<T> = { url: string; data?: T; error?: string }
@@ -45,10 +44,6 @@ function useReportResource<T>(url: string, request: Request, revision = 0) {
     }
   }, [url, request, revision, attempt])
   return { ...(state.url === url ? state : { url }), retry }
-}
-function reportStatusLabel(value: string) {
-  const status = (["queued", "creating", "running", "stopping", "completed", "failed"] as const).find(status => status === value)
-  return status ? runnerStatusLabel(status) : value
 }
 function hours(seconds: number) {
   return (seconds / 3600).toLocaleString(undefined, { maximumFractionDigits: 2 })
@@ -83,7 +78,8 @@ export function RunnerReportsSection({
   const report = overview.data
   const urlState = new URLSearchParams(search)
   const navigate = (values: Record<string, string | null>) => {
-    const next = new URLSearchParams(search)
+    const next = reportQueryParams(search)
+    if (urlState.has("sort")) next.set("sort", urlState.get("sort")!)
     if (report) {
       for (const [key, value] of Object.entries(report.query)) if (value) next.set(key, value)
       next.set("snapshot", report.snapshot)
@@ -103,13 +99,13 @@ export function RunnerReportsSection({
       report ? Object.entries(report.query).filter(([, value]) => Boolean(value)) : params,
     )
     next.delete("snapshot")
+    if (urlState.has("sort")) next.set("sort", urlState.get("sort")!)
     next.set(dimension, key)
     onNavigate(`?${next}`)
   }
   const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
   const filterQuery = Object.fromEntries([...params].filter(([key]) => key !== "snapshot"))
   const selected: ReportQuery = report?.query ?? { ...defaults, ...filterQuery }
-  const dimension = urlState.get("dimension") || ""
   const sort = urlState.get("sort") === "runtime" ? "runtime" : "requests"
   return (
     <section className="min-w-0 space-y-6" aria-labelledby="reports-title">
@@ -127,7 +123,9 @@ export function RunnerReportsSection({
       <ReportFilters
         key={JSON.stringify(selected)}
         query={selected}
-        onApply={(q) => onNavigate(`?${new URLSearchParams(Object.entries(q).filter(([, value]) => Boolean(value)))}`)}
+        onApply={(q) =>
+          onNavigate(`?${new URLSearchParams(Object.entries(q).filter(([, value]) => Boolean(value)))}`)
+        }
       />
       <Card>
         <CardContent className="space-y-3 pt-5">
@@ -166,58 +164,68 @@ export function RunnerReportsSection({
                 timezone: report.query.timezone,
               })}
             </p>
-            <p>{t("reports.comparison", { from: report.window.previous_start, to: report.window.previous_end })}</p>
+            <p>
+              {t("reports.comparison", {
+                from: report.window.previous_start,
+                to: report.window.previous_end,
+              })}
+            </p>
             <p>{t("reports.observed", { time: formatTime(report.observed_at, i18n.resolvedLanguage) })}</p>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {(["requests", "started", "rejected", "active_accounts", "active_repositories", "runtime"] as const).map(
-              (metric) => {
-                const value = metric === "runtime" ? report.totals.runtime.seconds : report.totals[metric]
-                const previous = metric === "runtime" ? report.previous.runtime.seconds : report.previous[metric]
-                const available = metric !== "runtime" || report.totals.runtime.samples > 0
-                const comparable = metric !== "runtime" || report.previous.runtime.samples > 0
-                const delta =
-                  !available || !comparable
-                    ? "—"
-                    : previous === 0
-                      ? value > 0
-                        ? t("reports.new")
-                        : "—"
-                      : `${value >= previous ? "+" : ""}${(((value - previous) / previous) * 100).toFixed(1)}%`
-                return (
-                  <Card key={metric}>
-                    <CardContent className="pt-4">
-                      <p className="text-sm text-muted-foreground">{t(`reports.${metric}`)}</p>
-                      <p className="my-2 text-2xl font-semibold tabular-nums">
-                        {!available ? "—" : metric === "runtime" ? hours(value) : value.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {delta} · {t("reports.vsPrevious")}
-                      </p>
-                    </CardContent>
-                  </Card>
-                )
-              },
-            )}
+            {(
+              [
+                "requests",
+                "started",
+                "rejected",
+                "active_accounts",
+                "active_repositories",
+                "runtime",
+              ] as const
+            ).map((metric) => {
+              const value = metric === "runtime" ? report.totals.runtime.seconds : report.totals[metric]
+              const previous =
+                metric === "runtime" ? report.previous.runtime.seconds : report.previous[metric]
+              const available = metric !== "runtime" || report.totals.runtime.samples > 0
+              const comparable = metric !== "runtime" || report.previous.runtime.samples > 0
+              const delta =
+                !available || !comparable
+                  ? "—"
+                  : previous === 0
+                    ? value > 0
+                      ? t("reports.new")
+                      : "—"
+                    : `${value >= previous ? "+" : ""}${(((value - previous) / previous) * 100).toFixed(1)}%`
+              return (
+                <Card key={metric}>
+                  <CardContent className="pt-4">
+                    <p className="text-sm text-muted-foreground">{t(`reports.${metric}`)}</p>
+                    <p className="my-2 text-2xl font-semibold tabular-nums">
+                      {!available ? "—" : metric === "runtime" ? hours(value) : value.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {delta} · {t("reports.vsPrevious")}
+                    </p>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
           <p className="text-sm text-muted-foreground">{t("reports.runtimeHelp")}</p>
           <Trend report={report} />
-          <Coverage report={report} />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold">{t("reports.distribution")}</h2>
             <ReportSelect
-              label={t("reports.sort")}
+              label={t("reports.distributionMetric")}
               value={sort}
-              onChange={(value) =>
-                navigate({ sort: value, spec_offset: null, owner_offset: null, repository_offset: null })
-              }
+              onChange={(value) => navigate({ sort: value })}
               options={[
                 ["requests", t("reports.requests")],
                 ["runtime", t("reports.runtime")],
               ]}
             />
           </div>
-          <div className="grid min-w-0 gap-4 xl:grid-cols-3">
+          <div className="grid min-w-0 gap-4 xl:grid-cols-2">
             {(["spec", "owner", "repository"] as const).map((d) => (
               <Distribution
                 key={`${d}-${revision}`}
@@ -225,30 +233,11 @@ export function RunnerReportsSection({
                 report={report}
                 request={request}
                 sort={sort}
-                offset={reportOffset(urlState.get(`${d}_offset`))}
-                onPage={(offset) => navigate({ [`${d}_offset`]: String(offset) })}
-                onOpen={(key) => navigate({ dimension: d, key, offset: null })}
                 onFilter={(key) => filter(d, key)}
               />
             ))}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-semibold">{t("reports.details")}</h2>
-            <Button variant="outline" size="sm" onClick={() => navigate({ dimension: null, key: null, offset: null })}>
-              {t("reports.allRequests")}
-            </Button>
-          </div>
-          {dimension && <p className="break-all text-sm text-muted-foreground">{t("reports.selectedGroup")}</p>}
-          <RequestRows
-            key={revision}
-            report={report}
-            dimension={dimension}
-            groupKey={urlState.get("key") || ""}
-            offset={reportOffset(urlState.get("offset"))}
-            request={request}
-            search={search}
-            onPage={(offset) => navigate({ offset: String(offset) })}
-          />
+          <Coverage report={report} />
         </>
       )}
     </section>
@@ -375,7 +364,10 @@ function ResourceState({ resource }: { resource: { data?: unknown; error?: strin
   const { t } = useTranslation()
   if (resource.error)
     return (
-      <div role="alert" className="break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+      <div
+        role="alert"
+        className="break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm"
+      >
         <p>{t("reports.loadFailed")}</p>
         <p>{resource.error}</p>
         <p className="mt-1 text-muted-foreground">{t("reports.retryHelp")}</p>
@@ -422,32 +414,64 @@ function Trend({ report }: { report: RunnerReport }) {
             ]}
           />
         </div>
-        <div className="h-64 min-w-0" aria-label={t("reports.trend")}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={points}>
-              <CartesianGrid vertical={false} stroke="var(--border)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} minTickGap={35} />
-              <YAxis width={45} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
-              <Tooltip
-                contentStyle={{ background: "var(--background)", borderColor: "var(--border)", borderRadius: 8 }}
-              />
-              <Bar
-                dataKey="value"
-                name={
-                  metric === "requests"
-                    ? t("reports.requests")
-                    : metric === "started"
-                      ? t("reports.started")
-                      : t("reports.runtime")
-                }
-                fill="var(--primary)"
-                radius={[3, 3, 0, 0]}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        <Suspense
+          fallback={
+            <p role="status" className="grid h-64 place-items-center text-sm text-muted-foreground">
+              {t("common.loading")}
+            </p>
+          }
+        >
+          <ReportChart
+            label={t("reports.trend")}
+            option={(colors) => ({
+              tooltip: {
+                trigger: "axis",
+                renderMode: "richText",
+                confine: true,
+                backgroundColor: colors.background,
+                borderColor: colors.border,
+                textStyle: { color: colors.text },
+                valueFormatter: (value) =>
+                  value === null || value === undefined
+                    ? "—"
+                    : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 }),
+              },
+              grid: { left: 50, right: 15, top: 15, bottom: 35 },
+              xAxis: {
+                type: "category",
+                data: points.map((p) => p.date),
+                axisLabel: { color: colors.text, hideOverlap: true },
+                axisLine: { lineStyle: { color: colors.border } },
+              },
+              yAxis: {
+                type: "value",
+                minInterval: metric === "runtime" ? undefined : 1,
+                axisLabel: { color: colors.text },
+                splitLine: { lineStyle: { color: colors.border } },
+              },
+              series: [
+                {
+                  type: "line",
+                  name:
+                    metric === "requests"
+                      ? t("reports.requests")
+                      : metric === "started"
+                        ? t("reports.started")
+                        : t("reports.runtime"),
+                  data: points.map((p) => p.value),
+                  connectNulls: false,
+                  symbolSize: 5,
+                  itemStyle: { color: colors.series[1] },
+                  areaStyle: { opacity: 0.08 },
+                },
+              ],
+            })}
+          />
+        </Suspense>
         <details>
-          <summary className="cursor-pointer text-sm text-muted-foreground">{t("reports.trendTable")}</summary>
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            {t("reports.trendTable")}
+          </summary>
           <div className="max-h-64 overflow-auto">
             <Table>
               <TableHeader>
@@ -511,205 +535,173 @@ function Coverage({ report }: { report: RunnerReport }) {
     </details>
   )
 }
+const chartColors = [1, 2, 3, 4, 5].map((n) => `var(--chart-${n})`)
+
 function Distribution({
   dimension,
   report,
   request,
   sort,
-  offset,
-  onPage,
-  onOpen,
   onFilter,
 }: {
   dimension: ReportDimension
   report: RunnerReport
   request: Request
-  sort: string
-  offset: number
-  onPage: (offset: number) => void
-  onOpen: (key: string) => void
+  sort: "requests" | "runtime"
   onFilter: (key: string) => void
 }) {
   const { t } = useTranslation()
   const groups = useReportResource<ReportPage<ReportGroup>>(
-    `/reports/${encodeURIComponent(report.snapshot)}/groups?${new URLSearchParams({ dimension, sort, offset: String(offset), limit: "5" })}`,
+    `/reports/${encodeURIComponent(report.snapshot)}/groups?${new URLSearchParams({ dimension, sort, offset: "0", limit: "5" })}`,
     request,
   )
-  const pageRequests = groups.data?.items.reduce((sum, row) => sum + row.requests, 0) || 0
+  const total = sort === "runtime" ? report.totals.runtime.seconds / 3600 : report.totals.requests
+  const points = groups.data
+    ? reportDistribution(groups.data, report.totals, sort).map((row, index) => {
+        const label = row.label.trim()
+        return {
+          ...row,
+          label: row.other ? t("reports.otherGroups") : label || t("common.unknown"),
+          color: row.other ? "var(--muted-foreground)" : chartColors[index],
+        }
+      })
+    : []
+  const metric = t(sort === "runtime" ? "reports.runtime" : "reports.requests")
+  const format = (value: number | null) =>
+    value === null ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  const share = (value: number | null) =>
+    value === null || total <= 0 ? "—" : `${((value / total) * 100).toFixed(1)}%`
   return (
-    <Card className="min-w-0">
+    <Card className={`min-w-0 ${dimension === "repository" ? "xl:col-span-2" : ""}`}>
       <CardContent className="space-y-4 pt-5">
-        <h3 className="font-semibold">{t(`reports.${dimension}`)}</h3>
+        <div>
+          <h3 className="font-semibold">{t(`reports.${dimension}`)}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{t("reports.topGroups")}</p>
+        </div>
         <ResourceState resource={groups} />
-        {groups.data && (
-          <>
-            {groups.data.items.length === 0 && <p className="text-sm text-muted-foreground">{t("reports.empty")}</p>}
-            {groups.data.items.map((g) => (
-              <div key={g.key} className="space-y-1.5 border-b pb-3 last:border-b-0">
-                <div className="flex min-w-0 items-start gap-2">
-                  <Button
-                    variant="link"
-                    className="h-auto min-w-0 flex-1 justify-start break-all whitespace-normal p-0 text-left"
-                    onClick={() => onOpen(g.key)}
-                  >
-                    {g.label || t("common.unknown")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7 shrink-0"
-                    aria-label={t("reports.filterGroup", { name: g.label || t("common.unknown") })}
-                    onClick={() => onFilter(g.key)}
-                    disabled={!g.key}
-                  >
-                    <Filter className="size-3.5" />
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {t("reports.requestShare", { value: coverage(g.requests, report.totals.requests) })} ·{" "}
-                  {g.runtime.samples ? t("reports.hours", { value: hours(g.runtime.seconds) }) : "—"} ·{" "}
-                  {t("reports.runtimeShare", {
-                    value:
-                      g.runtime.samples > 0 && report.totals.runtime.seconds > 0
-                        ? ((g.runtime.seconds / report.totals.runtime.seconds) * 100).toFixed(1) + "%"
-                        : "—",
-                  })}
-                </p>
-                <div className="h-1 rounded bg-muted">
-                  <div
-                    className="h-1 rounded bg-primary/70"
-                    style={{
-                      width: `${sort === "runtime" ? (report.totals.runtime.seconds ? (g.runtime.seconds / report.totals.runtime.seconds) * 100 : 0) : report.totals.requests ? (g.requests / report.totals.requests) * 100 : 0}%`,
-                    }}
+        {groups.data &&
+          (points.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">{t("reports.empty")}</p>
+          ) : (
+            <>
+              {total > 0 ? (
+                <Suspense
+                  fallback={
+                    <p role="status" className="grid h-64 place-items-center text-sm text-muted-foreground">
+                      {t("common.loading")}
+                    </p>
+                  }
+                >
+                  <ReportChart
+                    label={t("reports.distributionChart", { dimension: t(`reports.${dimension}`), metric })}
+                    option={(colors) => ({
+                      tooltip: {
+                        trigger: "item",
+                        renderMode: "richText",
+                        confine: true,
+                        backgroundColor: colors.background,
+                        borderColor: colors.border,
+                        textStyle: { color: colors.text, width: 220, overflow: "breakAll" },
+                        valueFormatter: (value) => format(typeof value === "number" ? value : null),
+                      },
+                      ...(dimension === "repository"
+                        ? {
+                            grid: { left: 130, right: 15, top: 10, bottom: 30 },
+                            xAxis: {
+                              type: "value" as const,
+                              minInterval: sort === "requests" ? 1 : undefined,
+                              axisLabel: { color: colors.text },
+                              splitLine: { lineStyle: { color: colors.border } },
+                            },
+                            yAxis: {
+                              type: "category" as const,
+                              inverse: true,
+                              data: points.map((row) => row.label),
+                              axisLabel: { color: colors.text, width: 115, overflow: "truncate" as const },
+                              axisLine: { show: false },
+                              axisTick: { show: false },
+                            },
+                          }
+                        : {}),
+                      series:
+                        dimension === "repository"
+                          ? [
+                              {
+                                type: "bar",
+                                name: metric,
+                                barMaxWidth: 22,
+                                data: points.map((row, index) => ({
+                                  name: row.label,
+                                  value: row.value ?? "-",
+                                  itemStyle: { color: row.other ? colors.text : colors.series[index] },
+                                })),
+                              },
+                            ]
+                          : [
+                              {
+                                type: "pie",
+                                name: metric,
+                                radius: ["52%", "78%"],
+                                label: { show: false },
+                                data: points.flatMap((row, index) =>
+                                  row.value !== null && row.value > 0
+                                    ? [
+                                        {
+                                          name: row.label,
+                                          value: row.value,
+                                          itemStyle: {
+                                            color: row.other ? colors.text : colors.series[index],
+                                          },
+                                        },
+                                      ]
+                                    : [],
+                                ),
+                              },
+                            ],
+                    })}
                   />
-                </div>
-              </div>
-            ))}
-            <p className="text-xs text-muted-foreground">
-              {t("reports.other", { count: report.totals.requests - pageRequests })}
-            </p>
-            <Pagination offset={offset} total={groups.data.total} size={5} onPage={onPage} />
-          </>
-        )}
+                </Suspense>
+              ) : (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  {t(report.totals.runtime.samples ? "reports.zeroRuntime" : "reports.noRuntime")}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t("reports.distributionTotal", {
+                  metric,
+                  value: sort === "runtime" && !report.totals.runtime.samples ? "—" : format(total),
+                })}
+              </p>
+              <ul
+                className="space-y-2"
+                aria-label={t("reports.chartValues", { dimension: t(`reports.${dimension}`) })}
+              >
+                {points.map((row, index) => (
+                  <li key={index} className="flex min-w-0 items-start gap-2 text-sm">
+                    <span className="mt-1.5 size-2.5 shrink-0 rounded-sm" style={{ background: row.color }} />
+                    <span className="min-w-0 flex-1 break-all">{row.label}</span>
+                    <span className="shrink-0 text-right tabular-nums">
+                      {format(row.value)}{" "}
+                      <span className="text-xs text-muted-foreground">· {share(row.value)}</span>
+                    </span>
+                    {!row.other && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-6 shrink-0"
+                        aria-label={t("reports.filterGroup", { name: row.label })}
+                        onClick={() => onFilter(row.key)}
+                        disabled={!row.key}
+                      >
+                        <Filter className="size-3.5" />
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ))}
       </CardContent>
     </Card>
-  )
-}
-function RequestRows({
-  report,
-  dimension,
-  groupKey,
-  offset,
-  request,
-  search,
-  onPage,
-}: {
-  report: RunnerReport
-  dimension: string
-  groupKey: string
-  offset: number
-  request: Request
-  search: string
-  onPage: (offset: number) => void
-}) {
-  const { t } = useTranslation()
-  const rows = useReportResource<ReportPage<ReportRow>>(
-    `/reports/${encodeURIComponent(report.snapshot)}/requests?${new URLSearchParams({ dimension, key: groupKey, offset: String(offset), limit: "20" })}`,
-    request,
-  )
-  const returnParams = new URLSearchParams(search)
-  for (const [key, value] of Object.entries(report.query)) if (value) returnParams.set(key, value)
-  returnParams.set("snapshot", report.snapshot)
-  return (
-    <div className="min-w-0 space-y-3">
-      <ResourceState resource={rows} />
-      {rows.data && (
-        <>
-          <div className="overflow-hidden rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {[
-                    t("reports.request"),
-                    t("reports.repository"),
-                    t("reports.spec"),
-                    t("common.status"),
-                    t("reports.jobResult"),
-                    t("reports.runtime"),
-                  ].map((label) => (
-                    <TableHead key={label}>{label}</TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.data.items.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                      {t("reports.empty")}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  rows.data.items.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell>
-                        <AppLink
-                          className="inline-flex max-w-64 items-center gap-2 break-all whitespace-normal font-mono text-xs hover:underline"
-                          href={`/admin/runner_requests/${encodeURIComponent(row.id)}?${new URLSearchParams({ report_return: `/admin/reports?${returnParams}` })}`}
-                        >
-                          {row.id}
-                          <ArrowRight className="size-3 shrink-0" />
-                        </AppLink>
-                      </TableCell>
-                      <TableCell className="max-w-64 break-all whitespace-normal">
-                        {row.repository || t("common.unknown")}
-                      </TableCell>
-                      <TableCell className="max-w-64 break-all whitespace-normal">
-                        {row.spec_label || t("common.unknown")}
-                      </TableCell>
-                      <TableCell>{reportStatusLabel(row.status)}</TableCell>
-                      <TableCell>{row.job_result === "unknown" ? t("common.unknown") : row.job_result}</TableCell>
-                      <TableCell>{row.runtime_seconds === null ? "—" : hours(row.runtime_seconds)}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-          <Pagination offset={offset} total={rows.data.total} size={20} onPage={onPage} />
-        </>
-      )}
-    </div>
-  )
-}
-function Pagination({
-  offset,
-  total,
-  size,
-  onPage,
-}: {
-  offset: number
-  total: number
-  size: number
-  onPage: (offset: number) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-      <span>
-        {t("reports.page", {
-          from: total ? Math.min(offset + 1, total) : 0,
-          to: Math.min(offset + size, total),
-          total,
-        })}
-      </span>
-      <div className="flex gap-1">
-        <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => onPage(Math.max(0, offset - size))}>
-          {t("reports.previousPage")}
-        </Button>
-        <Button variant="outline" size="sm" disabled={offset + size >= total} onClick={() => onPage(offset + size)}>
-          {t("reports.nextPage")}
-        </Button>
-      </div>
-    </div>
   )
 }

@@ -42,21 +42,13 @@ const report = {
   ],
 }
 const longName = "fixture-organization-with-a-very-long-name/repository-with-a-very-long-name"
-const runner = {
-  id: "request-1",
-  runner_name: "request-1",
-  status: "completed",
-  repository_full_name: longName,
-  runner_spec_name: "standard",
-  created_at: report.observed_at,
-  updated_at: report.observed_at,
-}
-
 async function setup(page: Page, language = "en") {
   test.skip(Boolean(process.env.RUNNERD_UI_SMOKE_BASE_URL), "local fixtures only")
-  await page.addInitScript(language => localStorage.setItem("runnerd:language", language), language)
+  await page.addInitScript((language) => localStorage.setItem("runnerd:language", language), language)
   await page.route("**/auth/session", (route) =>
-    route.fulfill({ json: { authenticated: true, role: "admin", login: "fixture-admin", oauth_enabled: true } }),
+    route.fulfill({
+      json: { authenticated: true, role: "admin", login: "fixture-admin", oauth_enabled: true },
+    }),
   )
   await page.route("**/reports/overview?*", (route) => route.fulfill({ json: report }))
   await page.route("**/reports/active?*", (route) =>
@@ -66,55 +58,44 @@ async function setup(page: Page, language = "en") {
   )
   await page.route("**/reports/*/groups?*", (route) =>
     route.fulfill({
-      json: { items: [{ ...totals, key: longName, label: longName }], total: 1, offset: 0, snapshot: report.snapshot },
-    }),
-  )
-  await page.route("**/reports/*/requests?*", (route) =>
-    route.fulfill({
       json: {
-        items: [
-          {
-            id: runner.id,
-            queued_at: report.observed_at,
-            repository: longName,
-            owner_label: "fixture",
-            spec_label: "standard · global",
-            status: "completed",
-            job_result: "failure",
-            runtime_seconds: 3600,
-          },
-        ],
+        items: [{ ...totals, key: longName, label: longName }],
         total: 1,
         offset: 0,
         snapshot: report.snapshot,
       },
     }),
   )
-  await page.route("**/runner_requests/request-1/diagnostics", (route) =>
-    route.fulfill({ json: { state: runner, github_job: { lookup_status: "unavailable" }, findings: [], events: [] } }),
-  )
-  await page.route("**/runner_requests/request-1/events*", (route) =>
-    route.fulfill({ json: { events: [], has_more: false } }),
-  )
 }
 
-test("report filters, snapshot drilldown and return survive reload", async ({ page }) => {
+test("chart filtering and snapshot metric survive reload without fetching request details", async ({
+  page,
+}) => {
   await setup(page)
-  await page.goto(`/admin/reports?${search}`)
+  const detailRequests: string[] = []
+  page.on("request", (request) => {
+    if (/\/reports\/[^/]+\/requests/.test(request.url())) detailRequests.push(request.url())
+  })
+  await page.goto(`/admin/reports?${search}&offset=20&dimension=spec`)
   await expect(page.getByRole("heading", { name: "Usage reports" })).toBeVisible()
   await expect(page.getByText("New · vs. previous period")).toBeVisible()
-  await expect(page.getByLabel("Start date", { exact: true })).toHaveValue(query.from)
-  await page.getByRole("button", { name: longName, exact: true }).first().click()
+  await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
+  await expect(page.getByRole("heading", { name: "Request drilldown" })).toHaveCount(0)
+  await page.getByRole("combobox", { name: "Distribution metric" }).click()
+  await page.getByRole("option", { name: "Recorded runtime (h)", exact: true }).click()
   await expect(page).toHaveURL(/snapshot=fixture-snapshot/)
-  await expect(page).toHaveURL(/dimension=spec/)
-  await page.getByRole("link", { name: "request-1", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Back to reports" })).toBeVisible()
-  await page.getByRole("button", { name: "Back to reports" }).click()
-  await expect(page).toHaveURL(/dimension=spec/)
-  await expect(page.getByRole("link", { name: "request-1", exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/sort=runtime/)
   await page.reload()
+  await expect(page.getByRole("combobox", { name: "Distribution metric" })).toHaveText("Recorded runtime (h)")
   await expect(page.getByLabel("Timezone", { exact: true })).toHaveValue(query.timezone)
-  await expect(page.getByRole("link", { name: "request-1", exact: true })).toBeVisible()
+  await page
+    .getByRole("button", { name: `Filter by ${longName}`, exact: true })
+    .first()
+    .click()
+  await expect(page).toHaveURL(/spec=/)
+  await expect(page).toHaveURL(/sort=runtime/)
+  await expect(page).not.toHaveURL(/snapshot=/)
+  expect(detailRequests).toEqual([])
 })
 
 test("backlog loads independently and obsolete reports cannot replace new filters", async ({ page }) => {
@@ -138,14 +119,81 @@ test("backlog loads independently and obsolete reports cannot replace new filter
   await expect(page.getByText("987", { exact: true })).toBeVisible()
 })
 
-test("desktop and narrow reports, popup, empty and error states remain usable", async ({ page }, testInfo) => {
+test("desktop and narrow reports, popup, empty and error states remain usable", async ({
+  page,
+}, testInfo) => {
   await setup(page)
+  const chartTotals = {
+    ...totals,
+    requests: 1200,
+    runtime: { seconds: 720000, samples: 1000, eligible: 1100 },
+  }
+  await page.route("**/reports/overview?*", (route) =>
+    route.fulfill({
+      json: {
+        ...report,
+        totals: chartTotals,
+        trend: [42, 67, 55, 89, 120, 106, 78, 95, 145, 112, 150, 100, 75, 90].map((requests, index) => ({
+          ...totals,
+          requests,
+          date: `2026-11-${String(index + 1).padStart(2, "0")}`,
+        })),
+      },
+    }),
+  )
+  await page.route("**/reports/*/groups?*", (route) => {
+    const dimension = new URL(route.request().url()).searchParams.get("dimension")
+    const names =
+      dimension === "spec"
+        ? [
+            "ubuntu-24.04 · global",
+            "ubuntu-22.04 · global",
+            "windows-2025 · global",
+            "large · account:7",
+            "Unknown",
+          ]
+        : dimension === "owner"
+          ? [
+              "platform-team",
+              "release-engineering",
+              "application-team",
+              "tools-team",
+              "external-contributors",
+            ]
+          : ["platform/api", "platform/runner", "apps/web", longName, "tools/release"]
+    return route.fulfill({
+      json: {
+        items: [600, 240, 120, 80, 60].map((requests, index) => ({
+          ...totals,
+          requests,
+          key: String(index),
+          label: names[index],
+        })),
+        total: 8,
+        offset: 0,
+        snapshot: report.snapshot,
+      },
+    })
+  })
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto(`/admin/reports?${search}`)
-  await expect(page.getByRole("link", { name: "request-1", exact: true })).toBeVisible()
+  await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
   await page.screenshot({ path: testInfo.outputPath("reports-desktop.png"), fullPage: true })
   await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
-  await page.screenshot({ path: testInfo.outputPath("reports-desktop-distribution.png"), animations: "disabled" })
+  await page.screenshot({
+    path: testInfo.outputPath("reports-desktop-distribution.png"),
+    animations: "disabled",
+  })
+  const donut = page.getByRole("img", { name: "Runner spec · Requests chart", exact: true })
+  await expect(donut.locator("svg path").first()).toBeVisible()
+  const donutSize = await donut.boundingBox()
+  await donut.hover({ position: { x: donutSize!.width / 2 + 80, y: donutSize!.height / 2 } })
+  await expect(donut.locator("svg")).toContainText("ubuntu-24.04 · global")
+  await page.screenshot({ path: testInfo.outputPath("reports-chart-tooltip.png"), animations: "disabled" })
+  await page
+    .getByRole("img", { name: "Repository · Requests chart", exact: true })
+    .locator("..")
+    .screenshot({ path: testInfo.outputPath("reports-repository-bars.png"), animations: "disabled" })
   await page.getByRole("heading", { name: "Trend", exact: true }).scrollIntoViewIfNeeded()
   await page.screenshot({ path: testInfo.outputPath("reports-desktop-trend.png"), animations: "disabled" })
   await page.getByRole("heading", { name: "Usage reports" }).scrollIntoViewIfNeeded()
@@ -154,21 +202,39 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.getByRole("combobox", { name: "Time grain", exact: true }).click()
   await expect(page.getByRole("option", { name: "Week", exact: true })).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath("reports-narrow-select.png"), fullPage: true, animations: "disabled" })
+  await page.screenshot({
+    path: testInfo.outputPath("reports-narrow-select.png"),
+    fullPage: true,
+    animations: "disabled",
+  })
   await page.keyboard.press("ArrowDown")
   await page.keyboard.press("Enter")
   await page.screenshot({ path: testInfo.outputPath("reports-narrow.png"), fullPage: true })
   await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
-  await page.screenshot({ path: testInfo.outputPath("reports-narrow-distribution.png"), animations: "disabled" })
-  await page.route("**/reports/*/requests?*", (route) =>
-    route.fulfill({ json: { items: [], total: 0, offset: 0, snapshot: report.snapshot } }),
-  )
+  await page.screenshot({
+    path: testInfo.outputPath("reports-narrow-distribution.png"),
+    animations: "disabled",
+  })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.evaluate(() => localStorage.setItem("theme", "dark"))
+  await page.reload()
+  await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
+  await expect(
+    page.getByRole("img", { name: "Runner spec · Requests chart", exact: true }).locator("svg path").first(),
+  ).toBeVisible()
+  await page
+    .getByRole("img", { name: "Runner spec · Requests chart", exact: true })
+    .locator("..")
+    .screenshot({ path: testInfo.outputPath("reports-narrow-dark.png"), animations: "disabled" })
   await page.route("**/reports/*/groups?*", (route) =>
-    route.fulfill({ status: 410, json: { error: "report snapshot expired; refresh the report" } }),
+    new URL(route.request().url()).searchParams.get("dimension") === "spec"
+      ? route.fulfill({ json: { items: [], total: 0, offset: 0, snapshot: report.snapshot } })
+      : route.fulfill({ status: 410, json: { error: "report snapshot expired; refresh the report" } }),
   )
   await page.reload()
   await expect(page.getByText("No matching requests.", { exact: true })).toBeVisible()
-  await expect(page.getByRole("alert")).toHaveCount(3)
+  await expect(page.getByRole("alert")).toHaveCount(2)
+  await expect(page.getByRole("img", { name: "Trend", exact: true }).locator("svg")).toBeVisible()
   await page.getByRole("heading", { name: "Usage distribution" }).scrollIntoViewIfNeeded()
   await page.screenshot({ path: testInfo.outputPath("reports-error-empty.png"), fullPage: true })
   await page.route("**/reports/overview?*", (route) =>
@@ -184,7 +250,7 @@ test("timezone-only URLs keep normalized dates when applying filters", async ({ 
   await page.clock.setFixedTime(new Date("2026-11-20T02:00:00Z"))
   const normalized = { from: "2026-10-21", to: "2026-11-20", timezone: "America/New_York", grain: "day" }
   const queries: URLSearchParams[] = []
-  await page.route("**/reports/overview?*", route => {
+  await page.route("**/reports/overview?*", (route) => {
     queries.push(new URL(route.request().url()).searchParams)
     return route.fulfill({ json: { ...report, query: normalized } })
   })
@@ -196,17 +262,77 @@ test("timezone-only URLs keep normalized dates when applying filters", async ({ 
   expect(queries.at(-1)?.get("from")).toBe(normalized.from)
 })
 
-test("Chinese reports localize statuses and both observation labels independently of browser locale", async ({ page }) => {
+test("Chinese charts label missing spec names and preserve localized observation times", async ({ page }) => {
   await setup(page, "zh")
-  await page.route("**/reports/*/requests?*", route => route.fulfill({ json: {
-    items: ["completed", "failed", "legacy_state"].map(status => ({ id: `request-${status}`, repository: longName, spec_label: "standard", status, job_result: "unknown", runtime_seconds: null })),
-    total: 3, offset: 0, snapshot: report.snapshot,
-  } }))
+  await page.route("**/reports/*/groups?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [{ ...totals, key: "unknown-spec", label: "" }],
+        total: 1,
+        offset: 0,
+        snapshot: report.snapshot,
+      },
+    }),
+  )
   await page.goto(`/admin/reports?${search}`)
   await expect(page.getByRole("heading", { name: "用量报表", exact: true })).toBeVisible()
-  await expect(page.getByRole("cell", { name: "已完成", exact: true })).toBeVisible()
-  await expect(page.getByRole("cell", { name: "失败", exact: true })).toBeVisible()
-  await expect(page.getByRole("cell", { name: "legacy_state", exact: true })).toBeVisible()
-  const expected = await page.evaluate(timestamp => new Date(timestamp).toLocaleString("zh"), report.observed_at)
+  await expect(page.getByRole("button", { name: "按 未知 筛选", exact: true }).first()).toBeVisible()
+  const expected = await page.evaluate(
+    (timestamp) => new Date(timestamp).toLocaleString("zh"),
+    report.observed_at,
+  )
   await expect(page.getByText(`统计时点：${expected}`, { exact: true })).toHaveCount(2)
+})
+
+test("charts show full-cohort Other and distinguish missing runtime from zero", async ({ page }) => {
+  await setup(page)
+  await page.route("**/reports/*/groups?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            ...totals,
+            requests: 1,
+            runtime: { seconds: 0, samples: 0, eligible: 1 },
+            key: "unknown",
+            label: "Unknown",
+          },
+        ],
+        total: 6,
+        offset: 0,
+        snapshot: report.snapshot,
+      },
+    }),
+  )
+  await page.goto(`/admin/reports?${search}`)
+  const legend = page.getByRole("list", { name: "Runner spec chart values", exact: true })
+  await expect(legend.getByRole("listitem").filter({ hasText: "Other" })).toContainText("3 · 75.0%")
+  await page.getByRole("combobox", { name: "Distribution metric" }).click()
+  await page.getByRole("option", { name: "Recorded runtime (h)", exact: true }).click()
+  await expect(legend.getByRole("listitem").filter({ hasText: "Unknown" })).toContainText("— · —")
+  await expect(legend.getByRole("listitem").filter({ hasText: "Other" })).toContainText("1 · 100.0%")
+  await page.route("**/reports/overview?*", (route) =>
+    route.fulfill({
+      json: {
+        ...report,
+        totals: { ...totals, runtime: { seconds: 0, samples: 0, eligible: 2 } },
+      },
+    }),
+  )
+  await page.reload()
+  await expect(
+    page.getByText("No valid runtime samples. Missing duration is not zero usage.", { exact: true }),
+  ).toHaveCount(3)
+  await page.route("**/reports/overview?*", (route) =>
+    route.fulfill({
+      json: {
+        ...report,
+        totals: { ...totals, runtime: { seconds: 0, samples: 1, eligible: 2 } },
+      },
+    }),
+  )
+  await page.reload()
+  await expect(
+    page.getByText("Recorded runtime is zero; there is no duration share to plot.", { exact: true }),
+  ).toHaveCount(3)
 })

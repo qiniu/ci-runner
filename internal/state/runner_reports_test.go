@@ -527,3 +527,20 @@ func TestRunnerReportWallClockResolution(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerReportMissingSpecLabel(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	for _, identity := range []reportSpecIdentity{
+		{Source: "global"},
+		{Source: "scoped_custom", ScopeType: "account", ScopeID: 7},
+	} {
+		row := (reportProjection{ProfileSource: identity.Source, ProfileScopeType: identity.ScopeType, ProfileScopeID: identity.ScopeID}).request(now)
+		if row.SpecLabel != "" || row.Spec != reportSpecKey(identity) || row.knownSpec {
+			t.Fatalf("missing name must stay unlabeled and retain identity: %+v", row)
+		}
+	}
+	row := (reportProjection{ProfileName: "· standard", ProfileSource: "global"}).request(now)
+	if row.SpecLabel != "· standard · global" {
+		t.Fatalf("real spec names must not be mistaken for missing names: %q", row.SpecLabel)
+	}
+}
