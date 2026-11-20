@@ -221,6 +221,7 @@ export function RunnerRequestSection({
   identifier,
   request,
   onBackToRunnerRequests,
+  backLabel,
   onResolvedRequestID,
   onCopyRunnerID,
   onRetryRunner,
@@ -230,6 +231,7 @@ export function RunnerRequestSection({
   identifier: string
   request: (url: string, options?: RequestInit) => Promise<unknown>
   onBackToRunnerRequests: () => void
+  backLabel?: string
   onResolvedRequestID?: (id: string) => void
   onCopyRunnerID?: (id: string) => void
   onRetryRunner?: (id: string) => Promise<boolean>
@@ -357,7 +359,7 @@ export function RunnerRequestSection({
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={onBackToRunnerRequests}>
               <ArrowLeft />
-              {t("admin.backToRunnerRequests")}
+              {backLabel || t("admin.backToRunnerRequests")}
             </Button>
           </div>
         </div>

@@ -23,6 +23,7 @@ import (
 )
 
 type Server struct {
+	reports          runnerReportCache
 	requestMetrics   runnerRequestMetricsCache
 	cfg              config.Config
 	store            state.Store
@@ -496,6 +497,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_request_metrics", s.handleRunnerRequestMetrics)
+	s.mux.HandleFunc("GET /reports/overview", s.handleRunnerReport)
+	s.mux.HandleFunc("GET /reports/active", s.handleRunnerReportActive)
+	s.mux.HandleFunc("GET /reports/{snapshot}/groups", s.handleRunnerReportGroups)
+	s.mux.HandleFunc("GET /reports/{snapshot}/requests", s.handleRunnerReportRequests)
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)
 	s.mux.HandleFunc("GET /runner_request_repositories", s.handleListRunnerRequestRepositories)
 	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)

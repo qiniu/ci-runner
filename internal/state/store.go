@@ -773,6 +773,8 @@ type TerminalStore interface {
 }
 
 type Store interface {
+	ReadRunnerReport(context.Context, RunnerReportQuery, time.Time) (*RunnerReport, error)
+	ReadRunnerReportActive(context.Context, RunnerReportQuery) (map[string]int64, error)
 	TerminalStore
 	RunnerRequestStore
 	RunnerCatalogStore
