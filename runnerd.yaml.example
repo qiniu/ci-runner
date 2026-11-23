@@ -99,11 +99,15 @@ github:
 # in account or GitHub installation Preferences; they are not stored in runnerd.yaml.
 # On each sandbox start, runnerd mints a short-lived Qiniu IAM STS credential
 # scoped to the user's cache prefix and injects it as AWS_* / RUNS_ON_S3_* env
-# vars so runs-on/cache can upload and restore caches directly to the bucket.
+# vars so qiniu/actions-cache can access the bucket directly. STS lasts at most
+# one hour; the paired Action refreshes credentials for longer jobs.
 
 cache:
   # STS federation token endpoint. The request path /sts/federation/token is appended.
   sts_endpoint: https://sts-ov.qiniuapi.com
+  # Optional HTTPS endpoint reachable from Sandboxes; defaults to the OAuth
+  # redirect URL origin + /cache/credentials. No userinfo, query or fragment.
+  # credentials_url: https://runner.example.com/cache/credentials
 
 worker:
   # Optional CI Runner limits keyed by GitHub owner login and owner/repository.

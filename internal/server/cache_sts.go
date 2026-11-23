@@ -5,16 +5,59 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/qiniu/go-sdk/v7/auth"
 )
 
-const cacheSTSHeadroom = 5 * time.Minute
+const (
+	cacheSTSHeadroom    = 5 * time.Minute
+	cacheSTSMaxDuration = time.Hour
+)
+
+// Never retain provider bodies or transport errors: they may echo credentials,
+// signed headers, private endpoints, or arbitrary upstream text.
+type cacheSTSError struct {
+	Reason        string
+	HTTPStatus    int
+	DurationLimit int
+}
+
+func (e *cacheSTSError) Error() string {
+	message := "cache STS " + e.Reason
+	if e.HTTPStatus != 0 {
+		message += fmt.Sprintf(" (HTTP %d)", e.HTTPStatus)
+	}
+	if e.DurationLimit > 0 {
+		message += fmt.Sprintf("; maximum duration_seconds=%d", e.DurationLimit)
+	}
+	return message
+}
+
+var cacheSTSDurationLimitPattern = regexp.MustCompile(`duration_seconds is too long, exceed ([0-9]{1,6})\b`)
+
+func cacheSTSProviderError(status int, body []byte) error {
+	reason := "provider_rejected"
+	limit := 0
+	if match := cacheSTSDurationLimitPattern.FindSubmatch(body); len(match) == 2 {
+		limit, _ = strconv.Atoi(string(match[1]))
+		reason = "duration_exceeded"
+	} else if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		reason = "authorization_rejected"
+	} else if status == http.StatusTooManyRequests {
+		reason = "rate_limited"
+	} else if status >= 500 {
+		reason = "service_unavailable"
+	}
+	return &cacheSTSError{Reason: reason, HTTPStatus: status, DurationLimit: limit}
+}
 
 // CacheSTSCredentials represents temporary S3 credentials generated for a sandbox.
 type CacheSTSCredentials struct {
@@ -187,8 +230,8 @@ func generateCacheSTSWithClient(ctx context.Context, config cacheSTSCredentialCo
 	if err != nil {
 		return CacheSTSCredentials{}, fmt.Errorf("marshal STS policy: %w", err)
 	}
-	if durationSeconds <= 0 {
-		return CacheSTSCredentials{}, fmt.Errorf("STS duration must be positive")
+	if durationSeconds <= 0 || durationSeconds > int(cacheSTSMaxDuration.Seconds()) {
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "invalid_requested_duration", DurationLimit: int(cacheSTSMaxDuration.Seconds())}
 	}
 	body, err := json.Marshal(qiniuSTSRequest{
 		Name:            "runnerd-cache",
@@ -209,58 +252,75 @@ func generateCacheSTSWithClient(ctx context.Context, config cacheSTSCredentialCo
 	stsURL := endpoint + "/sts/federation/token"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stsURL, bytes.NewReader(body))
 	if err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("build STS request: %w", err)
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "invalid_endpoint"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = req.URL.Host
 	cred := auth.New(strings.TrimSpace(config.AccessKeyID), strings.TrimSpace(config.SecretAccessKey))
 	authToken, err := cred.SignRequestV2(req)
 	if err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("sign STS request: %w", err)
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "request_signing_failed"}
 	}
 	req.Header.Set("Authorization", "Qiniu "+authToken)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("call STS API: %w", err)
+		reason := "transport_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "request_timed_out"
+		} else if errors.Is(err, context.Canceled) {
+			reason = "request_canceled"
+		}
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: reason}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("read STS response: %w", err)
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "response_read_failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return CacheSTSCredentials{}, fmt.Errorf("STS API status %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return CacheSTSCredentials{}, cacheSTSProviderError(resp.StatusCode, data)
 	}
 	var stResp qiniuSTSResponse
 	if err := json.Unmarshal(data, &stResp); err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("parse STS response: %w", err)
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "invalid_response"}
 	}
 	if stResp.Code != 0 || stResp.Error != "" {
-		return CacheSTSCredentials{}, fmt.Errorf("STS API error (code=%d): %s %s", stResp.Code, stResp.Error, stResp.Message)
+		return CacheSTSCredentials{}, cacheSTSProviderError(resp.StatusCode, data)
 	}
-	if stResp.Data == nil || strings.TrimSpace(stResp.Data.Credential.AccessKey) == "" {
-		return CacheSTSCredentials{}, fmt.Errorf("STS returned no credential")
+	if stResp.Data == nil || strings.TrimSpace(stResp.Data.Credential.AccessKey) == "" || strings.TrimSpace(stResp.Data.Credential.SecretKey) == "" || strings.TrimSpace(stResp.Data.Credential.SessionToken) == "" {
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "incomplete_credentials"}
 	}
 	creds := stResp.Data.Credential
 	expiration, err := time.Parse(time.RFC3339, creds.Expiration)
 	if err != nil {
-		return CacheSTSCredentials{}, fmt.Errorf("parse STS credential expiration %q: %w", creds.Expiration, err)
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "invalid_expiration"}
+	}
+	if !expiration.After(time.Now().Add(time.Minute)) {
+		return CacheSTSCredentials{}, &cacheSTSError{Reason: "credentials_expired_or_expiring"}
 	}
 	return CacheSTSCredentials{
 		AccessKeyID:     creds.AccessKey,
 		SecretAccessKey: creds.SecretKey,
 		SessionToken:    creds.SessionToken,
-		Expiration:      expiration,
+		Expiration:      minTime(expiration, time.Now().Add(time.Duration(durationSeconds)*time.Second)),
 	}, nil
 }
 
-// cacheSTSDurationSeconds covers the complete sandbox lifecycle and adds
-// five minutes for qiniu/actions-cache's post-job save step. There is no refresh
-// flow from the sandbox yet, so the credential must outlive the timeout.
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// Long jobs refresh credentials independently of the Sandbox lifetime.
 func cacheSTSDurationSeconds(sandboxTimeout time.Duration) int {
 	if sandboxTimeout <= 0 {
 		sandboxTimeout = time.Hour
+	}
+	if sandboxTimeout >= cacheSTSMaxDuration-cacheSTSHeadroom {
+		return int(cacheSTSMaxDuration.Seconds())
 	}
 	return int((sandboxTimeout + cacheSTSHeadroom).Seconds())
 }

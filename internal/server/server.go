@@ -36,6 +36,7 @@ type Server struct {
 	oauth            *http.Client
 	diagnostics      *http.Client
 	cacheSTS         *http.Client
+	cacheCredentials cacheCredentialsCache
 	terminalGate     sync.Mutex
 	terminalClosed   bool
 	terminalWG       sync.WaitGroup
@@ -504,6 +505,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /reports/{snapshot}/groups", s.handleRunnerReportGroups)
 	s.mux.HandleFunc("GET /reports/{snapshot}/requests", s.handleRunnerReportRequests)
 	s.mux.HandleFunc("GET /runner_requests", s.handleListRunners)
+	s.mux.HandleFunc("POST /cache/credentials", s.handleCacheCredentials)
 	s.mux.HandleFunc("GET /runner_request_repositories", s.handleListRunnerRequestRepositories)
 	s.mux.HandleFunc("GET /runner_requests_lookup/{identifier}", s.handleResolveRunnerRequest)
 	s.mux.HandleFunc("GET /runner_requests/{id}", s.handleGetRunner)

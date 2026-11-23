@@ -129,6 +129,8 @@ cache:
 
 Each region requires `id`, `label`, and `sandbox_api_url`. `s3_region` and `s3_endpoint` must be set together; only regions with both fields support Cache S3. The endpoint may be private to the Sandbox network, so runnerd validates configuration shape only and does not probe the bucket from the control plane.
 
-On every sandbox start, runnerd verifies Workflow Run context, mints an STS token for the sandbox lifetime plus five minutes, and injects `RUNS_ON_S3_*` variables. There is no refresh.
+On every sandbox start, runnerd verifies Workflow Run context and injects scoped `RUNS_ON_S3_*` credentials. Each STS token lasts at most one hour. The paired `qiniu/actions-cache` update refreshes credentials automatically for long jobs, including post-job save; keep the Sandbox timeout at 24 hours when needed. Publish the Action update before deploying runnerd and update any pinned old Action commit. Static AWS credentials in custom scripts do not refresh automatically.
+
+Sandboxes must reach the HTTPS `/cache/credentials` endpoint on the runnerd site. Operators can override it with `cache.credentials_url`; by default it uses the OAuth redirect URL origin. No workflow secret is required. Stopping or retrying the job, or changing its cache configuration, disables further refresh. STS failures appear in Runner logs under the `cache_sts` stage.
 
 See [Deploy runnerd](/docs/getting-started/deploy) for the full operator path.

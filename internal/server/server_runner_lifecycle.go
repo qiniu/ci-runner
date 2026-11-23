@@ -588,6 +588,7 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 			storage, storageErr := s.cacheStorageForInstallation(req.GitHubInstallationID, sandboxConfig.APIURL)
 			if storageErr != nil {
 				if !errors.Is(storageErr, state.ErrCacheServiceNotConfigured) {
+					s.recordCacheFailure(createCtx, id, st.ProvisionAttemptID, "configuration", storageErr)
 					s.logger.Warn("failed to resolve cache storage", "id", id, "error", storageErr)
 				} else {
 					s.logger.Debug("cache storage is not configured", "id", id)
@@ -602,9 +603,15 @@ func (s *Server) startClaimedRunner(ctx context.Context, claim state.RunnerState
 				}, cacheBasePrefix, scopeDecision.WriteScope, scopeDecision.ReadScopes, s.cfg.CacheSTSEndpoint, cacheSTSDurationSeconds(s.cfg.SandboxTimeout), s.cacheSTS)
 				if stsErr != nil {
 					s.logger.Warn("failed to generate cache STS", "id", id, "error", stsErr)
+					s.recordCacheFailure(createCtx, id, st.ProvisionAttemptID, "initial_credentials", stsErr)
 				} else if readPrefixesJSON, marshalErr := cacheScopePrefixesJSON(cacheBasePrefix, scopeDecision.ReadScopes); marshalErr != nil {
 					s.logger.Warn("failed to encode cache read prefixes", "id", id, "error", marshalErr)
+					s.recordCacheFailure(createCtx, id, st.ProvisionAttemptID, "read_scopes", marshalErr)
+				} else if refreshURL, refreshToken, refreshErr := s.issueCacheRefresh(req, st, storage, scopeDecision, stsCreds); refreshErr != nil {
+					s.recordCacheFailure(createCtx, id, st.ProvisionAttemptID, "refresh_configuration", refreshErr)
 				} else {
+					input.CacheCredentialsURL = refreshURL
+					input.CacheCredentialsToken = refreshToken
 					input.CacheS3Region = storage.region
 					input.CacheS3Bucket = storage.bucket
 					input.CacheS3Endpoint = storage.endpoint

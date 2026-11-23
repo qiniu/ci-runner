@@ -371,14 +371,20 @@ func TestEffectiveRunnerVersionCaptureRejectsWorkflowOnlyEvidence(t *testing.T) 
 
 func TestStartScriptExportsScopedCachePrefixes(t *testing.T) {
 	input := StartInput{
-		CacheS3Bucket:       "cache-bucket",
-		CacheS3AccessKeyID:  "access-key",
-		CacheS3SecretKey:    "secret-key",
-		CacheS3ReadPrefixes: `["cache/o/r/scopes/pr-7","cache/o/r/scopes/branch-main"]`,
-		CacheS3WritePrefix:  "cache/o/r/scopes/pr-7",
+		CacheS3Bucket:         "cache-bucket",
+		CacheCredentialsURL:   "https://runner.example/cache/credentials",
+		CacheCredentialsToken: "refresh-token",
+		CacheS3AccessKeyID:    "access-key",
+		CacheS3SecretKey:      "secret-key",
+		CacheS3ReadPrefixes:   `["cache/o/r/scopes/pr-7","cache/o/r/scopes/branch-main"]`,
+		CacheS3WritePrefix:    "cache/o/r/scopes/pr-7",
 	}
 	script := startScript(input, "sandbox-1")
 	for _, want := range []string{
+		"RUNS_ON_S3_CREDENTIALS_URL",
+		"RUNS_ON_S3_CREDENTIALS_TOKEN",
+		base64.StdEncoding.EncodeToString([]byte(input.CacheCredentialsURL)),
+		base64.StdEncoding.EncodeToString([]byte(input.CacheCredentialsToken)),
 		"RUNS_ON_S3_CACHE_READ_PREFIXES",
 		"RUNS_ON_S3_CACHE_WRITE_PREFIX",
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3ReadPrefixes)),
@@ -5437,5 +5443,28 @@ func TestSandboxTimeoutSecondsRoundsUpAndClamps(t *testing.T) {
 	}
 	if got := sandboxTimeoutSeconds(0); got != 1 {
 		t.Fatalf("expected minimum timeout of one second, got %d", got)
+	}
+}
+
+func TestJobStartedHookMasksCacheCredentialsBeforeWorkflow(t *testing.T) {
+	script := startScript(StartInput{}, "sandbox-1")
+	_, hook, ok := strings.Cut(script, "cat >\"$hook_root/job-started.sh\" <<'HOOK'\n")
+	if !ok {
+		t.Fatal("job-started hook missing")
+	}
+	hook, _, ok = strings.Cut(hook, "\nHOOK\n")
+	if !ok {
+		t.Fatal("job-started hook terminator missing")
+	}
+	cmd := exec.Command("bash", "-c", hook)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "RUNNERD_RUNNER_LISTENER=/nonexistent/listener", "RUNS_ON_S3_CREDENTIALS_TOKEN=cap%ability\nline", "RUNS_ON_S3_ACCESS_KEY_ID=sts-ak", "RUNS_ON_S3_SECRET_ACCESS_KEY=sts-sk", "RUNS_ON_S3_SESSION_TOKEN=sts-session"}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook: %v %s", err, output)
+	}
+	for _, want := range []string{"::add-mask::cap%25ability%0Aline", "::add-mask::sts-ak", "::add-mask::sts-sk", "::add-mask::sts-session"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("mask absent: %s", want)
+		}
 	}
 }

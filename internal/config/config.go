@@ -50,6 +50,7 @@ type Config struct {
 	ConfigPath                string
 	SandboxRegions            []SandboxRegionConfig
 	CacheSTSEndpoint          string
+	CacheCredentialsURL       string
 	DeploymentTemplateID      string
 	DeploymentWorkRoot        string
 	DeploymentMaxConcurrent   int
@@ -128,7 +129,8 @@ type fileConfig struct {
 		RepositoryConcurrencyLimits map[string]int `yaml:"repository_concurrency_limits"`
 	} `yaml:"worker"`
 	Cache struct {
-		STSEndpoint string `yaml:"sts_endpoint"`
+		STSEndpoint    string `yaml:"sts_endpoint"`
+		CredentialsURL string `yaml:"credentials_url"`
 	} `yaml:"cache"`
 	Deploy struct {
 		TemplateID            string `yaml:"template_id"`
@@ -237,6 +239,7 @@ func LoadFile(path string) (Config, error) {
 		ConfigPath:                path,
 		SandboxRegions:            raw.Sandbox.Regions,
 		CacheSTSEndpoint:          defaultString(raw.Cache.STSEndpoint, defaultCacheSTSEndpoint),
+		CacheCredentialsURL:       strings.TrimSpace(raw.Cache.CredentialsURL),
 		DeploymentTemplateID:      strings.TrimSpace(raw.Deploy.TemplateID),
 		DeploymentWorkRoot:        strings.TrimSpace(raw.Deploy.WorkRoot),
 		DeploymentMaxConcurrent:   defaultInt(raw.Deploy.MaxConcurrentPerScope, 3),
