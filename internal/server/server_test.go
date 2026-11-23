@@ -340,6 +340,12 @@ func (f *fakeTerminalSession) isClosed() bool {
 	return f.closed
 }
 
+func (f *fakeSandbox) terminalSession() *fakeTerminalSession {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.terminal
+}
+
 func (f *fakeSandbox) startedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
