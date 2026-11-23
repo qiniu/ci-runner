@@ -6,6 +6,7 @@
 
 面向最终用户的中英文公开指南位于 [runner.qiniuinc.com/docs](https://runner.qiniuinc.com/docs)，覆盖托管版上手、runnerd 部署、managed workflow、组织 Fork 赞助、自定义模板从构建到使用的完整流程和故障排查。中英文 Markdown 源文件成对放在 `ui/src/content/site-docs/{en,zh}/`，确保部署的 UI、指南内容和导航一同交付。
 
+- [Runner 用量报表](../runner-reports.md)：请求批次口径、身份与时间约定、快照接口、查询限制及验证证据（英文）。
 - [SQLite 到 PostgreSQL 迁移退役记录](database-transfer-retirement.md)：历史手册、保留的启动保护和后续运维事项。
 - [平台 Runner 规格管理](platform-runner-specs.md)：数据库权威来源、公共／私有绑定、目录发布、运行策略、迁移和兼容边界。
 - [本地测试与 GitHub 配置](testing.md)：本地配置、GitHub App/OAuth 设置、webhook forwarding、admin API 示例、终端计时故障注入和排障流程。

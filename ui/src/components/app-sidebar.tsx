@@ -1,4 +1,4 @@
-import { Activity, ClipboardList, CloudCog, Github, ListTree, ScrollText, Settings2, Stethoscope, UsersRound } from "lucide-react"
+import { BarChart3, Activity, ClipboardList, CloudCog, Github, ListTree, ScrollText, Settings2, Stethoscope, UsersRound } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { adminSectionPath, type AdminSection } from "@/admin-types"
@@ -19,6 +19,7 @@ export function AppSidebar({ section }: { section: AdminSection }) {
   const { t } = useTranslation()
   const items = [
     { id: "overview", label: t("sidebar.overview"), icon: Activity },
+    { id: "reports", label: t("sidebar.reports"), icon: BarChart3 },
     { id: "accounts", label: t("sidebar.accounts"), icon: UsersRound },
     { id: "github_accounts", label: t("sidebar.githubAppAccounts"), icon: Github },
     { id: "runner_requests", label: t("sidebar.runnerRequests"), icon: ListTree },

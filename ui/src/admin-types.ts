@@ -428,6 +428,7 @@ export type SandboxInstance = {
 export const activeStatuses = new Set<RunnerStatus>(["queued", "creating", "running", "stopping"])
 export const logNames = ["control.log", "stdout.log", "stderr.log"] as const
 export const adminSections = [
+  "reports",
   "overview",
   "accounts",
   "github_accounts",

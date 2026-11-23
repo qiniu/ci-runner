@@ -1,3 +1,5 @@
+import { RunnerReportsSection } from "@/components/runner-reports-section"
+import { reportReturnSearch } from "@/runner-reports"
 import { readableQuery } from "@/url-query"
 import { githubContextFromPath, githubContextPath } from "@/github-context-routes"
 import { lazy, Suspense, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -1435,6 +1437,8 @@ function App() {
             />
           ) : null}
 
+          {section === "reports" ? <RunnerReportsSection search={locationSearch} request={request} onNavigate={search => setSection("reports", search)} /> : null}
+
           {section === "accounts" ? <AccountsSection request={request} /> : null}
 
           {section === "github_accounts" ? (
@@ -1450,7 +1454,8 @@ function App() {
             <RunnerRequestSection
               identifier={runnerRequestIdentifier}
               request={request}
-              onBackToRunnerRequests={() => setSection("runner_requests", runnerRequestQuery)}
+              backLabel={reportReturnSearch(locationSearch) !== null ? t("reports.back") : undefined}
+              onBackToRunnerRequests={() => { const back = reportReturnSearch(locationSearch); if (back !== null) setSection("reports", back); else setSection("runner_requests", runnerRequestQuery) }}
               onResolvedRequestID={canonicalizeRunnerRequestID}
               onCopyRunnerID={(id) => void copyRunnerID(id)}
               onRetryRunner={retryRunner}

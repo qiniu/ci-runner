@@ -146,19 +146,20 @@ func TestTerminalSocketLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = c.WriteJSON(terminalFrame{Type: "resize", Rows: 41, Cols: 121})
+			terminal := f.fake.terminalSession()
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
-				f.fake.terminal.mu.Lock()
-				ok := f.fake.terminal.input == wantInput && f.fake.terminal.resized.Rows == 41
-				f.fake.terminal.mu.Unlock()
+				terminal.mu.Lock()
+				ok := terminal.input == wantInput && terminal.resized.Rows == 41
+				terminal.mu.Unlock()
 				if ok {
 					break
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			f.fake.terminal.mu.Lock()
-			input, size := f.fake.terminal.input, f.fake.terminal.resized
-			f.fake.terminal.mu.Unlock()
+			terminal.mu.Lock()
+			input, size := terminal.input, terminal.resized
+			terminal.mu.Unlock()
 			if input != wantInput || size.Cols != 121 {
 				t.Fatalf("input matched=%v, resize=%+v", input == wantInput, size)
 			}
@@ -262,9 +263,10 @@ func TestTerminalSocketRevocationAndAttemptFencing(t *testing.T) {
 				if closed.Cleanup != "confirmed" {
 					t.Fatalf("cleanup %+v", closed)
 				}
-				f.fake.terminal.mu.Lock()
-				defer f.fake.terminal.mu.Unlock()
-				if f.fake.terminal.input != "" {
+				terminal := f.fake.terminalSession()
+				terminal.mu.Lock()
+				defer terminal.mu.Unlock()
+				if terminal.input != "" {
 					t.Fatal("stale input accepted")
 				}
 			})
@@ -380,7 +382,7 @@ func TestTerminalSocketCreationRaceAndUnknownCleanup(t *testing.T) {
 				if _, _, err := c.ReadMessage(); err == nil {
 					t.Fatal("stale creation exposed")
 				}
-				if !f.fake.terminal.isClosed() {
+				if terminal := f.fake.terminalSession(); terminal == nil || !terminal.isClosed() {
 					t.Fatal("stale shell not closed")
 				}
 			}
