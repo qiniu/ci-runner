@@ -271,6 +271,7 @@ export const en = {
     repoRuntimeShare: "Runtime share by repository",
     ownerRequestShare: "Request share by GitHub owner",
     ownerRuntimeShare: "Runtime share by GitHub owner",
+    totalRuntime: "Total runtime",
     hoursValue: "{{value}} h",
     secondsValue: "{{value}} s",
     specCoverage: "Recorded runtime covers {{samples}} of {{eligible}} eligible requests from the current or last attempt.",

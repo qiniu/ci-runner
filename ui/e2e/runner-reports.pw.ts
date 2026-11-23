@@ -101,7 +101,7 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   await setup(page)
   const calls: string[] = []
   page.on("request", request => calls.push(request.url()))
-  const group = { ...totals, key: "standard", label: "standard · global" }
+  const group = { ...totals, key: "standard", label: "qiniu-ubuntu-24.04 · global" }
   const ranking = { total: 1, requests: [group], runtime: [group] }
   const scope = { ...query, repository: "team/repo" }
   const repos = [
@@ -111,7 +111,7 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   const items = [
           {
             key: "standard",
-            label: "standard · global",
+            label: group.label,
             name: "standard",
             source: "global",
             current: true,
@@ -174,8 +174,18 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   expect(calls.filter(url => /\/(specs|requests)\?/.test(url))).toEqual([])
 
   const donut = page.getByRole("img", { name: "Runner spec · Recorded runtime (h) chart" })
+  await expect(donut.locator("svg")).toContainText("Total runtime")
+  await expect(donut.locator("svg")).toContainText("1 h · 100.0%")
+  const bar = page.getByRole("img", { name: "Runner spec · Requests chart" })
+  const axisText = () => bar.locator("svg text").allTextContents().then(parts => parts.join("").replace(/\s+/g, ""))
+  await expect.poll(axisText).toContain(group.label.replace(/\s+/g, ""))
+  const legends = page.getByRole("list", { name: "Runner spec chart values" })
   const box = await donut.boundingBox()
-  if (!box) throw new Error("Missing runtime chart")
+  const barBox = await bar.boundingBox()
+  const legendBox = await legends.first().boundingBox()
+  if (!box || !barBox || !legendBox) throw new Error("Missing spec charts or legend")
+  expect(box.y).toBeGreaterThanOrEqual(barBox.y + barBox.height)
+  expect(legendBox.x).toBeGreaterThanOrEqual(barBox.x + barBox.width)
   await donut.click({ position: { x: box.width / 2 + box.height * 0.32, y: box.height / 2 } })
   await expect(filter).toHaveText(group.label)
   await expect(trend).toHaveCount(1)
@@ -201,6 +211,12 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   await choose("All specs")
   await expect(page.getByText("cancelled · 2 · 50%")).toBeVisible()
   await expect(charts).toHaveAttribute("aria-pressed", "true")
+  await expect.poll(axisText).toContain(group.label.replace(/\s+/g, ""))
+  await expect(donut.locator("svg")).toContainText("100.0%")
+  const mobileBar = await bar.boundingBox()
+  const mobileLegend = await legends.first().boundingBox()
+  if (!mobileBar || !mobileLegend) throw new Error("Missing mobile chart or legend")
+  expect(mobileLegend.y).toBeGreaterThanOrEqual(mobileBar.y + mobileBar.height)
   expect(calls.filter(url => /\/reports\/[^/]+\/requests(?:\?|$)/.test(url))).toEqual([])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

@@ -410,7 +410,7 @@ function SpecUsageReport({
         />
       )}
       {!table && !focus && (
-        <div className="grid min-w-0 gap-3 lg:grid-cols-2">
+        <div className="@container/spec-shares grid min-w-0 grid-cols-1 gap-3">
           {(["requests", "runtime"] as const).map((metric) => (
             <Distribution
               key={metric}
@@ -1088,6 +1088,7 @@ function Distribution({
       })
     : []
   const bars = dimension === "repository" || (dimension === "spec" && onSelect && sort === "requests")
+  const specRuntime = dimension === "spec" && sort === "runtime" && Boolean(onSelect)
   const metric = t(sort === "runtime" ? "reports.runtime" : "reports.requests")
   const format = (value: number | null) =>
     value === null ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
@@ -1104,7 +1105,7 @@ function Distribution({
           (points.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">{t("reports.empty")}</p>
           ) : (
-            <>
+            <div className="grid min-w-0 gap-2 @3xl/spec-shares:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] @3xl/spec-shares:items-center @3xl/spec-shares:gap-6">
               {total > 0 ? (
                 <Suspense
                   fallback={
@@ -1134,9 +1135,42 @@ function Distribution({
                         textStyle: { color: colors.text, width: 220, overflow: "breakAll" },
                         valueFormatter: (value) => format(typeof value === "number" ? value : null),
                       },
+                      ...(specRuntime && {
+                        title: {
+                          left: "center",
+                          top: "center",
+                          padding: 0,
+                          itemGap: 4,
+                          text: t("reports.hoursValue", { value: format(total) }),
+                          subtext: t("reports.totalRuntime"),
+                          textStyle: { color: colors.text, fontSize: 18 },
+                          subtextStyle: { color: colors.text, fontSize: 12 },
+                        },
+                        media: [
+                          {
+                            query: { maxWidth: 480 },
+                            option: { series: [{ label: { formatter: ({ value }: { value: number }) => share(value) } }] },
+                          },
+                          {
+                            option: {
+                              series: [{
+                                label: {
+                                  formatter: ({ name, value }: { name: string; value: number }) =>
+                                    `${name}\n${t("reports.hoursValue", { value: format(value) })} · ${share(value)}`,
+                                },
+                              }],
+                            },
+                          },
+                        ],
+                      }),
                       ...(bars
                         ? {
-                            grid: { left: 130, right: 15, top: 10, bottom: 30 },
+                            grid: { left: 4, right: 15, top: 10, bottom: 30 },
+                            media: [
+                              { query: { maxWidth: 359 }, option: { yAxis: { axisLabel: { width: 120 } } } },
+                              { query: { minWidth: 360, maxWidth: 599 }, option: { yAxis: { axisLabel: { width: 168 } } } },
+                              { option: { yAxis: { axisLabel: { width: 260 } } } },
+                            ],
                             xAxis: {
                               type: "value" as const,
                               minInterval: sort === "requests" ? 1 : undefined,
@@ -1147,7 +1181,14 @@ function Distribution({
                               type: "category" as const,
                               inverse: true,
                               data: points.map((row) => row.label),
-                              axisLabel: { color: colors.text, width: 115, overflow: "truncate" as const },
+                              axisLabel: {
+                                color: colors.text,
+                                interval: 0,
+                                overflow: "breakAll" as const,
+                                lineHeight: 12,
+                                height: 24,
+                                lineOverflow: "truncate" as const,
+                              },
                               axisLine: { show: false },
                               axisTick: { show: false },
                             },
@@ -1171,8 +1212,16 @@ function Distribution({
                             {
                               type: "pie",
                               name: metric,
-                              radius: ["52%", "78%"],
-                              label: { show: false },
+                              radius: specRuntime ? ["43%", "67%"] : ["52%", "78%"],
+                              label: {
+                                show: specRuntime,
+                                color: colors.text,
+                                alignTo: "edge",
+                                edgeDistance: 4,
+                                lineHeight: 16,
+                                overflow: "truncate",
+                              },
+                              labelLine: { length: 8, length2: 6 },
                               data: points.flatMap((row) =>
                                 row.value !== null && row.value > 0
                                   ? [
@@ -1197,50 +1246,52 @@ function Distribution({
                   {t(report.totals.runtime.samples ? "reports.zeroRuntime" : "reports.noRuntime")}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground">
-                {t("reports.distributionTotal", {
-                  metric,
-                  value: sort === "runtime" && !report.totals.runtime.samples ? "—" : format(total),
-                })}
-              </p>
-              <ul
-                className="space-y-1"
-                aria-label={t("reports.chartValues", { dimension: t(`reports.${dimension}`) })}
-              >
-                {points.map((row, index) => (
-                  <li key={index} className="flex min-w-0 items-start gap-2 text-sm">
-                    <span className="mt-1.5 size-2.5 shrink-0 rounded-sm" style={{ background: row.color }} />
-                    {onSelect && !row.other ? (
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 break-all text-left text-primary hover:underline aria-pressed:font-semibold aria-pressed:underline"
-                        onClick={() => onSelect(row.key, row.label)}
-                      >
-                        {row.label}
-                      </button>
-                    ) : (
-                      <span className="min-w-0 flex-1 break-all">{row.label}</span>
-                    )}
-                    <span className="shrink-0 text-right tabular-nums">
-                      {format(row.value)}{" "}
-                      <span className="text-xs text-muted-foreground">· {share(row.value)}</span>
-                    </span>
-                    {!row.other && onFilter && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-6 shrink-0"
-                        aria-label={t("reports.filterGroup", { name: row.label })}
-                        onClick={() => onFilter(row.key)}
-                        disabled={!row.key}
-                      >
-                        <Filter className="size-3.5" />
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
+              <div className="min-w-0 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {t("reports.distributionTotal", {
+                    metric,
+                    value: sort === "runtime" && !report.totals.runtime.samples ? "—" : format(total),
+                  })}
+                </p>
+                <ul
+                  className="space-y-1 @3xl/spec-shares:space-y-2"
+                  aria-label={t("reports.chartValues", { dimension: t(`reports.${dimension}`) })}
+                >
+                  {points.map((row, index) => (
+                    <li key={index} className="flex min-w-0 items-start gap-2 text-sm">
+                      <span className="mt-1.5 size-2.5 shrink-0 rounded-sm" style={{ background: row.color }} />
+                      {onSelect && !row.other ? (
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 break-all text-left text-primary hover:underline aria-pressed:font-semibold aria-pressed:underline"
+                          onClick={() => onSelect(row.key, row.label)}
+                        >
+                          {row.label}
+                        </button>
+                      ) : (
+                        <span className="min-w-0 flex-1 break-all">{row.label}</span>
+                      )}
+                      <span className="shrink-0 text-right tabular-nums">
+                        {format(row.value)}{" "}
+                        <span className="text-xs text-muted-foreground">· {share(row.value)}</span>
+                      </span>
+                      {!row.other && onFilter && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-6 shrink-0"
+                          aria-label={t("reports.filterGroup", { name: row.label })}
+                          onClick={() => onFilter(row.key)}
+                          disabled={!row.key}
+                        >
+                          <Filter className="size-3.5" />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           ))}
       </CardContent>
     </Card>

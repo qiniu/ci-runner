@@ -271,6 +271,7 @@ export const zh = {
     repoRuntimeShare: "仓库运行时长占比",
     ownerRequestShare: "GitHub 账户／组织请求数占比",
     ownerRuntimeShare: "GitHub 账户／组织运行时长占比",
+    totalRuntime: "总运行时长",
     hoursValue: "{{value}} 小时",
     secondsValue: "{{value}} 秒",
     specCoverage: "运行时长覆盖 {{samples}} / {{eligible}} 条适用请求，统计当前或最后一次尝试。",

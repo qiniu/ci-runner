@@ -13,14 +13,16 @@ import {
 import {
   GridComponent,
   TooltipComponent,
+  TitleComponent,
   type GridComponentOption,
   type TooltipComponentOption,
+  type TitleComponentOption,
 } from "echarts/components"
 import { SVGRenderer } from "echarts/renderers"
 
-registerCharts([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, SVGRenderer])
+registerCharts([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, TitleComponent, SVGRenderer])
 export type ReportChartOption = ComposeOption<
-  BarSeriesOption | LineSeriesOption | PieSeriesOption | GridComponentOption | TooltipComponentOption
+  BarSeriesOption | LineSeriesOption | PieSeriesOption | GridComponentOption | TooltipComponentOption | TitleComponentOption
 >
 export type ReportChartColors = { series: string[]; text: string; border: string; background: string }
 

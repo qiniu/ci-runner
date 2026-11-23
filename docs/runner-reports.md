@@ -5,7 +5,11 @@ trends, and usage by Runner Spec, GitHub Installation owner, and repository.
 The filter bar above the report tabs applies the date range, timezone, repository
 and time grain to both Overview and Specs. Switching tabs keeps those selections.
 The Specs tab opens with two comparison charts showing each spec's share of
-requests and recorded runtime. The catalog includes global, account and
+requests and recorded runtime. Each chart occupies its own row. The legend shows
+exact values and shares beside the plot on wide cards and below it on narrow cards.
+The runtime donut shows the total in its center and labels each visible slice.
+Narrow plots use percentage labels with the full breakdown in the legend.
+The catalog includes global, account and
 organization specs. Repository and owner filters narrow usage, and an exact
 spec filter also narrows the catalog.
 
