@@ -42,14 +42,21 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 		t.Fatalf("overview: %d %s", w.Code, w.Body)
 	}
 	var value struct {
-		Snapshot string                  `json:"snapshot"`
-		Query    state.RunnerReportQuery `json:"query"`
+		Snapshot      string                              `json:"snapshot"`
+		Distributions map[string]state.ReportDistribution `json:"distributions"`
+		Query         state.RunnerReportQuery             `json:"query"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &value); err != nil {
 		t.Fatal(err)
 	}
 	if value.Snapshot == "" || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("missing snapshot or cache boundary")
+	}
+	for _, dimension := range []string{"spec", "owner", "repository"} {
+		ranking, ok := value.Distributions[dimension]
+		if !ok || ranking.Requests == nil || ranking.Runtime == nil || ranking.Total != 0 {
+			t.Fatalf("empty %s rankings missing from overview: %+v", dimension, ranking)
+		}
 	}
 	paths := []string{"/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", "/reports/" + value.Snapshot + "/requests"}
 	for _, path := range paths {

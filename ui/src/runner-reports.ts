@@ -32,6 +32,7 @@ export type ReportTotals = {
 export type RunnerReport = {
   query: ReportQuery
   snapshot: string
+  distributions?: Record<ReportDimension, { total: number; requests: ReportGroup[]; runtime: ReportGroup[] }>
   observed_at: string
   expires_at: string
   window: { start: string; end: string; previous_start: string; previous_end: string }
@@ -78,7 +79,7 @@ export function reportPreset(days: number, timezone: string, now = new Date()): 
 
 // The remainder uses full snapshot totals, never a normalized Top 5 subtotal.
 export function reportDistribution(
-  page: ReportPage<ReportGroup>,
+  page: Pick<ReportPage<ReportGroup>, "items" | "total">,
   totals: ReportTotals,
   metric: "requests" | "runtime",
 ) {

@@ -676,12 +676,19 @@ func (r *RunnerReport) Groups(dimension, sortBy string) ([]ReportGroup, error) {
 	if sortBy != "requests" && sortBy != "runtime" {
 		return nil, errors.New("invalid report sort")
 	}
-	var result []ReportGroup
+	groups := r.reportGroups(dimension)
+	sortReportGroups(groups, sortBy)
+	return groups, nil
+}
+
+func (r *RunnerReport) reportGroups(dimension string) []ReportGroup {
 	if r.groupTotals != nil {
-		result = append([]ReportGroup{}, r.groupTotals[dimension]...)
-	} else {
-		result = r.groupRows(dimension)
+		return append([]ReportGroup{}, r.groupTotals[dimension]...)
 	}
+	return r.groupRows(dimension)
+}
+
+func sortReportGroups(result []ReportGroup, sortBy string) {
 	sort.Slice(result, func(i, j int) bool {
 		if sortBy == "runtime" && result[i].Runtime.Seconds != result[j].Runtime.Seconds {
 			return result[i].Runtime.Seconds > result[j].Runtime.Seconds
@@ -691,7 +698,29 @@ func (r *RunnerReport) Groups(dimension, sortBy string) ([]ReportGroup, error) {
 		}
 		return result[i].Key < result[j].Key
 	})
-	return result, nil
+}
+
+type ReportDistribution struct {
+	Total    int           `json:"total"`
+	Requests []ReportGroup `json:"requests"`
+	Runtime  []ReportGroup `json:"runtime"`
+}
+
+// ChartDistributions freezes both Top 5 rankings for the dashboard in the
+// overview response. Each dimension is grouped once, including for row snapshots.
+func (r *RunnerReport) ChartDistributions() map[string]ReportDistribution {
+	distributions := make(map[string]ReportDistribution, 3)
+	for _, dimension := range []string{"spec", "owner", "repository"} {
+		groups := r.reportGroups(dimension)
+		n := min(5, len(groups))
+		sortReportGroups(groups, "requests")
+		requests := append([]ReportGroup{}, groups[:n]...)
+		sortReportGroups(groups, "runtime")
+		distributions[dimension] = ReportDistribution{
+			Total: len(groups), Requests: requests, Runtime: append([]ReportGroup{}, groups[:n]...),
+		}
+	}
+	return distributions
 }
 
 func (r *RunnerReport) groupRows(dimension string) []ReportGroup {

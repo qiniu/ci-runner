@@ -118,7 +118,10 @@ calls or current catalog scans.
 | `/reports/{snapshot}/requests` | Optional `dimension` and exact `key`; `limit`, `offset`. No dimension returns the full captured cohort |
 
 Overview returns normalized `query`, `window`, `observed_at`, `totals`, `previous`,
-zero-filled `trend`, `snapshot` and `expires_at`. Details return `items`, `total`,
+zero-filled `trend`, `snapshot`, `expires_at` and `distributions`. Each distribution includes its
+group count and the first five groups by requests and by runtime. The dashboard
+renders and switches rankings from this single response. Snapshot IDs used by
+the pagination endpoints are cached in the serving process. Details return `items`, `total`,
 `offset` and `snapshot`. Totals are computed in the server over the entire bounded
 cohort, never over a browser page. Groups use the same immutable snapshot as the overview. Request pages are
 available for snapshots that retain individual requests. All group shares use full
