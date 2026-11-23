@@ -459,8 +459,7 @@ function Trend({ report }: { report: RunnerReport }) {
                     }
                   : {
                       type: "line" as const,
-                      smooth: 0.2,
-                      smoothMonotone: "x" as const,
+                      smooth: true,
                       symbolSize: 5,
                       z: 3,
                       itemStyle: { color: colors.series[1] },
