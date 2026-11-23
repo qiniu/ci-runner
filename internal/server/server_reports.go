@@ -105,6 +105,7 @@ func reportQueryKey(q state.RunnerReportQuery) string {
 	}
 	return string(b)
 }
+
 func (c *runnerReportCache) find(id, key string, now time.Time) (cachedRunnerReport, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

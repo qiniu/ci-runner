@@ -23,6 +23,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -31,27 +32,45 @@ const ReportChart = lazy(() => import("@/components/report-chart"))
 
 type Request = (url: string, options?: RequestInit) => Promise<unknown>
 type Resource<T> = { url: string; data?: T; error?: string }
-function useReportResource<T>(url: string, request: Request, revision = 0) {
+function useReportResource<T>(
+  url: string,
+  request: Request,
+  revision = 0,
+  pinnedUrl?: (resource: Resource<T>) => string | undefined,
+) {
   const [state, setState] = useState<Resource<T>>({ url: "" })
+  // Writing the displayed snapshot to the URL should not reload it. A page reload
+  // starts with empty state and fetches the pinned URL, including expiry checks.
+  const fetchUrl = url === pinnedUrl?.(state) ? state.url : url
   const [attempt, setAttempt] = useState(0)
   const retry = useCallback(() => setAttempt((v) => v + 1), [])
   useEffect(() => {
     const controller = new AbortController()
     let current = true
-    if (url)
-      void request(url, { signal: controller.signal })
+    if (fetchUrl)
+      void request(fetchUrl, { signal: controller.signal })
         .then((data) => {
-          if (current) setState({ url, data: data as T })
+          if (current) setState({ url: fetchUrl, data: data as T })
         })
         .catch((error) => {
-          if (current) setState({ url, error: error instanceof Error ? error.message : String(error) })
+          if (current) setState({ url: fetchUrl, error: error instanceof Error ? error.message : String(error) })
         })
     return () => {
       current = false
       controller.abort()
     }
-  }, [url, request, revision, attempt])
-  return { ...(state.url === url ? state : { url }), retry }
+  }, [fetchUrl, request, revision, attempt])
+  return { ...(state.url === fetchUrl ? state : { url }), retry }
+}
+function pinnedReportUrl({ url, data }: Resource<RunnerReport>) {
+  if (!data) return
+  const params = new URLSearchParams()
+  for (const key of reportQueryKeys) {
+    const value = data.query[key]
+    if (value) params.set(key, value)
+  }
+  params.set("snapshot", data.snapshot)
+  return `${url.split("?")[0]}?${params}`
 }
 function hours(seconds: number) {
   return (seconds / 3600).toLocaleString(undefined, { maximumFractionDigits: 2 })
@@ -81,6 +100,7 @@ export function RunnerReportsSection({
     `/reports/${view === "specs" ? "spec-usage" : "overview"}?${query}`,
     request,
     revision,
+    pinnedReportUrl,
   )
   const report = overview.data
   const navigate = (values: Record<string, string | null>) => {
@@ -96,7 +116,7 @@ export function RunnerReportsSection({
     onNavigate(`?${next}`)
   }
   const refresh = () => {
-    navigate({ snapshot: null, focus_snapshot: null, requests_offset: null })
+    navigate({ snapshot: null, focus_snapshot: null, requests_offset: null, spec_offset: null })
     setRevision((v) => v + 1)
   }
   const applyFilters = (query: ReportQuery) => {
@@ -131,24 +151,34 @@ export function RunnerReportsSection({
         query={selected}
         onApply={applyFilters}
       />
-      <ReportTabs
+      <Tabs
+        className="min-w-0 gap-4"
         value={view}
-        onChange={(next) => {
+        onValueChange={(next) => {
           if (next !== view) navigate({ view: next === "overview" ? null : next, snapshot: null })
         }}
-      />
-      <ResourceState resource={overview} />
-      {report && (
-        <>
-          {view === "specs" ? (
+      >
+        <TabsList variant="line" aria-label={t("reports.views")}>
+          {(["overview", "specs"] as const).map((tab) => (
+            <TabsTrigger key={tab} value={tab} variant="line">
+              {t(`reports.${tab}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <ResourceState resource={overview} />
+        <TabsContent value="specs" className="min-w-0">
+          {report && view === "specs" && (
             <SpecUsageReport
               key={revision}
               report={report}
               search={search}
               request={request}
-              onNavigate={onNavigate}
+              navigate={navigate}
             />
-          ) : (
+          )}
+        </TabsContent>
+        <TabsContent value="overview" className="min-w-0 space-y-4">
+          {report && view === "overview" && (
             <>
               <div className="flex flex-wrap gap-x-4 gap-y-1 break-words text-xs text-muted-foreground">
                 <p>
@@ -266,38 +296,9 @@ export function RunnerReportsSection({
               </div>
             </>
           )}
-        </>
-      )}
+        </TabsContent>
+      </Tabs>
     </section>
-  )
-}
-
-function ReportTabs({
-  value,
-  onChange,
-}: {
-  value: "overview" | "specs"
-  onChange: (value: "overview" | "specs") => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div className="flex gap-1 border-b" role="tablist" aria-label={t("reports.views")}>
-      {(["overview", "specs"] as const).map((tab) => (
-        <Button
-          key={tab}
-          type="button"
-          variant="ghost"
-          role="tab"
-          aria-selected={value === tab}
-          className={
-            value === tab ? "rounded-b-none border-b-2 border-primary text-primary" : "rounded-b-none"
-          }
-          onClick={() => onChange(tab)}
-        >
-          {t(`reports.${tab}`)}
-        </Button>
-      ))}
-    </div>
   )
 }
 
@@ -309,30 +310,19 @@ function SpecUsageReport({
   report,
   search,
   request,
-  onNavigate,
+  navigate,
 }: {
   report: RunnerReport
   search: string
   request: Request
-  onNavigate: (search: string) => void
+  navigate: SpecURLUpdate
 }) {
   const { t } = useTranslation()
   const url = new URLSearchParams(search)
   const table = url.get("spec_mode") === "table"
   const focus = url.get("focus_spec") || url.get("spec") || ""
-  const update = (values: Record<string, string | null>) => {
-    const next = new URLSearchParams(search)
-    next.delete("spec")
-    next.delete("requests_offset")
-    next.delete("focus_snapshot")
-    if (focus) next.set("focus_spec", focus)
-    if (url.has("spec")) next.delete("snapshot")
-    for (const [key, value] of Object.entries(values)) {
-      if (value === null) next.delete(key)
-      else next.set(key, value)
-    }
-    onNavigate(`?${next}`)
-  }
+  const update: SpecURLUpdate = (values) =>
+    navigate({ spec: null, requests_offset: null, focus_snapshot: null, focus_spec: focus || null, ...values })
   const dashboard = report.spec_dashboard
   const embedded = dashboard?.items.find((item) => item.key === focus)
   const lookup = useReportResource<ReportSpecPage>(

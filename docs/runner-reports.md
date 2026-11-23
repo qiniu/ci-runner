@@ -22,6 +22,8 @@ owner rankings use the selected cohort's requests or recorded runtime as the
 denominator. Each ranking includes its Top 5 and a metric-specific remainder.
 A zero runtime denominator or missing sample displays a dash.
 
+Spec selections, table sorting and pagination preserve the snapshot and date range in the URL.
+Refreshing loads the first table page of the refreshed snapshot.
 Table mode shows exact aggregate metrics for the current selection. Individual
 requests are available on the admin Runner Requests page.
 

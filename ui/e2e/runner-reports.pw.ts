@@ -150,7 +150,7 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
     ...report, query:scope, distributions:{spec:ranking,owner:ranking,repository:ranking},
     spec_dashboard:{ summary:{ ...items[0], requests:4, job_results:{success:2, cancelled:2} }, total:2, catalog:2, used_current:1, historical_groups:0, items },
   }}))
-  await page.goto(`/admin/reports?${new URLSearchParams(scope)}&view=specs&requests_offset=0`)
+  await page.goto("/admin/reports?view=specs&requests_offset=0")
   const requestToggle = page.getByRole("button", { name: /^(View|Hide) requests$/ })
   const tab = page.getByRole("tab", { name: "Specs", exact: true })
   const charts = page.getByRole("button", { name: "Charts", exact: true })
@@ -188,6 +188,9 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   expect(legendBox.x).toBeGreaterThanOrEqual(barBox.x + barBox.width)
   await donut.click({ position: { x: box.width / 2 + box.height * 0.32, y: box.height / 2 } })
   await expect(filter).toHaveText(group.label)
+  expect(Object.fromEntries(new URL(page.url()).searchParams)).toMatchObject({
+    ...scope, snapshot: report.snapshot, focus_spec: group.key,
+  })
   await expect(trend).toHaveCount(1)
   await expect(page.getByRole("list", {name:"Request share by repository"})).toContainText("50%")
   await expect(page.getByRole("list", {name:"Runtime share by repository"})).toContainText("75%")
@@ -201,7 +204,14 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   await expect(page.getByRole("table").getByRole("row")).toHaveCount(2)
   await expect(page.getByRole("table")).toContainText(group.label)
   await expect(trend).toHaveCount(0)
-  await page.reload()
+  expect(calls.filter(url => url.includes("/reports/spec-usage?"))).toHaveLength(1)
+  const [restored] = await Promise.all([
+    page.waitForRequest(req => req.url().includes("/reports/spec-usage?")),
+    page.reload(),
+  ])
+  expect(Object.fromEntries(new URL(restored.url()).searchParams)).toMatchObject({
+    ...scope, snapshot: report.snapshot,
+  })
   await expect(page.getByRole("table")).toContainText(group.label)
   await expect(requestToggle).toHaveCount(0)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -219,6 +229,33 @@ test("spec charts and table ignore legacy request drilldown links", async ({ pag
   expect(mobileLegend.y).toBeGreaterThanOrEqual(mobileBar.y + mobileBar.height)
   expect(calls.filter(url => /\/reports\/[^/]+\/requests(?:\?|$)/.test(url))).toEqual([])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test("refreshing a paged specs table returns to the first page of the new snapshot", async ({ page }) => {
+  await setup(page)
+  const oldSnapshot = "old-catalog"
+  const catalog = Array.from({ length: 25 }, (_, i) => ({
+    key: `spec-${i}`, label: `Spec ${i}`, current: true, enabled: true,
+    requests: 0, started: 0, repositories: 0, runtime: { samples: 0, eligible: 0, seconds: 0 },
+  }))
+  await page.route("**/reports/spec-usage?*", route => {
+    const old = new URL(route.request().url()).searchParams.get("snapshot") === oldSnapshot
+    return route.fulfill({ json: {
+      ...report, snapshot: old ? oldSnapshot : "new-catalog",
+      spec_dashboard: { total: old ? 25 : 5, items: catalog.slice(0, old ? 20 : 5) },
+    } })
+  })
+  await page.route(`**/reports/${oldSnapshot}/specs?*`, route =>
+    route.fulfill({ json: { total: 25, items: catalog.slice(20) } }))
+  await page.goto(`/admin/reports?${search}&view=specs&spec_mode=table&snapshot=${oldSnapshot}&spec_offset=20`)
+  const previous = page.getByRole("button", { name: "Previous", exact: true })
+  await expect(previous).toBeEnabled()
+  await expect(page.getByRole("table")).toContainText("Spec 20")
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("5 specs", { exact: true })).toBeVisible()
+  await expect(previous).toBeDisabled()
+  await expect(page.getByRole("table")).toContainText("Spec 0")
+  await expect(page).not.toHaveURL(/spec_offset=|snapshot=/)
 })
 
 test("chart filtering and snapshot metric survive reload without fetching request details", async ({
@@ -289,15 +326,18 @@ test("form filters preserve the distribution metric and discard the old snapshot
   await repository.fill("draft/repo")
   const [specRequest] = await Promise.all([
     page.waitForRequest(request => request.url().includes("/reports/spec-usage?")),
-    specs.click(),
+    page.getByRole("tab", { name: "Overview", exact: true }).press("ArrowRight"),
   ])
+  await expect(specs).toBeFocused()
+  await expect(page.getByRole("tabpanel", { name: "Specs" })).toBeVisible()
   const specQuery = new URL(specRequest.url()).searchParams
   for (const key of ["from", "to", "timezone", "grain", "repository"]) {
     expect(specQuery.get(key)).toBe(applied.get(key))
   }
   await expect(page.getByRole("button", { name: "Charts", exact: true })).toBeVisible()
   await expect(repository).toHaveValue("draft/repo")
-  await page.getByRole("tab", { name: "Overview", exact: true }).click()
+  await specs.press("ArrowLeft")
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeFocused()
   await expect(metric).toHaveText("Recorded runtime (h)")
   await expect(repository).toHaveValue("draft/repo")
   await page.getByRole("button", { name: "Clear dimension filters" }).click()
