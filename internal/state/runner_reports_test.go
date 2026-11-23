@@ -315,6 +315,7 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			verifyReportGlobalSpecIdentity(t, s)
 			if backend.name == BackendPostgres {
 				verifyLargePostgresReport(t, s)
+				t.Run("trend_timezone", func(t *testing.T) { verifyPostgresTrendTimezone(t, s) })
 			}
 		})
 	}
@@ -382,6 +383,54 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		large.Totals.Runtime != (ReportDuration{Seconds: 90 * (ReportMaxRows + 1), Samples: ReportMaxRows + 1, Eligible: ReportMaxRows + 1}) ||
 		large.Totals.Requests != ReportMaxRows+1 || large.Previous.Requests != 0 || len(large.Rows) != 0 || large.RetainedEntries() != 3 {
 		t.Fatalf("filtered large report: %+v, groups=%+v: %v", large.Totals, groups, err)
+	}
+}
+
+// Only the previous cohort grows across the threshold, so both paths must
+// return the same current trend. CET observes summer time in Go's IANA data.
+func verifyPostgresTrendTimezone(t *testing.T, s *DBStore) {
+	t.Helper()
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := RunnerReportQuery{From: "2026-03-28", To: "2026-06-02", Timezone: "CET", Grain: "day", Repository: "timezone/repo"}
+	now := reportTime("2026-06-03T00:00:00Z")
+	insert := func(prefix, queued string, n int) {
+		t.Helper()
+		at := reportTime(queued)
+		err := db.Exec(`INSERT INTO runner_requests (id, source, runner_name, labels_json, status, repository_full_name, queued_at, updated_at)
+			SELECT ? || i, 'test', ? || i, '[]', 'queued', ?, ?, ? FROM generate_series(1, ?) i`,
+			prefix, prefix, q.Repository, at, at, n).Error
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("cet-winter-", "2026-03-28T22:30:00Z", 1) // 23:30 on March 28
+	insert("cet-summer-", "2026-05-31T22:30:00Z", 2) // 00:30 on June 1
+	const previous = "2026-03-01T12:00:00Z"
+	insert("cet-previous-", previous, ReportMaxRows-3)
+	for _, size := range []int{ReportMaxRows, ReportMaxRows + 1} {
+		if size > ReportMaxRows {
+			insert("cet-extra-", previous, 1)
+		}
+		r, err := s.ReadRunnerReport(t.Context(), q, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Totals.Requests != 3 || r.Previous.Requests != int64(size-3) || (r.Rows == nil) != (size > ReportMaxRows) {
+			t.Fatalf("cohort size %d: current=%d previous=%d aggregate=%t", size, r.Totals.Requests, r.Previous.Requests, r.Rows == nil)
+		}
+		got := map[string]int64{}
+		for _, b := range r.Trend {
+			if b.Requests > 0 {
+				got[b.Date] = b.Requests
+			}
+		}
+		want := map[string]int64{"2026-03-28": 1, "2026-06-01": 2}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("cohort size %d: got trend %v, want %v", size, got, want)
+		}
 	}
 }
 

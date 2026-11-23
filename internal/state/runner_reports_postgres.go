@@ -7,9 +7,28 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var ErrReportTooManyGroups = errors.New("report exceeds 100000 aggregate groups; narrow the date range or filters")
+
+// Use the same zone rules as reportBucketDate. PostgreSQL can interpret an
+// IANA name such as CET as a fixed abbreviation even during summer time.
+// Only the current period contributes trend buckets.
+func postgresTrendOffset(window ReportWindow) clause.Expr {
+	at := window.End.Add(-time.Nanosecond).In(window.Location)
+	_, offset := at.Zone()
+	seconds := gorm.Expr("?::int", offset)
+	for start, _ := at.ZoneBounds(); start.After(window.Start); start, _ = at.ZoneBounds() {
+		at = start.Add(-time.Nanosecond)
+		_, previous := at.Zone()
+		if previous != offset {
+			seconds = gorm.Expr("CASE WHEN queued_at < ? THEN ?::int ELSE ? END", start.UTC(), previous, seconds)
+			offset = previous
+		}
+	}
+	return seconds
+}
 
 // PostgreSQL computes all five rollups in one query. Only aggregate rows cross
 // the database connection, regardless of the number of requests in a cohort.
@@ -30,7 +49,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	WITH bounds AS (SELECT ?::timestamptz AS observed, ?::timestamptz AS start_at),
 	validated AS (
 		SELECT c.*, queued_at >= start_at AS current_period,
-			to_char(date_trunc(?, timezone(?, queued_at)), 'YYYY-MM-DD') AS bucket,
+			to_char(date_trunc(?, timezone(make_interval(secs => ?), queued_at)), 'YYYY-MM-DD') AS bucket,
 			queued_at >= timestamptz '0002-01-01 UTC' AS valid_queue,
 			creating_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS valid_create,
 			running_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS started,
@@ -75,7 +94,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		// Match Go's time.Duration saturation for exceptionally long valid intervals.
 		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum(least(extract(epoch FROM "+metric+"), 9223372036.854775807)) FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
 	}
-	query := db.Raw(aggregates+strings.Join(durations, ", ")+rollups, now.UTC(), window.Start.UTC(), q.Grain, q.Timezone, cohort, ReportMaxRows+1)
+	query := db.Raw(aggregates+strings.Join(durations, ", ")+rollups, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
 	rows, err := query.Rows()
 	if err != nil {
 		return nil, err
