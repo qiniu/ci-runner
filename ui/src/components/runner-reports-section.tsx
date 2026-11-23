@@ -83,13 +83,9 @@ export function RunnerReportsSection({
     navigate({ snapshot: null })
     setRevision((v) => v + 1)
   }
-  const filter = (dimension: ReportDimension, key: string) => {
-    const next = new URLSearchParams(
-      report ? Object.entries(report.query).filter(([, value]) => Boolean(value)) : params,
-    )
-    next.delete("snapshot")
+  const applyFilters = (query: ReportQuery) => {
+    const next = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)))
     if (urlState.has("sort")) next.set("sort", urlState.get("sort")!)
-    next.set(dimension, key)
     onNavigate(`?${next}`)
   }
   const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
@@ -109,13 +105,7 @@ export function RunnerReportsSection({
           <RefreshCw />
         </Button>
       </div>
-      <ReportFilters
-        key={JSON.stringify(selected)}
-        query={selected}
-        onApply={(q) =>
-          onNavigate(`?${new URLSearchParams(Object.entries(q).filter(([, value]) => Boolean(value)))}`)
-        }
-      />
+      <ReportFilters key={JSON.stringify(selected)} query={selected} onApply={applyFilters} />
       <ResourceState resource={overview} />
       {report && (
         <>
@@ -217,7 +207,7 @@ export function RunnerReportsSection({
                 report={report}
                 request={request}
                 sort={sort}
-                onFilter={(key) => filter(d, key)}
+                onFilter={(key) => applyFilters({ ...report.query, [d]: key })}
               />
             ))}
           </div>

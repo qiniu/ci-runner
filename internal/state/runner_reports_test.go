@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,61 @@ func TestRunnerReportQueryPlanAndCancellation(t *testing.T) {
 	cancel()
 	if _, err := s.ReadRunnerReport(ctx, q, now); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation=%v", err)
+	}
+}
+
+func TestRunnerReportInterruptsSQLiteScan(t *testing.T) {
+	for _, name := range []string{"disk", "memory"} {
+		t.Run(name, func(t *testing.T) {
+			dsn := filepath.Join(t.TempDir(), "reports.db")
+			if name == "memory" {
+				dsn = ":memory:"
+			}
+			s := NewWithOptions(Options{Backend: BackendSQLite, DatabaseDSN: dsn, MigrateOnStart: true}).(*DBStore)
+			db, err := s.dbOrEnsure()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { closeTestDB(t, db) })
+			q, now := reportFixture(t, s)
+
+			// The report cannot produce its first matching row until SQLite finishes
+			// this scalar subquery. A context check between rows is too late.
+			if err := db.Exec("ALTER TABLE github_installation_owners RENAME TO fixture_owners").Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Exec(`CREATE VIEW github_installation_owners AS
+		SELECT installation_id, account_login, github_account_id + (
+			WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x < 6000000)
+			SELECT min(x)-1 FROM seq
+		) AS github_account_id FROM fixture_owners`).Error; err != nil {
+				t.Fatal(err)
+			}
+			q.Owner = "github:10"
+			for _, active := range []bool{false, true} {
+				ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+				start := time.Now()
+				if active {
+					_, err = s.ReadRunnerReportActive(ctx, q)
+				} else {
+					_, err = s.ReadRunnerReport(ctx, q, now)
+				}
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+					t.Fatalf("executing report (active=%t) returned %v after %s", active, err, time.Since(start))
+				}
+			}
+			if err := db.Exec("DROP VIEW github_installation_owners").Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Exec("ALTER TABLE fixture_owners RENAME TO github_installation_owners").Error; err != nil {
+				t.Fatal(err)
+			}
+			next, err := s.ReadRunnerReport(context.Background(), q, now)
+			if err != nil || next.Totals.Requests != 4 {
+				t.Fatalf("subsequent report after interruptions: %v, err=%v", next, err)
+			}
+		})
 	}
 }
 

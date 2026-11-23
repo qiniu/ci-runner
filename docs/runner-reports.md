@@ -71,7 +71,7 @@ runtime totals without valid samples display as unavailable.
   time). A range containing no elapsed instants, such as one entirely skipped
   local date, is rejected.
 - `queued_at ∈ [from,to)` selects the cohort. All metrics and trend buckets describe
-  that cohort as observed during one database SELECT. Day/week/month buckets use
+  that cohort as observed in one database snapshot. Day/week/month buckets use
   the same timezone; weeks start Monday. Empty periods are included. Calendar
   labels advance independently of local midnight instants, so midnight DST jumps
   cannot omit an unfinished final date or shift week/month buckets. Requests
@@ -148,10 +148,15 @@ changed since the report snapshot.
 
 SQLite uses the existing queued-date index and a short-lived read-only connection
 to the main database file resolved from the initialized connection. It opens with
-`mode=ro`, enables `query_only`, runs no migrations, and closes after the read.
-WAL permits concurrent scheduler writes while a SELECT retains its snapshot.
-This avoids occupying the normal single-connection pool for the report scan.
-In-memory SQLite retains the original connection. PostgreSQL and MySQL reuse their
+`mode=ro`, runs no migrations, and closes after the read. Inside one transaction,
+an interruptible statement selects at most 100,001 ordered request keys and
+their owner mappings into a connection-local temporary table. The reader walks
+those keys in order and looks up each request by primary key. For current backlog
+the temporary table holds at most four status counts. The query deadline covers
+the scan, sort and grouping as well as row reads. Rollback removes the temporary
+table. WAL allows concurrent scheduler writes on the primary connection.
+In-memory SQLite uses the original connection and retains its data on cancellation.
+PostgreSQL and MySQL reuse their
 configured pools. No schema or index changes are introduced. On disk, historical
 payloads are still physically colocated in SQLite table pages; projecting narrow
 columns avoids decoding/returning them, but is not a claim of zero physical I/O
@@ -173,7 +178,7 @@ Local verification on 2026-11-20:
   `idx_runner_requests_queued_id` index. The implementation adds no schema or
   preaggregation based solely on hypothetical load.
 - A synthetic 100,000-request SQLite database has 20 repositories and an extra
-  1 KiB historical payload per request. Final local report read: **1.299 s**;
+  1 KiB historical payload per request. Initial local report read: **1.299 s**;
   simultaneous 25-row list: **1.276 ms**; simultaneous real queue claim:
   **2.012 ms** (baseline **0.812 ms**). With the original shared connection, the
   concurrent list/claim waited about **1.87 s**. The read-only connection removed
@@ -194,7 +199,7 @@ including the open Select, long group names and error states.
 
 The chart revision passed frontend lint, i18n/type checks and the production
 build, 364 frontend tests, the full Go race suite, and 58 production-bundle
-browser cases. The final report-only browser run also passed all 7 cases after
+browser cases. That revision also passed all 7 report-only cases after
 adding multi-group chart, dual-axis trend, tooltip, dark-theme and narrow-layout
 evidence. The report page no longer requests current backlog. A
 focused race regression covers missing spec names without rewriting their saved
@@ -202,6 +207,17 @@ identity. These browser screenshots use fixtures; the existing local signed-in
 browser and production-data rendering were not verified in this revision.
 Build-producing checks must finish before browser verification to avoid changing
 assets beneath a running preview server.
+
+Follow-up verification on 2026-11-23:
+
+- Disk and in-memory SQLite interrupted an executing scan in the overview and
+  current-backlog paths under a 75 ms test deadline. A subsequent report read
+  succeeded on each database. On the same 100,000-row synthetic fixture, the
+  updated report read took 1.125 s, the concurrent list 1.479 ms and the queue
+  claim 0.848 ms (0.633 ms baseline).
+- The report contract passed on a dedicated PostgreSQL 16 test database. All
+  eight report browser cases passed, including retaining the distribution metric
+  when applying a filter, choosing a date preset, clearing dimensions and reloading.
 
 Reproduce focused backend checks with `go test ./internal/state ./internal/server
 -run TestRunnerReport -count=1`. Set `RUNNERD_REPORT_SCALE_TEST=1` for the scale

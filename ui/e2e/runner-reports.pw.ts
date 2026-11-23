@@ -99,6 +99,31 @@ test("chart filtering and snapshot metric survive reload without fetching reques
   expect(detailRequests).toEqual([])
 })
 
+test("form filters preserve the distribution metric and discard the old snapshot", async ({ page }) => {
+  await setup(page)
+  await page.route("**/reports/overview?*", (route) => {
+    const params = new URL(route.request().url()).searchParams
+    params.delete("snapshot")
+    return route.fulfill({ json: { ...report, query: { ...query, ...Object.fromEntries(params) } } })
+  })
+  await page.clock.setFixedTime(new Date("2026-11-20T10:00:00Z"))
+  await page.goto(`/admin/reports?${search}&sort=runtime&snapshot=fixture-snapshot`)
+  const metric = page.getByRole("combobox", { name: "Distribution metric" })
+  await expect(metric).toHaveText("Recorded runtime (h)")
+  await page.getByLabel("Repository", { exact: true }).fill("team/repo")
+  await page.getByRole("button", { name: "Apply filters" }).click()
+  await expect(page).toHaveURL(/repository=team%2Frepo/)
+  await expect(page).not.toHaveURL(/snapshot=/)
+  await expect(metric).toHaveText("Recorded runtime (h)")
+  await page.getByRole("button", { name: "Last 7 days" }).click()
+  await expect(page.getByLabel("Start date", { exact: true })).not.toHaveValue(query.from)
+  await expect(metric).toHaveText("Recorded runtime (h)")
+  await page.getByRole("button", { name: "Clear dimension filters" }).click()
+  await expect(page).not.toHaveURL(/repository=/)
+  await page.reload()
+  await expect(metric).toHaveText("Recorded runtime (h)")
+})
+
 test("obsolete reports cannot replace new filters", async ({ page }) => {
   await setup(page)
   const pending: Route[] = []

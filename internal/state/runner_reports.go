@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -289,8 +290,8 @@ func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
 
 // reportDB isolates long SQLite reads from the scheduler's single connection.
 // Resolve the already-open main database rather than guessing from a DSN. The
-// extra connection cannot create/write files or run migrations. WAL keeps one
-// SELECT consistent while the primary connection continues to admit work.
+// extra connection opens the main database read-only and runs no migrations. WAL keeps one
+// transaction consistent while the primary connection continues to admit work.
 // In-memory databases retain their original connection and identity.
 func (s *DBStore) reportDB(ctx context.Context) (*gorm.DB, func(), error) {
 	db, err := s.dbOrEnsure()
@@ -314,7 +315,7 @@ func (s *DBStore) reportDB(ctx context.Context) (*gorm.DB, func(), error) {
 		}
 	}
 	if filename == "" {
-		return db.WithContext(ctx), func() {}, nil
+		return sqliteReportTransaction(db.WithContext(ctx), func() {})
 	}
 	dsn := (&url.URL{Scheme: "file", Path: filename, RawQuery: "mode=ro"}).String()
 	reader, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: db.Logger, DisableForeignKeyConstraintWhenMigrating: true})
@@ -329,16 +330,57 @@ func (s *DBStore) reportDB(ctx context.Context) (*gorm.DB, func(), error) {
 	pool.SetMaxIdleConns(1)
 	closeReader := func() { _ = pool.Close() }
 	reader = reader.WithContext(ctx)
-	for _, pragma := range []string{"PRAGMA query_only = ON", "PRAGMA busy_timeout = 1000"} {
+	for _, pragma := range []string{"PRAGMA temp_store = MEMORY", "PRAGMA busy_timeout = 1000"} {
 		if err := reader.Exec(pragma).Error; err != nil {
 			closeReader()
 			return nil, nil, err
 		}
 	}
-	return reader, closeReader, nil
+	return sqliteReportTransaction(reader, closeReader)
 }
 
-// ReadRunnerReport reads one narrow, statement-consistent snapshot. It never loads
+// Acquire the connection under the report deadline, but own rollback explicitly.
+// database/sql otherwise discards this driver's connection on transaction
+// cancellation, which would erase an entire :memory: database.
+func sqliteReportTransaction(reader *gorm.DB, closeReader func()) (*gorm.DB, func(), error) {
+	ctx := reader.Statement.Context
+	pool, err := reader.DB()
+	if err != nil {
+		closeReader()
+		return nil, nil, err
+	}
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		closeReader()
+		return nil, nil, err
+	}
+	tx, err := conn.BeginTx(context.WithoutCancel(ctx), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		conn.Close()
+		closeReader()
+		return nil, nil, err
+	}
+	reader = reader.WithContext(ctx)
+	reader.Statement.ConnPool = tx
+	return reader, func() {
+		_ = tx.Rollback() // also removes the temporary table
+		_ = conn.Close()
+		closeReader()
+	}, nil
+}
+
+// The SQLite driver keeps its interrupt watcher active during ExecContext,
+// but not during Rows.Next. Finish all filtering, sorting and grouping in one
+// interruptible statement; subsequent reads walk only the bounded result.
+func materializeSQLiteReport(db, selection *gorm.DB) error {
+	err := db.Exec("CREATE TEMP TABLE report_result AS ?", selection).Error
+	if ctxErr := db.Statement.Context.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+// ReadRunnerReport reads the current and prior cohorts from one consistent snapshot. It never loads
 // payloads, logs, provider configuration, credentials, or current spec catalogs.
 func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
 	window, err := q.Window(now)
@@ -355,10 +397,19 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		return nil, err
 	}
 	query = query.Where("(r.queued_at >= ? AND r.queued_at < ?) OR (r.queued_at >= ? AND r.queued_at < ?)", window.Start.UTC(), window.End.UTC(), window.PreviousStart.UTC(), window.PreviousEnd.UTC())
+	query = query.Order("r.queued_at DESC, r.id ASC").Limit(ReportMaxRows + 1)
+	if db.Dialector.Name() == BackendSQLite {
+		if err := materializeSQLiteReport(db, query.Select("r.id AS request_id, o.github_account_id, o.account_login")); err != nil {
+			return nil, err
+		}
+		// CTAS assigns rowids in SELECT order. Drive indexed request lookups
+		// from that sequence to retain native timestamp types and avoid a sort.
+		query = db.Table("temp.report_result AS o CROSS JOIN runner_requests AS r ON r.id = o.request_id").Order("o.rowid")
+	}
 	rows, err := query.Select(`r.id, r.queued_at, r.repository_full_name, r.profile_name, r.profile_source, r.profile_scope_type, r.profile_scope_id,
  r.github_installation_id, o.github_account_id AS owner_id, o.account_login AS owner_login, r.status, r.failure_stage,
  r.workflow_job_id, r.github_job_status, r.github_job_conclusion, r.github_job_observed_at,
- r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`).Order("r.queued_at DESC, r.id ASC").Limit(ReportMaxRows + 1).Rows()
+ r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +444,9 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	report.Totals = current.totals()
@@ -654,8 +708,14 @@ func (s *DBStore) ReadRunnerReportActive(ctx context.Context, q RunnerReportQuer
 		Status string
 		Count  int64
 	}
-	err = query.Select("r.status, COUNT(*) AS count").Where("r.status IN ?", []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping}).Group("r.status").Scan(&rows).Error
-	if err != nil {
+	query = query.Select("r.status, COUNT(*) AS count").Where("r.status IN ?", []string{StatusQueued, StatusCreating, StatusRunning, StatusStopping}).Group("r.status")
+	if db.Dialector.Name() == BackendSQLite {
+		if err := materializeSQLiteReport(db, query); err != nil {
+			return nil, err
+		}
+		query = db.Table("temp.report_result")
+	}
+	if err := query.Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := map[string]int64{StatusQueued: 0, StatusCreating: 0, StatusRunning: 0, StatusStopping: 0}
