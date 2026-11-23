@@ -2,6 +2,16 @@ package state
 
 import "time"
 
+// The reserved writer row serializes bounded snapshot publication on all backends.
+type reportSpecSnapshotRecord struct {
+	ID        string    `gorm:"primaryKey;size:40"`
+	ExpiresAt time.Time `gorm:"not null"`
+	Entries   int       `gorm:"not null"`
+	Payload   []byte    `gorm:"size:16777215"`
+}
+
+func (reportSpecSnapshotRecord) TableName() string { return "report_spec_snapshots" }
+
 type runnerRequestRecord struct {
 	ID                              string     `gorm:"column:id;primaryKey;index:idx_runner_requests_queued_id,priority:2,sort:asc;index:idx_runner_requests_github_installation_queued_id,priority:3,sort:asc;index:idx_runner_requests_profile_queued_id,priority:3,sort:asc;index:idx_runner_requests_repository_queued_id,priority:3,sort:asc"`
 	Source                          string     `gorm:"column:source;not null"`

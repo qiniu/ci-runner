@@ -147,8 +147,7 @@ scoped catalogs inside the same report transaction.
 Overview returns normalized `query`, `window`, `observed_at`, `totals`, `previous`,
 zero-filled `trend`, `snapshot`, `expires_at` and `distributions`. Each distribution includes its
 group count and the first five groups by requests and by runtime. The dashboard
-renders and switches rankings from this single response. Snapshot IDs used by
-the pagination endpoints are cached in the serving process. Details return `items`, `total`,
+renders and switches rankings from this single response. The Specs dashboard and its spec pages share a frozen catalog and aggregate snapshot across servers using the same state database. Details return `items`, `total`,
 `offset` and `snapshot`. Totals are computed in the server over the entire bounded
 cohort, never over a browser page. Groups use the same immutable snapshot as the overview. Request pages are
 available for snapshots that retain individual requests. All group shares use full
@@ -167,7 +166,7 @@ keeps its original grouping sets.
 - Detail snapshots retain up to 100,000 requests across the current and prior
   cohorts combined. For larger PostgreSQL cohorts, the overview and all three
   group distributions use database aggregates over the full selected period.
-  The size probe and rollups share a read-only repeatable-read transaction.
+  The size probe and rollups share a read-only repeatable-read transaction. PostgreSQL computes additive metrics for repeated dimension combinations first, then rolls those partials up, retaining owner and repository identities for exact distinct counts.
   The chart snapshot contains aggregate values only. Its request-detail endpoint
   returns **422**; narrowing the dates or filters can produce a detail snapshot.
   More than 100,000 aggregate rows also returns **422**. SQLite and MySQL keep
@@ -185,9 +184,14 @@ keeps its original grouping sets.
 - Invalid parameters: **400**. Query timeout: **504**. Missing/expired snapshot or
   changed filters on restoration: **410**, requiring an explicit refresh. A
   refresh may reuse a result within its freshness window; timestamps stay visible.
-- Caches are process-local. A restart or request sent to another process may
-  return 410. This does not establish multi-instance support. Never silently
-  substitute another snapshot while preserving an old drilldown page.
+- Before serving a new Specs snapshot, runnerd stores its dashboard, rankings and full
+  spec table in `report_spec_snapshots`. Restoring the URL or requesting a spec page
+  on another server uses that same snapshot, including its original expiry and filters.
+  The shared cache holds up to 8 snapshots and 200,000 aggregate entries. A payload
+  of 16 MiB or larger returns **422**. Publication evicts expired and excess entries.
+  Schema initialization creates this cache table on upgrade. Overview, grouped and
+  request-row detail caches remain local and may return **410** after a restart
+  or routing change.
 
 SQLite uses the existing queued-date index and a short-lived read-only connection
 to the main database file resolved from the initialized connection. It opens with
@@ -266,7 +270,7 @@ Reproduce focused backend checks with `go test ./internal/state ./internal/serve
 -run TestRunnerReport -count=1`. Set `RUNNERD_REPORT_SCALE_TEST=1` for the scale
 case. Real SQL compatibility requires `RUNNERD_CATALOG_BACKEND_TESTS=1` and
 `RUNNERD_POSTGRES_TEST_DSN` / `RUNNERD_MYSQL_TEST_DSN` pointing at dedicated
-`*_test` databases: those tests reset their tables. UI fixtures run via
+`*_test` databases: those tests reset their tables. Combining the SQL backend and scale flags also runs the 30-day PostgreSQL Specs test with 1,020,000 generated requests and the normal ten-second query deadline. UI fixtures run via
 `bun run test:production runner-reports.pw.ts` in `ui/`.
 
 Production data completeness, actual row/cardinality distributions, production
