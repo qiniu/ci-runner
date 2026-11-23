@@ -193,7 +193,15 @@ export function RunnerReportsSection({
               inline
               label={t("reports.distributionMetric")}
               value={sort}
-              onChange={(value) => navigate({ sort: value })}
+              onChange={(value) => {
+                if (report.distributions) {
+                  const next = new URLSearchParams(search)
+                  next.set("sort", value)
+                  onNavigate(`?${next}`)
+                } else {
+                  navigate({ sort: value })
+                }
+              }}
               options={[
                 ["requests", t("reports.requests")],
                 ["runtime", t("reports.runtime")],
@@ -523,13 +531,18 @@ function Distribution({
   onFilter: (key: string) => void
 }) {
   const { t } = useTranslation()
-  const groups = useReportResource<ReportPage<ReportGroup>>(
-    `/reports/${encodeURIComponent(report.snapshot)}/groups?${new URLSearchParams({ dimension, sort, offset: "0", limit: "5" })}`,
+  const distribution = report.distributions?.[dimension]
+  // Older servers return the snapshot ID without embedded rankings during a rollout.
+  const fallback = useReportResource<ReportPage<ReportGroup>>(
+    distribution
+      ? ""
+      : `/reports/${encodeURIComponent(report.snapshot)}/groups?${new URLSearchParams({ dimension, sort, offset: "0", limit: "5" })}`,
     request,
   )
   const total = sort === "runtime" ? report.totals.runtime.seconds / 3600 : report.totals.requests
-  const points = groups.data
-    ? reportDistribution(groups.data, report.totals, sort).map((row, index) => {
+  const groups = distribution ? { items: distribution[sort], total: distribution.total } : fallback.data
+  const points = groups
+    ? reportDistribution(groups, report.totals, sort).map((row, index) => {
         const label = row.label.trim()
         return {
           ...row,
@@ -549,8 +562,8 @@ function Distribution({
         <div>
           <h3 className="font-semibold">{t(`reports.${dimension}`)}</h3>
         </div>
-        <ResourceState resource={groups} />
-        {groups.data &&
+        {!distribution && <ResourceState resource={fallback} />}
+        {groups &&
           (points.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">{t("reports.empty")}</p>
           ) : (

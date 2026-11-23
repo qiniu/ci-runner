@@ -354,6 +354,9 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		return r
 	}
 	large := read()
+	if !reflect.DeepEqual(large.ChartDistributions(), baseline.ChartDistributions()) {
+		t.Fatal("large PostgreSQL overview rankings differ from the row snapshot")
+	}
 	wantPrevious := baseline.Previous
 	wantPrevious.Requests += ReportMaxRows + 1
 	wantPrevious.ActiveRepositories++
@@ -430,6 +433,34 @@ func verifyPostgresTrendTimezone(t *testing.T, s *DBStore) {
 		want := map[string]int64{"2026-03-28": 1, "2026-06-01": 2}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("cohort size %d: got trend %v, want %v", size, got, want)
+		}
+	}
+}
+
+func TestRunnerReportChartRankings(t *testing.T) {
+	rows := &RunnerReport{}
+	for i := range 7 {
+		key := fmt.Sprint(i)
+		duration := float64(i * i)
+		for range 7 - i {
+			rows.Rows = append(rows.Rows, ReportRequest{
+				Repository: key, Owner: key, Spec: key, RuntimeSeconds: &duration, terminal: true, started: true,
+			})
+		}
+	}
+	aggregate := &RunnerReport{groupTotals: make(map[string][]ReportGroup)}
+	for _, dim := range []string{"spec", "owner", "repository"} {
+		aggregate.groupTotals[dim] = rows.groupRows(dim)
+	}
+	for _, report := range []*RunnerReport{rows, aggregate} {
+		rankings := report.ChartDistributions()
+		for _, dim := range []string{"spec", "owner", "repository"} {
+			got := rankings[dim]
+			requests, _ := rows.Groups(dim, "requests")
+			runtime, _ := rows.Groups(dim, "runtime")
+			if got.Total != 7 || !reflect.DeepEqual(got.Requests, requests[:5]) || !reflect.DeepEqual(got.Runtime, runtime[:5]) {
+				t.Fatalf("%s rankings diverged from paginated groups", dim)
+			}
 		}
 	}
 }

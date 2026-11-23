@@ -24,9 +24,10 @@ const (
 )
 
 type cachedRunnerReport struct {
-	id, key string
-	created time.Time
-	report  *state.RunnerReport
+	id, key       string
+	created       time.Time
+	report        *state.RunnerReport
+	distributions map[string]state.ReportDistribution
 }
 type runnerReportCache struct {
 	mu          sync.Mutex
@@ -193,7 +194,14 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 		if err != nil {
 			return nil, err
 		}
-		entry := cachedRunnerReport{id: newID(), key: key, created: time.Now(), report: report}
+		distributions := report.ChartDistributions()
+		if err := queryCtx.Err(); err != nil {
+			return nil, err
+		}
+		entry := cachedRunnerReport{
+			id: newID(), key: key, created: time.Now(),
+			report: report, distributions: distributions,
+		}
 		s.reports.put(entry)
 		return entry, nil
 	})
@@ -267,9 +275,10 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		*state.RunnerReport
-		Snapshot  string    `json:"snapshot"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}{entry.report, entry.id, entry.created.Add(reportRetention)})
+		Snapshot      string                              `json:"snapshot"`
+		ExpiresAt     time.Time                           `json:"expires_at"`
+		Distributions map[string]state.ReportDistribution `json:"distributions"`
+	}{entry.report, entry.id, entry.created.Add(reportRetention), entry.distributions})
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {

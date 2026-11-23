@@ -63,6 +63,40 @@ async function setup(page: Page, language = "en") {
   )
 }
 
+test("all distributions and both metrics work with a process-local snapshot", async ({ page }) => {
+  await setup(page)
+  let overviewReads = 0
+  let groupReads = 0
+  const distributions = Object.fromEntries(["spec", "owner", "repository"].map((dimension) => [
+    dimension,
+    {
+      total: 1,
+      requests: [{ ...totals, key: dimension, label: dimension + " requests" }],
+      runtime: [{ ...totals, key: dimension, label: dimension + " runtime" }],
+    },
+  ]))
+  await page.route("**/reports/overview?*", (route) => {
+    overviewReads++
+    return route.fulfill({ json: { ...report, distributions } })
+  })
+  await page.route("**/reports/*/groups?*", (route) => {
+    groupReads++
+    return route.fulfill({ status: 410, json: { error: "report snapshot expired" } })
+  })
+  await page.goto("/admin/reports")
+  for (const dimension of Object.keys(distributions)) {
+    await expect(page.getByRole("button", { name: "Filter by " + dimension + " requests", exact: true })).toBeVisible()
+  }
+  await page.getByRole("combobox", { name: "Distribution metric" }).click()
+  await page.getByRole("option", { name: "Recorded runtime (h)", exact: true }).click()
+  for (const dimension of Object.keys(distributions)) {
+    await expect(page.getByRole("button", { name: "Filter by " + dimension + " runtime", exact: true })).toBeVisible()
+  }
+  await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
+  expect(overviewReads).toBe(1)
+  expect(groupReads).toBe(0)
+})
+
 test("chart filtering and snapshot metric survive reload without fetching request details", async ({
   page,
 }) => {
