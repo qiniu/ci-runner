@@ -178,7 +178,7 @@ class HelperTest(unittest.TestCase):
             try:
                 status = Path(f'/proc/{child}/stat').read_text().split()[2]
                 if status == 'Z': break
-            except FileNotFoundError: break
+            except (FileNotFoundError, ProcessLookupError): break
             time.sleep(.02)
         else: self.fail('direct shell survived supervisor death')
         # Reap orphan via the container init before forcing a real reused PID.
