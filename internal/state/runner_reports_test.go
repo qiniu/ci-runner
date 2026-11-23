@@ -432,9 +432,12 @@ func verifyReportGlobalSpecIdentity(t *testing.T, s *DBStore) {
 	now := reportTime("2026-11-20T10:00:00Z")
 	for i, identity := range []reportSpecIdentity{
 		{Source: "global", Name: "shared"},
+		{Source: "global", Name: "Shared"},
+		{Source: "GLOBAL", Name: "shared"},
 		{Source: "global", ScopeType: "account", ScopeID: 7, Name: "shared"},
 		{Source: "global", ScopeType: "installation", ScopeID: 8, Name: "shared"},
 		{Source: "scoped_custom", ScopeType: "account", ScopeID: 7, Name: "shared"},
+		{Source: "scoped_custom", ScopeType: "Account", ScopeID: 7, Name: "shared"},
 		{Source: "scoped_custom", ScopeType: "installation", ScopeID: 8, Name: "shared"},
 	} {
 		id := fmt.Sprintf("scope-identity-%d", i)
@@ -449,7 +452,7 @@ func verifyReportGlobalSpecIdentity(t *testing.T, s *DBStore) {
 		t.Fatal(err)
 	}
 	groups, err := report.Groups("spec", "requests")
-	if err != nil || len(groups) != 3 || groups[0].Requests != 3 || groups[0].Label != "shared · global" {
+	if err != nil || len(groups) != 6 || groups[0].Requests != 3 || groups[0].Label != "shared · global" {
 		t.Fatalf("groups=%+v err=%v", groups, err)
 	}
 	for _, group := range groups {
@@ -466,6 +469,18 @@ func verifyReportGlobalSpecIdentity(t *testing.T, s *DBStore) {
 		if err != nil || counts[StatusRunning] != group.Requests {
 			t.Fatalf("active filter: %+v %v", counts, err)
 		}
+	}
+
+	// The case variant belongs to a separate repository group even under the
+	// default MySQL collation. Its filter must select exactly its captured row.
+	variant := runnerRequestRecord{ID: "repo-case", RunnerName: "repo-case", Source: "fixture", LabelsJSON: "[]", QueuedAt: now.Add(-time.Hour), UpdatedAt: now, Status: StatusRunning, RepositoryFullName: "Identity/Scope"}
+	if err := db.Create(&variant).Error; err != nil {
+		t.Fatal(err)
+	}
+	q.Repository, q.Spec = variant.RepositoryFullName, ""
+	filtered, err := s.ReadRunnerReport(context.Background(), q, now)
+	if err != nil || len(filtered.Rows) != 1 || filtered.Rows[0].ID != variant.ID {
+		t.Fatalf("case-sensitive repository filter: %+v %v", filtered, err)
 	}
 }
 

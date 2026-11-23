@@ -15,6 +15,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ReportMaxRows bounds a report's current and comparison cohorts together.
@@ -258,11 +259,24 @@ type reportProjection struct {
 	FailedAt             *time.Time
 }
 
+// Keep SQL membership identical to the byte-exact keys used by Groups and
+// Requests, including when the database's text collation ignores case.
+func reportTextKey(db *gorm.DB, key string) clause.Expr {
+	switch db.Dialector.Name() {
+	case BackendMySQL:
+		return gorm.Expr("CAST(? AS BINARY)", key)
+	case BackendPostgres:
+		return gorm.Expr(`? COLLATE "C"`, key)
+	default:
+		return gorm.Expr("? COLLATE BINARY", key)
+	}
+}
+
 // A unique installation-owner join avoids fan-out through user-installation links.
 func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
 	query := db.Table("runner_requests AS r").Joins("LEFT JOIN github_installation_owners AS o ON o.installation_id = r.github_installation_id")
 	if q.Repository != "" {
-		query = query.Where("COALESCE(r.repository_full_name, '') = ?", q.Repository)
+		query = query.Where("COALESCE(r.repository_full_name, '') = ?", reportTextKey(db, q.Repository))
 	}
 	if q.Owner != "" {
 		kind, id, err := parseReportOwner(q.Owner)
@@ -280,9 +294,9 @@ func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
 		if err != nil {
 			return nil, err
 		}
-		query = query.Where("COALESCE(r.profile_source, '') = ? AND COALESCE(r.profile_name, '') = ?", spec.Source, spec.Name)
+		query = query.Where("COALESCE(r.profile_source, '') = ? AND COALESCE(r.profile_name, '') = ?", reportTextKey(db, spec.Source), reportTextKey(db, spec.Name))
 		if spec.Source != "global" {
-			query = query.Where("COALESCE(r.profile_scope_type, '') = ? AND COALESCE(r.profile_scope_id, 0) = ?", spec.ScopeType, spec.ScopeID)
+			query = query.Where("COALESCE(r.profile_scope_type, '') = ? AND COALESCE(r.profile_scope_id, 0) = ?", reportTextKey(db, spec.ScopeType), spec.ScopeID)
 		}
 	}
 	return query, nil

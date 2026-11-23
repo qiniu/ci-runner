@@ -61,6 +61,7 @@ export function RunnerReportsSection({
 }) {
   const { t, i18n } = useTranslation()
   const [revision, setRevision] = useState(0)
+  const [trendMetric, setTrendMetric] = useState("requests-runtime")
   const params = reportQueryParams(search)
   const query = params.toString()
   const overview = useReportResource<RunnerReport>(`/reports/overview?${query}`, request, revision)
@@ -182,7 +183,7 @@ export function RunnerReportsSection({
               )
             })}
           </div>
-          <Trend report={report} />
+          <Trend report={report} metric={trendMetric} onMetricChange={setTrendMetric} />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-semibold">{t("reports.distribution")}</h2>
@@ -359,9 +360,16 @@ function ResourceState({ resource }: { resource: { data?: unknown; error?: strin
     )
   return null
 }
-function Trend({ report }: { report: RunnerReport }) {
+function Trend({
+  report,
+  metric,
+  onMetricChange,
+}: {
+  report: RunnerReport
+  metric: string
+  onMetricChange: (value: string) => void
+}) {
   const { t } = useTranslation()
-  const [metric, setMetric] = useState("requests-runtime")
   const combined = metric === "requests-runtime"
   const seriesMetrics = combined
     ? (["requests", "runtime"] as const)
@@ -375,7 +383,7 @@ function Trend({ report }: { report: RunnerReport }) {
             inline
             label={t("reports.metric")}
             value={metric}
-            onChange={setMetric}
+            onChange={onMetricChange}
             options={[
               ["requests-runtime", t("reports.requestsAndRuntime")],
               ["requests", t("reports.requests")],
