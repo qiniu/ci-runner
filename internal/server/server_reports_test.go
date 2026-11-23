@@ -145,7 +145,7 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{state.ErrReportTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
+	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
 		w := httptest.NewRecorder()
 		srv.writeReportError(w, httptest.NewRequest(http.MethodGet, "/reports/overview", nil), tc.err)
 		if w.Code != tc.code {

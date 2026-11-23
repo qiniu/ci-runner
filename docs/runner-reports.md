@@ -120,21 +120,27 @@ calls or current catalog scans.
 Overview returns normalized `query`, `window`, `observed_at`, `totals`, `previous`,
 zero-filled `trend`, `snapshot` and `expires_at`. Details return `items`, `total`,
 `offset` and `snapshot`. Totals are computed in the server over the entire bounded
-cohort, never over a browser page. Groups and request pages use the immutable
-current-cohort rows retained with that same snapshot. All group shares use full
+cohort, never over a browser page. Groups use the same immutable snapshot as the overview. Request pages are
+available for snapshots that retain individual requests. All group shares use full
 cohort denominators; chart remainders subtract displayed groups from full totals,
 including runtime sample counts. A missing spec name is labeled Unknown while
 preserving its saved identity. The request detail itself is live and may have
 changed since the report snapshot.
 
-- Current and prior cohorts together: at most 100,000 requests. Read 100,001 to
-  detect overflow, then return **422**, never a truncated total.
+- Detail snapshots retain up to 100,000 requests across the current and prior
+  cohorts combined. For larger PostgreSQL cohorts, the overview and all three
+  group distributions use database aggregates over the full selected period.
+  The size probe and rollups share a read-only repeatable-read transaction.
+  The chart snapshot contains aggregate values only. Its request-detail endpoint
+  returns **422**; narrowing the dates or filters can produce a detail snapshot.
+  More than 100,000 aggregate rows also returns **422**. SQLite and MySQL keep
+  the original 100,000-request limit for all reports.
 - Query deadline: 10 seconds, including waiting for a build slot. Identical
   concurrent queries coalesce; cancelling one browser subscriber does not cancel
   other subscribers. Errors are not cached. There is one historical build slot
   and one independent current-backlog slot per server.
 - Overview reuse: 30 seconds. Snapshot retention: up to 5 minutes, 8 entries and
-  200,000 retained rows. Capacity eviction can expire an entry sooner. Current
+  200,000 retained request or group entries. Capacity eviction can expire an entry sooner. Current
   backlog reuse: 5 seconds, at most 8 dimension-filter entries.
 - Detail pages: default 20, maximum 100 rows; offsets 0–100,000. Group order is
   stable, with request count and identity tie-breakers. Requests are ordered by
