@@ -1,3 +1,9 @@
+const baseChartColors = [1, 2, 3, 4, 5].map(index => `var(--chart-${index})`)
+// The two spec rankings can contain up to ten distinct identities.
+export const reportChartPalette = [...baseChartColors, ...baseChartColors.map(color =>
+  `color-mix(in srgb, ${color} 65%, var(--card))`,
+)]
+
 export type ReportDimension = "spec" | "owner" | "repository"
 export type ReportQuery = {
   from: string
@@ -35,12 +41,42 @@ export type RunnerReport = {
   distributions?: Record<ReportDimension, { total: number; requests: ReportGroup[]; runtime: ReportGroup[] }>
   observed_at: string
   expires_at: string
+  spec_dashboard?: SpecDashboard
   window: { start: string; end: string; previous_start: string; previous_end: string }
   totals: ReportTotals
   previous: ReportTotals
   trend: (ReportTotals & { date: string })[]
 }
 export type ReportGroup = ReportTotals & { key: string; label: string }
+export type ReportSpecUsage = {
+  key: string
+  label: string
+  name: string
+  source: string
+  scope_type?: string
+  scope_id?: number
+  current: boolean
+  enabled: boolean
+  published: boolean
+  template_source?: string
+  requests: number
+  started: number
+  repositories: number
+  runtime: ReportDuration
+  creation: ReportDuration
+  average_runtime_seconds?: number
+  p95_runtime_seconds?: number
+  average_creation_seconds?: number
+  p95_creation_seconds?: number
+  repository_mix?: SpecMix
+  owner_mix?: SpecMix
+  spec_trend?: SpecSegment[]
+  job_results?: Record<string, number>
+}
+export type SpecMix = { requests: SpecSegment[]; runtime: SpecSegment[] }
+export type SpecSegment = { key: string; label: string; started?: number; requests: number; runtime: ReportDuration; other?: boolean }
+export type SpecDashboard = { summary: ReportSpecUsage; catalog: number; used_current: number; historical_groups: number; total: number; items: ReportSpecUsage[] }
+export type ReportSpecPage = { items: ReportSpecUsage[]; total: number; offset: number; snapshot: string }
 export type ReportPage<T> = { items: T[]; total: number; offset: number; snapshot: string }
 export const reportQueryKeys = ["from", "to", "timezone", "grain", "owner", "repository", "spec"] as const
 

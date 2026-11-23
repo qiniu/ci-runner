@@ -90,6 +90,16 @@ func verifyRunnerReport(t *testing.T, s *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	specQuery := q
+	specQuery.IncludeSpecUsage = true
+	specQuery.Spec = groups[0].Key
+	dashboard, err := s.ReadRunnerReport(t.Context(), specQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dashboard.SpecItems) != 1 || dashboard.SpecItems[0].Key != specQuery.Spec || dashboard.SpecItems[0].Runtime != groups[0].Runtime || dashboard.SpecItems[0].RepositoryMix == nil {
+		t.Fatal("filtered specification dashboard does not reconcile")
+	}
 	var sum int64
 	var secs float64
 	for _, g := range groups {
@@ -335,6 +345,12 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	specQuery := q
+	specQuery.IncludeSpecUsage = true
+	smallSpecs, err := s.ReadRunnerReport(t.Context(), specQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	insert := `INSERT INTO runner_requests (id, source, runner_name, labels_json, status, repository_full_name, queued_at, updated_at)
 		SELECT 'volume-' || i, 'fixture', 'volume-' || i, '[]', 'queued', 'volume/repo', ?, ? FROM generate_series(1, ?) i`
 	prior := now.AddDate(0, 0, -40)
@@ -352,6 +368,18 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		}
 		t.Logf("PostgreSQL report: %d current + %d previous, %d retained entries in %s", r.Totals.Requests, r.Previous.Requests, r.RetainedEntries(), time.Since(start))
 		return r
+	}
+	bigSpecs, err := s.ReadRunnerReport(t.Context(), specQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, item := range smallSpecs.SpecItems {
+		// Exact percentiles are only available for retained request rows.
+		item.P95RuntimeSeconds = nil
+		item.P95CreationSeconds = nil
+		if !reflect.DeepEqual(item, bigSpecs.SpecItems[i]) {
+			t.Fatalf("spec dashboard rollup differs for %s: row=%+v aggregate=%+v", item.Key, item, bigSpecs.SpecItems[i])
+		}
 	}
 	large := read()
 	if !reflect.DeepEqual(large.ChartDistributions(), baseline.ChartDistributions()) {
@@ -462,6 +490,124 @@ func TestRunnerReportChartRankings(t *testing.T) {
 				t.Fatalf("%s rankings diverged from paginated groups", dim)
 			}
 		}
+	}
+}
+
+func TestRunnerReportSpecUsagesMergesCatalogAndCalculatesSamples(t *testing.T) {
+	duration := func(value float64) *float64 { return &value }
+	customKey := reportSpecKey(reportSpecIdentity{Source: "scoped_custom", ScopeType: "account", ScopeID: 7, Name: "shared"})
+	report := &RunnerReport{Rows: []ReportRequest{
+		{Spec: reportSpecKey(reportSpecIdentity{Source: "global", Name: "standard"}), JobResult: "success", RuntimeSeconds: duration(10), creation: duration(4)},
+		{Spec: reportSpecKey(reportSpecIdentity{Source: "global", Name: "standard"}), JobResult: "failure", RuntimeSeconds: duration(20), creation: duration(8)},
+		{Spec: customKey, JobResult: "cancelled", RuntimeSeconds: duration(30), creation: duration(12)},
+	}}
+	for i := range report.Rows {
+		report.Rows[i].started, report.Rows[i].terminal = true, true
+		report.Rows[i].SpecLabel = report.Rows[i].Spec
+		report.Rows[i].Repository = fmt.Sprintf("team/repo-%d", i)
+	}
+	catalog := []ReportSpecUsage{
+		{Name: "standard", Source: "global", Enabled: true, Published: true, TemplateSource: TemplateSourcePublic},
+		{Name: "unused", Source: "global"},
+	}
+	usages := report.specUsages(catalog)
+	if len(usages) != 3 {
+		t.Fatalf("usage count=%d, want catalog and historical entries", len(usages))
+	}
+	var standard, unused, custom *ReportSpecUsage
+	for i := range usages {
+		switch usages[i].Name {
+		case "standard":
+			standard = &usages[i]
+		case "unused":
+			unused = &usages[i]
+		case "shared":
+			custom = &usages[i]
+		}
+	}
+	if standard == nil || standard.Requests != 2 || standard.JobResults["success"] != 1 || standard.JobResults["failure"] != 1 || standard.P95RuntimeSeconds == nil || *standard.P95RuntimeSeconds != 20 {
+		t.Fatalf("standard usage=%+v", standard)
+	}
+	if unused == nil || !unused.Current || unused.Requests != 0 {
+		t.Fatalf("unused usage=%+v", unused)
+	}
+	if custom == nil || custom.Current || custom.ScopeID != 7 || custom.Requests != 1 {
+		t.Fatalf("custom usage=%+v", custom)
+	}
+}
+
+func TestRunnerReportSpecDashboardCatalogAndShares(t *testing.T) {
+	s := reportTestStore(t)
+	q, now := reportFixture(t, s)
+	db, _ := s.dbOrEnsure()
+	if err := db.Create(&runnerProfileRecord{Name: "standard", LabelsJSON: "[]", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&[]scopedRunnerProfileRecord{{ScopeType: "account", ScopeID: 7, Name: "standard", LabelKey: "a", WorkflowLabelsJSON: "[]", Enabled: true}, {ScopeType: "account", ScopeID: 8, Name: "unused", LabelKey: "b", WorkflowLabelsJSON: "[]"}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	q.IncludeSpecUsage = true
+	r, err := s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current, used int
+	var requests int64
+	for _, item := range r.SpecItems {
+		if item.Current {
+			current++
+			if item.Requests > 0 {
+				used++
+			}
+		}
+		requests += item.Requests
+		if item.Requests == 0 {
+			continue
+		}
+		for _, groups := range [][]ReportSpecSegment{item.RepositoryMix.Requests, item.RepositoryMix.Runtime, item.Owners.Requests, item.Owners.Runtime, item.Trend} {
+			var count, samples int64
+			var seconds float64
+			for _, g := range groups {
+				count += g.Requests
+				samples += g.Runtime.Samples
+				seconds += g.Runtime.Seconds
+			}
+			if count != item.Requests || samples != item.Runtime.Samples || seconds != item.Runtime.Seconds {
+				t.Fatalf("group mismatch for %s: %+v", item.Key, groups)
+			}
+		}
+	}
+	if current != 3 || used != 2 || requests != r.Totals.Requests {
+		t.Fatalf("catalog=%d used=%d requests=%d", current, used, requests)
+	}
+	summary := r.SpecSummary
+	if summary == nil || summary.Requests != requests || summary.Repositories != r.Totals.ActiveRepositories || summary.Runtime != r.Totals.Runtime || summary.P95RuntimeSeconds == nil {
+		t.Fatalf("incorrect full-cohort spec summary: %+v", summary)
+	}
+	for _, ranking := range [][]ReportSpecSegment{summary.RepositoryMix.Requests, summary.Owners.Runtime} {
+		var count int64
+		for _, group := range ranking {
+			count += group.Requests
+		}
+		if count != requests {
+			t.Fatalf("summary ranking lost requests: %+v", ranking)
+		}
+	}
+	q.Spec = reportSpecKey(reportSpecIdentity{Source: "scoped_custom", ScopeType: "account", ScopeID: 8, Name: "unused"})
+	r, err = s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil || len(r.SpecItems) != 1 || r.SpecItems[0].Requests != 0 || !r.SpecItems[0].Current {
+		t.Fatalf("filtered zero-use entry: %+v, %v", r, err)
+	}
+}
+
+func TestRunnerReportSpecRepositoryTopAndOther(t *testing.T) {
+	var repos []ReportSpecSegment
+	for i := range 8 {
+		repos = append(repos, ReportSpecSegment{Key: fmt.Sprint(i), Requests: int64(8 - i), Runtime: ReportDuration{Seconds: float64(i), Samples: 1}})
+	}
+	mix := rankSpecGroups(repos)
+	if mix.Requests[0].Key != "0" || mix.Runtime[0].Key != "7" || !mix.Requests[5].Other || mix.Requests[5].Requests != 6 || !mix.Runtime[5].Other || mix.Runtime[5].Runtime.Seconds != 3 || mix.Runtime[5].Runtime.Samples != 3 {
+		t.Fatalf("wrong rank or remainder: %+v", mix)
 	}
 }
 

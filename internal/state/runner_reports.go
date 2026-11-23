@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -25,13 +26,14 @@ var ErrReportTooLarge = errors.New("report exceeds 100000 requests; narrow the d
 
 // RunnerReportQuery uses local calendar dates and an exclusive To boundary.
 type RunnerReportQuery struct {
-	From       string `json:"from"`
-	To         string `json:"to"`
-	Timezone   string `json:"timezone"`
-	Grain      string `json:"grain"`
-	Owner      string `json:"owner,omitempty"`
-	Repository string `json:"repository,omitempty"`
-	Spec       string `json:"spec,omitempty"`
+	IncludeSpecUsage bool   `json:"-"`
+	From             string `json:"from"`
+	To               string `json:"to"`
+	Timezone         string `json:"timezone"`
+	Grain            string `json:"grain"`
+	Owner            string `json:"owner,omitempty"`
+	Repository       string `json:"repository,omitempty"`
+	Spec             string `json:"spec,omitempty"`
 }
 
 type ReportWindow struct {
@@ -235,7 +237,40 @@ type ReportGroup struct {
 	Label string `json:"label"`
 	ReportTotals
 }
+
+// ReportSpecUsage combines a report cohort with the current platform catalog.
+// Current identifies an exact match in the captured catalog.
+// Percentile fields are unavailable for aggregate-only snapshots.
+type ReportSpecUsage struct {
+	Owners                 *ReportSpecMix      `json:"owner_mix,omitempty"`
+	Trend                  []ReportSpecSegment `json:"spec_trend,omitempty"`
+	RepositoryMix          *ReportSpecMix      `json:"repository_mix,omitempty"`
+	Key                    string              `json:"key"`
+	Label                  string              `json:"label"`
+	Name                   string              `json:"name"`
+	Source                 string              `json:"source"`
+	ScopeType              string              `json:"scope_type,omitempty"`
+	ScopeID                int64               `json:"scope_id,omitempty"`
+	Current                bool                `json:"current"`
+	Enabled                bool                `json:"enabled"`
+	Published              bool                `json:"published"`
+	TemplateSource         string              `json:"template_source,omitempty"`
+	Requests               int64               `json:"requests"`
+	Started                int64               `json:"started"`
+	Repositories           int64               `json:"repositories"`
+	Runtime                ReportDuration      `json:"runtime"`
+	Creation               ReportDuration      `json:"creation"`
+	AverageRuntimeSeconds  *float64            `json:"average_runtime_seconds,omitempty"`
+	P95RuntimeSeconds      *float64            `json:"p95_runtime_seconds,omitempty"`
+	AverageCreationSeconds *float64            `json:"average_creation_seconds,omitempty"`
+	P95CreationSeconds     *float64            `json:"p95_creation_seconds,omitempty"`
+	JobResults             map[string]int64    `json:"job_results,omitempty"`
+}
 type RunnerReport struct {
+	SpecSummary *ReportSpecUsage  `json:"-"`
+	SpecItems   []ReportSpecUsage `json:"-"`
+	specGroups  map[string]*specBreakdown
+
 	Query      RunnerReportQuery `json:"query"`
 	Window     ReportWindow      `json:"window"`
 	ObservedAt time.Time         `json:"observed_at"`
@@ -408,7 +443,7 @@ func materializeSQLiteReport(db, selection *gorm.DB) error {
 }
 
 // ReadRunnerReport reads the current and prior cohorts from one consistent snapshot. It never loads
-// payloads, logs, provider configuration, credentials, or current spec catalogs.
+// payloads, logs, provider configuration or credentials. The spec dashboard also reads narrow catalog fields.
 func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
 	window, err := q.Window(now)
 	if err != nil {
@@ -419,7 +454,7 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		return nil, err
 	}
 	defer closeReader()
-	if db.Dialector.Name() == BackendPostgres {
+	if db.Dialector.Name() == BackendPostgres || (q.IncludeSpecUsage && db.Dialector.Name() == BackendMySQL) {
 		// The size probe and whichever representation it selects must see the same rows.
 		db = db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if db.Error != nil {
@@ -427,6 +462,27 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 		defer db.Rollback()
 	}
+	report, err := readReportCohort(ctx, db, q, window, now)
+	if err != nil || !q.IncludeSpecUsage {
+		return report, err
+	}
+	catalog, err := readReportSpecCatalog(db, q.Spec)
+	if err != nil {
+		return nil, err
+	}
+	report.SpecItems = report.specUsages(catalog)
+	report.SpecSummary = report.specUsageSummary()
+	report.specGroups = nil
+	if len(report.SpecItems) > ReportMaxRows || report.RetainedEntries() > 2*ReportMaxRows {
+		return nil, ErrReportTooManyGroups
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, window ReportWindow, now time.Time) (*RunnerReport, error) {
 	query, err := reportBase(db, q)
 	if err != nil {
 		return nil, err
@@ -745,7 +801,23 @@ func (r *RunnerReport) groupRows(dimension string) []ReportGroup {
 
 // RetainedEntries counts both snapshot representations against the cache budget.
 func (r *RunnerReport) RetainedEntries() int {
+	entries := func(item ReportSpecUsage) int {
+		n := 1 + len(item.Trend) + len(item.JobResults)
+		if item.Owners != nil {
+			n += len(item.Owners.Requests) + len(item.Owners.Runtime)
+		}
+		if item.RepositoryMix != nil {
+			n += len(item.RepositoryMix.Requests) + len(item.RepositoryMix.Runtime)
+		}
+		return n
+	}
 	n := len(r.Rows)
+	for _, item := range r.SpecItems {
+		n += entries(item)
+	}
+	if r.SpecSummary != nil {
+		n += entries(*r.SpecSummary)
+	}
 	for _, groups := range r.groupTotals {
 		n += len(groups)
 	}
@@ -783,6 +855,116 @@ func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) 
 		}
 	}
 	return result, nil
+}
+
+func (r *RunnerReport) specUsages(catalog []ReportSpecUsage) []ReportSpecUsage {
+	byKey := make(map[string]*ReportSpecUsage)
+	for _, item := range catalog {
+		identity := reportSpecIdentity{item.Source, item.ScopeType, item.ScopeID, item.Name}
+		item.Key, item.Label, item.Current = reportSpecKey(identity), identity.label(), true
+		if r.Query.Spec != "" && r.Query.Spec != item.Key {
+			continue
+		}
+		item.JobResults = map[string]int64{}
+		byKey[item.Key] = &item
+	}
+	for _, group := range r.reportGroups("spec") {
+		identity, err := decodeReportSpec(group.Key)
+		if err != nil {
+			continue
+		}
+		usage := byKey[group.Key]
+		if usage == nil {
+			usage = &ReportSpecUsage{
+				Key: group.Key, Label: group.Label, Name: identity.Name, Source: identity.Source,
+				ScopeType: identity.ScopeType, ScopeID: identity.ScopeID,
+				JobResults: map[string]int64{},
+			}
+			byKey[group.Key] = usage
+		}
+		usage.Requests = group.Requests
+		usage.Started = group.Started
+		usage.Repositories = group.ActiveRepositories
+		usage.Runtime = group.Runtime
+		usage.Creation = group.Creation
+		usage.AverageRuntimeSeconds = reportMean(group.Runtime)
+		usage.AverageCreationSeconds = reportMean(group.Creation)
+	}
+	for _, row := range r.Rows {
+		usage := byKey[row.Spec]
+		if usage == nil {
+			continue
+		}
+		usage.JobResults[row.JobResult]++
+	}
+	if len(r.Rows) > 0 {
+		samples := make(map[string]*specUsageSamples)
+		for _, row := range r.Rows {
+			entry := samples[row.Spec]
+			if entry == nil {
+				entry = &specUsageSamples{}
+				samples[row.Spec] = entry
+			}
+			if row.RuntimeSeconds != nil {
+				entry.runtime = append(entry.runtime, *row.RuntimeSeconds)
+			}
+			if row.creation != nil {
+				entry.creation = append(entry.creation, *row.creation)
+			}
+		}
+		for key, entry := range samples {
+			usage := byKey[key]
+			if usage == nil {
+				continue
+			}
+			usage.P95RuntimeSeconds = reportP95(entry.runtime)
+			usage.P95CreationSeconds = reportP95(entry.creation)
+		}
+	}
+	if r.Query.IncludeSpecUsage {
+		for key, b := range r.specBreakdowns() {
+			usage := byKey[key]
+			usage.RepositoryMix = rankSpecGroups(b.repos)
+			usage.Owners = rankSpecGroups(b.owners)
+			sort.Slice(b.trend, func(i, j int) bool { return b.trend[i].Key < b.trend[j].Key })
+			usage.Trend = b.trend
+			if b.outcomes != nil {
+				usage.JobResults = b.outcomes
+			}
+		}
+	}
+	result := make([]ReportSpecUsage, 0, len(byKey))
+	for _, usage := range byKey {
+		result = append(result, *usage)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Requests != result[j].Requests {
+			return result[i].Requests > result[j].Requests
+		}
+		return result[i].Key < result[j].Key
+	})
+	return result
+}
+
+type specUsageSamples struct {
+	runtime, creation []float64
+}
+
+func reportMean(duration ReportDuration) *float64 {
+	if duration.Samples == 0 {
+		return nil
+	}
+	mean := duration.Seconds / float64(duration.Samples)
+	return &mean
+}
+
+func reportP95(values []float64) *float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Float64s(values)
+	value := values[int(math.Ceil(float64(len(values))*0.95))-1]
+	return &value
 }
 
 // ReadRunnerReportActive is a separate current-state read without a date filter.
