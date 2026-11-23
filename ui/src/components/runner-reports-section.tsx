@@ -263,7 +263,7 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
       </div>
       <div className="grid min-w-0 items-end gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {(["from", "to", "timezone", "repository"] as const).map((key) => (
-          <div className="min-w-0 space-y-1.5" key={key}>
+          <div className="flex min-w-0 flex-col gap-1.5" key={key}>
             <Label htmlFor={`report-${key}`}>{t(`reports.${key}`)}</Label>
             <Input
               id={`report-${key}`}
@@ -280,7 +280,7 @@ function ReportFilters({ query, onApply }: { query: ReportQuery; onApply: (query
           options={(["day", "week", "month"] as const).map((g) => [g, t(`reports.${g}`)])}
         />
       </div>
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="flex flex-wrap self-end gap-2">
         <Button type="submit">{t("reports.apply")}</Button>
         {(draft.owner || draft.spec || draft.repository) && (
           <Button
@@ -328,7 +328,7 @@ function ReportSelect({
   onChange: (value: string) => void
 }) {
   return (
-    <div className={inline ? "flex min-w-0 flex-wrap items-center gap-2" : "min-w-0 space-y-1.5"}>
+    <div className={inline ? "flex min-w-0 flex-wrap items-center gap-2" : "flex min-w-0 flex-col gap-1.5"}>
       <span className="text-sm font-medium">{label}</span>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger className={inline ? "w-auto min-w-32" : "w-full min-w-32"} aria-label={label}>

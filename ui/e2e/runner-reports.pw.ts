@@ -187,6 +187,12 @@ test("desktop and narrow reports, popup, empty and error states remain usable", 
   await page.setViewportSize({ width: 1603, height: 1565 })
   await page.goto(`/admin/reports?${search}`)
   await expect(page.getByRole("img", { name: /chart$/ })).toHaveCount(3)
+  const applyBottom = await page.getByRole("button", { name: "Apply filters" })
+    .evaluate((button) => button.getBoundingClientRect().bottom)
+  for (const bottom of await page.locator("form input:visible, form button[role=combobox]")
+    .evaluateAll((fields) => fields.map((field) => field.getBoundingClientRect().bottom))) {
+    expect(Math.abs(bottom - applyBottom)).toBeLessThanOrEqual(1)
+  }
   await page
     .locator("section[aria-labelledby=reports-title]")
     .screenshot({ path: testInfo.outputPath("reports-desktop.png"), animations: "disabled" })
