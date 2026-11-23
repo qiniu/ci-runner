@@ -457,7 +457,14 @@ function Trend({ report }: { report: RunnerReport }) {
                       z: 1,
                       itemStyle: { color: colors.series[0], opacity: 0.45 },
                     }
-                  : { type: "line" as const, symbolSize: 5, z: 3, itemStyle: { color: colors.series[1] } }),
+                  : {
+                      type: "line" as const,
+                      smooth: 0.2,
+                      smoothMonotone: "x" as const,
+                      symbolSize: 5,
+                      z: 3,
+                      itemStyle: { color: colors.series[1] },
+                    }),
                 name: t(`reports.${key}`),
                 yAxisIndex: index,
                 data: report.trend.map((bucket) =>
