@@ -140,7 +140,7 @@ scoped catalogs inside the same report transaction.
 | `/reports/overview` | `from`, `to`, `timezone`, `grain=day\|week\|month`, exact `owner`, `repository`, `spec`; optional `snapshot` to restore the identical result |
 | `/reports/spec-usage` | Same filters as overview. Returns an independent snapshot with `spec_dashboard` counts, full-cohort summary and up to 20 spec records ordered by requests |
 | `/reports/active` | Same query contract; date and grain do not restrict current backlog |
-| `/reports/{snapshot}/specs` | `sort=requests\|runtime\|average_runtime\|repositories`, optional exact `key`, label search `q`, `limit`, `offset`; pages the frozen catalog and spec usage for a spec dashboard snapshot |
+| `/reports/{snapshot}/specs` | `sort=requests\|runtime\|average_runtime\|repositories`, optional exact `key`, label search `q`, `limit`, `offset`; pages the frozen catalog and usage from a `/reports/spec-usage` snapshot. An overview snapshot returns **400** |
 | `/reports/{snapshot}/groups` | `dimension=spec\|owner\|repository`, `sort=requests\|runtime`, optional label substring `q`, `limit`, `offset` |
 | `/reports/{snapshot}/requests` | Optional `dimension` and exact `key`; `limit`, `offset`. No dimension returns the full captured cohort |
 

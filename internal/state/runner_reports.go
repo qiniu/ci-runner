@@ -857,17 +857,6 @@ func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) 
 	return result, nil
 }
 
-// SpecUsages merges current global profiles with the immutable report cohort.
-// Scoped custom profiles are retained when present in the cohort, while the
-// current catalog input remains global-only.
-func (r *RunnerReport) SpecUsages(profiles []RunnerProfile) []ReportSpecUsage {
-	catalog := make([]ReportSpecUsage, 0, len(profiles))
-	for _, profile := range profiles {
-		catalog = append(catalog, ReportSpecUsage{Name: profile.Name, Source: "global", Enabled: profile.Enabled, Published: profile.Published, TemplateSource: profile.TemplateSource})
-	}
-	return r.specUsages(catalog)
-}
-
 func (r *RunnerReport) specUsages(catalog []ReportSpecUsage) []ReportSpecUsage {
 	byKey := make(map[string]*ReportSpecUsage)
 	for _, item := range catalog {

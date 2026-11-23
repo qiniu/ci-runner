@@ -506,8 +506,11 @@ func TestRunnerReportSpecUsagesMergesCatalogAndCalculatesSamples(t *testing.T) {
 		report.Rows[i].SpecLabel = report.Rows[i].Spec
 		report.Rows[i].Repository = fmt.Sprintf("team/repo-%d", i)
 	}
-	profiles := []RunnerProfile{{Name: "standard", Enabled: true, Published: true, TemplateSource: TemplateSourcePublic}, {Name: "unused", Enabled: false}}
-	usages := report.SpecUsages(profiles)
+	catalog := []ReportSpecUsage{
+		{Name: "standard", Source: "global", Enabled: true, Published: true, TemplateSource: TemplateSourcePublic},
+		{Name: "unused", Source: "global"},
+	}
+	usages := report.specUsages(catalog)
 	if len(usages) != 3 {
 		t.Fatalf("usage count=%d, want catalog and historical entries", len(usages))
 	}

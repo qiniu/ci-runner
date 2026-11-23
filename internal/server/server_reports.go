@@ -442,18 +442,12 @@ func (s *Server) handleRunnerReportSpecs(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	if !entry.report.Query.IncludeSpecUsage {
+		writeError(w, http.StatusBadRequest, "spec pagination requires a snapshot from /reports/spec-usage")
+		return
+	}
 	// Sorting must never mutate the retained order of the chart snapshot.
 	items := append([]state.ReportSpecUsage{}, entry.report.SpecItems...)
-	if !entry.report.Query.IncludeSpecUsage {
-		ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
-		defer cancel()
-		profiles, err := s.store.ListProfilesContext(ctx)
-		if err != nil {
-			s.writeReportError(w, r, err)
-			return
-		}
-		items = entry.report.SpecUsages(profiles)
-	}
 	key := r.URL.Query().Get("key")
 	search := strings.ToLower(r.URL.Query().Get("q"))
 	if key != "" || search != "" {

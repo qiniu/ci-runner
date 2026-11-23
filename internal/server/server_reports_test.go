@@ -26,7 +26,8 @@ func (s *reportsReadStore) ReadRunnerReport(ctx context.Context, q state.RunnerR
 }
 
 func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
-	srv := newTestServer(t, state.New(t.TempDir()), "http://example.test", &fakeSandbox{})
+	store := state.New(t.TempDir())
+	srv := newTestServer(t, store, "http://example.test", &fakeSandbox{})
 	get := func(path string, admin bool) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -58,7 +59,28 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 			t.Fatalf("empty %s rankings missing from overview: %+v", dimension, ranking)
 		}
 	}
-	paths := []string{"/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", "/reports/" + value.Snapshot + "/specs", "/reports/" + value.Snapshot + "/requests"}
+	w = get("/reports/spec-usage", true)
+	var specs struct {
+		Snapshot string
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("spec dashboard: %d %s", w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &specs); err != nil || specs.Snapshot == "" {
+		t.Fatalf("missing spec dashboard snapshot: %s", w.Body)
+	}
+	specPage := "/reports/" + specs.Snapshot + "/specs"
+	before := get(specPage, true)
+	if before.Code != http.StatusOK {
+		t.Fatalf("spec page: %d %s", before.Code, before.Body)
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "added-after-snapshot", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if after := get(specPage, true); after.Code != http.StatusOK || after.Body.String() != before.Body.String() {
+		t.Fatalf("spec page changed after catalog update: before %s, after %d %s", before.Body, after.Code, after.Body)
+	}
+	paths := []string{"/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", specPage, "/reports/" + value.Snapshot + "/requests"}
 	for _, path := range paths {
 		ordinary := httptest.NewRequest(http.MethodGet, path, nil)
 		ordinary.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
@@ -74,7 +96,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 			t.Errorf("unauthenticated %s: %d", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/reports/overview?from=invalid", "/reports/overview?grain=year", "/reports/overview?timezone=Local", "/reports/overview?owner=github:0", "/reports/overview?grain=day&grain=week", "/reports/" + value.Snapshot + "/requests?limit=101", "/reports/" + value.Snapshot + "/groups?dimension=invalid", "/reports/" + value.Snapshot + "/specs?sort=invalid"} {
+	for _, path := range []string{"/reports/overview?from=invalid", "/reports/overview?grain=year", "/reports/overview?timezone=Local", "/reports/overview?owner=github:0", "/reports/overview?grain=day&grain=week", "/reports/" + value.Snapshot + "/requests?limit=101", "/reports/" + value.Snapshot + "/groups?dimension=invalid", "/reports/" + value.Snapshot + "/specs", specPage + "?sort=invalid"} {
 		if w := get(path, true); w.Code != 400 {
 			t.Errorf("invalid %s: %d %s", path, w.Code, w.Body)
 		}
