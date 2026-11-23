@@ -130,14 +130,14 @@ func (c *runnerReportCache) put(e cachedRunnerReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept := make([]cachedRunnerReport, 0, reportCacheEntries)
-	n := len(e.report.Rows)
+	n := e.report.RetainedEntries()
 	kept = append(kept, e)
 	for _, old := range c.entries {
-		if time.Since(old.created) >= reportRetention || len(kept) >= reportCacheEntries || n+len(old.report.Rows) > reportCacheRows {
+		if time.Since(old.created) >= reportRetention || len(kept) >= reportCacheEntries || n+old.report.RetainedEntries() > reportCacheRows {
 			continue
 		}
 		kept = append(kept, old)
-		n += len(old.report.Rows)
+		n += old.report.RetainedEntries()
 	}
 	c.entries = kept
 }
@@ -273,7 +273,7 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, state.ErrReportTooLarge) {
+	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -395,6 +395,10 @@ func (s *Server) handleRunnerReportRequests(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	rows, err := entry.report.Requests(r.URL.Query().Get("dimension"), r.URL.Query().Get("key"))
+	if errors.Is(err, state.ErrReportTooLarge) {
+		s.writeReportError(w, r, err)
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

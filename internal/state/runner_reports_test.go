@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -312,7 +313,124 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
 			verifyReportGlobalSpecIdentity(t, s)
+			if backend.name == BackendPostgres {
+				verifyLargePostgresReport(t, s)
+				t.Run("trend_timezone", func(t *testing.T) { verifyPostgresTrendTimezone(t, s) })
+			}
 		})
+	}
+}
+
+// First force the aggregate path with previous-period rows only. Every current
+// metric, trend bucket and group must match the existing row-based snapshot.
+func verifyLargePostgresReport(t *testing.T, s *DBStore) {
+	t.Helper()
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := reportTime("2026-11-20T10:00:00Z")
+	q := RunnerReportQuery{From: "2026-10-22", To: "2026-11-21", Timezone: "Asia/Shanghai", Grain: "day"}
+	baseline, err := s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert := `INSERT INTO runner_requests (id, source, runner_name, labels_json, status, repository_full_name, queued_at, updated_at)
+		SELECT 'volume-' || i, 'fixture', 'volume-' || i, '[]', 'queued', 'volume/repo', ?, ? FROM generate_series(1, ?) i`
+	prior := now.AddDate(0, 0, -40)
+	if err := db.Exec(insert, prior, prior, ReportMaxRows+1).Error; err != nil {
+		t.Fatal(err)
+	}
+	read := func() *RunnerReport {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		start := time.Now()
+		r, err := s.ReadRunnerReport(ctx, q, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PostgreSQL report: %d current + %d previous, %d retained entries in %s", r.Totals.Requests, r.Previous.Requests, r.RetainedEntries(), time.Since(start))
+		return r
+	}
+	large := read()
+	wantPrevious := baseline.Previous
+	wantPrevious.Requests += ReportMaxRows + 1
+	wantPrevious.ActiveRepositories++
+	if large.Previous != wantPrevious || large.Totals != baseline.Totals || !reflect.DeepEqual(large.Trend, baseline.Trend) {
+		t.Fatalf("aggregate totals/trend diverged: got %+v / %+v, want %+v / %+v", large.Totals, large.Previous, baseline.Totals, wantPrevious)
+	}
+	for _, dim := range []string{"spec", "repository", "owner"} {
+		want, _ := baseline.Groups(dim, "requests")
+		got, err := large.Groups(dim, "requests")
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: got %+v, want %+v: %v", dim, got, want, err)
+		}
+	}
+	if _, err := large.Requests("", ""); !errors.Is(err, ErrReportTooLarge) {
+		t.Fatalf("expected explicit detail overflow: %v", err)
+	}
+	// Put all 100001 generated requests in the current cohort with a narrow
+	// repository filter; no request rows may be truncated or retained.
+	at := now.Add(-48 * time.Hour)
+	if err := db.Exec("UPDATE runner_requests SET queued_at=?, status='completed', running_at=?, completed_at=? WHERE repository_full_name='volume/repo'", at, at, at.Add(90*time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	q.Repository = "volume/repo"
+	large = read()
+	groups, err := large.Groups("repository", "runtime")
+	if err != nil || len(groups) != 1 || groups[0].Key != q.Repository || groups[0].Requests != ReportMaxRows+1 ||
+		large.Totals.Runtime != (ReportDuration{Seconds: 90 * (ReportMaxRows + 1), Samples: ReportMaxRows + 1, Eligible: ReportMaxRows + 1}) ||
+		large.Totals.Requests != ReportMaxRows+1 || large.Previous.Requests != 0 || len(large.Rows) != 0 || large.RetainedEntries() != 3 {
+		t.Fatalf("filtered large report: %+v, groups=%+v: %v", large.Totals, groups, err)
+	}
+}
+
+// Only the previous cohort grows across the threshold, so both paths must
+// return the same current trend. CET observes summer time in Go's IANA data.
+func verifyPostgresTrendTimezone(t *testing.T, s *DBStore) {
+	t.Helper()
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := RunnerReportQuery{From: "2026-03-28", To: "2026-06-02", Timezone: "CET", Grain: "day", Repository: "timezone/repo"}
+	now := reportTime("2026-06-03T00:00:00Z")
+	insert := func(prefix, queued string, n int) {
+		t.Helper()
+		at := reportTime(queued)
+		err := db.Exec(`INSERT INTO runner_requests (id, source, runner_name, labels_json, status, repository_full_name, queued_at, updated_at)
+			SELECT ? || i, 'test', ? || i, '[]', 'queued', ?, ?, ? FROM generate_series(1, ?) i`,
+			prefix, prefix, q.Repository, at, at, n).Error
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("cet-winter-", "2026-03-28T22:30:00Z", 1) // 23:30 on March 28
+	insert("cet-summer-", "2026-05-31T22:30:00Z", 2) // 00:30 on June 1
+	const previous = "2026-03-01T12:00:00Z"
+	insert("cet-previous-", previous, ReportMaxRows-3)
+	for _, size := range []int{ReportMaxRows, ReportMaxRows + 1} {
+		if size > ReportMaxRows {
+			insert("cet-extra-", previous, 1)
+		}
+		r, err := s.ReadRunnerReport(t.Context(), q, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Totals.Requests != 3 || r.Previous.Requests != int64(size-3) || (r.Rows == nil) != (size > ReportMaxRows) {
+			t.Fatalf("cohort size %d: current=%d previous=%d aggregate=%t", size, r.Totals.Requests, r.Previous.Requests, r.Rows == nil)
+		}
+		got := map[string]int64{}
+		for _, b := range r.Trend {
+			if b.Requests > 0 {
+				got[b.Date] = b.Requests
+			}
+		}
+		want := map[string]int64{"2026-03-28": 1, "2026-06-01": 2}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("cohort size %d: got trend %v, want %v", size, got, want)
+		}
 	}
 }
 

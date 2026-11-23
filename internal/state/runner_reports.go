@@ -18,7 +18,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ReportMaxRows bounds a report's current and comparison cohorts together.
+// ReportMaxRows bounds detail snapshots across both cohorts and the number of PostgreSQL aggregate rows.
 const ReportMaxRows = 100000
 
 var ErrReportTooLarge = errors.New("report exceeds 100000 requests; narrow the date range or filters")
@@ -144,6 +144,17 @@ func (v reportSpecIdentity) canonical() reportSpecIdentity {
 	return v
 }
 
+func (identity reportSpecIdentity) label() string {
+	label := identity.Name
+	if identity.Name != "" && identity.ScopeType != "" {
+		label += fmt.Sprintf(" · %s:%d", identity.ScopeType, identity.ScopeID)
+	}
+	if identity.Name != "" && identity.Source != "" {
+		label += " · " + identity.Source
+	}
+	return label
+}
+
 func reportSpecKey(v reportSpecIdentity) string {
 	v = v.canonical()
 	b, _ := json.Marshal(v)
@@ -192,11 +203,11 @@ type ReportTotals struct {
 	TerminalTimes      int64          `json:"terminal_times"`
 	JobResults         int64          `json:"job_results"`
 	JobResultEligible  int64          `json:"job_result_eligible"`
-	Runtime            ReportDuration `json:"runtime"`
-	Startup            ReportDuration `json:"startup"`
-	Creation           ReportDuration `json:"creation"`
-	Cleanup            ReportDuration `json:"cleanup"`
-	Completion         ReportDuration `json:"completion"`
+	Runtime            ReportDuration `json:"runtime" gorm:"embedded;embeddedPrefix:runtime_"`
+	Startup            ReportDuration `json:"startup" gorm:"embedded;embeddedPrefix:startup_"`
+	Creation           ReportDuration `json:"creation" gorm:"embedded;embeddedPrefix:creation_"`
+	Cleanup            ReportDuration `json:"cleanup" gorm:"embedded;embeddedPrefix:cleanup_"`
+	Completion         ReportDuration `json:"completion" gorm:"embedded;embeddedPrefix:completion_"`
 }
 
 type ReportRequest struct {
@@ -233,6 +244,8 @@ type RunnerReport struct {
 	Trend      []ReportBucket    `json:"trend"`
 	// Rows are retained only in the bounded server cache for consistent drilldowns.
 	Rows []ReportRequest `json:"-"`
+	// Large PostgreSQL cohorts retain grouped totals instead of individual rows.
+	groupTotals map[string][]ReportGroup
 }
 
 type reportProjection struct {
@@ -406,11 +419,29 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		return nil, err
 	}
 	defer closeReader()
+	if db.Dialector.Name() == BackendPostgres {
+		// The size probe and whichever representation it selects must see the same rows.
+		db = db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if db.Error != nil {
+			return nil, db.Error
+		}
+		defer db.Rollback()
+	}
 	query, err := reportBase(db, q)
 	if err != nil {
 		return nil, err
 	}
 	query = query.Where("(r.queued_at >= ? AND r.queued_at < ?) OR (r.queued_at >= ? AND r.queued_at < ?)", window.Start.UTC(), window.End.UTC(), window.PreviousStart.UTC(), window.PreviousEnd.UTC())
+	if db.Dialector.Name() == BackendPostgres {
+		var overflow int
+		probe := query.Session(&gorm.Session{}).Select("1").Offset(ReportMaxRows).Limit(1).Scan(&overflow)
+		if probe.Error != nil {
+			return nil, probe.Error
+		}
+		if overflow != 0 {
+			return postgresAggregateReport(ctx, db, query, q, window, now)
+		}
+	}
 	query = query.Order("r.queued_at DESC, r.id ASC").Limit(ReportMaxRows + 1)
 	if db.Dialector.Name() == BackendSQLite {
 		if err := materializeSQLiteReport(db, query.Select("r.id AS request_id, o.github_account_id, o.account_login")); err != nil {
@@ -465,6 +496,16 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 	}
 	report.Totals = current.totals()
 	report.Previous = previous.totals()
+	bucketTotals := make(map[string]ReportTotals, len(buckets))
+	for key, bucket := range buckets {
+		bucketTotals[key] = bucket.totals()
+	}
+	report.fillTrend(bucketTotals)
+	return report, nil
+}
+
+func (report *RunnerReport) fillTrend(buckets map[string]ReportTotals) {
+	window := report.Window
 	// Iterate civil dates in UTC so a missing local midnight cannot normalize
 	// to the previous date and shift all later buckets. The last included
 	// instant preserves the exclusive end while including an unfinished date.
@@ -472,18 +513,14 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 	lastDate := reportCalendarDate(window.End.Add(-time.Nanosecond), window.Location)
 	seen := map[string]bool{}
 	for day := firstDate; !day.After(lastDate); day = day.AddDate(0, 0, 1) {
-		key := reportBucketDate(day, time.UTC, q.Grain)
+		key := reportBucketDate(day, time.UTC, report.Query.Grain)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		total := ReportTotals{}
-		if buckets[key] != nil {
-			total = buckets[key].totals()
-		}
+		total := buckets[key]
 		report.Trend = append(report.Trend, ReportBucket{Date: key, ReportTotals: total})
 	}
-	return report, nil
 }
 
 // The UTC value represents a local calendar label, not an execution instant.
@@ -517,14 +554,7 @@ func reportSeconds(start, end *time.Time, now time.Time) *float64 {
 
 func (p reportProjection) request(now time.Time) ReportRequest {
 	identity := (reportSpecIdentity{p.ProfileSource, p.ProfileScopeType, p.ProfileScopeID, p.ProfileName}).canonical()
-	label := p.ProfileName
-	if p.ProfileName != "" && identity.ScopeType != "" {
-		label += fmt.Sprintf(" · %s:%d", identity.ScopeType, identity.ScopeID)
-	}
-	if p.ProfileName != "" && p.ProfileSource != "" {
-		label += " · " + p.ProfileSource
-	}
-	row := ReportRequest{ID: p.ID, QueuedAt: p.QueuedAt, Repository: p.RepositoryFullName, Spec: reportSpecKey(identity), SpecLabel: label, Status: p.Status, JobResult: "unknown"}
+	row := ReportRequest{ID: p.ID, QueuedAt: p.QueuedAt, Repository: p.RepositoryFullName, Spec: reportSpecKey(identity), SpecLabel: identity.label(), Status: p.Status, JobResult: "unknown"}
 	row.Owner = "installation:" + strconv.FormatInt(p.GitHubInstallationID, 10)
 	row.OwnerLabel = row.Owner
 	if p.OwnerID > 0 {
@@ -640,30 +670,17 @@ func (a *reportAccumulator) totals() ReportTotals {
 
 // Groups aggregates the same immutable cohort used by the summary and requests.
 func (r *RunnerReport) Groups(dimension, sortBy string) ([]ReportGroup, error) {
-	groups := map[string]*reportAccumulator{}
-	labels := map[string]string{}
-	for _, row := range r.Rows {
-		key, label, err := row.dimension(dimension)
-		if err != nil {
-			return nil, err
-		}
-		if groups[key] == nil {
-			groups[key] = newReportAccumulator()
-		}
-		groups[key].add(row)
-		if labels[key] == "" || label < labels[key] {
-			labels[key] = label
-		}
-	}
 	if dimension != "spec" && dimension != "owner" && dimension != "repository" {
 		return nil, errors.New("invalid report dimension")
 	}
 	if sortBy != "requests" && sortBy != "runtime" {
 		return nil, errors.New("invalid report sort")
 	}
-	result := make([]ReportGroup, 0, len(groups))
-	for key, a := range groups {
-		result = append(result, ReportGroup{key, labels[key], a.totals()})
+	var result []ReportGroup
+	if r.groupTotals != nil {
+		result = append([]ReportGroup{}, r.groupTotals[dimension]...)
+	} else {
+		result = r.groupRows(dimension)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if sortBy == "runtime" && result[i].Runtime.Seconds != result[j].Runtime.Seconds {
@@ -675,6 +692,35 @@ func (r *RunnerReport) Groups(dimension, sortBy string) ([]ReportGroup, error) {
 		return result[i].Key < result[j].Key
 	})
 	return result, nil
+}
+
+func (r *RunnerReport) groupRows(dimension string) []ReportGroup {
+	groups := map[string]*reportAccumulator{}
+	labels := map[string]string{}
+	for _, row := range r.Rows {
+		key, label, _ := row.dimension(dimension)
+		if groups[key] == nil {
+			groups[key] = newReportAccumulator()
+		}
+		groups[key].add(row)
+		if labels[key] == "" || label < labels[key] {
+			labels[key] = label
+		}
+	}
+	result := make([]ReportGroup, 0, len(groups))
+	for key, a := range groups {
+		result = append(result, ReportGroup{key, labels[key], a.totals()})
+	}
+	return result
+}
+
+// RetainedEntries counts both snapshot representations against the cache budget.
+func (r *RunnerReport) RetainedEntries() int {
+	n := len(r.Rows)
+	for _, groups := range r.groupTotals {
+		n += len(groups)
+	}
+	return n
 }
 
 func (r ReportRequest) dimension(dimension string) (string, string, error) {
@@ -691,11 +737,14 @@ func (r ReportRequest) dimension(dimension string) (string, string, error) {
 }
 
 func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) {
+	if dimension != "" && dimension != "spec" && dimension != "owner" && dimension != "repository" {
+		return nil, errors.New("invalid report dimension")
+	}
+	if r.groupTotals != nil {
+		return nil, ErrReportTooLarge
+	}
 	if dimension == "" {
 		return r.Rows, nil
-	}
-	if dimension != "spec" && dimension != "owner" && dimension != "repository" {
-		return nil, errors.New("invalid report dimension")
 	}
 	result := []ReportRequest{}
 	for _, row := range r.Rows {
