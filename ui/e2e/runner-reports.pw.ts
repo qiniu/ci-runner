@@ -97,6 +97,114 @@ test("all distributions and both metrics work with a process-local snapshot", as
   expect(groupReads).toBe(0)
 })
 
+test("spec charts and table ignore legacy request drilldown links", async ({ page }) => {
+  await setup(page)
+  const calls: string[] = []
+  page.on("request", request => calls.push(request.url()))
+  const group = { ...totals, key: "standard", label: "standard · global" }
+  const ranking = { total: 1, requests: [group], runtime: [group] }
+  const scope = { ...query, repository: "team/repo" }
+  const repos = [
+    { key:"org/main", label:"org/main", requests:1, runtime:{seconds:1800,samples:1,eligible:1} },
+    { key:"org/ci", label:"org/ci", requests:1, runtime:{seconds:5400,samples:1,eligible:1} },
+  ]
+  const items = [
+          {
+            key: "standard",
+            label: "standard · global",
+            name: "standard",
+            source: "global",
+            current: true,
+            enabled: true,
+            published: true,
+            requests: 2,
+            started: 2,
+            repositories: 1,
+            runtime: { seconds: 7200, samples: 2, eligible: 2 },
+            creation: { seconds: 120, samples: 2, eligible: 2 },
+            average_runtime_seconds: 3600,
+            p95_runtime_seconds: 3600,
+            average_creation_seconds: 60,
+            p95_creation_seconds: 60,
+            job_results: { success: 2 },
+            repository_mix: { requests: repos, runtime: [...repos].reverse() },
+            owner_mix: { requests: repos, runtime: [...repos].reverse() },
+            spec_trend: [{ ...repos[0], key: "2026-11-01", started: 1 }],
+          },
+          {
+            key: "unused",
+            label: "unused · global",
+            name: "unused",
+            source: "global",
+            current: true,
+            enabled: false,
+            published: false,
+            requests: 0,
+            started: 0,
+            repositories: 0,
+            runtime: { seconds: 0, samples: 0, eligible: 0 },
+            creation: { seconds: 0, samples: 0, eligible: 0 },
+          },
+        ]
+  await page.route("**/reports/spec-usage?*", route => route.fulfill({json:{
+    ...report, query:scope, distributions:{spec:ranking,owner:ranking,repository:ranking},
+    spec_dashboard:{ summary:{ ...items[0], requests:4, job_results:{success:2, cancelled:2} }, total:2, catalog:2, used_current:1, historical_groups:0, items },
+  }}))
+  await page.goto(`/admin/reports?${new URLSearchParams(scope)}&view=specs&requests_offset=0`)
+  const requestToggle = page.getByRole("button", { name: /^(View|Hide) requests$/ })
+  const tab = page.getByRole("tab", { name: "Specs", exact: true })
+  const charts = page.getByRole("button", { name: "Charts", exact: true })
+  const table = page.getByRole("button", { name: "Table", exact: true })
+  const filter = page.getByRole("button", { name: "Filter by spec", exact: true })
+  const trend = page.getByRole("heading", { name: "Trend", exact: true })
+  const choose = async (name: string) => {
+    await filter.click()
+    await page.getByRole("dialog").getByRole("button", { name, exact: true }).click()
+  }
+  await expect(tab).toHaveAttribute("aria-selected", "true")
+  await expect(charts).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByText(/^(Cohort:|Previous period:|Observed )/)).toHaveCount(0)
+  await expect(filter).toHaveText("All specs")
+  await expect(requestToggle).toHaveCount(0)
+  await expect(trend).toHaveCount(1)
+  await expect(page.getByText("cancelled · 2 · 50%")).toBeVisible()
+  await expect(page.getByText("Current catalog specs", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("No requests in this cohort.")).toHaveCount(0)
+  await expect(page.getByRole("table")).toHaveCount(0)
+  expect(calls.filter(url => /\/(specs|requests)\?/.test(url))).toEqual([])
+
+  const donut = page.getByRole("img", { name: "Runner spec · Recorded runtime (h) chart" })
+  const box = await donut.boundingBox()
+  if (!box) throw new Error("Missing runtime chart")
+  await donut.click({ position: { x: box.width / 2 + box.height * 0.32, y: box.height / 2 } })
+  await expect(filter).toHaveText(group.label)
+  await expect(trend).toHaveCount(1)
+  await expect(page.getByRole("list", {name:"Request share by repository"})).toContainText("50%")
+  await expect(page.getByRole("list", {name:"Runtime share by repository"})).toContainText("75%")
+  await expect(page.getByText("cancelled · 2 · 50%")).toHaveCount(0)
+  await choose("unused · global")
+  await expect(page.getByText("No requests in this cohort.")).toBeVisible()
+  await expect(trend).toHaveCount(0)
+  await choose(group.label)
+  await table.click()
+  await expect(table).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(2)
+  await expect(page.getByRole("table")).toContainText(group.label)
+  await expect(trend).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole("table")).toContainText(group.label)
+  await expect(requestToggle).toHaveCount(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await charts.click()
+  await expect(filter).toHaveText(group.label)
+  await expect(trend).toHaveCount(1)
+  await choose("All specs")
+  await expect(page.getByText("cancelled · 2 · 50%")).toBeVisible()
+  await expect(charts).toHaveAttribute("aria-pressed", "true")
+  expect(calls.filter(url => /\/reports\/[^/]+\/requests(?:\?|$)/.test(url))).toEqual([])
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
 test("chart filtering and snapshot metric survive reload without fetching request details", async ({
   page,
 }) => {
@@ -152,6 +260,30 @@ test("form filters preserve the distribution metric and discard the old snapshot
   await page.getByRole("button", { name: "Last 7 days" }).click()
   await expect(page.getByLabel("Start date", { exact: true })).not.toHaveValue(query.from)
   await expect(metric).toHaveText("Recorded runtime (h)")
+  const applied = new URL(page.url()).searchParams
+  await page.route("**/reports/spec-usage?*", (route) => {
+    const params = new URL(route.request().url()).searchParams
+    return route.fulfill({ json: { ...report, query: Object.fromEntries(params) } })
+  })
+  const repository = page.getByLabel("Repository", { exact: true })
+  const specs = page.getByRole("tab", { name: "Specs", exact: true })
+  expect(await repository.evaluate(input =>
+    Boolean(input.compareDocumentPosition(document.querySelector('[role="tablist"]')!) & Node.DOCUMENT_POSITION_FOLLOWING)
+  )).toBe(true)
+  await repository.fill("draft/repo")
+  const [specRequest] = await Promise.all([
+    page.waitForRequest(request => request.url().includes("/reports/spec-usage?")),
+    specs.click(),
+  ])
+  const specQuery = new URL(specRequest.url()).searchParams
+  for (const key of ["from", "to", "timezone", "grain", "repository"]) {
+    expect(specQuery.get(key)).toBe(applied.get(key))
+  }
+  await expect(page.getByRole("button", { name: "Charts", exact: true })).toBeVisible()
+  await expect(repository).toHaveValue("draft/repo")
+  await page.getByRole("tab", { name: "Overview", exact: true }).click()
+  await expect(metric).toHaveText("Recorded runtime (h)")
+  await expect(repository).toHaveValue("draft/repo")
   await page.getByRole("button", { name: "Clear dimension filters" }).click()
   await expect(page).not.toHaveURL(/repository=/)
   await page.reload()

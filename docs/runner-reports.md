@@ -2,13 +2,31 @@
 
 Administrators use `/admin/reports` to inspect request cohorts, recorded runtime,
 trends, and usage by Runner Spec, GitHub Installation owner, and repository.
+The filter bar above the report tabs applies the date range, timezone, repository
+and time grain to both Overview and Specs. Switching tabs keeps those selections.
+The Specs tab opens with two comparison charts showing each spec's share of
+requests and recorded runtime. The catalog includes global, account and
+organization specs. Repository and owner filters narrow usage, and an exact
+spec filter also narrows the catalog.
+
+A single usage report defaults to all specs. Its spec filter and the comparison
+chart selections update the same report in place. The filter includes unused
+catalog entries and historical identities, with search and paging for larger
+catalogs. The report shows starts, repository coverage, mean and P95 runtime,
+mean creation time, retained Job outcomes and a date trend. Repository and
+owner rankings use the selected cohort's requests or recorded runtime as the
+denominator. Each ranking includes its Top 5 and a metric-specific remainder.
+A zero runtime denominator or missing sample displays a dash.
+
+Table mode shows exact aggregate metrics for the current selection. Individual
+requests are available on the admin Runner Requests page.
+
 The overview uses Apache ECharts: a dual-axis time-series chart (request-count lines over translucent recorded-runtime bars in hours), spec and owner donut
 charts, and horizontal repository bars. Distribution charts show the Top 5 by
 request count or recorded runtime, with all remaining groups combined as Other.
 Legends show exact values and full-cohort shares and allow filtering the entire
 report. Missing runtime samples remain unavailable, distinct from valid zero
-durations. Request rows belong in Runner Requests and are not loaded by this
-page; the snapshot request API and historical detail return links remain compatible.
+durations. The overview loads chart data only.
 Charts load on demand, use the existing theme tokens, resize with their container,
 and expose values in text legends and a collapsible trend table. The runtime
 summary shows its valid record count with an accessible calculation tooltip;
@@ -107,13 +125,16 @@ or display it. Inspect current lifecycle counts on Runner Requests instead.
 
 All endpoints require the existing administrator authorization, including cache
 hits and drilldowns. Responses have `Cache-Control: no-store`. Only local narrow
-projections are selected: no credentials, raw webhook payloads, logs, provider
-calls or current catalog scans.
+projections are selected: no credentials, raw webhook payloads, logs, or provider
+calls. The spec dashboard reads narrow identity and display fields from the global and
+scoped catalogs inside the same report transaction.
 
 | GET endpoint | Parameters and behavior |
 | --- | --- |
 | `/reports/overview` | `from`, `to`, `timezone`, `grain=day\|week\|month`, exact `owner`, `repository`, `spec`; optional `snapshot` to restore the identical result |
+| `/reports/spec-usage` | Same filters as overview. Returns an independent snapshot with `spec_dashboard` counts, full-cohort summary and up to 20 spec records ordered by requests |
 | `/reports/active` | Same query contract; date and grain do not restrict current backlog |
+| `/reports/{snapshot}/specs` | `sort=requests\|runtime\|average_runtime\|repositories`, optional exact `key`, label search `q`, `limit`, `offset`; pages the frozen catalog and spec usage for a spec dashboard snapshot |
 | `/reports/{snapshot}/groups` | `dimension=spec\|owner\|repository`, `sort=requests\|runtime`, optional label substring `q`, `limit`, `offset` |
 | `/reports/{snapshot}/requests` | Optional `dimension` and exact `key`; `limit`, `offset`. No dimension returns the full captured cohort |
 
@@ -129,6 +150,13 @@ cohort denominators; chart remainders subtract displayed groups from full totals
 including runtime sample counts. A missing spec name is labeled Unknown while
 preserving its saved identity. The request detail itself is live and may have
 changed since the report snapshot.
+
+For spec dashboard snapshots, the specs endpoint includes unused catalog entries
+and historical groups. The PostgreSQL aggregate path computes spec-by-repository,
+owner, date and Job outcome groups in the bounded report query. Average times
+remain available from sums and valid sample counts. Exact P95 needs individual
+samples and is unavailable on aggregate-only snapshots. The standard overview
+keeps its original grouping sets.
 
 - Detail snapshots retain up to 100,000 requests across the current and prior
   cohorts combined. For larger PostgreSQL cohorts, the overview and all three

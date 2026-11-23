@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react"
+import { reportChartPalette } from "@/runner-reports"
 import { useTheme } from "next-themes"
 import { init, use as registerCharts, type ComposeOption, type EChartsType } from "echarts/core"
 import {
@@ -31,8 +32,8 @@ function themeColors(element: HTMLElement): ReportChartColors {
   const canvas = document.createElement("canvas")
   canvas.width = canvas.height = 1
   const context = canvas.getContext("2d")!
-  const resolve = (token: string) => {
-    probe.style.color = `var(--${token})`
+  const resolve = (color: string) => {
+    probe.style.color = color
     context.clearRect(0, 0, 1, 1)
     context.fillStyle = getComputedStyle(probe).color
     context.fillRect(0, 0, 1, 1)
@@ -40,10 +41,10 @@ function themeColors(element: HTMLElement): ReportChartColors {
     return `rgba(${r},${g},${b},${a / 255})`
   }
   const colors = {
-    series: [1, 2, 3, 4, 5].map((n) => resolve(`chart-${n}`)),
-    text: resolve("muted-foreground"),
-    border: resolve("border"),
-    background: resolve("card"),
+    series: reportChartPalette.map(resolve),
+    text: resolve("var(--muted-foreground)"),
+    border: resolve("var(--border)"),
+    background: resolve("var(--card)"),
   }
   probe.remove()
   return colors
@@ -52,8 +53,12 @@ function themeColors(element: HTMLElement): ReportChartColors {
 export default function ReportChart({
   label,
   option,
+  onDataClick,
+  large,
 }: {
   label: string
+  large?: boolean
+  onDataClick?: (key: string) => void
   option: (colors: ReportChartColors) => ReportChartOption
 }) {
   const container = useRef<HTMLDivElement>(null)
@@ -71,6 +76,19 @@ export default function ReportChart({
     }
   }, [])
   useEffect(() => {
+    const chart = instance.current
+    if (!chart || !onDataClick) return
+    const select = ({ data }: { data?: unknown }) => {
+      if (data && typeof data === "object" && "id" in data && typeof data.id === "string") {
+        onDataClick(data.id)
+      }
+    }
+    chart.on("click", select)
+    return () => {
+      chart.off("click", select)
+    }
+  }, [onDataClick])
+  useEffect(() => {
     const colors = themeColors(container.current!)
     instance.current?.setOption(
       {
@@ -82,5 +100,5 @@ export default function ReportChart({
       { notMerge: true },
     )
   }, [option, resolvedTheme])
-  return <div ref={container} className="h-48 min-w-0" role="img" aria-label={label} />
+  return <div ref={container} className={large ? "h-72 min-w-0 md:h-80" : "h-48 min-w-0"} role="img" aria-label={label} />
 }

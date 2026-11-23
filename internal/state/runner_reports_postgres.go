@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		CASE r.status WHEN 'completed' THEN r.completed_at WHEN 'failed' THEN r.failed_at END AS terminal_at,
 		r.status IN ('completed', 'failed') AS terminal, r.status = 'failed' AND r.failure_stage = 'admission' AS rejected,
 		r.workflow_job_id > 0 AS has_job, r.github_job_status = 'completed' AND
-			coalesce(r.github_job_conclusion, '') NOT IN ('', 'unknown') AS saved_result, r.github_job_observed_at,
+			coalesce(r.github_job_conclusion, '') NOT IN ('', 'unknown') AS saved_result, r.github_job_conclusion, r.github_job_observed_at,
 		coalesce(r.profile_name, '') COLLATE "C" AS spec_name, coalesce(r.profile_source, '') COLLATE "C" AS spec_source,
 		CASE WHEN r.profile_source = 'global' THEN '' ELSE coalesce(r.profile_scope_type, '') END COLLATE "C" AS scope_type,
 		CASE WHEN r.profile_source = 'global' THEN 0 ELSE coalesce(r.profile_scope_id, 0) END AS scope_id,
@@ -60,6 +61,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		FROM (?) AS c CROSS JOIN bounds
 	), intervals AS (
 		SELECT v.*,
+   CASE WHEN has_job AND saved_result AND valid_result THEN github_job_conclusion ELSE 'unknown' END COLLATE "C" AS job_result,
 			CASE WHEN started AND valid_terminal AND runtime_end BETWEEN running_at AND terminal_at
 				THEN runtime_end - running_at END AS runtime,
 			CASE WHEN started AND valid_queue AND running_at >= queued_at THEN running_at - queued_at END AS startup,
@@ -69,9 +71,9 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		FROM validated v
 	)
 	SELECT current_period,
-		CASE WHEN grouping(bucket) = 0 THEN 'trend' WHEN grouping(spec_name) = 0 THEN 'spec'
+		CASE %s WHEN grouping(bucket) = 0 THEN 'trend'  WHEN grouping(spec_name) = 0 THEN 'spec'
 			WHEN grouping(owner_key) = 0 THEN 'owner' WHEN grouping(repo) = 0 THEN 'repository' ELSE 'total' END AS dimension,
-		bucket, spec_source, scope_type, scope_id, spec_name, owner_key, repo,
+		bucket, spec_source, scope_type, scope_id, spec_name, owner_key, repo, %s
 		min(CASE WHEN account_id > 0 THEN coalesce(account_login, owner_key) ELSE owner_key END) AS owner_label,
 		count(*) AS requests, count(*) FILTER (WHERE started) AS started, count(*) FILTER (WHERE terminal) AS terminal,
 		count(*) FILTER (WHERE rejected) AS rejected, count(DISTINCT account_id) FILTER (WHERE account_id > 0) AS active_accounts,
@@ -85,8 +87,16 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		count(*) FILTER (WHERE terminal AND started) AS runtime_eligible, count(*) FILTER (WHERE started) AS startup_eligible,
 		count(*) FILTER (WHERE started) AS creation_eligible, count(*) FILTER (WHERE terminal AND valid_stop) AS cleanup_eligible,
 		count(*) FILTER (WHERE terminal) AS completion_eligible, `
-	const rollups = `
-	FROM intervals GROUP BY current_period, GROUPING SETS ((), (bucket), (spec_source, scope_type, scope_id, spec_name), (owner_key), (repo))
+	specRepoSet, classify, resultField := "", "", ""
+	if q.IncludeSpecUsage {
+		for _, dim := range []struct{ column, kind string }{{"repo", "spec_repo"}, {"owner_key", "spec_owner"}, {"bucket", "spec_trend"}, {"job_result", "spec_result"}} {
+			specRepoSet += ", (spec_source, scope_type, scope_id, spec_name, " + dim.column + ")"
+			classify += " WHEN grouping(spec_name, " + dim.column + ") = 0 THEN '" + dim.kind + "'"
+		}
+		resultField = "job_result,"
+	}
+	rollups := `
+	FROM intervals GROUP BY current_period, GROUPING SETS ((), (bucket), (spec_source, scope_type, scope_id, spec_name), (owner_key), (repo)` + specRepoSet + `)
 	HAVING current_period OR grouping(bucket, spec_name, owner_key, repo) = 15
 	LIMIT ?`
 	var durations []string
@@ -94,7 +104,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		// Match Go's time.Duration saturation for exceptionally long valid intervals.
 		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum(least(extract(epoch FROM "+metric+"), 9223372036.854775807)) FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
 	}
-	query := db.Raw(aggregates+strings.Join(durations, ", ")+rollups, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
+	query := db.Raw(fmt.Sprintf(aggregates, classify, resultField)+strings.Join(durations, ", ")+rollups, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
 	rows, err := query.Rows()
 	if err != nil {
 		return nil, err
@@ -107,10 +117,10 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 			return nil, ErrReportTooManyGroups
 		}
 		var row struct {
-			CurrentPeriod                                                                  bool
-			Dimension, Bucket, SpecSource, ScopeType, SpecName, OwnerKey, OwnerLabel, Repo string
-			ScopeID                                                                        int64
-			ReportTotals                                                                   `gorm:"embedded"`
+			CurrentPeriod                                                                             bool
+			Dimension, Bucket, SpecSource, ScopeType, SpecName, OwnerKey, OwnerLabel, Repo, JobResult string
+			ScopeID                                                                                   int64
+			ReportTotals                                                                              `gorm:"embedded"`
 		}
 		if err := db.ScanRows(rows, &row); err != nil {
 			return nil, err
@@ -126,6 +136,25 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 			continue
 		case "trend":
 			buckets[row.Bucket] = row.ReportTotals
+			continue
+		case "spec_repo", "spec_owner", "spec_trend", "spec_result":
+			if report.specGroups == nil {
+				report.specGroups = make(map[string]*specBreakdown)
+			}
+			id := reportSpecKey(reportSpecIdentity{row.SpecSource, row.ScopeType, row.ScopeID, row.SpecName})
+			if report.specGroups[id] == nil {
+				report.specGroups[id] = &specBreakdown{}
+			}
+			group := ReportSpecSegment{Key: row.Repo, Label: row.Repo, Started: row.Started, Requests: row.Requests, Runtime: row.Runtime}
+			switch row.Dimension {
+			case "spec_owner":
+				group.Key, group.Label = row.OwnerKey, row.OwnerLabel
+			case "spec_trend":
+				group.Key, group.Label = row.Bucket, row.Bucket
+			case "spec_result":
+				group.Key = row.JobResult
+			}
+			report.specGroups[id].addGroup(row.Dimension, group)
 			continue
 		case "spec":
 			id := reportSpecIdentity{row.SpecSource, row.ScopeType, row.ScopeID, row.SpecName}

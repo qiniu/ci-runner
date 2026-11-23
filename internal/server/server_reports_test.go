@@ -58,7 +58,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 			t.Fatalf("empty %s rankings missing from overview: %+v", dimension, ranking)
 		}
 	}
-	paths := []string{"/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", "/reports/" + value.Snapshot + "/requests"}
+	paths := []string{"/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", "/reports/" + value.Snapshot + "/specs", "/reports/" + value.Snapshot + "/requests"}
 	for _, path := range paths {
 		ordinary := httptest.NewRequest(http.MethodGet, path, nil)
 		ordinary.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
@@ -74,7 +74,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 			t.Errorf("unauthenticated %s: %d", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/reports/overview?from=invalid", "/reports/overview?grain=year", "/reports/overview?timezone=Local", "/reports/overview?owner=github:0", "/reports/overview?grain=day&grain=week", "/reports/" + value.Snapshot + "/requests?limit=101", "/reports/" + value.Snapshot + "/groups?dimension=invalid"} {
+	for _, path := range []string{"/reports/overview?from=invalid", "/reports/overview?grain=year", "/reports/overview?timezone=Local", "/reports/overview?owner=github:0", "/reports/overview?grain=day&grain=week", "/reports/" + value.Snapshot + "/requests?limit=101", "/reports/" + value.Snapshot + "/groups?dimension=invalid", "/reports/" + value.Snapshot + "/specs?sort=invalid"} {
 		if w := get(path, true); w.Code != 400 {
 			t.Errorf("invalid %s: %d %s", path, w.Code, w.Body)
 		}
@@ -88,7 +88,11 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 		t.Fatalf("filter mismatch: %d", w.Code)
 	}
 	srv.reports.mu.Lock()
-	srv.reports.entries[0].created = time.Now().Add(-reportRetention)
+	for i := range srv.reports.entries {
+		if srv.reports.entries[i].id == value.Snapshot {
+			srv.reports.entries[i].created = time.Now().Add(-reportRetention)
+		}
+	}
 	srv.reports.mu.Unlock()
 	if w := get("/reports/"+value.Snapshot+"/requests", true); w.Code != 410 {
 		t.Fatalf("expired: %d", w.Code)

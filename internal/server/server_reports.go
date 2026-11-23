@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,7 +98,13 @@ func (s *Server) loadReportActive(ctx context.Context, q state.RunnerReportQuery
 	}
 }
 
-func reportQueryKey(q state.RunnerReportQuery) string { b, _ := json.Marshal(q); return string(b) }
+func reportQueryKey(q state.RunnerReportQuery) string {
+	b, _ := json.Marshal(q)
+	if q.IncludeSpecUsage {
+		return "specs:" + string(b)
+	}
+	return string(b)
+}
 func (c *runnerReportCache) find(id, key string, now time.Time) (cachedRunnerReport, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -258,6 +265,7 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
 	var entry cachedRunnerReport
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
@@ -273,12 +281,17 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		s.writeReportError(w, r, err)
 		return
 	}
+	var dashboard *reportSpecDashboard
+	if q.IncludeSpecUsage {
+		dashboard = newReportSpecDashboard(entry.report)
+	}
 	writeJSON(w, http.StatusOK, struct {
 		*state.RunnerReport
 		Snapshot      string                              `json:"snapshot"`
 		ExpiresAt     time.Time                           `json:"expires_at"`
 		Distributions map[string]state.ReportDistribution `json:"distributions"`
-	}{entry.report, entry.id, entry.created.Add(reportRetention), entry.distributions})
+		SpecDashboard *reportSpecDashboard                `json:"spec_dashboard,omitempty"`
+	}{entry.report, entry.id, entry.created.Add(reportRetention), entry.distributions, dashboard})
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
@@ -396,6 +409,111 @@ func (s *Server) handleRunnerReportGroups(w http.ResponseWriter, r *http.Request
 		Offset   int                 `json:"offset"`
 		Snapshot string              `json:"snapshot"`
 	}{groups[start:end], total, start, entry.id})
+}
+
+type reportSpecDashboard struct {
+	Summary          *state.ReportSpecUsage  `json:"summary"`
+	Catalog          int                     `json:"catalog"`
+	UsedCurrent      int                     `json:"used_current"`
+	HistoricalGroups int                     `json:"historical_groups"`
+	Total            int                     `json:"total"`
+	Items            []state.ReportSpecUsage `json:"items"`
+}
+
+func newReportSpecDashboard(report *state.RunnerReport) *reportSpecDashboard {
+	items := report.SpecItems
+	page := &reportSpecDashboard{Summary: report.SpecSummary, Total: len(items), Items: items[:min(20, len(items))]}
+	for _, item := range items {
+		if item.Current {
+			page.Catalog++
+			if item.Requests > 0 {
+				page.UsedCurrent++
+			}
+		} else {
+			page.HistoricalGroups++
+		}
+	}
+	return page
+}
+
+func (s *Server) handleRunnerReportSpecs(w http.ResponseWriter, r *http.Request) {
+	entry, limit, offset, ok := s.reportDetail(w, r)
+	if !ok {
+		return
+	}
+	// Sorting must never mutate the retained order of the chart snapshot.
+	items := append([]state.ReportSpecUsage{}, entry.report.SpecItems...)
+	if !entry.report.Query.IncludeSpecUsage {
+		ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+		defer cancel()
+		profiles, err := s.store.ListProfilesContext(ctx)
+		if err != nil {
+			s.writeReportError(w, r, err)
+			return
+		}
+		items = entry.report.SpecUsages(profiles)
+	}
+	key := r.URL.Query().Get("key")
+	search := strings.ToLower(r.URL.Query().Get("q"))
+	if key != "" || search != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if (key == "" || item.Key == key) && strings.Contains(strings.ToLower(item.Label), search) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	switch sortBy := r.URL.Query().Get("sort"); sortBy {
+	case "", "requests":
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Requests != items[j].Requests {
+				return items[i].Requests > items[j].Requests
+			}
+			return items[i].Key < items[j].Key
+		})
+	case "runtime":
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Runtime.Seconds != items[j].Runtime.Seconds {
+				return items[i].Runtime.Seconds > items[j].Runtime.Seconds
+			}
+			return items[i].Key < items[j].Key
+		})
+	case "average_runtime":
+		sort.Slice(items, func(i, j int) bool {
+			left, right := reportOptionalFloat(items[i].AverageRuntimeSeconds), reportOptionalFloat(items[j].AverageRuntimeSeconds)
+			if left != right {
+				return left > right
+			}
+			return items[i].Key < items[j].Key
+		})
+	case "repositories":
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Repositories != items[j].Repositories {
+				return items[i].Repositories > items[j].Repositories
+			}
+			return items[i].Key < items[j].Key
+		})
+	default:
+		writeError(w, http.StatusBadRequest, "invalid report spec sort")
+		return
+	}
+	total := len(items)
+	start := min(offset, total)
+	end := min(start+limit, total)
+	writeJSON(w, http.StatusOK, struct {
+		Items    []state.ReportSpecUsage `json:"items"`
+		Total    int                     `json:"total"`
+		Offset   int                     `json:"offset"`
+		Snapshot string                  `json:"snapshot"`
+	}{items[start:end], total, start, entry.id})
+}
+
+func reportOptionalFloat(value *float64) float64 {
+	if value == nil {
+		return -1
+	}
+	return *value
 }
 
 func (s *Server) handleRunnerReportRequests(w http.ResponseWriter, r *http.Request) {
