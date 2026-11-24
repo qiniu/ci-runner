@@ -8,6 +8,14 @@
 
 `eslint-plugin-react-hooks` 固定为 7.0.1，以保持已验证的 lint 行为；评估升级时保留现有启用的规则。终端使用 `@xterm/xterm` 和 `@xterm/addon-fit`；终端依赖变更后运行 `task ui-production-smoke` 和 `task ui-terminal-fault-test`。包含 Bun 依赖安装的任务应串行执行，避免链接冲突。依赖后续工作及带日期的审计结果记录在 [TODO](../../TODO.md#maintenance)。
 
+## Cache STS 刷新
+
+运行 `go test -race -tags development ./internal/state ./internal/server ./internal/sandboxrunner -run 'Test(RunnerCache|CacheRefresh|CacheSTS|GenerateCacheSTS|StartScriptExportsScopedCache|WindowsStartScriptEncodes)'`。夹具验证：不缩短 24 小时 Sandbox 超时的 3600 秒上限、任务结束前刷新、原始只读策略不扩权、并发合并、共享状态的新 Server 实例、STS 过期后刷新、停止／重试／配置变更（包括上游调用期间）撤销，以及请求取消后仍安全持久化的 `cache_sts` 事件。共享刷新不受单个调用方取消影响，等价刷新凭证编码也不能绕过失败退避。事件写入不得改变生命周期版本或时间戳。这些本地实例不代表多进程部署验收。
+
+在配套 `qiniu/actions-cache` 工作区运行 `npm test -- --runInBand` 和 `npm run build`。SDK 测试通过模拟时钟推进 24 小时，核对每次 S3 请求的 session token，覆盖无效／超大／失败响应，以及每个下载分片重新签名。四个已纳入版本管理的 `dist` 入口都需重新构建。公开指南更新还需运行 `task ui-production-smoke`。
+
+先发布 Action，再部署 runnerd。验证两个 Sandbox 区域均可访问 HTTPS `POST /cache/credentials`，反向代理透传 Authorization 且不记录、不转向登录页、不缓存响应。执行超过一小时的真实任务，以及在配置的 Sandbox 硬超时内完成 restore 与 post-job save 的 24 小时验收任务，并由后续 Job 验证恢复成功。仅在临时测试环境制造 STS 失败，确认获授权的用户／管理员时间线均显示安全原因，且不含密钥或上游原文。静态环境变量消费者和旧 Action commit 无法自动刷新。模拟时钟通过不代表生产验收完成。
+
 ## CI 检查范围
 
 `Check` 在 PR 和 main 推送时运行应用测试、构建及发布归档验证。

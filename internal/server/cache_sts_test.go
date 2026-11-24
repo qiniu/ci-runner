@@ -22,7 +22,7 @@ func (c *cacheSTSRecordingClient) Do(request *http.Request) (*http.Response, err
 }
 
 func TestCacheSTSDurationSecondsAddsHeadroom(t *testing.T) {
-	if got, want := cacheSTSDurationSeconds(time.Hour), 3900; got != want {
+	if got, want := cacheSTSDurationSeconds(time.Hour), 3600; got != want {
 		t.Fatalf("cacheSTSDurationSeconds(1h) = %d, want %d", got, want)
 	}
 	if got, want := cacheSTSDurationSeconds(30*time.Minute), 2100; got != want {
@@ -37,7 +37,7 @@ func TestGenerateCacheSTSUsesRequestedDuration(t *testing.T) {
 		Bucket:          "cache-bucket",
 		AccessKeyID:     "access-key",
 		SecretAccessKey: "secret-key",
-	}, "gh-actions-cache/example/repo", ownScope, []string{ownScope}, "https://sts.example.test", 3900, client)
+	}, "gh-actions-cache/example/repo", ownScope, []string{ownScope}, "https://sts.example.test", 3600, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestGenerateCacheSTSUsesRequestedDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"duration_seconds":3900`) {
+	if !strings.Contains(string(body), `"duration_seconds":3600`) {
 		t.Fatalf("STS request does not contain requested duration: %s", body)
 	}
 }
@@ -76,7 +76,7 @@ func TestValidateCacheBucketRejectsResourceComponents(t *testing.T) {
 func TestGenerateCacheSTSRejectsResourceWildcards(t *testing.T) {
 	for _, prefix := range []string{"gh-actions/*/repo", "gh-actions/?/repo"} {
 		t.Run(prefix, func(t *testing.T) {
-			_, err := generateCacheSTSWithClient(t.Context(), cacheSTSCredentialConfig{Bucket: "cache-bucket"}, prefix, "scopes/branch-main", []string{"scopes/branch-main"}, "", 3900, &cacheSTSRecordingClient{})
+			_, err := generateCacheSTSWithClient(t.Context(), cacheSTSCredentialConfig{Bucket: "cache-bucket"}, prefix, "scopes/branch-main", []string{"scopes/branch-main"}, "", 3600, &cacheSTSRecordingClient{})
 			if err == nil || !strings.Contains(err.Error(), "resource wildcard") {
 				t.Fatalf("expected resource wildcard error, got %v", err)
 			}
@@ -142,5 +142,31 @@ func TestGenerateCacheSTSRequiresReadScope(t *testing.T) {
 	_, err := generateCacheSTSWithClient(t.Context(), cacheSTSCredentialConfig{Bucket: "my-bucket"}, "gh-cache/org/repo", "", nil, "https://sts.example.test", 1800, &cacheSTSRecordingClient{})
 	if err == nil || !strings.Contains(err.Error(), "read scope") {
 		t.Fatalf("expected missing read scope error, got %v", err)
+	}
+}
+
+func TestCacheSTSFailuresRedactProviderDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		body, reason string
+	}{
+		{"duration", 400, `{"error":"duration_seconds is too long, exceed 3600 SECRET"}`, "duration_exceeded"},
+		{"denied", 403, "SECRET", "authorization_rejected"},
+		{"throttled", 429, "SECRET", "rate_limited"},
+		{"unavailable", 503, "SECRET", "service_unavailable"},
+		{"invalid-json", 200, "SECRET", "invalid_response"},
+		{"incomplete", 200, `{"data":{"credential":{"access_key":"SECRET"}}}`, "incomplete_credentials"},
+		{"expired", 200, `{"data":{"credential":{"access_key":"SECRET","secret_key":"SECRET","session_token":"SECRET","expiration":"2000-01-01T00:00:00Z"}}}`, "credentials_expired_or_expiring"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &http.Client{Transport: profileValidationTransportFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}
+			_, err := generateCacheSTS(t.Context(), cacheSTSCredentialConfig{Bucket: "bucket", AccessKeyID: "ak", SecretAccessKey: "SECRET"}, "cache/o/r", "scopes/branch-main", []string{"scopes/branch-main"}, "https://sts.example", 3600, client)
+			if err == nil || !strings.Contains(err.Error(), tc.reason) || strings.Contains(err.Error(), "SECRET") {
+				t.Fatalf("unsafe or missing failure: %v", err)
+			}
+		})
 	}
 }

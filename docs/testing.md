@@ -8,6 +8,14 @@ Run `task lint` for local quality checks. Its `staticcheck` step uses the Go ver
 
 `eslint-plugin-react-hooks` is pinned to 7.0.1 to preserve the verified lint behavior; keep the enabled rules when evaluating an upgrade. The terminal uses `@xterm/xterm` and `@xterm/addon-fit`; run `task ui-production-smoke` and `task ui-terminal-fault-test` after terminal dependency changes. Run tasks that install Bun dependencies sequentially to avoid link collisions. Track dependency follow-ups and dated audit results in [TODO](../TODO.md#maintenance).
 
+## Cache STS refresh
+
+Run `go test -race -tags development ./internal/state ./internal/server ./internal/sandboxrunner -run 'Test(RunnerCache|CacheRefresh|CacheSTS|GenerateCacheSTS|StartScriptExportsScopedCache|WindowsStartScriptEncodes)'`. The fixtures verify the 3600-second ceiling without changing the 24-hour Sandbox timeout, late post-job refresh, immutable read-only policy, concurrent calls, a new server instance sharing the state, expired STS renewal, stop/retry/configuration revocation (including during provider I/O), safe persisted `cache_sts` evidence after caller cancellation, and shared refresh/backoff that cannot be canceled by another caller or bypassed with equivalent capability encodings. Timeline writes must preserve lifecycle versions and timestamps. These local instances are not multi-process deployment acceptance.
+
+In the paired `qiniu/actions-cache` checkout, run `npm test -- --runInBand` and `npm run build`. SDK tests advance a fake clock through 24 hours and assert each S3 request's session token, exercise malformed/oversized/error responses, and check each download part gets a new signature. Rebuild all four checked-in `dist` entrypoints. Public guide changes also require `task ui-production-smoke`.
+
+Deploy the Action first, then runnerd. Verify HTTPS `POST /cache/credentials` is reachable from both Sandbox regions and the proxy forwards Authorization without logging it, redirecting it to login, or caching the response. Use a real Job longer than one hour plus a 24-hour acceptance run whose restore and post-job save complete within the configured Sandbox hard timeout. Check a later Job restores the saved cache. Force an STS failure only in a disposable test setup and confirm the safe reason in both authorized user/admin timelines; verify secrets and provider bodies are absent. Static env-only consumers and older Action commits cannot refresh. Do not treat local simulated time as production acceptance.
+
 ## CI scope
 
 `Check` runs application tests, builds and release archive validation on PRs and

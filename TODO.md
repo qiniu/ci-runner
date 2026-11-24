@@ -4,6 +4,8 @@ This file tracks active project work. Completed behavior should move into `READM
 
 ## Active Roadmap
 
+- Roll out the paired Cache STS refresh Action before runnerd; verify both regions with a real long-running Job and post-job cache save, endpoint reachability, credential rotation/revocation and safe `cache_sts` timeline failures. Local simulated-clock and HTTP fixtures do not establish 24-hour production acceptance.
+
 - Deploy the admin browser entry for explicit unknown-creation closure on both runnerd nodes before using it for the authorized historical request/attempt scope. The underlying API is deployed; production closure remains pending. Acceptance of uncertainty must retain audit and live checks without claiming resource absence; see [Unconfirmed Sandbox creation](docs/unknown-sandbox-creation.md).
 
 - Complete deployed acceptance for CI Runner account/repository concurrency: configure limits, verify an unrelated repository progresses under backlog, cleanup releases slots, and restart with a reduced limit retains existing Runners. Local regression coverage is documented in [Testing](docs/testing.md#ci-runner-account-and-repository-concurrency).

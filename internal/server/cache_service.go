@@ -15,6 +15,7 @@ import (
 // reachable only from the Sandbox, so runnerd does not create an S3 client or
 // perform network validation against it.
 type cacheS3 struct {
+	scope          accountPreferenceScope
 	bucket, prefix string
 	region         string
 	endpoint       string
@@ -110,10 +111,14 @@ func (s *Server) cacheStorageForScope(scope accountPreferenceScope, sandboxAPIUR
 	if err != nil {
 		return nil, err
 	}
-	return newCacheS3(cacheS3Config{
+	storage, err := newCacheS3(cacheS3Config{
 		Region: mappedRegion, Bucket: value.Bucket, Prefix: value.Prefix, Endpoint: mappedEndpoint,
 		AccessKeyID: accessKeyValue, SecretAccessKey: secretKeyValue,
 	})
+	if storage != nil {
+		storage.scope = scope
+	}
+	return storage, err
 }
 
 func (s *Server) cacheS3SettingsForSandboxAPIURL(apiURL string) (string, string, bool) {

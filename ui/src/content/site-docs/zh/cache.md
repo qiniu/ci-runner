@@ -129,6 +129,8 @@ cache:
 
 每个 region 必须包含 `id`、`label` 和 `sandbox_api_url`。`s3_region` 与 `s3_endpoint` 必须成对出现；只有两者都配置的区域才支持 Cache S3。Endpoint 可能只在 Sandbox 内网可达，所以 runnerd 保存用户配置时只校验格式，不从控制面探测 Bucket。
 
-每次启动沙箱时，runnerd 校验 Workflow Run 上下文，签发有效期为沙箱生命周期加五分钟的 STS，并注入 `RUNS_ON_S3_*` 环境变量。没有刷新机制。
+每次启动沙箱时，runnerd 校验 Workflow Run 上下文并注入限定范围的 `RUNS_ON_S3_*` 凭据。每次 STS 有效期最多一小时，配套更新后的 `qiniu/actions-cache` 会自动刷新，支持长任务及 post-job 缓存保存；需要时仍可保留 24 小时 Sandbox 超时。请先发布配套 Action 再部署 runnerd，固定旧 Action commit 的工作流需更新引用。自定义脚本中的静态 AWS 凭据不会自动刷新。
+
+Sandbox 必须能访问 runnerd 站点的 HTTPS `/cache/credentials` 端点。运维可通过 `cache.credentials_url` 覆盖地址，默认使用 OAuth 回调地址的站点 origin。工作流无需配置额外 secret。停止或重试任务、修改缓存配置后，将拒绝继续刷新。STS 失败可在 Runner 日志时间线的 `cache_sts` 阶段查看。
 
 完整部署步骤见[部署 runnerd](/docs/getting-started/deploy)。

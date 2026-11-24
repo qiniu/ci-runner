@@ -39,6 +39,8 @@ github:
   oauth:
     client_id: Iv1.test
     client_secret: secret
+cache:
+  credentials_url: https://runner.example.test/cache/credentials
 worker:
   max_concurrent_runners: 5
 `), 0o644); err != nil {
@@ -48,6 +50,9 @@ worker:
 	cfg, err := LoadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.CacheCredentialsURL != "https://runner.example.test/cache/credentials" {
+		t.Fatalf("unexpected cache refresh endpoint: %q", cfg.CacheCredentialsURL)
 	}
 	if cfg.HTTPAddr != ":28000" {
 		t.Fatalf("unexpected HTTP address: %s", cfg.HTTPAddr)

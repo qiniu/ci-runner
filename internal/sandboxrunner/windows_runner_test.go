@@ -47,22 +47,24 @@ func TestWindowsRunnerBootstrapUsesEnvdDefaultUser(t *testing.T) {
 func TestWindowsStartScriptEncodesEveryArgument(t *testing.T) {
 	t.Parallel()
 	input := StartInput{
-		Platform:            PlatformWindows,
-		RequestID:           `req'$(calc)`,
-		RepositoryURL:       `https://github.com/o/r'; calc; '`,
-		RegistrationToken:   `unused-token`,
-		JITConfig:           `jit"&calc`,
-		RunnerName:          "runner`calc",
-		Labels:              []string{"self-hosted", "windows", `x64'$(calc)`},
-		RunnerGroup:         `group';calc;'`,
-		CacheS3Region:       "cn-east-1",
-		CacheS3Bucket:       "bucket'",
-		CacheS3Endpoint:     "https://s3.example",
-		CacheS3ReadPrefixes: "a,b",
-		CacheS3WritePrefix:  "w",
-		CacheS3AccessKeyID:  "ak'",
-		CacheS3SecretKey:    "sk'",
-		CacheS3SessionToken: "st'",
+		Platform:              PlatformWindows,
+		RequestID:             `req'$(calc)`,
+		RepositoryURL:         `https://github.com/o/r'; calc; '`,
+		RegistrationToken:     `unused-token`,
+		JITConfig:             `jit"&calc`,
+		RunnerName:            "runner`calc",
+		Labels:                []string{"self-hosted", "windows", `x64'$(calc)`},
+		RunnerGroup:           `group';calc;'`,
+		CacheS3Region:         "cn-east-1",
+		CacheS3Bucket:         "bucket'",
+		CacheS3Endpoint:       "https://s3.example",
+		CacheS3ReadPrefixes:   "a,b",
+		CacheS3WritePrefix:    "w",
+		CacheS3AccessKeyID:    "ak'",
+		CacheS3SecretKey:      "sk'",
+		CacheS3SessionToken:   "st'",
+		CacheCredentialsURL:   "https://runner.example/cache/credentials",
+		CacheCredentialsToken: "refresh-token'",
 	}
 	sandboxID := `sandbox'$(calc)`
 	script := windowsStartScript(input, sandboxID)
@@ -89,6 +91,8 @@ func TestWindowsStartScriptEncodesEveryArgument(t *testing.T) {
 		input.CacheS3AccessKeyID,
 		input.CacheS3SecretKey,
 		input.CacheS3SessionToken,
+		input.CacheCredentialsURL,
+		input.CacheCredentialsToken,
 		sandboxID,
 	} {
 		if strings.Contains(script, raw) {

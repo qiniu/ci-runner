@@ -254,6 +254,8 @@ cache_s3_session_token="$(printf '%%s' "%[16]s" | base64 -d)"
 
 # Inject Cache S3 STS credentials for qiniu/actions-cache
 if [ -n "$cache_s3_bucket" ] && [ -n "$cache_s3_access_key" ] && [ -n "$cache_s3_secret_key" ]; then
+  export RUNS_ON_S3_CREDENTIALS_URL="$(printf '%%s' "%[18]s" | base64 -d)"
+  export RUNS_ON_S3_CREDENTIALS_TOKEN="$(printf '%%s' "%[19]s" | base64 -d)"
   export RUNS_ON_S3_BUCKET_CACHE="$cache_s3_bucket"
   if [ -n "$cache_s3_endpoint" ]; then
     export RUNS_ON_S3_BUCKET_ENDPOINT="$cache_s3_endpoint"
@@ -335,6 +337,16 @@ else
 fi
 cat >"$hook_root/job-started.sh" <<'HOOK'
 #!/usr/bin/env bash
+# Hook stdout is processed by the Runner before any workflow step starts.
+for cache_secret in "${RUNS_ON_S3_CREDENTIALS_TOKEN:-}" "${RUNS_ON_S3_ACCESS_KEY_ID:-}" "${RUNS_ON_S3_SECRET_ACCESS_KEY:-}" "${RUNS_ON_S3_SESSION_TOKEN:-}"; do
+  if [ -n "$cache_secret" ]; then
+    cache_secret="${cache_secret//%%/%%25}"
+    cache_secret="${cache_secret//$'\r'/%%0D}"
+    cache_secret="${cache_secret//$'\n'/%%0A}"
+    printf '::add-mask::%%s\n' "$cache_secret"
+  fi
+done
+unset cache_secret
 effective_runner_version="$("$RUNNERD_RUNNER_LISTENER" --version 2>/dev/null || true)"
 if [ -n "${RUNNERD_HOOK_SIGNAL_PATH:-}" ] && [ -p "$RUNNERD_HOOK_SIGNAL_PATH" ]; then
   {

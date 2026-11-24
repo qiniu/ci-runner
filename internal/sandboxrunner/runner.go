@@ -53,33 +53,35 @@ func (p Platform) runnerApplicationOS() string {
 }
 
 type StartInput struct {
-	RecordSandbox       func(context.Context, string) error
-	CheckOwnership      func(context.Context) error
-	ProvisionAttemptID  string
-	Platform            Platform
-	RequestID           string
-	RunnerName          string
-	RepositoryURL       string
-	RegistrationToken   string
-	JITConfig           string
-	Labels              []string
-	RunnerGroup         string
-	RunnerApplications  []RunnerApplication
-	TemplateID          string
-	RequireDocker       bool
-	Timeout             time.Duration
-	CommandContext      context.Context
-	CacheS3Region       string
-	CacheS3Bucket       string
-	CacheS3Endpoint     string
-	CacheS3ReadPrefixes string
-	CacheS3WritePrefix  string
-	CacheS3AccessKeyID  string
-	CacheS3SecretKey    string
-	CacheS3SessionToken string
-	OnStdout            func([]byte)
-	OnStderr            func([]byte)
-	OnExit              func(ExitResult, error)
+	RecordSandbox         func(context.Context, string) error
+	CheckOwnership        func(context.Context) error
+	ProvisionAttemptID    string
+	Platform              Platform
+	RequestID             string
+	RunnerName            string
+	RepositoryURL         string
+	RegistrationToken     string
+	JITConfig             string
+	Labels                []string
+	RunnerGroup           string
+	RunnerApplications    []RunnerApplication
+	TemplateID            string
+	RequireDocker         bool
+	Timeout               time.Duration
+	CommandContext        context.Context
+	CacheS3Region         string
+	CacheS3Bucket         string
+	CacheS3Endpoint       string
+	CacheS3ReadPrefixes   string
+	CacheS3WritePrefix    string
+	CacheS3AccessKeyID    string
+	CacheS3SecretKey      string
+	CacheS3SessionToken   string
+	CacheCredentialsURL   string
+	CacheCredentialsToken string
+	OnStdout              func([]byte)
+	OnStderr              func([]byte)
+	OnExit                func(ExitResult, error)
 }
 
 type RunnerApplication = runnerapplication.Application
@@ -1345,6 +1347,8 @@ func renderStartScript(template string, input StartInput, sandboxID string) stri
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SecretKey)),
 		base64.StdEncoding.EncodeToString([]byte(input.CacheS3SessionToken)),
 		base64.StdEncoding.EncodeToString([]byte(runnerApplicationsManifest(input.Platform, input.RunnerApplications))),
+		base64.StdEncoding.EncodeToString([]byte(input.CacheCredentialsURL)),
+		base64.StdEncoding.EncodeToString([]byte(input.CacheCredentialsToken)),
 	)
 }
 

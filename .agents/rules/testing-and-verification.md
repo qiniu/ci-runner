@@ -247,3 +247,7 @@ Real deployment readiness still requires `docs/deployment-smoke.md` with a GitHu
 - For Windows registrations, run `TestWindowsJITRegistrationProcess` on PostgreSQL. Kill the creator after the POST, hide the result and expose a different same-name Runner. Check retained capacity, late positive/rejected replies, Job completion and cleanup of the exact numeric ID.
 
 - Runner account/repository concurrency changes must cover simultaneous claims, admission rollback, concurrent spec mutations, cross-Spec totals, independent owners/repositories, exact case-insensitive name matching, zero/missing and invalid configuration, persisted in-flight lifecycle counts after reopen, and queue progress through a restricted backlog. Run these admission tests with race detection; local fixtures do not replace deployed cleanup/restart acceptance.
+
+## Cache STS refresh
+
+Run the focused state/server/Sandbox race regressions documented in `docs/testing.md#cache-sts-refresh`. Keep a 24-hour Sandbox timeout while asserting every STS request is at most 3600 seconds. Cover stale attempts, stopped jobs, configuration rotation, in-flight revocation, immutable read-only policy and redacted timeline events. The paired Action must exercise SDK renewal with simulated elapsed time, per-part download signatures and all four rebuilt bundles. Retain real regional/long-job acceptance as a separate deployment gate.

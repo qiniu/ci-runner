@@ -156,7 +156,7 @@ database:
 
 用户需要在账户或 GitHub installation 的 Preferences 中配置 Cache S3 Bucket、可选 Prefix、AK 和 SK。默认 Prefix 是 `gh-actions-cache`。S3 region 和 endpoint 由用户选择的 Sandbox service region 决定，并由运维人员在 `runnerd.yaml` 的 `sandbox.regions` 中配置。由于 endpoint 可能只在 Sandbox 内网可访问，runnerd 保存时只校验配置格式；Bucket 的可达性和权限由实际工作流在 Sandbox 中验证。AK/SK 会加密保存在 scoped state，不会返回给浏览器或 Runner。
 
-每次启动沙箱时，runnerd 将 GitHub 仓库解析到对应 installation/account scope，校验 Workflow Run 的可信上下文，并通过 `cache.sts_endpoint`（默认 `https://sts-ov.qiniuapi.com`）签发七牛 IAM 联邦凭证。凭证请求时长为配置的 Sandbox 生命周期加五分钟，用于覆盖任务结束后的缓存保存步骤；目前暂不提供刷新机制。随后在沙箱启动脚本中注入 `AWS_*` / `RUNS_ON_S3_*` 环境变量，使 scoped cache action 可以直接把缓存上传/恢复到用户 bucket，而无需经过 runnerd 转发字节。
+每次启动沙箱时，runnerd 将 GitHub 仓库解析到对应 installation/account scope，校验 Workflow Run 的可信上下文，并通过 `cache.sts_endpoint`（默认 `https://sts-ov.qiniuapi.com`）签发七牛 IAM 联邦凭证。每次 STS 申请最多 3600 秒，与 Sandbox 超时独立。配套 `qiniu/actions-cache` 使用刷新凭据的方式支持 24 小时任务及其 post-job 缓存保存，不缩短 Sandbox 生命周期。随后在沙箱启动脚本中注入 `AWS_*` / `RUNS_ON_S3_*` 环境变量，使 scoped cache action 可以直接把缓存上传/恢复到用户 bucket，而无需经过 runnerd 转发字节。
 
 缓存对象 Key 按仓库和工作流上下文隔离：
 
@@ -183,6 +183,10 @@ cache:
 ```
 
 `sandbox.regions` 定义通过 `GET /sandbox/regions` 暴露给前端的公开 Sandbox 区域目录；S3 映射只保留在服务端，因为 endpoint 可能是内网地址。每个条目必须包含 `id`、`label` 和 `sandbox_api_url`。`s3_region` 与 `s3_endpoint` 是可选字段，但必须同时配置；只有同时配置的区域支持 Cache S3。必须至少配置一个 region。为了更好地隔离缓存，建议每个 GitHub installation 使用独立 Bucket。`cache.sts_endpoint` 是七牛 IAM 联邦凭证端点，用于签发短期凭证。
+
+启用缓存的 Sandbox 必须能访问 runnerd 的 HTTPS `POST /cache/credentials`。`cache.credentials_url` 默认使用 `github.oauth.redirect_url` 的站点 origin 加 `/cache/credentials`；该地址不可用时需显式配置。更新后的 Action 通过注入的 `RUNS_ON_S3_CREDENTIALS_URL` 和 `RUNS_ON_S3_CREDENTIALS_TOKEN` 刷新短期凭据。加密刷新凭证绑定原始请求、创建尝试、缓存配置和读写范围；停止、重试、修改缓存配置或轮换密钥后拒绝继续刷新。已签发的 STS 凭据仍有效至其自身到期。长期 AK/SK 不进入 Sandbox。初次签发及刷新失败会以 `cache_sts` 阶段写入请求时间线，仅保留安全错误分类和 HTTP 状态，不保存上游原文或密钥。
+
+部署顺序：先发布配套 Action，再部署 runnerd；固定旧 Action commit 的工作流需更新引用。旧 Action 或只读取静态 `AWS_*` / `RUNS_ON_S3_*` 的脚本不能自动刷新，一小时后可能失效。已有运行中的 Sandbox 不会自动获得刷新凭证，应在上线后重跑受影响任务。反向代理应允许 Sandbox 无浏览器登录访问该端点、透传 Authorization，且不得记录该请求头或缓存响应。刷新不会延长配置的 Sandbox 硬超时。
 
 #### 在 GitHub Actions 工作流中使用缓存
 

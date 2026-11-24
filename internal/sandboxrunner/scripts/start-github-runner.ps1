@@ -243,6 +243,8 @@ $cacheS3SessionToken = Decode-Argument '%[16]s'
 
 # Inject Cache S3 STS credentials for qiniu/actions-cache
 if ($cacheS3Bucket -and $cacheS3AccessKey -and $cacheS3SecretKey) {
+  $env:RUNS_ON_S3_CREDENTIALS_URL = Decode-Argument '%[18]s'
+  $env:RUNS_ON_S3_CREDENTIALS_TOKEN = Decode-Argument '%[19]s'
   $env:RUNS_ON_S3_BUCKET_CACHE = $cacheS3Bucket
   if ($cacheS3Endpoint) {
     $env:RUNS_ON_S3_BUCKET_ENDPOINT = $cacheS3Endpoint
@@ -293,6 +295,11 @@ $hookSignalPath = Join-Path $hookRoot 'job-started.signal'
 Remove-Item -LiteralPath $hookSignalPath, "$hookSignalPath.tmp" -Force -ErrorAction SilentlyContinue
 $env:RUNNERD_HOOK_SIGNAL_FALLBACK_PATH = $hookSignalPath
 Set-Content -LiteralPath (Join-Path $hookRoot 'job-started.ps1') -Encoding ASCII -Value @'
+# Mask credentials before any workflow step; never relay them to runnerd.
+foreach ($secret in @($env:RUNS_ON_S3_CREDENTIALS_TOKEN, $env:RUNS_ON_S3_ACCESS_KEY_ID, $env:RUNS_ON_S3_SECRET_ACCESS_KEY, $env:RUNS_ON_S3_SESSION_TOKEN)) {
+  if ($secret) { Write-Output ('::add-mask::' + $secret.Replace('%%', '%%25').Replace("`r", '%%0D').Replace("`n", '%%0A')) }
+}
+Remove-Variable secret
 $effectiveRunnerVersion = ''
 try {
   $effectiveRunnerVersion = ((& $env:RUNNERD_RUNNER_LISTENER --version 2>$null) | Out-String).Trim()

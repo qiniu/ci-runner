@@ -604,6 +604,7 @@ type RunnerRequestStore interface {
 	CreateRejectedRequest(req RunnerRequest, payload []byte, reason string) (bool, RunnerState, error)
 	ReadRequest(id string) (RunnerRequest, error)
 	ReadState(id string) (RunnerState, error)
+	AppendRunnerCacheEvent(ctx context.Context, id, attempt, message string) error
 	WriteState(st RunnerState) error
 	ListStates() ([]RunnerState, error)
 	ListActiveStates() ([]RunnerState, error)
