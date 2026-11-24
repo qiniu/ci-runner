@@ -322,6 +322,7 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			sdb, _ := s.dbOrEnsure()
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
+			verifyExecutionUsage(t, s)
 			verifySharedSpecSnapshotBounds(t, s)
 			verifyReportAccountUsage(t, s)
 			verifyEfficiency(t, s)

@@ -154,6 +154,7 @@ scoped catalogs inside the same report transaction.
 | GET endpoint | Parameters and behavior |
 | --- | --- |
 | `/reports/overview` | `from`, `to`, `timezone`, `grain=day\|week\|month`, exact `owner`, `repository`, `spec`; optional `snapshot` to restore the identical result |
+| `/reports/execution-usage` | Observed Runner intervals, provisional seconds, peak concurrency and exact GitHub Job seconds in each calendar bucket |
 | `/reports/efficiency` | Same date and dimension filters as overview. Returns lifecycle percentiles, failure and termination groups, admission rejection trend and request-detail availability |
 | `/reports/backlog` | `status=queued\|creating\|stopping`, `minutes=1…10080` and optional owner, repository, repository_missing or spec; returns the observation time and matching requests |
 | `/reports/account-usage` | Same filters as overview. Returns owner/repository activity, Job outcomes, ranking distributions and request detail availability. Use `repository_missing=1` to select unnamed repositories |
@@ -302,3 +303,50 @@ size, and measure scheduler latency under the real workload. If legitimate range
 exceed the explicit cap or the cost is excessive, design bounded preaggregation or
 an asynchronous reporting store with evidence; do not silently raise the cap or
 mix attempt history and period consumption into this contract.
+
+## Execution history and period usage
+
+Administrators can open `/admin/reports?view=execution` or query
+`GET /reports/execution-usage` with the same dates, time grain, timezone and
+dimension filters. The response includes the observation time, collection start
+and per-bucket covered boundaries. Collection starts when the first upgraded
+writer initializes the database. Drain older writers during rollout. Attempts
+already under way at upgrade and attempts started by old writers during a
+rollback can have missing history. The migration preserves existing requests
+and leaves historical timing fields empty. Execution facts are retained with
+the state database across restarts and retries, without automatic expiration.
+
+An admission writes one row in `runner_execution_attempts` with the request
+ID, provision attempt ID and spec identity. Lifecycle updates and retry closure
+commit alongside the fenced request transition. Each row records creation,
+running, stopping, end, final disposition, and the selected Sandbox service
+source and sponsor installation when available. Operators can reconcile one
+request by filtering this table on `request_id` and ordering by `creating_at`.
+
+Signed Job events and existing lifecycle API reads record GitHub's source
+timestamps against the original repository and positive Job ID. The admin request diagnostics response
+exposes these as `github_job_timing`, including the source and observation time
+of each endpoint and, when supplied, the conclusion for that completion. The
+first consistent value for each endpoint survives later deliveries and retries.
+Invalid, future or inverted times contribute no duration. A missed delivery may
+be filled by a later observation of the same Job, including the verified Job lookup in a successful administrator closure of an unknown creation. Timing storage errors are logged independently of Runner lifecycle handling. The report itself reads local
+state. Jobs executed by another Runner retain their original Job identity.
+
+Period usage intersects intervals with each local calendar bucket and the
+collection period. A request queued before the selected range can contribute.
+A Runner interval begins on entering running and ends on entering stopping,
+or at attempt closure if it never entered stopping. An open interval contributes
+provisional seconds only while the request still identifies that exact running
+attempt. A Job contributes source duration once both endpoints are known.
+The incomplete count covers Jobs whose sole known endpoint falls in the covered
+window. Jobs lacking both endpoints cannot be assigned to a period.
+The whole-period row counts each intersecting interval once and gives the maximum observed concurrency. Bucket sample counts include each intersecting interval once per bucket.
+A zero-length sample belongs to its start bucket and contributes no concurrency.
+Peak counts simultaneous observed Runner intervals, including provisional ones,
+using exclusive ends. Resource billing, capacity utilization and GitHub Job
+concurrency require different measurements.
+
+Period snapshots use the overview's bounded process-local cache and deadline.
+The period query selects stopped, directly ended, and still-running intervals separately before sorting by start time. An index on stopping and ending timestamps supports each overlap search. The report streams the selected intervals, holding interval ends for overlap counting. SQLite uses the isolated reporting connection and limits
+each materialized interval selection to 100,000 rows. Narrow the date range or
+dimensions if that limit is exceeded.

@@ -38,6 +38,7 @@ type runnerDiagnosticFinding struct {
 }
 
 type runnerRequestDiagnostics struct {
+	GitHubJobTiming                    *state.JobTimeEvidence    `json:"github_job_timing,omitempty"`
 	UnknownCreationResolutionAvailable bool                      `json:"unknown_creation_resolution_available,omitempty"`
 	CreationAttemptID                  string                    `json:"creation_attempt_id,omitempty"`
 	State                              state.RunnerState         `json:"state"`
@@ -152,6 +153,7 @@ func (s *Server) writeRunnerRequestDiagnostics(w http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(w, http.StatusOK, runnerRequestDiagnostics{
+		GitHubJobTiming:                    st.GitHubJobTiming,
 		UnknownCreationResolutionAvailable: canResolveUnknownCreation(st, time.Now()),
 		State:                              st,
 		CreationAttemptID:                  st.ProvisionAttemptID,

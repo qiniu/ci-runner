@@ -87,6 +87,7 @@ func recordToState(record runnerRequestRecord) RunnerState {
 		GitHubJobStatus:                 record.GitHubJobStatus,
 		GitHubJobConclusion:             record.GitHubJobConclusion,
 		GitHubJobRunnerName:             record.GitHubJobRunnerName,
+		GitHubJobTiming:                 record.jobTimeEvidence(),
 		GitHubJobObservedAt:             pointerToTime(record.GitHubJobObservedAt),
 		PullRequestNumber:               githubLinks.pullRequestNumber,
 		AssignedJobID:                   record.AssignedJobID,

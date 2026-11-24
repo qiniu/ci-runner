@@ -150,6 +150,9 @@ func (s *Server) loadReportActive(ctx context.Context, q state.RunnerReportQuery
 
 func reportQueryKey(q state.RunnerReportQuery) string {
 	b, _ := json.Marshal(q)
+	if q.IncludeExecution {
+		return "execution:" + string(b)
+	}
 	if q.IncludeEfficiency {
 		return "efficiency:" + string(b)
 	}
@@ -251,7 +254,10 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 		if err != nil {
 			return nil, err
 		}
-		distributions := report.ChartDistributions()
+		var distributions map[string]state.ReportDistribution
+		if !q.IncludeExecution {
+			distributions = report.ChartDistributions()
+		}
 		if err := queryCtx.Err(); err != nil {
 			return nil, err
 		}
@@ -330,6 +336,7 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q.IncludeExecution = r.URL.Path == "/reports/execution-usage"
 	q.IncludeEfficiency = r.URL.Path == "/reports/efficiency"
 	q.IncludeAccountUsage = r.URL.Path == "/reports/account-usage"
 	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
@@ -360,6 +367,13 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.writeReportError(w, r, err)
+		return
+	}
+	if q.IncludeExecution {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"query": q, "observed_at": entry.report.ObservedAt, "execution": entry.report.Execution,
+			"snapshot": entry.id, "expires_at": entry.created.Add(reportRetention),
+		})
 		return
 	}
 	var dashboard *reportSpecDashboard
@@ -469,6 +483,10 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 	}
 	if !ok {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return entry, 0, 0, false
+	}
+	if entry.report.Execution != nil {
+		writeError(w, http.StatusBadRequest, "period usage snapshots contain calendar buckets only")
 		return entry, 0, 0, false
 	}
 	return entry, limit, offset, true

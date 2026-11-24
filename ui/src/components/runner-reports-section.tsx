@@ -8,6 +8,7 @@ import {
   reportPreset,
   reportQueryKeys,
   reportQueryParams,
+  type ExecutionUsage,
   type ReportQuery,
   type ReportDimension,
   type ReportGroup,
@@ -26,6 +27,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { ReportDisplayMode, ReportPager, ReportSelect, ResourceState } from "@/components/report-controls"
 import { type ReportFetch as Request, type Resource, useReportResource } from "@/use-report-resource"
 import { EfficiencyReport, CurrentBacklog } from "@/components/efficiency-report"
+import { ExecutionUsageReport } from "@/components/execution-usage-report"
 import { AccountUsageReport } from "@/components/account-usage-report"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -34,7 +36,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 const ReportChart = lazy(() => import("@/components/report-chart"))
 
-function pinnedReportUrl({ url, data }: Resource<RunnerReport>) {
+type ExecutionReport = Pick<RunnerReport, "query" | "snapshot" | "observed_at" | "expires_at"> & { execution: ExecutionUsage }
+type ReportResponse = RunnerReport | ExecutionReport
+
+function pinnedReportUrl({ url, data }: Resource<ReportResponse>) {
   if (!data) return
   const params = new URLSearchParams()
   for (const key of reportQueryKeys) {
@@ -64,7 +69,7 @@ export function RunnerReportsSection({
   const params = reportQueryParams(search)
   const urlState = new URLSearchParams(search)
   const tab = urlState.get("view")
-  const view = tab === "specs" || tab === "accounts" || tab === "efficiency" ? tab : "overview"
+  const view = tab === "specs" || tab === "accounts" || tab === "efficiency" || tab === "execution" ? tab : "overview"
   const sharedUsage = view === "accounts" || view === "efficiency"
   // Older spec links used a cohort-wide filter and may carry a scoped snapshot.
   if (view === "specs" && params.has("spec")) {
@@ -72,14 +77,15 @@ export function RunnerReportsSection({
     params.delete("snapshot")
   }
   const query = params.toString()
-  const endpoint = { overview: "overview", specs: "spec-usage", accounts: "account-usage", efficiency: "efficiency" }[view]
-  const overview = useReportResource<RunnerReport>(
+  const endpoint = { overview: "overview", specs: "spec-usage", accounts: "account-usage", efficiency: "efficiency", execution: "execution-usage" }[view]
+  const overview = useReportResource<ReportResponse>(
     `/reports/${endpoint}?${query}`,
     request,
     revision,
     pinnedReportUrl,
   )
-  const report = overview.data
+  const response = overview.data
+  const report = response && "totals" in response ? response : undefined
   useEffect(() => {
     if (!sharedUsage || !report || new URLSearchParams(search).has("snapshot")) return
     const pinned = new URLSearchParams(search)
@@ -89,9 +95,9 @@ export function RunnerReportsSection({
   }, [sharedUsage, report, search, onNavigate])
   const navigate = (values: Record<string, string | null>) => {
     const next = new URLSearchParams(search)
-    if (report) {
-      for (const [key, value] of Object.entries(report.query)) if (value) next.set(key, value)
-      next.set("snapshot", report.snapshot)
+    if (response) {
+      for (const [key, value] of Object.entries(response.query)) if (value) next.set(key, value)
+      next.set("snapshot", response.snapshot)
     }
     for (const [key, value] of Object.entries(values)) {
       if (value === null) next.delete(key)
@@ -113,7 +119,7 @@ export function RunnerReportsSection({
   }
   const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
   const filterQuery = Object.fromEntries([...params].filter(([key]) => key !== "snapshot"))
-  const selected: ReportQuery = report?.query ?? { ...defaults, ...filterQuery }
+  const selected: ReportQuery = response?.query ?? { ...defaults, ...filterQuery }
   const filterKey = JSON.stringify(reportQueryKeys.map((key) => selected[key] || ""))
   const [edits, setEdits] = useState<{ key: string; query: ReportQuery } | null>(null)
   if (edits && edits.key !== filterKey) setEdits(null)
@@ -202,14 +208,19 @@ export function RunnerReportsSection({
           })
         }}
       >
-        <TabsList variant="line" aria-label={t("reports.views")}>
-          {(["overview", "specs", "accounts", "efficiency"] as const).map((tab) => (
+        <TabsList variant="line" className="h-auto max-w-full flex-wrap justify-start" aria-label={t("reports.views")}>
+          {(["overview", "specs", "accounts", "efficiency", "execution"] as const).map((tab) => (
             <TabsTrigger key={tab} value={tab} variant="line">
               {t(`reports.${tab}`)}
             </TabsTrigger>
           ))}
         </TabsList>
         <ResourceState resource={overview} />
+        <TabsContent value="execution" className="min-w-0">
+          {view === "execution" && response && "execution" in response && (
+            <ExecutionUsageReport usage={response.execution} observedAt={response.observed_at} timezone={response.query.timezone} />
+          )}
+        </TabsContent>
         <TabsContent value="efficiency" className="min-w-0 space-y-4">
           {view === "efficiency" && (
             <>

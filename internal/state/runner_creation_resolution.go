@@ -73,6 +73,10 @@ func (s *DBStore) ResolveUnknownSandboxCreation(ctx context.Context, st RunnerSt
 		if res.RowsAffected != 1 {
 			return ErrConflict
 		}
+		if err := tx.Model(&executionAttempt{}).Where("request_id = ? AND attempt_id = ? AND ended_at IS NULL", st.ID, st.ProvisionAttemptID).
+			UpdateColumns(map[string]any{"ended_at": gorm.Expr("(SELECT completed_at FROM runner_requests WHERE id = ?)", st.ID), "status": StatusCompleted}).Error; err != nil {
+			return err
+		}
 		if _, err := appendAuditEvent(tx, audit); err != nil {
 			return fmt.Errorf("%w: %w", ErrAuditEventPersistence, err)
 		}

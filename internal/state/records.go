@@ -27,6 +27,13 @@ type runnerRequestRecord struct {
 	GitHubJobStatus                 string     `gorm:"column:github_job_status"`
 	GitHubJobConclusion             string     `gorm:"column:github_job_conclusion"`
 	GitHubJobRunnerName             string     `gorm:"column:github_job_runner_name"`
+	GitHubJobStartedAt              *time.Time `gorm:"column:github_job_started_at;index:idx_requests_job_started"`
+	GitHubJobCompletedAt            *time.Time `gorm:"column:github_job_completed_at;index:idx_requests_job_completed"`
+	GitHubJobTimeConclusion         string     `gorm:"column:github_job_time_conclusion;size:32"`
+	GitHubJobStartSource            string     `gorm:"column:github_job_start_source;size:16"`
+	GitHubJobEndSource              string     `gorm:"column:github_job_end_source;size:16"`
+	GitHubJobStartObservedAt        *time.Time `gorm:"column:github_job_start_observed_at"`
+	GitHubJobEndObservedAt          *time.Time `gorm:"column:github_job_end_observed_at"`
 	GitHubJobObservedAt             *time.Time `gorm:"column:github_job_observed_at"`
 	PullRequestNumber               int64      `gorm:"column:pull_request_number;index:idx_runner_requests_repository_pr,priority:2"`
 	GitHubContextBackfilled         bool       `gorm:"column:github_context_backfilled;not null;default:false;index:idx_runner_requests_github_context_backfill"`

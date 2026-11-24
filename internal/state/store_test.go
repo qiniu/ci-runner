@@ -4573,7 +4573,7 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 }
 
 func sqlBackendTestTables() []string {
-	return []string{
+	return []string{"runner_execution_attempts", "runner_execution_collection",
 		"report_spec_snapshots",
 		"runner_admission_guard",
 		"terminal_sessions",
@@ -5634,6 +5634,13 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
+	var historyCount int64
+	if err := db.Model(&executionAttempt{}).Where("request_id = ?", record.ID).Count(&historyCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 0 || record.jobTimeEvidence() != nil {
+		t.Fatal("migration synthesized execution history")
+	}
 	if record.ProvisionAttemptID != "" || record.SandboxCreateDispatched {
 		t.Fatal("migration assigned a new attempt to historical state")
 	}
@@ -5650,6 +5657,8 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"github_job_conclusion",
 		"github_job_runner_name",
 		"github_job_observed_at",
+		"github_job_started_at", "github_job_completed_at", "github_job_start_source", "github_job_end_source",
+		"github_job_start_observed_at", "github_job_end_observed_at", "github_job_time_conclusion",
 		"termination_source",
 		"runner_exit_code",
 		"sandbox_region",

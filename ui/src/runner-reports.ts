@@ -46,6 +46,22 @@ export type EfficiencySummary = {
   groups: EfficiencyGroup[]
   rejections?: Record<string, Record<string, number>>
 }
+type ExecutionTotals = {
+  attempts: number
+  attempt_seconds: number
+  provisional_seconds: number
+  active_attempts: number
+  peak: number
+  jobs: number
+  job_seconds: number
+}
+export type ExecutionUsage = {
+  collection_started_at: string
+  incomplete_jobs: number
+  total: ExecutionTotals
+  buckets: (ExecutionTotals & { date: string; from: string; to: string })[]
+}
+
 export type RunnerReport = {
   efficiency?: EfficiencySummary
   query: ReportQuery

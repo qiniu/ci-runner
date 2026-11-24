@@ -53,6 +53,11 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strconv.FormatInt(event.WorkflowJob.ID, 10)
 	s.logger.Info("workflow_job webhook parsed", "delivery", r.Header.Get("X-GitHub-Delivery"), "action", event.Action, "job_id", id, "job_name", event.WorkflowJob.Name, "repository", event.Repository.FullName, "runner_name", event.WorkflowJob.RunnerName, "labels", []string(event.WorkflowJob.Labels))
+	// Record source timestamps after lifecycle handling, including when the
+	// original Job ran on another request's Runner.
+	if event.Action == "in_progress" || event.Action == "completed" {
+		defer s.observeJobTimes(r.Context(), event.Repository.FullName, event.WorkflowJob, event.Action, "webhook", time.Now().UTC())
+	}
 	switch event.Action {
 	case "queued":
 		workflowName := workflowNameFor(event.WorkflowJob.WorkflowName, event.WorkflowRun.Name)
