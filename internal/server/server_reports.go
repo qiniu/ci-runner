@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	reportFreshness    = 30 * time.Second
-	reportRetention    = 5 * time.Minute
-	reportTimeout      = 10 * time.Second
-	reportCacheEntries = state.ReportSnapshotLimit
-	reportCacheRows    = state.ReportSnapshotEntries
+	accountSnapshotPrefix = "acct-"
+	reportFreshness       = 30 * time.Second
+	reportRetention       = 5 * time.Minute
+	reportTimeout         = 10 * time.Second
+	reportCacheEntries    = state.ReportSnapshotLimit
+	reportCacheRows       = state.ReportSnapshotEntries
 )
 
 type cachedRunnerReport struct {
@@ -46,13 +47,13 @@ func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) err
 	if err != nil {
 		return err
 	}
-	return s.store.SaveReportSpecSnapshot(ctx, e.id, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+	return s.store.SaveReportSnapshot(ctx, e.id, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
 }
 
 func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id string) (cachedRunnerReport, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
 	defer cancel()
-	raw, err := s.store.LoadReportSpecSnapshot(ctx, id, time.Now())
+	raw, err := s.store.LoadReportSnapshot(ctx, id, time.Now())
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
 		return cachedRunnerReport{}, false
@@ -144,6 +145,9 @@ func (s *Server) loadReportActive(ctx context.Context, q state.RunnerReportQuery
 
 func reportQueryKey(q state.RunnerReportQuery) string {
 	b, _ := json.Marshal(q)
+	if q.IncludeAccountUsage {
+		return "accounts:" + string(b)
+	}
 	if q.IncludeSpecUsage {
 		return "specs:" + string(b)
 	}
@@ -247,6 +251,12 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 			id: newID(), key: key, created: time.Now(),
 			report: report, distributions: distributions,
 		}
+		if q.IncludeAccountUsage {
+			entry.id = accountSnapshotPrefix + entry.id
+			if err := s.saveAccountSnapshot(queryCtx, entry); err != nil {
+				return nil, err
+			}
+		}
 		if q.IncludeSpecUsage {
 			if err := s.saveSpecSnapshot(queryCtx, entry); err != nil {
 				return nil, err
@@ -272,12 +282,12 @@ func parseRunnerReportQuery(values url.Values, now time.Time) (state.RunnerRepor
 			return state.RunnerReportQuery{}, errors.New("repeated report parameters are not supported")
 		}
 		switch k {
-		case "from", "to", "timezone", "grain", "owner", "repository", "spec", "snapshot":
+		case "from", "to", "timezone", "grain", "owner", "repository", "repository_missing", "spec", "snapshot":
 		default:
 			return state.RunnerReportQuery{}, errors.New("unsupported report parameter")
 		}
 	}
-	q := state.RunnerReportQuery{From: values.Get("from"), To: values.Get("to"), Timezone: values.Get("timezone"), Grain: values.Get("grain"), Owner: values.Get("owner"), Repository: values.Get("repository"), Spec: values.Get("spec")}
+	q := state.RunnerReportQuery{From: values.Get("from"), To: values.Get("to"), Timezone: values.Get("timezone"), Grain: values.Get("grain"), Owner: values.Get("owner"), Repository: values.Get("repository"), MissingRepository: values.Get("repository_missing"), Spec: values.Get("spec")}
 	if q.Timezone == "" {
 		q.Timezone = "UTC"
 	}
@@ -308,12 +318,21 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q.IncludeAccountUsage = r.URL.Path == "/reports/account-usage"
 	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
 	var entry cachedRunnerReport
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
 		entry, ok = s.reports.byID(id)
-		if !ok && q.IncludeSpecUsage {
+		if !ok && q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix) {
+			entry, err = s.restoreAccountSnapshot(r.Context(), id)
+			if err != nil {
+				s.writeReportError(w, r, err)
+				return
+			}
+			ok = true
+		}
+		if !ok && q.IncludeSpecUsage && !strings.HasPrefix(id, accountSnapshotPrefix) {
 			entry, ok = s.restoreSpecSnapshot(w, r, id)
 			if !ok {
 				return
@@ -344,6 +363,10 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, state.ErrNotFound) {
+		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return
+	}
 	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) || errors.Is(err, state.ErrReportSnapshotTooLarge) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -419,6 +442,14 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 		return cachedRunnerReport{}, 0, 0, false
 	}
 	entry, ok := s.reports.byID(r.PathValue("snapshot"))
+	if !ok && strings.HasPrefix(r.PathValue("snapshot"), accountSnapshotPrefix) {
+		entry, err = s.restoreAccountSnapshot(r.Context(), r.PathValue("snapshot"))
+		if err != nil {
+			s.writeReportError(w, r, err)
+			return entry, 0, 0, false
+		}
+		ok = true
+	}
 	if !ok && r.Pattern == "GET /reports/{snapshot}/specs" {
 		entry, ok = s.restoreSpecSnapshot(w, r, r.PathValue("snapshot"))
 		return entry, limit, offset, ok

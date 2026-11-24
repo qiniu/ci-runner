@@ -323,6 +323,7 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
 			verifySharedSpecSnapshotBounds(t, s)
+			verifyReportAccountUsage(t, s)
 			verifyReportGlobalSpecIdentity(t, s)
 			if backend.name == BackendPostgres {
 				verifyLargePostgresReport(t, s)
@@ -367,7 +368,18 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	if r.Totals.Requests != 501602 || r.Previous.Requests != 509758 || r.SpecSummary.Requests != r.Totals.Requests || r.Totals.ActiveRepositories != 101 || r.Totals.Runtime.Seconds != 56*float64(r.Totals.Requests) {
 		t.Fatalf("30-day aggregate: current %d, prior %d, repositories %d, runtime %v", r.Totals.Requests, r.Previous.Requests, r.Totals.ActiveRepositories, r.Totals.Runtime)
 	}
-	t.Logf("30-day Specs dashboard: %d current + %d prior requests in %s", r.Totals.Requests, r.Previous.Requests, time.Since(start))
+	accountStart := time.Now()
+	accountCtx, accountCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer accountCancel()
+	account, err := s.ReadRunnerReport(accountCtx, RunnerReportQuery{From: r.Query.From, To: r.Query.To, Timezone: "UTC", Grain: "day", IncludeAccountUsage: true}, r.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Totals != r.Totals || account.Previous != r.Previous || account.Outcomes["unknown"] != account.Totals.Requests {
+		t.Fatal("30-day account usage does not reconcile with specs")
+	}
+	t.Logf("30-day account dashboard: %d current + %d prior in %s", account.Totals.Requests, account.Previous.Requests, time.Since(accountStart))
+	t.Logf("30-day Specs dashboard: %d current + %d prior requests in %s", r.Totals.Requests, r.Previous.Requests, accountStart.Sub(start))
 }
 
 // First force the aggregate path with previous-period rows only. Every current
@@ -381,6 +393,13 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 	now := reportTime("2026-11-20T10:00:00Z")
 	q := RunnerReportQuery{From: "2026-10-22", To: "2026-11-21", Timezone: "Asia/Shanghai", Grain: "day"}
 	baseline, err := s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := q
+	accounts.IncludeAccountUsage = true
+	accounts.Grain = "month"
+	smallAccounts, err := s.ReadRunnerReport(t.Context(), accounts, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,6 +426,20 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		}
 		t.Logf("PostgreSQL report: %d current + %d previous, %d retained entries in %s", r.Totals.Requests, r.Previous.Requests, r.RetainedEntries(), time.Since(start))
 		return r
+	}
+	largeAccounts, err := s.ReadRunnerReport(t.Context(), accounts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dim := range []string{"owner", "repository", "spec"} {
+		small, _ := smallAccounts.Groups(dim, "requests")
+		large, _ := largeAccounts.Groups(dim, "requests")
+		if !reflect.DeepEqual(small, large) {
+			t.Fatalf("account %s small vs aggregate: %+v vs %+v", dim, small, large)
+		}
+	}
+	if !reflect.DeepEqual(smallAccounts.Outcomes, largeAccounts.Outcomes) || !reflect.DeepEqual(smallAccounts.Trend, largeAccounts.Trend) {
+		t.Fatal("aggregate dashboard differs from detail cohort")
 	}
 	bigSpecs, err := s.ReadRunnerReport(t.Context(), specQuery, now)
 	if err != nil {
@@ -515,9 +548,9 @@ func TestRunnerReportChartRankings(t *testing.T) {
 			})
 		}
 	}
-	aggregate := &RunnerReport{groupTotals: make(map[string][]ReportGroup)}
+	aggregate := &RunnerReport{GroupTotals: make(map[string][]ReportGroup)}
 	for _, dim := range []string{"spec", "owner", "repository"} {
-		aggregate.groupTotals[dim] = rows.groupRows(dim)
+		aggregate.GroupTotals[dim] = rows.groupRows(dim)
 	}
 	for _, report := range []*RunnerReport{rows, aggregate} {
 		rankings := report.ChartDistributions()
@@ -668,7 +701,7 @@ func TestRunnerReportScale(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	q := RunnerReportQuery{From: "2026-11-19", To: "2026-11-21", Timezone: "UTC", Grain: "day"}
+	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-11-19", To: "2026-11-21", Timezone: "UTC", Grain: "day"}
 	// Two queued requests outside the cohort let us measure real queue claims.
 	for _, id := range []string{"baseline-claim", "concurrent-claim"} {
 		if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, Source: "fixture", LabelsJSON: "[]", Status: StatusQueued, QueuedAt: start.AddDate(0, 0, -100), UpdatedAt: now}).Error; err != nil {
@@ -723,7 +756,7 @@ func TestRunnerReportScale(t *testing.T) {
 	if r.Totals.Requests != 100000 {
 		t.Fatal("truncated report")
 	}
-	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: report=%s, retained=%d", elapsed, len(r.Rows))
+	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: account report=%s, retained entries=%d", elapsed, r.RetainedEntries())
 	before = time.Now()
 	if _, _, err := s.ListStatesCursor(context.Background(), RunnerRequestListOptions{Limit: 25}, nil); err != nil {
 		t.Fatal(err)
@@ -956,7 +989,7 @@ func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
 	save := func(id int, weight int) {
 		t.Helper()
 		key := fmt.Sprint(id)
-		if err := s.SaveReportSpecSnapshot(t.Context(), key, expires.Add(time.Duration(id)*time.Second), weight, []byte(key)); err != nil {
+		if err := s.SaveReportSnapshot(t.Context(), key, expires.Add(time.Duration(id)*time.Second), weight, []byte(key)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -966,7 +999,7 @@ func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
 	get := func(id int, now time.Time, want bool) {
 		t.Helper()
 		key := fmt.Sprint(id)
-		b, err := s.LoadReportSpecSnapshot(t.Context(), key, now)
+		b, err := s.LoadReportSnapshot(t.Context(), key, now)
 		if want && (err != nil || string(b) != key) || !want && !errors.Is(err, ErrNotFound) {
 			t.Fatalf("snapshot %s: body %q err %v, want present %t", key, b, err, want)
 		}
@@ -984,7 +1017,7 @@ func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
 	for i := range writers {
 		go func() {
 			key := fmt.Sprintf("writer-%d", i)
-			done <- s.SaveReportSpecSnapshot(t.Context(), key, expires, ReportSnapshotEntries/2, []byte(key))
+			done <- s.SaveReportSnapshot(t.Context(), key, expires, ReportSnapshotEntries/2, []byte(key))
 		}()
 	}
 	for range writers {
@@ -997,7 +1030,7 @@ func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
 		t.Fatal(err)
 	}
 	var count int64
-	if err := db.Model(&reportSpecSnapshotRecord{}).Where("id <> ?", specSnapshotWriter).Count(&count).Error; err != nil || count != 2 {
+	if err := db.Model(&reportSpecSnapshotRecord{}).Where("id <> ?", reportSnapshotWriter).Count(&count).Error; err != nil || count != 2 {
 		t.Fatalf("concurrent publications retained %d snapshots, want 2: %v", count, err)
 	}
 }
@@ -1005,3 +1038,57 @@ func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
 func TestRunnerReportSharedSpecSnapshotBounds(t *testing.T) {
 	verifySharedSpecSnapshotBounds(t, reportTestStore(t))
 }
+
+func verifyReportAccountUsage(t *testing.T, s *DBStore) {
+	t.Helper()
+	now := reportTime("2026-11-21T10:00:00Z")
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []int64{42, 43} {
+		if err := db.Create(&githubInstallationRecord{AccountID: account, InstallationID: 1234, GitHubAccountID: 456, AccountLogin: "fork"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&githubInstallationOwnerRecord{InstallationID: 1234, GitHubAccountID: 456, AccountLogin: "fork"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	instants := []string{"2026-11-20T15:59:00Z", "2026-11-20T16:01:00Z", "2026-11-20T17:00:00Z", "2026-11-20T18:00:00Z"}
+	for i, name := range []string{"fork/old-name", "fork/new-name", "fork/new-name", ""} {
+		id := fmt.Sprintf("activity-%d", i)
+		at := reportTime(instants[i])
+		r := runnerRequestRecord{ID: id, Source: "fixture", RunnerName: id, LabelsJSON: "[]", Status: StatusCompleted, QueuedAt: at, UpdatedAt: at, GitHubInstallationID: 1234, RepositoryFullName: name, ProfileSource: "scoped_custom", ProfileScopeType: "account", ProfileScopeID: 43, ProfileName: "custom", RunningAt: &at, CompletedAt: &at}
+		if i == 3 {
+			r.GitHubInstallationID = 9876
+		}
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-11-20", To: "2026-11-22", Timezone: "Asia/Shanghai", Grain: "month", Owner: "github:456"}
+	report, err := s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := report.Groups("owner", "requests")
+	if len(groups) != 1 {
+		t.Fatalf("owner groups: %v", groups)
+	}
+	g := groups[0]
+	if g.Requests != 3 || g.ActiveRepositories != 2 || g.UsedSpecs != 1 || g.ActiveDays != 2 || !g.LastQueuedAt.Equal(reportTime(instants[2])) || g.Outcomes["unknown"] != 3 || g.Runtime.Samples != 3 || g.Runtime.Seconds != 0 || g.JobResults != 0 {
+		t.Fatalf("owner usage %+v activity %+v", g, g.ReportActivity)
+	}
+	q.Owner = "installation:9876"
+	q.MissingRepository = "1"
+	report, err = s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ = report.Groups("repository", "requests")
+	if len(groups) != 1 || groups[0].Key != "" || report.Totals.Requests != 1 || report.Rows[0].ID != "activity-3" || report.Rows[0].Owner != q.Owner {
+		t.Fatal("unknown repository or Installation lost in drilldown")
+	}
+}
+
+func TestRunnerReportAccountUsage(t *testing.T) { verifyReportAccountUsage(t, reportTestStore(t)) }

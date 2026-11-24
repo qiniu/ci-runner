@@ -352,6 +352,8 @@ go run ./cmd/runnerd --config ./runnerd.yaml --bootstrap-admin github:<your-gith
 export COOKIE_JAR=./runnerd.cookies
 ```
 
+验证管理员用量报表时，打开 `/admin/reports?view=accounts`，选择账户和仓库，刷新表格第二页，再打开具体请求。返回报表后应恢复原筛选、页码和选中行。[报表统计口径与专项测试](../runner-reports.md) 包含默认日期和跨实例快照恢复检查。
+
 管理员账户页面：
 
 ```text

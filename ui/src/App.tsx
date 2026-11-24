@@ -257,13 +257,13 @@ function App() {
     })
   }, [])
 
-  const setSection = useCallback((next: string, search = "") => {
+  const setSection = useCallback((next: string, search = "", replace = false) => {
     const section = adminSections.includes(next as AdminSection) ? (next as AdminSection) : "overview"
     invalidateRunnerRequestPage()
     setSectionState(section)
     const nextPath = adminSectionPath(section)
     if (window.location.pathname + window.location.search !== nextPath + search) {
-      window.history.pushState(null, "", nextPath + search)
+      window.history[replace ? "replaceState" : "pushState"](null, "", nextPath + search)
       setLocationPath(nextPath)
       setLocationSearch(search)
     }
@@ -283,12 +283,17 @@ function App() {
     setLocationSearch(nextSearch)
   }
 
-  const openRunnerRequest = useCallback((identifier: string) => {
+  const openRunnerRequest = useCallback((identifier: string, reportSearch?: string) => {
     runnerRequestLookupGeneration.current += 1
     invalidateRunnerRequestPage()
-    const search = window.location.pathname === adminSectionPath("runner_requests")
-      ? adminRunnerRequestSearch(adminRunnerRequestSearchFromURL(window.location.search))
-      : ""
+    let search = ""
+    if (reportSearch) {
+      const returnTo = adminSectionPath("reports") + reportSearch
+      window.history.replaceState(null, "", returnTo)
+      search = "?" + new URLSearchParams({ report_return: returnTo })
+    } else if (window.location.pathname === adminSectionPath("runner_requests")) {
+      search = adminRunnerRequestSearch(adminRunnerRequestSearchFromURL(window.location.search))
+    }
     const nextPath = adminRunnerRequestDetailPath(identifier, search)
     if (window.location.pathname + window.location.search !== nextPath) {
       window.history.pushState(null, "", nextPath)
@@ -1437,7 +1442,7 @@ function App() {
             />
           ) : null}
 
-          {section === "reports" ? <RunnerReportsSection search={locationSearch} request={request} onNavigate={search => setSection("reports", search)} /> : null}
+          {section === "reports" ? <RunnerReportsSection search={locationSearch} request={request} onOpenRequest={openRunnerRequest} onNavigate={(search, replace) => setSection("reports", search, replace)} /> : null}
 
           {section === "accounts" ? <AccountsSection request={request} /> : null}
 
