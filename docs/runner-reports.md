@@ -3,7 +3,7 @@
 Administrators use `/admin/reports` to inspect request cohorts, recorded runtime,
 trends, and usage by Runner Spec, GitHub Installation owner, and repository.
 The filter bar above the report tabs applies the date range, timezone, repository
-and time grain to both Overview and Specs. Switching tabs keeps those selections.
+and time grain across the report tabs. Switching tabs keeps those selections.
 The Specs tab opens with two comparison charts showing each spec's share of
 requests and recorded runtime. Each chart occupies its own row. The legend shows
 exact values and shares beside the plot on wide cards and below it on narrow cards.
@@ -41,6 +41,14 @@ report-page panel. The compact layout uses shared small Cards: six summary
 metrics and three distribution charts fit side by side on wide screens, while
 narrow layouts wrap controls and stack charts. Chart legends, metric selectors,
 filters and the trend data table remain available.
+
+## Accounts and repositories
+
+Open `/admin/reports?view=accounts` to rank GitHub owners and repositories by requests or recorded runtime. The default charts share the selected cohort with the paged table. Choose an owner or repository in the filter bar, chart or table to narrow usage in place. Selecting an owner opens repository rankings in table mode when the table is shown. Select a spec in the distribution or use the paged spec filter to find any spec in the cohort. Choosing or clearing a dimension applies the dates, timezone and grain currently entered in the same form.
+
+Each row includes requests, starts, recorded runtime, coverage, distinct identified specs, active days and the latest queued request within the filters. Owner rows include distinct named repositories. Active days count local calendar dates even for weekly or monthly trends. If the browser cannot format the selected server timezone, timestamps display in ISO 8601 UTC and the server continues grouping in the selected timezone. The Job result distribution includes unknowns. Its coverage denominator is terminal requests with an original Job ID.
+
+Open **Request details** to page through the filtered cohort. A request ID opens its live admin detail and timeline. Browser Back and **Back to reports** restore the report snapshot, view, filters, both page offsets and highlighted request. Expired snapshots require an explicit refresh. For an aggregate-only PostgreSQL cohort, narrow the dates or dimensions until request details are available.
 
 ## Metric contract
 
@@ -138,6 +146,7 @@ scoped catalogs inside the same report transaction.
 | GET endpoint | Parameters and behavior |
 | --- | --- |
 | `/reports/overview` | `from`, `to`, `timezone`, `grain=day\|week\|month`, exact `owner`, `repository`, `spec`; optional `snapshot` to restore the identical result |
+| `/reports/account-usage` | Same filters as overview. Returns owner/repository activity, Job outcomes, ranking distributions and request detail availability. Use `repository_missing=1` to select unnamed repositories |
 | `/reports/spec-usage` | Same filters as overview. Returns an independent snapshot with `spec_dashboard` counts, full-cohort summary and up to 20 spec records ordered by requests |
 | `/reports/active` | Same query contract; date and grain do not restrict current backlog |
 | `/reports/{snapshot}/specs` | `sort=requests\|runtime\|average_runtime\|repositories`, optional exact `key`, label search `q`, `limit`, `offset`; pages the frozen catalog and usage from a `/reports/spec-usage` snapshot. An overview snapshot returns **400** |
@@ -189,9 +198,7 @@ keeps its original grouping sets.
   on another server uses that same snapshot, including its original expiry and filters.
   The shared cache holds up to 8 snapshots and 200,000 aggregate entries. A payload
   of 16 MiB or larger returns **422**. Publication evicts expired and excess entries.
-  Schema initialization creates this cache table on upgrade. Overview, grouped and
-  request-row detail caches remain local and may return **410** after a restart
-  or routing change.
+  Accounts and repositories share this storage and retention budget. Their snapshot includes the frozen group tables and the narrow request projections for detail-capable cohorts, gzip-compressed within the same payload limit (128 MiB decoded). Another server can restore a group or request page directly. Overview snapshots remain process-local and may return **410** after a restart or routing change.
 
 SQLite uses the existing queued-date index and a short-lived read-only connection
 to the main database file resolved from the initialized connection. It opens with
@@ -272,6 +279,8 @@ case. Real SQL compatibility requires `RUNNERD_CATALOG_BACKEND_TESTS=1` and
 `RUNNERD_POSTGRES_TEST_DSN` / `RUNNERD_MYSQL_TEST_DSN` pointing at dedicated
 `*_test` databases: those tests reset their tables. Combining the SQL backend and scale flags also runs the 30-day PostgreSQL Specs test with 1,020,000 generated requests and the normal ten-second query deadline. UI fixtures run via
 `bun run test:production runner-reports.pw.ts` in `ui/`.
+
+Local verification on 2026-11-24 exercised account rankings on SQLite, PostgreSQL 16 and MySQL 8.4. Fixtures include two login accounts linked to one Installation, a scoped-custom spec, an unmapped Installation, a missing repository, different saved repository names, and two local active dates within one monthly trend bucket. The PostgreSQL account report completed a synthetic 30-day query with 501,602 current and 509,758 comparison requests in 5.72 seconds under the normal ten-second deadline. The SQLite account report read 100,000 requests in 1.56 seconds. During the overlapping report read, a queue claim took 1.63 ms and a 25-row list took 0.94 ms. A two-server HTTP test restores the same default 30-day dashboard and second ranking/request pages after new requests arrive. Chromium fixtures exercise English and Chinese labels, an unnamed repository, keyboard selection, 390px layout, retrying a failed ranking page and returning to a highlighted request after a reload.
 
 Production data completeness, actual row/cardinality distributions, production
 query plans/latency and deployed browser acceptance remain **unverified**. Before

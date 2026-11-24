@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -58,7 +59,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 			terminal_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS valid_terminal,
 			github_job_observed_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS valid_result,
 			coalesce(nullif(stopping_at, timestamptz '0001-01-01 UTC'), terminal_at) AS runtime_end
-		FROM (?) AS c CROSS JOIN bounds
+		%s FROM (?) AS c CROSS JOIN bounds
 	), intervals AS (
 		SELECT v.*,
    CASE WHEN has_job AND saved_result AND valid_result THEN github_job_conclusion ELSE 'unknown' END COLLATE "C" AS job_result,
@@ -100,6 +101,23 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		partialResult = "CASE WHEN current_period THEN job_result END AS period_result,"
 		partialGroup = ", period_result"
 	}
+	var dayField, activityFields string
+	args := []any{now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window)}
+	if q.IncludeAccountUsage {
+		dayField = ", timezone(make_interval(secs => ?), queued_at)::date AS local_day"
+		args = append(args, postgresTrendOffset(window))
+		partialResult = "CASE WHEN current_period THEN local_day END AS activity_day, max(queued_at) AS last_queued_at, CASE WHEN current_period THEN job_result END AS period_result,"
+		partialGroup = ", activity_day, period_result"
+		activityFields = `count(DISTINCT activity_day) AS active_days,
+       count(DISTINCT (period_source,period_scope_type,period_scope_id,period_name)) FILTER (WHERE known_specs > 0) AS used_specs,
+       max(last_queued_at) AS last_queued_at,`
+		var outcomes []string
+		for _, result := range []string{"success", "failure", "timed_out", "cancelled", "skipped", "unknown"} {
+			outcomes = append(outcomes, "'"+result+"', sum(requests) FILTER (WHERE period_result = '"+result+"')")
+		}
+		outcomes = append(outcomes, "'other', sum(requests) FILTER (WHERE period_result NOT IN ('success','failure','timed_out','cancelled','skipped','unknown'))")
+		activityFields += " json_strip_nulls(json_build_object(" + strings.Join(outcomes, ",") + ")) AS outcomes,"
+	}
 	const regroup = `
 	FROM intervals
 	GROUP BY current_period, period_bucket, period_source, period_scope_type, period_scope_id, period_name, owner_key, account_id, repo%s
@@ -130,21 +148,24 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	for _, field := range fields {
 		sums = append(sums, "sum("+field+") AS "+field)
 	}
-	statement := fmt.Sprintf(aggregates, partialResult) + strings.Join(durations, ", ") +
-		fmt.Sprintf(regroup, partialGroup, classify, resultField) + strings.Join(sums, ", ") + rollups
-	query := db.Raw(statement, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
+	statement := fmt.Sprintf(aggregates, dayField, partialResult) + strings.Join(durations, ", ") +
+		fmt.Sprintf(regroup, partialGroup, classify, resultField+activityFields) + strings.Join(sums, ", ") + rollups
+	query := db.Raw(statement, append(args, cohort, ReportMaxRows+1)...)
 	rows, err := query.Rows()
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	report := &RunnerReport{Query: q, Window: window, ObservedAt: now.UTC(), groupTotals: make(map[string][]ReportGroup)}
+	report := &RunnerReport{Query: q, Window: window, ObservedAt: now.UTC(), GroupTotals: make(map[string][]ReportGroup)}
 	buckets := make(map[string]ReportTotals)
 	for n := 0; rows.Next(); n++ {
 		if n >= ReportMaxRows {
 			return nil, ErrReportTooManyGroups
 		}
 		var row struct {
+			ActiveDays, UsedSpecs                                                                     int64
+			LastQueuedAt                                                                              time.Time
+			Outcomes                                                                                  string
 			CurrentPeriod                                                                             bool
 			Dimension, Bucket, SpecSource, ScopeType, SpecName, OwnerKey, OwnerLabel, Repo, JobResult string
 			ScopeID                                                                                   int64
@@ -192,7 +213,14 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		case "repository":
 			key, label = row.Repo, row.Repo
 		}
-		report.groupTotals[row.Dimension] = append(report.groupTotals[row.Dimension], ReportGroup{key, label, row.ReportTotals})
+		group := ReportGroup{Key: key, Label: label, ReportTotals: row.ReportTotals}
+		if q.IncludeAccountUsage && row.Dimension != "spec" {
+			group.ReportActivity = &ReportActivity{ActiveDays: row.ActiveDays, UsedSpecs: row.UsedSpecs, LastQueuedAt: row.LastQueuedAt.UTC()}
+			if err := json.Unmarshal([]byte(row.Outcomes), &group.Outcomes); err != nil {
+				return nil, err
+			}
+		}
+		report.GroupTotals[row.Dimension] = append(report.GroupTotals[row.Dimension], group)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

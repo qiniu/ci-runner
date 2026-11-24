@@ -26,14 +26,16 @@ var ErrReportTooLarge = errors.New("report exceeds 100000 requests; narrow the d
 
 // RunnerReportQuery uses local calendar dates and an exclusive To boundary.
 type RunnerReportQuery struct {
-	IncludeSpecUsage bool   `json:"-"`
-	From             string `json:"from"`
-	To               string `json:"to"`
-	Timezone         string `json:"timezone"`
-	Grain            string `json:"grain"`
-	Owner            string `json:"owner,omitempty"`
-	Repository       string `json:"repository,omitempty"`
-	Spec             string `json:"spec,omitempty"`
+	IncludeAccountUsage bool   `json:"-"`
+	MissingRepository   string `json:"repository_missing,omitempty"`
+	IncludeSpecUsage    bool   `json:"-"`
+	From                string `json:"from"`
+	To                  string `json:"to"`
+	Timezone            string `json:"timezone"`
+	Grain               string `json:"grain"`
+	Owner               string `json:"owner,omitempty"`
+	Repository          string `json:"repository,omitempty"`
+	Spec                string `json:"spec,omitempty"`
 }
 
 type ReportWindow struct {
@@ -66,6 +68,9 @@ func (q RunnerReportQuery) Window(now time.Time) (ReportWindow, error) {
 
 	if q.Grain != "day" && q.Grain != "week" && q.Grain != "month" {
 		return ReportWindow{}, errors.New("grain must be day, week or month")
+	}
+	if q.MissingRepository != "" && (q.MissingRepository != "1" || q.Repository != "") {
+		return ReportWindow{}, errors.New("repository_missing requires an empty repository and value 1")
 	}
 	if len(q.Repository) > 256 || len(q.Owner) > 100 || len(q.Spec) > 2048 {
 		return ReportWindow{}, errors.New("report filter is too long")
@@ -233,8 +238,9 @@ type ReportBucket struct {
 	ReportTotals
 }
 type ReportGroup struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
+	*ReportActivity `json:",omitempty"`
+	Key             string `json:"key"`
+	Label           string `json:"label"`
 	ReportTotals
 }
 
@@ -267,9 +273,11 @@ type ReportSpecUsage struct {
 	JobResults             map[string]int64    `json:"job_results,omitempty"`
 }
 type RunnerReport struct {
-	SpecSummary *ReportSpecUsage  `json:"-"`
-	SpecItems   []ReportSpecUsage `json:"-"`
-	specGroups  map[string]*specBreakdown
+	DetailAvailable *bool             `json:"request_detail_available,omitempty"`
+	Outcomes        map[string]int64  `json:"outcomes,omitempty"`
+	SpecSummary     *ReportSpecUsage  `json:"-"`
+	SpecItems       []ReportSpecUsage `json:"-"`
+	specGroups      map[string]*specBreakdown
 
 	Query      RunnerReportQuery `json:"query"`
 	Window     ReportWindow      `json:"window"`
@@ -277,10 +285,10 @@ type RunnerReport struct {
 	Totals     ReportTotals      `json:"totals"`
 	Previous   ReportTotals      `json:"previous"`
 	Trend      []ReportBucket    `json:"trend"`
-	// Rows are retained only in the bounded server cache for consistent drilldowns.
+	// Bounded detail snapshots retain this narrow projection for consistent drilldowns.
 	Rows []ReportRequest `json:"-"`
-	// Large PostgreSQL cohorts retain grouped totals instead of individual rows.
-	groupTotals map[string][]ReportGroup
+	// Account snapshots freeze all group pages. Large PostgreSQL cohorts retain only groups.
+	GroupTotals map[string][]ReportGroup `json:"-"`
 }
 
 type reportProjection struct {
@@ -323,7 +331,7 @@ func reportTextKey(db *gorm.DB, key string) clause.Expr {
 // A unique installation-owner join avoids fan-out through user-installation links.
 func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
 	query := db.Table("runner_requests AS r").Joins("LEFT JOIN github_installation_owners AS o ON o.installation_id = r.github_installation_id")
-	if q.Repository != "" {
+	if q.Repository != "" || q.MissingRepository == "1" {
 		query = query.Where("COALESCE(r.repository_full_name, '') = ?", reportTextKey(db, q.Repository))
 	}
 	if q.Owner != "" {
@@ -463,8 +471,31 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		defer db.Rollback()
 	}
 	report, err := readReportCohort(ctx, db, q, window, now)
-	if err != nil || !q.IncludeSpecUsage {
-		return report, err
+	if err != nil {
+		return nil, err
+	}
+	if q.IncludeAccountUsage {
+		report.DetailAvailable = new(report.Rows != nil)
+		if report.GroupTotals == nil {
+			groups := make(map[string][]ReportGroup)
+			for _, dim := range []string{"owner", "repository", "spec"} {
+				groups[dim] = report.groupRows(dim)
+			}
+			report.GroupTotals = groups
+		}
+		report.Outcomes = make(map[string]int64)
+		for _, group := range report.GroupTotals["repository"] {
+			for outcome, n := range group.Outcomes {
+				report.Outcomes[outcome] += n
+			}
+		}
+		if report.RetainedEntries() > ReportSnapshotEntries {
+			return nil, ErrReportTooManyGroups
+		}
+		return report, ctx.Err()
+	}
+	if !q.IncludeSpecUsage {
+		return report, nil
 	}
 	catalog, err := readReportSpecCatalog(db, q.Spec)
 	if err != nil {
@@ -738,16 +769,21 @@ func (r *RunnerReport) Groups(dimension, sortBy string) ([]ReportGroup, error) {
 }
 
 func (r *RunnerReport) reportGroups(dimension string) []ReportGroup {
-	if r.groupTotals != nil {
-		return append([]ReportGroup{}, r.groupTotals[dimension]...)
+	if r.GroupTotals != nil {
+		return append([]ReportGroup{}, r.GroupTotals[dimension]...)
 	}
 	return r.groupRows(dimension)
 }
 
 func sortReportGroups(result []ReportGroup, sortBy string) {
 	sort.Slice(result, func(i, j int) bool {
-		if sortBy == "runtime" && result[i].Runtime.Seconds != result[j].Runtime.Seconds {
-			return result[i].Runtime.Seconds > result[j].Runtime.Seconds
+		if sortBy == "runtime" {
+			if result[i].Runtime.Seconds != result[j].Runtime.Seconds {
+				return result[i].Runtime.Seconds > result[j].Runtime.Seconds
+			}
+			if (result[i].Runtime.Samples > 0) != (result[j].Runtime.Samples > 0) {
+				return result[i].Runtime.Samples > 0
+			}
 		}
 		if result[i].Requests != result[j].Requests {
 			return result[i].Requests > result[j].Requests
@@ -782,19 +818,31 @@ func (r *RunnerReport) ChartDistributions() map[string]ReportDistribution {
 func (r *RunnerReport) groupRows(dimension string) []ReportGroup {
 	groups := map[string]*reportAccumulator{}
 	labels := map[string]string{}
+	activities := map[string]*activityAccumulator{}
 	for _, row := range r.Rows {
 		key, label, _ := row.dimension(dimension)
 		if groups[key] == nil {
 			groups[key] = newReportAccumulator()
 		}
 		groups[key].add(row)
+		if r.Query.IncludeAccountUsage && dimension != "spec" {
+			if activities[key] == nil {
+				activities[key] = newActivityAccumulator()
+			}
+			activities[key].add(row, r.Window.Location)
+		}
 		if labels[key] == "" || label < labels[key] {
 			labels[key] = label
 		}
 	}
 	result := make([]ReportGroup, 0, len(groups))
 	for key, a := range groups {
-		result = append(result, ReportGroup{key, labels[key], a.totals()})
+		group := ReportGroup{Key: key, Label: labels[key], ReportTotals: a.totals()}
+		if activity := activities[key]; activity != nil {
+			stats := activity.ReportActivity
+			group.ReportActivity = &stats
+		}
+		result = append(result, group)
 	}
 	return result
 }
@@ -818,7 +866,7 @@ func (r *RunnerReport) RetainedEntries() int {
 	if r.SpecSummary != nil {
 		n += entries(*r.SpecSummary)
 	}
-	for _, groups := range r.groupTotals {
+	for _, groups := range r.GroupTotals {
 		n += len(groups)
 	}
 	return n
@@ -841,7 +889,7 @@ func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) 
 	if dimension != "" && dimension != "spec" && dimension != "owner" && dimension != "repository" {
 		return nil, errors.New("invalid report dimension")
 	}
-	if r.groupTotals != nil {
+	if r.GroupTotals != nil && r.Rows == nil {
 		return nil, ErrReportTooLarge
 	}
 	if dimension == "" {

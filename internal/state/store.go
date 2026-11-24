@@ -773,8 +773,8 @@ type TerminalStore interface {
 }
 
 type Store interface {
-	SaveReportSpecSnapshot(context.Context, string, time.Time, int, []byte) error
-	LoadReportSpecSnapshot(context.Context, string, time.Time) ([]byte, error)
+	SaveReportSnapshot(context.Context, string, time.Time, int, []byte) error
+	LoadReportSnapshot(context.Context, string, time.Time) ([]byte, error)
 	ReadRunnerReport(context.Context, RunnerReportQuery, time.Time) (*RunnerReport, error)
 	ReadRunnerReportActive(context.Context, RunnerReportQuery) (map[string]int64, error)
 	TerminalStore

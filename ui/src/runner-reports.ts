@@ -1,3 +1,5 @@
+import type { AppTFunction } from "@/i18n"
+
 const baseChartColors = [1, 2, 3, 4, 5].map(index => `var(--chart-${index})`)
 // The two spec rankings can contain up to ten distinct identities.
 export const reportChartPalette = [...baseChartColors, ...baseChartColors.map(color =>
@@ -11,6 +13,7 @@ export type ReportQuery = {
   timezone: string
   grain: string
   owner?: string
+  repository_missing?: string
   repository?: string
   spec?: string
 }
@@ -41,6 +44,8 @@ export type RunnerReport = {
   distributions?: Record<ReportDimension, { total: number; requests: ReportGroup[]; runtime: ReportGroup[] }>
   observed_at: string
   expires_at: string
+  request_detail_available?: boolean
+  outcomes?: Record<string, number>
   spec_dashboard?: SpecDashboard
   window: { start: string; end: string; previous_start: string; previous_end: string }
   totals: ReportTotals
@@ -48,6 +53,26 @@ export type RunnerReport = {
   trend: (ReportTotals & { date: string })[]
 }
 export type ReportGroup = ReportTotals & { key: string; label: string }
+export function reportGroupLabel(t: AppTFunction, dimension: ReportDimension, key: string, label: string) {
+  if (dimension === "owner" && key.startsWith("installation:")) {
+    return t("reports.historicalInstallation", { id: key.slice("installation:".length) })
+  }
+  return label.trim() || t("common.unknown")
+}
+
+export type ActivityGroup = ReportGroup & {
+  active_days: number
+  used_specs: number
+  last_queued_at: string
+  outcomes: Record<string, number>
+}
+export type ReportRequestRow = {
+  id: string
+  queued_at: string
+  repository: string
+  spec_label: string
+  job_result: string
+}
 export type ReportSpecUsage = {
   key: string
   label: string
@@ -78,7 +103,7 @@ export type SpecSegment = { key: string; label: string; started?: number; reques
 export type SpecDashboard = { summary: ReportSpecUsage; catalog: number; used_current: number; historical_groups: number; total: number; items: ReportSpecUsage[] }
 export type ReportSpecPage = { items: ReportSpecUsage[]; total: number; offset: number; snapshot: string }
 export type ReportPage<T> = { items: T[]; total: number; offset: number; snapshot: string }
-export const reportQueryKeys = ["from", "to", "timezone", "grain", "owner", "repository", "spec"] as const
+export const reportQueryKeys = ["from", "to", "timezone", "grain", "owner", "repository", "repository_missing", "spec"] as const
 
 export function reportQueryParams(search: string): URLSearchParams {
   const source = new URLSearchParams(search),

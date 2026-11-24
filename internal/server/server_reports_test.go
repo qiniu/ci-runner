@@ -255,7 +255,83 @@ func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 	get(second, "/reports/overview?"+q.Encode(), http.StatusGone)
 	q.Set("repository", "different/repo")
 	get(second, "/reports/spec-usage?"+q.Encode(), http.StatusGone)
-	if _, err := store.LoadReportSpecSnapshot(t.Context(), dashboard.Snapshot, time.Now().Add(reportRetention)); !errors.Is(err, state.ErrNotFound) {
+	if _, err := store.LoadReportSnapshot(t.Context(), dashboard.Snapshot, time.Now().Add(reportRetention)); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("expired snapshot: %v", err)
 	}
+}
+
+func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	get := func(srv *Server, path string, want int) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	add := func(i int) {
+		t.Helper()
+		id := fmt.Sprintf("fixture-%03d", i)
+		if _, _, err := store.CreateRequest(state.RunnerRequest{ID: id, Source: "fixture", RepositoryFullName: "fork/" + id, GitHubInstallationID: 12}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 24; i++ {
+		add(i)
+	}
+	body := get(first, "/reports/account-usage?owner=installation:12", 200)
+	var dashboard struct {
+		Snapshot string
+		Query    state.RunnerReportQuery
+		Totals   state.ReportTotals
+	}
+	if err := json.Unmarshal([]byte(body), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	from, _ := time.Parse(time.DateOnly, dashboard.Query.From)
+	to, _ := time.Parse(time.DateOnly, dashboard.Query.To)
+	if to.Sub(from) != 30*24*time.Hour || dashboard.Totals.Requests != 24 {
+		t.Fatalf("default account cohort %+v", dashboard)
+	}
+	pin := url.Values{"from": {dashboard.Query.From}, "to": {dashboard.Query.To}, "owner": {"installation:12"}, "snapshot": {dashboard.Snapshot}}
+	base := "/reports/" + dashboard.Snapshot
+	groupPath := base + "/groups?dimension=repository&sort=runtime&offset=20"
+	requestPath := base + "/requests?offset=20"
+	// Each endpoint must be able to restore first, before a dashboard has warmed the process.
+	for i, path := range []string{groupPath, requestPath, "/reports/account-usage?" + pin.Encode()} {
+		second.reports.entries = nil
+		before := get(first, path, 200)
+		add(25 + i)
+		if got := get(second, path, 200); got != before {
+			t.Fatalf("restored %s changed", path)
+		}
+		if path == groupPath || path == requestPath {
+			var page struct {
+				Items         []json.RawMessage
+				Total, Offset int
+			}
+			if err := json.Unmarshal([]byte(before), &page); err != nil || len(page.Items) != 4 || page.Total != 24 || page.Offset != 20 {
+				t.Fatalf("second page %s", before)
+			}
+		} else if before != body {
+			t.Fatal("dashboard changed")
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		w := httptest.NewRecorder()
+		second.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("ordinary account read %s: %d", path, w.Code)
+		}
+	}
+	get(second, "/reports/spec-usage?"+pin.Encode(), 410)
+	pin.Set("owner", "installation:13")
+	get(second, "/reports/account-usage?"+pin.Encode(), 410)
+	get(second, "/reports/account-usage?repository_missing=1&repository=x", 400)
+	get(second, "/reports/account-usage?snapshot=acct-missing", 410)
 }
