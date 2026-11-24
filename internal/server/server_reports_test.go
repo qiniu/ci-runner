@@ -80,7 +80,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 	if after := get(specPage, true); after.Code != http.StatusOK || after.Body.String() != before.Body.String() {
 		t.Fatalf("spec page changed after catalog update: before %s, after %d %s", before.Body, after.Code, after.Body)
 	}
-	paths := []string{"/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", specPage, "/reports/" + value.Snapshot + "/requests"}
+	paths := []string{"/reports/execution-usage", "/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", specPage, "/reports/" + value.Snapshot + "/requests"}
 	for _, path := range paths {
 		ordinary := httptest.NewRequest(http.MethodGet, path, nil)
 		ordinary.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))

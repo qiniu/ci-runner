@@ -325,7 +325,7 @@ Admin 创建时分别维护平台执行配置和公共可见性。只应服务�
 | 路由                     | 说明                           |
 | ------------------------ | ------------------------------ |
 | `/admin/`                | 仪表盘：runnerd 运行时诊断与指标 |
-| `/admin/reports` | 请求批次趋势、覆盖率、规格用量和 GitHub 账户／仓库排行，可下钻至具体请求。参见[报表统计口径与限制](docs/runner-reports.md) |
+| `/admin/reports` | 请求批次趋势、覆盖率、规格用量和 GitHub 账户／仓库排行，可下钻至具体请求。期间用量展示执行尝试时长、Runner 并发峰值和 GitHub Job 时长。参见[报表统计口径与限制](docs/runner-reports.md) |
 | `/admin/accounts`        | 账户管理：列表、搜索、角色变更 |
 | `/admin/github_accounts` | GitHub 实时返回的 GitHub App 安装账号 |
 | `/admin/github_accounts/{installation_id}` | 单个 GitHub App 安装及其当前授权仓库 |

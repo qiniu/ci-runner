@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestTerminalOwnershipAndExpiration(t *testing.T) {
@@ -38,6 +40,9 @@ func testTerminalOwnership(t *testing.T, s *DBStore) {
 		t.Fatalf("foreign finish %+v %v", got, err)
 	}
 	db, _ := s.dbOrEnsure()
+	if db.Dialector.Name() == BackendMySQL {
+		testUnchangedTerminalRenewal(t, s, db, row.ID)
+	}
 	if err := db.Model(&TerminalSession{}).Where("id = ?", row.ID).UpdateColumn("lease_until", 1).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +69,40 @@ func testTerminalOwnership(t *testing.T, s *DBStore) {
 	got, _ = s.GetTerminalSession(ctx, row.ID)
 	if got.Status != "closed" || got.Cleanup != "confirmed" {
 		t.Fatalf("normal close %+v", got)
+	}
+}
+
+// Pin both clocks on one MySQL connection so the second UPDATE changes no columns.
+func testUnchangedTerminalRenewal(t *testing.T, s *DBStore, db *gorm.DB, id string) {
+	t.Helper()
+	fixed := time.Now().UTC().Truncate(time.Second)
+	err := db.Connection(func(conn *gorm.DB) error {
+		if err := conn.Exec("SET timestamp = ?", fixed.Unix()).Error; err != nil {
+			return err
+		}
+		defer func() {
+			if err := conn.Exec("SET timestamp = 0").Error; err != nil {
+				t.Error(err)
+			}
+		}()
+		pinned := &DBStore{opts: s.opts, db: conn.Session(&gorm.Session{NowFunc: func() time.Time { return fixed }}), migrated: true}
+		for range 2 {
+			ok, err := pinned.TouchTerminalSession(t.Context(), id, "a", false)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				t.Error("unchanged live renewal lost ownership")
+			}
+		}
+		ok, err := pinned.TouchTerminalSession(t.Context(), id, "b", false)
+		if ok {
+			t.Error("foreign owner renewed a lease")
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

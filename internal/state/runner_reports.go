@@ -26,6 +26,7 @@ var ErrReportTooLarge = errors.New("report exceeds 100000 requests; narrow the d
 
 // RunnerReportQuery uses local calendar dates and an exclusive To boundary.
 type RunnerReportQuery struct {
+	IncludeExecution    bool   `json:"-"`
 	IncludeEfficiency   bool   `json:"-"`
 	IncludeAccountUsage bool   `json:"-"`
 	MissingRepository   string `json:"repository_missing,omitempty"`
@@ -275,6 +276,7 @@ type ReportSpecUsage struct {
 	JobResults             map[string]int64    `json:"job_results,omitempty"`
 }
 type RunnerReport struct {
+	Execution       *ExecutionUsage    `json:"execution,omitempty"`
 	Efficiency      *EfficiencySummary `json:"efficiency,omitempty"`
 	DetailAvailable *bool              `json:"request_detail_available,omitempty"`
 	Outcomes        map[string]int64   `json:"outcomes,omitempty"`
@@ -335,7 +337,11 @@ func reportTextKey(db *gorm.DB, key string) clause.Expr {
 
 // A unique installation-owner join avoids fan-out through user-installation links.
 func reportBase(db *gorm.DB, q RunnerReportQuery) (*gorm.DB, error) {
-	query := db.Table("runner_requests AS r").Joins("LEFT JOIN github_installation_owners AS o ON o.installation_id = r.github_installation_id")
+	return reportDimensionQuery(db, q, "runner_requests AS r")
+}
+
+func reportDimensionQuery(db *gorm.DB, q RunnerReportQuery, table string) (*gorm.DB, error) {
+	query := db.Table(table).Joins("LEFT JOIN github_installation_owners AS o ON o.installation_id = r.github_installation_id")
 	if q.Repository != "" || q.MissingRepository == "1" {
 		query = query.Where("COALESCE(r.repository_full_name, '') = ?", reportTextKey(db, q.Repository))
 	}
@@ -467,13 +473,16 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		return nil, err
 	}
 	defer closeReader()
-	if db.Dialector.Name() == BackendPostgres || (q.IncludeSpecUsage && db.Dialector.Name() == BackendMySQL) {
+	if db.Dialector.Name() == BackendPostgres || ((q.IncludeSpecUsage || q.IncludeExecution) && db.Dialector.Name() == BackendMySQL) {
 		// The size probe and whichever representation it selects must see the same rows.
 		db = db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if db.Error != nil {
 			return nil, db.Error
 		}
 		defer db.Rollback()
+	}
+	if q.IncludeExecution {
+		return readExecutionReport(db, q, window, now)
 	}
 	report, err := readReportCohort(ctx, db, q, window, now)
 	if err != nil {
@@ -884,6 +893,9 @@ func (r *RunnerReport) RetainedEntries() int {
 		return n
 	}
 	n := len(r.Rows)
+	if r.Execution != nil {
+		n += len(r.Execution.Buckets)
+	}
 	if r.Efficiency != nil {
 		n += len(r.Efficiency.Groups)
 		for _, buckets := range r.Efficiency.Rejections {

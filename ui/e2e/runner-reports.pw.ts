@@ -1086,3 +1086,28 @@ test("switching report views resets the request page for the selected evidence",
   await expect(rejected).toBeVisible()
   expect(new URL(page.url()).searchParams.get("requests_offset")).toBe("0")
 })
+
+test("period usage separates provisional Runner time from GitHub Job time", async ({ page }) => {
+  await setup(page)
+  const bucket = {
+    date: "2026-11-20", from: "2026-11-20T00:00:00Z", to: report.observed_at,
+    attempts: 3, active_attempts: 1, attempt_seconds: 17, provisional_seconds: 3, peak: 2, jobs: 1, job_seconds: 11,
+  }
+  await page.route("**/reports/execution-usage?*", route => route.fulfill({
+    json: { query, observed_at: report.observed_at, snapshot: "exec-fixture", execution: {
+      collection_started_at: bucket.from, incomplete_jobs: 2, total: bucket, buckets: [bucket],
+    } },
+  }))
+  await page.goto("/admin/reports?view=execution")
+  const tab = page.getByRole("tab", { name: "Period usage" })
+  await expect(tab).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("row", { name: "2026-11-20 3 17 3 2 1 11" })).toBeVisible()
+  await expect(page.getByText("Jobs with just one endpoint in this window: 2")).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await tab.focus()
+  await expect(tab).toBeFocused()
+  await expect(tab).toBeInViewport()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.reload()
+  await expect(page.getByRole("columnheader", { name: "Peak Runners" })).toBeVisible()
+})

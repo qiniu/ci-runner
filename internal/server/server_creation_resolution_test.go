@@ -147,7 +147,7 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 					if scenario == "wrong job" {
 						jobID++
 					}
-					writeJSON(w, 200, map[string]any{"id": jobID, "status": status, "conclusion": "success"})
+					writeJSON(w, 200, map[string]any{"id": jobID, "status": status, "conclusion": "success", "started_at": "2025-01-01T00:01:00Z", "completed_at": "2025-01-01T00:02:00Z"})
 				case "/repos/o/r/actions/runners":
 					if scenario == "runner lookup error" {
 						w.WriteHeader(http.StatusForbidden)
@@ -238,6 +238,10 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 				if rec.Code != 200 || got.Status != state.StatusCompleted || got.CleanupSandboxDone || len(audits) != 1 || audits[0].Actor != "github:12345" {
 					t.Fatalf("resolution failed: status=%d body=%s state=%+v audit=%+v", rec.Code, rec.Body.String(), got, audits)
 				}
+				timing := got.GitHubJobTiming
+				if timing == nil || timing.StartedAt == nil || timing.CompletedAt == nil || timing.CompletedAt.Sub(*timing.StartedAt) != time.Minute || timing.StartSource != "github_api" || timing.EndSource != "github_api" {
+					t.Fatalf("missing Job timing from resolution lookup: %+v", timing)
+				}
 				expectedCode := state.UnknownCreationResolvedCode
 				if acceptUnknown {
 					expectedCode = state.UnknownCreationClosedCode
@@ -263,7 +267,7 @@ func testResolveUnknownCreationEndpoint(t *testing.T, acceptUnknown bool) {
 					t.Fatal(rec2.Code)
 				}
 			} else {
-				if rec.Code < 400 || got.Status != state.StatusStopping || len(audits) != 0 {
+				if rec.Code < 400 || got.Status != state.StatusStopping || len(audits) != 0 || got.GitHubJobTiming != nil {
 					t.Fatalf("unsafe resolution %s: status=%d body=%s state=%s audits=%d", scenario, rec.Code, rec.Body.String(), got.Status, len(audits))
 				}
 				if strings.Contains(rec.Body.String(), "credential-canary") {

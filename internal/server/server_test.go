@@ -5527,8 +5527,10 @@ func TestWebhookCompletedStopsActualRunnerAndRecordsJob(t *testing.T) {
 	}
 	waitForState(t, store, "1001", state.StatusRunning)
 
-	completed := []byte(`{"action":"completed","repository":{"full_name":"o/r"},"workflow_job":{"id":1001,"name":"staticcheck","runner_name":"e2b-1001","labels":["self-hosted","e2b"]}}`)
-	req = httptest.NewRequest(http.MethodPost, "/webhooks/github", bytes.NewReader(completed))
+	completed := []byte(`{"action":"completed","repository":{"full_name":"o/r"},"workflow_job":{"id":1001,"name":"staticcheck","status":"completed","conclusion":"success","started_at":"2026-11-01T10:00:00Z","completed_at":"2026-11-01T10:02:00Z","runner_name":"e2b-1001","labels":["self-hosted","e2b"]}}`)
+	webhookCtx, disconnect := context.WithCancel(t.Context())
+	defer disconnect()
+	req = httptest.NewRequestWithContext(webhookCtx, http.MethodPost, "/webhooks/github", bytes.NewReader(completed))
 	req.Header.Set("X-GitHub-Event", "workflow_job")
 	req.Header.Set("X-Hub-Signature-256", sign("secret", completed))
 	rec = httptest.NewRecorder()
@@ -5550,6 +5552,7 @@ func TestWebhookCompletedStopsActualRunnerAndRecordsJob(t *testing.T) {
 		t.Fatalf("expected persisted stopping state during webhook cleanup, got %#v", duringCleanup)
 	}
 	cleanupStartedAt := duringCleanup.StoppingAt
+	disconnect()
 	close(stopBlock)
 	released = true
 	select {
@@ -5570,6 +5573,12 @@ func TestWebhookCompletedStopsActualRunnerAndRecordsJob(t *testing.T) {
 	}
 	if st.AssignedJobID != 1001 || st.AssignedJobName != "staticcheck" {
 		t.Fatalf("expected assigned job to be recorded, got id=%d name=%q", st.AssignedJobID, st.AssignedJobName)
+	}
+	timing := st.GitHubJobTiming
+	if timing == nil || timing.StartedAt == nil || timing.CompletedAt == nil ||
+		timing.StartedAt.Format(time.RFC3339) != "2026-11-01T10:00:00Z" || timing.CompletedAt.Format(time.RFC3339) != "2026-11-01T10:02:00Z" ||
+		timing.StartSource != "webhook" || timing.EndSource != "webhook" {
+		t.Fatalf("expected signed Job times to survive webhook disconnect during cleanup, got %+v", timing)
 	}
 	if fake.stoppedCount() != 1 {
 		t.Fatalf("expected one sandbox stop, got %d", fake.stoppedCount())

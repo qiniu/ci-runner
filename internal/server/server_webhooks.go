@@ -53,6 +53,17 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strconv.FormatInt(event.WorkflowJob.ID, 10)
 	s.logger.Info("workflow_job webhook parsed", "delivery", r.Header.Get("X-GitHub-Delivery"), "action", event.Action, "job_id", id, "job_name", event.WorkflowJob.Name, "repository", event.Repository.FullName, "runner_name", event.WorkflowJob.RunnerName, "labels", []string(event.WorkflowJob.Labels))
+	// Record source timestamps after lifecycle handling, including when the
+	// original Job ran on another request's Runner.
+	if event.Action == "in_progress" || event.Action == "completed" {
+		observedAt := time.Now().UTC()
+		defer func() {
+			// Cleanup can outlive the webhook connection. Give the local write its own deadline.
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+			defer cancel()
+			s.observeJobTimes(ctx, event.Repository.FullName, event.WorkflowJob, event.Action, "webhook", observedAt)
+		}()
+	}
 	switch event.Action {
 	case "queued":
 		workflowName := workflowNameFor(event.WorkflowJob.WorkflowName, event.WorkflowRun.Name)

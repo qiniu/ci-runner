@@ -43,7 +43,7 @@ func (s *Server) ensureWorkflowJobStillQueued(ctx context.Context, req state.Run
 	s.store.AppendLog(req.ID, "control.log", []byte("checking workflow job status before sandbox start\n"))
 	lookupCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
 	defer cancel()
-	job, lookupErr := s.gh.GetWorkflowJob(lookupCtx, req.RepositoryFullName, req.JobID)
+	job, lookupErr := s.lookupLifecycleJob(lookupCtx, req.RepositoryFullName, req.JobID)
 
 	unlock := s.lockRunner(req.ID)
 	defer unlock()

@@ -280,6 +280,7 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 		return fmt.Errorf("request id is empty")
 	}
 	now := time.Now().UTC()
+	attemptID := st.ProvisionAttemptID
 	st.UpdatedAt = now
 	if st.Status == StatusQueued {
 		st.ProvisionAttemptID = ""
@@ -341,63 +342,65 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 	if st.Status == StatusQueued && st.queueRetry != nil && st.queueRetry.version == st.Version {
 		updates["next_retry_at"] = queueTime(db, st.queueRetry.delay)
 	}
-	query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
-	if lease.queueOwner != "" {
-		query = liveQueuedClaim(query, lease.queueOwner)
-	}
-	if lease.currentToken != "" {
-		if lease.cleanupWrite {
-			query = query.Where("status = ?", StatusStopping)
-		} else {
-			query = query.Where("status IN ?", []string{StatusCreating, StatusRunning})
+	return db.Transaction(func(db *gorm.DB) error {
+		query := db.Model(&runnerRequestRecord{}).Where("id = ? AND version = ?", st.ID, st.Version)
+		if lease.queueOwner != "" {
+			query = liveQueuedClaim(query, lease.queueOwner)
 		}
-		query = query.Where("watch_token = ? AND watch_expires_at > ?", lease.currentToken, queueTime(db, 0))
-	}
-	if lease.beginCleanup {
-		// A stop preempts a live creator or watcher. Once stopping, only an
-		// unowned or expired cleanup can be taken over, even with a fresh version.
-		query = query.Where("status <> ? OR watch_expires_at IS NULL OR watch_expires_at <= ?", StatusStopping, queueTime(db, 0))
-	}
-	if lease.queueOwner != "" && lease.newToken != "" && st.JITRegistrationState == JITUnsent {
-		updates["jit_registration_state"] = JITUnsent
-	}
-	if lease.newToken != "" {
-		updates["watch_token"], updates["watch_expires_at"] = lease.newToken, queueTime(db, lease.ttl)
-	} else if st.Status != StatusCreating && st.Status != StatusRunning && st.Status != StatusStopping {
-		updates["watch_token"], updates["watch_expires_at"] = nil, nil
-	} else if st.Status == StatusStopping && lease.currentToken != "" && !lease.cleanupWrite {
-		// A creator handing pending JIT cleanup to recovery relinquishes its watch.
-		updates["watch_token"], updates["watch_expires_at"] = nil, nil
-	}
-	if lease.currentToken != "" && st.Status == StatusCreating && st.CleanupSandboxDone {
-		// The active creator confirmed its exact Sandbox is already gone.
-		updates["cleanup_sandbox_done"] = true
-	}
-	if st.ManualStopRequested {
-		updates["manual_stop_requested"] = true
-	}
-	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
-		updates["sandbox_create_dispatched"] = false
-	}
-	// Use the persisted pre-transition status within the version-checked write.
-	// Queue claims, backoff and metadata changes leave the ongoing wait intact.
-	updates["queue_entered_at"] = nil
-	if st.Status == StatusQueued {
-		updates["queue_entered_at"] = gorm.Expr("CASE WHEN status = ? THEN queue_entered_at ELSE ? END", StatusQueued, now)
-		updates["manual_stop_requested"] = false
-		if st.JITRegistrationState != "" {
+		if lease.currentToken != "" {
+			if lease.cleanupWrite {
+				query = query.Where("status = ?", StatusStopping)
+			} else {
+				query = query.Where("status IN ?", []string{StatusCreating, StatusRunning})
+			}
+			query = query.Where("watch_token = ? AND watch_expires_at > ?", lease.currentToken, queueTime(db, 0))
+		}
+		if lease.beginCleanup {
+			// A stop preempts a live creator or watcher. Once stopping, only an
+			// unowned or expired cleanup can be taken over, even with a fresh version.
+			query = query.Where("status <> ? OR watch_expires_at IS NULL OR watch_expires_at <= ?", StatusStopping, queueTime(db, 0))
+		}
+		if lease.queueOwner != "" && lease.newToken != "" && st.JITRegistrationState == JITUnsent {
 			updates["jit_registration_state"] = JITUnsent
 		}
-		updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
-	}
-	result := query.Updates(updates)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrConflict
-	}
-	return nil
+		if lease.newToken != "" {
+			updates["watch_token"], updates["watch_expires_at"] = lease.newToken, queueTime(db, lease.ttl)
+		} else if st.Status != StatusCreating && st.Status != StatusRunning && st.Status != StatusStopping {
+			updates["watch_token"], updates["watch_expires_at"] = nil, nil
+		} else if st.Status == StatusStopping && lease.currentToken != "" && !lease.cleanupWrite {
+			// A creator handing pending JIT cleanup to recovery relinquishes its watch.
+			updates["watch_token"], updates["watch_expires_at"] = nil, nil
+		}
+		if lease.currentToken != "" && st.Status == StatusCreating && st.CleanupSandboxDone {
+			// The active creator confirmed its exact Sandbox is already gone.
+			updates["cleanup_sandbox_done"] = true
+		}
+		if st.ManualStopRequested {
+			updates["manual_stop_requested"] = true
+		}
+		if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
+			updates["sandbox_create_dispatched"] = false
+		}
+		// Use the persisted pre-transition status within the version-checked write.
+		// Queue claims, backoff and metadata changes leave the ongoing wait intact.
+		updates["queue_entered_at"] = nil
+		if st.Status == StatusQueued {
+			updates["queue_entered_at"] = gorm.Expr("CASE WHEN status = ? THEN queue_entered_at ELSE ? END", StatusQueued, now)
+			updates["manual_stop_requested"] = false
+			if st.JITRegistrationState != "" {
+				updates["jit_registration_state"] = JITUnsent
+			}
+			updates["cleanup_sandbox_done"], updates["cleanup_github_done"], updates["cleanup_github_runner_id"] = false, false, 0
+		}
+		result := query.Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrConflict
+		}
+		return recordExecutionTransition(db, st, attemptID, lease, now)
+	})
 }
 
 func (s *DBStore) ListStates() ([]RunnerState, error) {
