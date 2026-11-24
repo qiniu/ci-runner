@@ -763,6 +763,18 @@ function ReportFilters({
 }) {
   const { t } = useTranslation()
   const [error, setError] = useState("")
+  const clearDimensions = (draft.owner || draft.spec || draft.repository || draft.repository_missing) && (
+    <Button
+      type="button"
+      variant="ghost"
+      onClick={() => {
+        const next = { ...draft, owner: "", spec: "", repository: "", repository_missing: "" }
+        onApply(next)
+      }}
+    >
+      {t("reports.clearDimensions")}
+    </Button>
+  )
   return (
     <form
       className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[1fr_auto]"
@@ -791,9 +803,12 @@ function ReportFilters({
             {t("reports.lastDays", { days })}
           </Button>
         ))}
+        {identityFilters && clearDimensions}
       </div>
       <div
-        className={`grid min-w-0 items-end gap-2 sm:grid-cols-2 ${identityFilters ? "xl:grid-cols-4" : "lg:grid-cols-5"}`}
+        className={`grid min-w-0 items-end gap-2 ${
+          identityFilters ? "sm:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]" : "sm:grid-cols-2 lg:grid-cols-5"
+        }`}
       >
         {(["from", "to", "timezone", "repository"] as const)
           .filter((key) => key !== "repository" || !identityFilters)
@@ -824,18 +839,7 @@ function ReportFilters({
       </div>
       <div className="flex flex-wrap self-end gap-2">
         <Button type="submit">{t("reports.apply")}</Button>
-        {(draft.owner || draft.spec || draft.repository || draft.repository_missing) && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              const next = { ...draft, owner: "", spec: "", repository: "", repository_missing: "" }
-              onApply(next)
-            }}
-          >
-            {t("reports.clearDimensions")}
-          </Button>
-        )}
+        {!identityFilters && clearDimensions}
       </div>
       {(draft.owner || draft.spec || draft.repository_missing) && (
         <p className="text-sm text-muted-foreground">

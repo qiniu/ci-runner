@@ -109,9 +109,9 @@ export function AccountUsageReport({
   const totals = report.totals
   return (
     <section className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <p className="max-w-3xl text-xs text-muted-foreground">{t("reports.activityIdentity")}</p>
+      <div className="grid items-start justify-items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="w-full min-w-0 space-y-1">
+          <p className="text-xs text-muted-foreground">{t("reports.activityIdentity")}</p>
           <p className="text-xs text-muted-foreground">
             {t("reports.observed", { time: time(report.observed_at) })}
           </p>
