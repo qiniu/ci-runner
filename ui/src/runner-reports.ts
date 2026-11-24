@@ -38,7 +38,16 @@ export type ReportTotals = {
   cleanup: ReportDuration
   completion: ReportDuration
 }
+export type EfficiencyGroup = { dimension: string; key: string; count: number }
+export type EfficiencySummary = {
+  startup_p95: number | null
+  creation_p95: number | null
+  cleanup_p95: number | null
+  groups: EfficiencyGroup[]
+  rejections?: Record<string, Record<string, number>>
+}
 export type RunnerReport = {
+  efficiency?: EfficiencySummary
   query: ReportQuery
   snapshot: string
   distributions?: Record<ReportDimension, { total: number; requests: ReportGroup[]; runtime: ReportGroup[] }>
@@ -67,6 +76,7 @@ export type ActivityGroup = ReportGroup & {
   outcomes: Record<string, number>
 }
 export type ReportRequestRow = {
+  efficiency?: Partial<Record<"startup" | "creation" | "cleanup", number>>
   id: string
   queued_at: string
   repository: string
@@ -168,4 +178,30 @@ export function reportDistribution(
     rows.push({ key: "", label: "", value: value(requests, runtime), other: true })
   }
   return rows
+}
+
+export function outcomeCategory(key: string) {
+  switch (key) {
+    case "success":
+    case "failure":
+    case "timed_out":
+    case "cancelled":
+    case "skipped":
+    case "unknown":
+      return key
+    default:
+      return "other"
+  }
+}
+
+export function reportTimeFormatter(locale: string | undefined, timeZone: string) {
+  const options: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "medium", timeZone }
+  try {
+    const formatter = new Intl.DateTimeFormat(locale, options)
+    return (value: string) => formatter.format(new Date(value)) + " · " + timeZone
+  } catch (error) {
+    // The server's timezone database can include zones the browser does not recognize.
+    if (!(error instanceof RangeError)) throw error
+    return (value: string) => new Date(value).toISOString()
+  }
 }

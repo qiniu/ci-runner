@@ -26,6 +26,7 @@ var ErrReportTooLarge = errors.New("report exceeds 100000 requests; narrow the d
 
 // RunnerReportQuery uses local calendar dates and an exclusive To boundary.
 type RunnerReportQuery struct {
+	IncludeEfficiency   bool   `json:"-"`
 	IncludeAccountUsage bool   `json:"-"`
 	MissingRepository   string `json:"repository_missing,omitempty"`
 	IncludeSpecUsage    bool   `json:"-"`
@@ -218,16 +219,17 @@ type ReportTotals struct {
 }
 
 type ReportRequest struct {
-	ID             string    `json:"id"`
-	QueuedAt       time.Time `json:"queued_at"`
-	Repository     string    `json:"repository"`
-	Owner          string    `json:"owner"`
-	OwnerLabel     string    `json:"owner_label"`
-	Spec           string    `json:"spec"`
-	SpecLabel      string    `json:"spec_label"`
-	Status         string    `json:"status"`
-	JobResult      string    `json:"job_result"`
-	RuntimeSeconds *float64  `json:"runtime_seconds"`
+	Efficiency     *EfficiencyEvidence `json:"efficiency,omitempty"`
+	ID             string              `json:"id"`
+	QueuedAt       time.Time           `json:"queued_at"`
+	Repository     string              `json:"repository"`
+	Owner          string              `json:"owner"`
+	OwnerLabel     string              `json:"owner_label"`
+	Spec           string              `json:"spec"`
+	SpecLabel      string              `json:"spec_label"`
+	Status         string              `json:"status"`
+	JobResult      string              `json:"job_result"`
+	RuntimeSeconds *float64            `json:"runtime_seconds"`
 	// Aggregate-only evidence is not exposed as a raw database row.
 	started, rejected, terminal, mappedOwner, knownSpec, creatingTime, stoppingTime, terminalTime, jobEligible bool
 	startup, creation, cleanup, completion                                                                     *float64
@@ -273,10 +275,11 @@ type ReportSpecUsage struct {
 	JobResults             map[string]int64    `json:"job_results,omitempty"`
 }
 type RunnerReport struct {
-	DetailAvailable *bool             `json:"request_detail_available,omitempty"`
-	Outcomes        map[string]int64  `json:"outcomes,omitempty"`
-	SpecSummary     *ReportSpecUsage  `json:"-"`
-	SpecItems       []ReportSpecUsage `json:"-"`
+	Efficiency      *EfficiencySummary `json:"efficiency,omitempty"`
+	DetailAvailable *bool              `json:"request_detail_available,omitempty"`
+	Outcomes        map[string]int64   `json:"outcomes,omitempty"`
+	SpecSummary     *ReportSpecUsage   `json:"-"`
+	SpecItems       []ReportSpecUsage  `json:"-"`
 	specGroups      map[string]*specBreakdown
 
 	Query      RunnerReportQuery `json:"query"`
@@ -304,6 +307,8 @@ type reportProjection struct {
 	OwnerLogin           string
 	Status               string
 	FailureStage         string
+	FailureReason        string
+	TerminationSource    string
 	WorkflowJobID        int64
 	GitHubJobStatus      string     `gorm:"column:github_job_status"`
 	GitHubJobConclusion  string     `gorm:"column:github_job_conclusion"`
@@ -474,7 +479,14 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 	if err != nil {
 		return nil, err
 	}
-	if q.IncludeAccountUsage {
+	if q.IncludeEfficiency {
+		if report.Rows != nil {
+			report.Efficiency = summarizeEfficiency(report.Rows)
+		} else if err := readPostgresEfficiency(db, report); err != nil {
+			return nil, err
+		}
+	}
+	if q.IncludeAccountUsage || q.IncludeEfficiency {
 		report.DetailAvailable = new(report.Rows != nil)
 		if report.GroupTotals == nil {
 			groups := make(map[string][]ReportGroup)
@@ -483,10 +495,12 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 			}
 			report.GroupTotals = groups
 		}
-		report.Outcomes = make(map[string]int64)
-		for _, group := range report.GroupTotals["repository"] {
-			for outcome, n := range group.Outcomes {
-				report.Outcomes[outcome] += n
+		if q.IncludeAccountUsage {
+			report.Outcomes = make(map[string]int64)
+			for _, group := range report.GroupTotals["repository"] {
+				for outcome, n := range group.Outcomes {
+					report.Outcomes[outcome] += n
+				}
 			}
 		}
 		if report.RetainedEntries() > ReportSnapshotEntries {
@@ -538,10 +552,14 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 		// from that sequence to retain native timestamp types and avoid a sort.
 		query = db.Table("temp.report_result AS o CROSS JOIN runner_requests AS r ON r.id = o.request_id").Order("o.rowid")
 	}
-	rows, err := query.Select(`r.id, r.queued_at, r.repository_full_name, r.profile_name, r.profile_source, r.profile_scope_type, r.profile_scope_id,
+	fields := `r.id, r.queued_at, r.repository_full_name, r.profile_name, r.profile_source, r.profile_scope_type, r.profile_scope_id,
  r.github_installation_id, o.github_account_id AS owner_id, o.account_login AS owner_login, r.status, r.failure_stage,
  r.workflow_job_id, r.github_job_status, r.github_job_conclusion, r.github_job_observed_at,
- r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`).Rows()
+ r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`
+	if q.IncludeEfficiency {
+		fields += ", r.failure_reason, r.termination_source"
+	}
+	rows, err := query.Select(fields).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -564,9 +582,15 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 		}
 		row := p.request(now)
 		if !row.QueuedAt.Before(window.Start) && row.QueuedAt.Before(window.End) {
+			day := reportBucketDate(row.QueuedAt, window.Location, q.Grain)
+			if q.IncludeEfficiency {
+				row.Efficiency = efficiencyEvidence(p, row)
+				if row.rejected {
+					row.Efficiency.AdmissionBucket = day
+				}
+			}
 			report.Rows = append(report.Rows, row)
 			current.add(row)
-			day := reportBucketDate(row.QueuedAt, window.Location, q.Grain)
 			if buckets[day] == nil {
 				buckets[day] = newReportAccumulator()
 			}
@@ -860,6 +884,12 @@ func (r *RunnerReport) RetainedEntries() int {
 		return n
 	}
 	n := len(r.Rows)
+	if r.Efficiency != nil {
+		n += len(r.Efficiency.Groups)
+		for _, buckets := range r.Efficiency.Rejections {
+			n += len(buckets)
+		}
+	}
 	for _, item := range r.SpecItems {
 		n += entries(item)
 	}
@@ -886,7 +916,8 @@ func (r ReportRequest) dimension(dimension string) (string, string, error) {
 }
 
 func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) {
-	if dimension != "" && dimension != "spec" && dimension != "owner" && dimension != "repository" {
+	efficiency := r.Query.IncludeEfficiency && isEfficiencyDimension(dimension)
+	if !efficiency && dimension != "" && dimension != "spec" && dimension != "owner" && dimension != "repository" {
 		return nil, errors.New("invalid report dimension")
 	}
 	if r.GroupTotals != nil && r.Rows == nil {
@@ -897,6 +928,12 @@ func (r *RunnerReport) Requests(dimension, key string) ([]ReportRequest, error) 
 	}
 	result := []ReportRequest{}
 	for _, row := range r.Rows {
+		if efficiency {
+			if row.Efficiency.matches(dimension, key) {
+				result = append(result, row)
+			}
+			continue
+		}
 		k, _, _ := row.dimension(dimension)
 		if k == key {
 			result = append(result, row)

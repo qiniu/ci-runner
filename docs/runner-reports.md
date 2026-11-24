@@ -50,6 +50,14 @@ Each row includes requests, starts, recorded runtime, coverage, distinct identif
 
 Open **Request details** to page through the filtered cohort. A request ID opens its live admin detail and timeline. Browser Back and **Back to reports** restore the report snapshot, view, filters, both page offsets and highlighted request. Expired snapshots require an explicit refresh. For an aggregate-only PostgreSQL cohort, narrow the dates or dimensions until request details are available.
 
+## Efficiency and anomalies
+
+Open `/admin/reports?view=efficiency` to compare request-to-running, creating-to-running and cleanup durations. The table shows mean and nearest-rank P95 in seconds, valid and eligible sample counts, coverage and missing count. Select a metric to inspect its valid samples. The rejection trend uses the same local calendar buckets as the overview. Select a rejection reason to see its trend. A bar or a date in the trend table opens the rejected requests matching that date and reason.
+
+Admission reasons use all requests as their denominator. Other failure reasons and stages are separated by the presence of a valid running timestamp, with the corresponding started or unstarted population as denominator. Each terminal request contributes one termination source, including the unknown category. Sort by count or share. Select a category to inspect matching requests, open their admin timelines and return to the same snapshot and page. Large PostgreSQL cohorts retain database rollups and exact nearest-rank percentiles; narrow the filters for individual requests.
+
+Current backlog reads the selected dimensions independently of historical dates and snapshots. Select queued, creating or stopping and an age threshold (default 30 minutes). Queue age starts at the most recent transition into queued. In-queue updates and backoff preserve this timestamp. Historical cohorts still use the original queued_at. Queued rows from before the timestamp was recorded show unavailable age until their next queue entry. Creating and stopping use their respective state timestamps. Missing, future or inverted timestamps have unavailable age and are included for inspection. The endpoint returns up to 100 rows, indicates truncation and performs no lifecycle mutations.
+
 ## Metric contract
 
 The unit is a persisted Runner request, not a GitHub Job or execution attempt.
@@ -146,6 +154,8 @@ scoped catalogs inside the same report transaction.
 | GET endpoint | Parameters and behavior |
 | --- | --- |
 | `/reports/overview` | `from`, `to`, `timezone`, `grain=day\|week\|month`, exact `owner`, `repository`, `spec`; optional `snapshot` to restore the identical result |
+| `/reports/efficiency` | Same date and dimension filters as overview. Returns lifecycle percentiles, failure and termination groups, admission rejection trend and request-detail availability |
+| `/reports/backlog` | `status=queued\|creating\|stopping`, `minutes=1…10080` and optional owner, repository, repository_missing or spec; returns the observation time and matching requests |
 | `/reports/account-usage` | Same filters as overview. Returns owner/repository activity, Job outcomes, ranking distributions and request detail availability. Use `repository_missing=1` to select unnamed repositories |
 | `/reports/spec-usage` | Same filters as overview. Returns an independent snapshot with `spec_dashboard` counts, full-cohort summary and up to 20 spec records ordered by requests |
 | `/reports/active` | Same query contract; date and grain do not restrict current backlog |
@@ -198,7 +208,7 @@ keeps its original grouping sets.
   on another server uses that same snapshot, including its original expiry and filters.
   The shared cache holds up to 8 snapshots and 200,000 aggregate entries. A payload
   of 16 MiB or larger returns **422**. Publication evicts expired and excess entries.
-  Accounts and repositories share this storage and retention budget. Their snapshot includes the frozen group tables and the narrow request projections for detail-capable cohorts, gzip-compressed within the same payload limit (128 MiB decoded). Another server can restore a group or request page directly. Overview snapshots remain process-local and may return **410** after a restart or routing change.
+  The account and efficiency reports share this storage and retention budget. Their snapshot includes the frozen group tables and the narrow request projections for detail-capable cohorts, gzip-compressed within the same payload limit (128 MiB decoded). Another server can restore a group or request page directly. Overview snapshots remain process-local and may return **410** after a restart or routing change.
 
 SQLite uses the existing queued-date index and a short-lived read-only connection
 to the main database file resolved from the initialized connection. It opens with
@@ -277,10 +287,12 @@ Reproduce focused backend checks with `go test ./internal/state ./internal/serve
 -run TestRunnerReport -count=1`. Set `RUNNERD_REPORT_SCALE_TEST=1` for the scale
 case. Real SQL compatibility requires `RUNNERD_CATALOG_BACKEND_TESTS=1` and
 `RUNNERD_POSTGRES_TEST_DSN` / `RUNNERD_MYSQL_TEST_DSN` pointing at dedicated
-`*_test` databases: those tests reset their tables. Combining the SQL backend and scale flags also runs the 30-day PostgreSQL Specs test with 1,020,000 generated requests and the normal ten-second query deadline. UI fixtures run via
+`*_test` databases: those tests reset their tables. Combining the SQL backend and scale flags also runs 30-day PostgreSQL spec, account and efficiency queries with 1,020,000 generated requests and the normal ten-second query deadline. UI fixtures run via
 `bun run test:production runner-reports.pw.ts` in `ui/`.
 
 Local verification on 2026-11-24 exercised account rankings on SQLite, PostgreSQL 16 and MySQL 8.4. Fixtures include two login accounts linked to one Installation, a scoped-custom spec, an unmapped Installation, a missing repository, different saved repository names, and two local active dates within one monthly trend bucket. The PostgreSQL account report completed a synthetic 30-day query with 501,602 current and 509,758 comparison requests in 5.72 seconds under the normal ten-second deadline. The SQLite account report read 100,000 requests in 1.56 seconds. During the overlapping report read, a queue claim took 1.63 ms and a 25-row list took 0.94 ms. A two-server HTTP test restores the same default 30-day dashboard and second ranking/request pages after new requests arrive. Chromium fixtures exercise English and Chinese labels, an unnamed repository, keyboard selection, 390px layout, retrying a failed ranking page and returning to a highlighted request after a reload.
+
+On the same synthetic PostgreSQL fixture, the efficiency query aggregated 501,602 current and 509,758 comparison requests in 5.82 seconds. On the 100,000-request SQLite fixture it took 2.06 seconds, with a concurrent 25-row list in 1.52 ms and a queue claim in 0.96 ms. SQLite, PostgreSQL 16 and MySQL 8.4 fixtures cover duration eligibility, unknown classifications, rejection counts and state-age thresholds. A second HTTP server restores the original anomaly group and its exact requests after the live cohort changes.
 
 Production data completeness, actual row/cardinality distributions, production
 query plans/latency and deployed browser acceptance remain **unverified**. Before

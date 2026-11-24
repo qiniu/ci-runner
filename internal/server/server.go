@@ -498,6 +498,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /runner_requests", s.handleCreateRunner)
 	s.mux.HandleFunc("GET /runner_request_metrics", s.handleRunnerRequestMetrics)
 	s.mux.HandleFunc("GET /reports/overview", s.handleRunnerReport)
+	s.mux.HandleFunc("GET /reports/efficiency", s.handleRunnerReport)
+	s.mux.HandleFunc("GET /reports/backlog", s.handleReportBacklog)
 	s.mux.HandleFunc("GET /reports/account-usage", s.handleRunnerReport)
 	s.mux.HandleFunc("GET /reports/spec-usage", s.handleRunnerReport)
 	s.mux.HandleFunc("GET /reports/{snapshot}/specs", s.handleRunnerReportSpecs)

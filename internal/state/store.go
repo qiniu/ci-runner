@@ -776,6 +776,7 @@ type Store interface {
 	SaveReportSnapshot(context.Context, string, time.Time, int, []byte) error
 	LoadReportSnapshot(context.Context, string, time.Time) ([]byte, error)
 	ReadRunnerReport(context.Context, RunnerReportQuery, time.Time) (*RunnerReport, error)
+	ReadReportBacklog(context.Context, RunnerReportQuery, string, int, time.Time) ([]ReportBacklogItem, bool, error)
 	ReadRunnerReportActive(context.Context, RunnerReportQuery) (map[string]int64, error)
 	TerminalStore
 	RunnerRequestStore
