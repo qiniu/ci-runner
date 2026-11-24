@@ -58,7 +58,7 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 	defer cancel()
 	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "runner not found")
+		s.writeRunnerRequestLookupError(w, r.PathValue("id"), err)
 		return
 	}
 	if !canResolveUnknownCreation(st, time.Now()) || st.Version != input.Version || st.ProvisionAttemptID != input.AttemptID {
