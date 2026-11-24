@@ -17,21 +17,21 @@ func deploymentTerminalAvailable(d state.Deployment) bool {
 	return d.Status == state.DeploymentStatusRunning && d.SandboxID != "" && time.Now().Before(d.ExpiresAt)
 }
 
-func (s *Server) loadDeploymentTerminal(w http.ResponseWriter, r *http.Request) (state.Deployment, int64, bool) {
-	_, account, d, ok := s.loadAuthorizedDeployment(w, r)
+func (s *Server) loadDeploymentTerminal(w http.ResponseWriter, r *http.Request) (state.Deployment, int64, adminSession, bool) {
+	session, account, d, ok := s.loadAuthorizedDeployment(w, r)
 	if !ok {
-		return state.Deployment{}, 0, false
+		return state.Deployment{}, 0, adminSession{}, false
 	}
 	number, err := strconv.ParseInt(r.PathValue("number"), 10, 64)
 	if err != nil || number <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid revision number")
-		return state.Deployment{}, 0, false
+		return state.Deployment{}, 0, adminSession{}, false
 	}
 	if number != d.RevisionNumber || !deploymentTerminalAvailable(d) {
 		writeError(w, http.StatusConflict, "terminal is only available for the current running deployment revision")
-		return state.Deployment{}, 0, false
+		return state.Deployment{}, 0, adminSession{}, false
 	}
-	return d, account.ID, true
+	return d, account.ID, session, true
 }
 
 func sameDeploymentTerminal(expected, current state.Deployment) bool {

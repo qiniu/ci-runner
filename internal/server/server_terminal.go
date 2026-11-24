@@ -44,30 +44,30 @@ type pullTitleResult struct {
 const maxPullTitleCacheItems = 512
 
 func (s *Server) userRunnerState(w http.ResponseWriter, r *http.Request) (state.RunnerState, bool) {
-	st, _, ok := s.userRunnerStateAndAccount(w, r)
+	st, _, _, ok := s.userRunnerStateAndAccount(w, r)
 	return st, ok
 }
 
-func (s *Server) userRunnerStateAndAccount(w http.ResponseWriter, r *http.Request) (state.RunnerState, int64, bool) {
-	_, account, ok := s.requireUserSession(w, r)
+func (s *Server) userRunnerStateAndAccount(w http.ResponseWriter, r *http.Request) (state.RunnerState, int64, adminSession, bool) {
+	session, account, ok := s.requireUserSession(w, r)
 	if !ok {
-		return state.RunnerState{}, 0, false
+		return state.RunnerState{}, 0, adminSession{}, false
 	}
 	st, err := s.store.ReadState(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "runner not found")
-		return state.RunnerState{}, 0, false
+		return state.RunnerState{}, 0, adminSession{}, false
 	}
 	access, err := s.userAuthorizedRepositoryAccess(r.Context(), account.ID)
 	if err != nil {
 		s.writeUserRepositoryAuthorizationError(w, err)
-		return state.RunnerState{}, 0, false
+		return state.RunnerState{}, 0, adminSession{}, false
 	}
 	if hasRepositoryAccess(access, st.GitHubInstallationID, st.RepositoryFullName) {
-		return userVisibleRunnerState(st), account.ID, true
+		return userVisibleRunnerState(st), account.ID, session, true
 	}
 	writeError(w, http.StatusNotFound, "runner not found")
-	return state.RunnerState{}, 0, false
+	return state.RunnerState{}, 0, adminSession{}, false
 }
 
 func (s *Server) handleUserGetRunner(w http.ResponseWriter, r *http.Request) {
