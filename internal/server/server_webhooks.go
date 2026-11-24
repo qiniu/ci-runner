@@ -56,7 +56,13 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Record source timestamps after lifecycle handling, including when the
 	// original Job ran on another request's Runner.
 	if event.Action == "in_progress" || event.Action == "completed" {
-		defer s.observeJobTimes(r.Context(), event.Repository.FullName, event.WorkflowJob, event.Action, "webhook", time.Now().UTC())
+		observedAt := time.Now().UTC()
+		defer func() {
+			// Cleanup can outlive the webhook connection. Give the local write its own deadline.
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+			defer cancel()
+			s.observeJobTimes(ctx, event.Repository.FullName, event.WorkflowJob, event.Action, "webhook", observedAt)
+		}()
 	}
 	switch event.Action {
 	case "queued":
