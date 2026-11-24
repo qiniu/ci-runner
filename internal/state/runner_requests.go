@@ -184,6 +184,9 @@ func (s *DBStore) createRequest(req RunnerRequest, payload []byte, status, failu
 		UpdatedAt:                       now,
 		Version:                         0,
 	}
+	if status == StatusQueued {
+		record.QueueEnteredAt = &req.CreatedAt
+	}
 	if req.JobID != 0 {
 		record.WorkflowJobID = &req.JobID
 	}
@@ -376,7 +379,11 @@ func (s *DBStore) writeState(st RunnerState, lease stateWriteLease) error {
 	if st.Status == StatusQueued || (st.Status == StatusFailed && !st.SandboxCreateDispatched) {
 		updates["sandbox_create_dispatched"] = false
 	}
+	// Use the persisted pre-transition status within the version-checked write.
+	// Queue claims, backoff and metadata changes leave the ongoing wait intact.
+	updates["queue_entered_at"] = nil
 	if st.Status == StatusQueued {
+		updates["queue_entered_at"] = gorm.Expr("CASE WHEN status = ? THEN queue_entered_at ELSE ? END", StatusQueued, now)
 		updates["manual_stop_requested"] = false
 		if st.JITRegistrationState != "" {
 			updates["jit_registration_state"] = JITUnsent
@@ -1068,6 +1075,8 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		}
 		switch record.Status {
 		case StatusFailed:
+			entered := now.UTC()
+			record.QueueEnteredAt = &entered
 		case StatusQueued:
 			if record.NextRetryAt == nil || !record.LastErrorRetryable {
 				return ErrRetryNotAllowed
@@ -1117,7 +1126,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 		record.SponsorAuthorizationReason = ""
 		record.UpdatedAt = now.UTC()
 		record.Version++
-		if err := tx.Model(&runnerRequestRecord{}).
+		result := tx.Model(&runnerRequestRecord{}).
 			Where("id = ? AND version = ?", record.ID, record.Version-1).
 			Updates(map[string]any{
 				"provision_attempt_id":                record.ProvisionAttemptID,
@@ -1128,6 +1137,7 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 				"cleanup_github_done":                 false,
 				"cleanup_github_runner_id":            0,
 				"status":                              record.Status,
+				"queue_entered_at":                    record.QueueEnteredAt,
 				"error":                               record.Error,
 				"failure_stage":                       record.FailureStage,
 				"failure_reason":                      record.FailureReason,
@@ -1162,8 +1172,12 @@ func (s *DBStore) RetryRequest(id string, now time.Time) (RunnerState, error) {
 				"sponsor_authorization_reason":        record.SponsorAuthorizationReason,
 				"updated_at":                          record.UpdatedAt,
 				"version":                             record.Version,
-			}).Error; err != nil {
-			return err
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrConflict
 		}
 		if err := tx.First(&saved, "id = ?", id).Error; err != nil {
 			return err

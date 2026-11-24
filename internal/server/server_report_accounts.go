@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/state"
@@ -14,7 +15,7 @@ import (
 
 // The snapshot carries only the public report projection. Rows are null for
 // PostgreSQL aggregate-only cohorts and an empty array for empty detail cohorts.
-type sharedAccountSnapshot struct {
+type sharedUsageSnapshot struct {
 	Report  *state.RunnerReport
 	Groups  map[string][]state.ReportGroup
 	Rows    []state.ReportRequest
@@ -23,8 +24,8 @@ type sharedAccountSnapshot struct {
 
 const accountSnapshotDecodeLimit = 128 << 20
 
-func (s *Server) saveAccountSnapshot(ctx context.Context, entry cachedRunnerReport) error {
-	data, err := json.Marshal(sharedAccountSnapshot{entry.report, entry.report.GroupTotals, entry.report.Rows, entry.created})
+func (s *Server) saveUsageSnapshot(ctx context.Context, entry cachedRunnerReport) error {
+	data, err := json.Marshal(sharedUsageSnapshot{entry.report, entry.report.GroupTotals, entry.report.Rows, entry.created})
 	if err != nil {
 		return err
 	}
@@ -45,7 +46,7 @@ func (s *Server) saveAccountSnapshot(ctx context.Context, entry cachedRunnerRepo
 	return s.store.SaveReportSnapshot(ctx, entry.id, entry.created.Add(reportRetention), entry.report.RetainedEntries(), compressed.Bytes())
 }
 
-func (s *Server) restoreAccountSnapshot(ctx context.Context, id string) (cachedRunnerReport, error) {
+func (s *Server) restoreUsageSnapshot(ctx context.Context, id string) (cachedRunnerReport, error) {
 	result := s.reports.group.DoChan("restore:"+id, func() (any, error) {
 		readCtx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 		defer cancel()
@@ -73,15 +74,16 @@ func (s *Server) restoreAccountSnapshot(ctx context.Context, id string) (cachedR
 		if len(data) > accountSnapshotDecodeLimit {
 			return nil, state.ErrReportSnapshotTooLarge
 		}
-		var saved sharedAccountSnapshot
+		var saved sharedUsageSnapshot
 		if err := json.Unmarshal(data, &saved); err != nil {
 			return nil, err
 		}
 		if saved.Report == nil || saved.Groups == nil {
-			return nil, errors.New("invalid stored account report")
+			return nil, errors.New("invalid stored usage report")
 		}
 		report := saved.Report
-		report.Query.IncludeAccountUsage = true
+		report.Query.IncludeEfficiency = strings.HasPrefix(id, efficiencySnapshotPrefix)
+		report.Query.IncludeAccountUsage = !report.Query.IncludeEfficiency
 		report.GroupTotals, report.Rows = saved.Groups, saved.Rows
 		entry := cachedRunnerReport{id: id, key: reportQueryKey(report.Query), created: saved.Created, report: report, distributions: report.ChartDistributions()}
 		if err := readCtx.Err(); err != nil {

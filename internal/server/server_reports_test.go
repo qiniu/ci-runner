@@ -335,3 +335,65 @@ func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
 	get(second, "/reports/account-usage?repository_missing=1&repository=x", 400)
 	get(second, "/reports/account-usage?snapshot=acct-missing", 410)
 }
+
+func TestRunnerReportEfficiencySnapshotAndBacklog(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	peer := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	if _, _, err := store.CreateRequest(state.RunnerRequest{ID: "eff-sample", Source: "fixture", RepositoryFullName: "org/repo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	reject := func(id string) {
+		t.Helper()
+		if _, _, err := store.CreateRejectedRequest(state.RunnerRequest{ID: id, Source: "fixture", RepositoryFullName: "org/repo"}, nil, "profile_labels_not_matched"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reject("rejected-before-snapshot")
+	get := func(s *Server, path string, admin bool, want int) []byte {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if admin {
+			r = adminRequest(http.MethodGet, path, nil)
+		} else {
+			r.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		return w.Body.Bytes()
+	}
+	const path = "/reports/efficiency?repository=org%2Frepo"
+	var report struct {
+		Snapshot   string
+		Efficiency *state.EfficiencySummary
+	}
+	body := get(srv, path, true, 200)
+	if err := json.Unmarshal(body, &report); err != nil || report.Efficiency == nil {
+		t.Fatal("missing efficiency summary")
+	}
+	reject("rejected-after-snapshot")
+	if got := get(peer, path+"&snapshot="+report.Snapshot, true, 200); string(got) != string(body) {
+		t.Fatal("restored efficiency dashboard changed")
+	}
+	details := "/reports/" + report.Snapshot + "/requests?dimension=admission_reason&key=profile_labels_not_matched&limit=20"
+	var page struct {
+		Items []state.ReportRequest
+		Total int
+	}
+	if err := json.Unmarshal(get(peer, details, true, 200), &page); err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "rejected-before-snapshot" {
+		t.Fatalf("restored request evidence: %+v, %v", page, err)
+	}
+	get(peer, "/reports/account-usage?snapshot="+report.Snapshot, true, 410)
+	get(peer, "/reports/efficiency?snapshot=eff-missing", true, 410)
+	const backlog = "/reports/backlog?status=queued&minutes=30"
+	get(peer, backlog, true, 200)
+	get(peer, backlog+"&from=2020-01-01", true, 400)
+	get(peer, "/reports/backlog?status=running&minutes=30", true, 400)
+	for _, p := range []string{path, details, backlog} {
+		get(peer, p, false, 401)
+	}
+}

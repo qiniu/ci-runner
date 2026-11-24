@@ -17,13 +17,18 @@ import (
 )
 
 const (
-	accountSnapshotPrefix = "acct-"
-	reportFreshness       = 30 * time.Second
-	reportRetention       = 5 * time.Minute
-	reportTimeout         = 10 * time.Second
-	reportCacheEntries    = state.ReportSnapshotLimit
-	reportCacheRows       = state.ReportSnapshotEntries
+	efficiencySnapshotPrefix = "eff-"
+	accountSnapshotPrefix    = "acct-"
+	reportFreshness          = 30 * time.Second
+	reportRetention          = 5 * time.Minute
+	reportTimeout            = 10 * time.Second
+	reportCacheEntries       = state.ReportSnapshotLimit
+	reportCacheRows          = state.ReportSnapshotEntries
 )
+
+func isUsageSnapshot(id string) bool {
+	return strings.HasPrefix(id, accountSnapshotPrefix) || strings.HasPrefix(id, efficiencySnapshotPrefix)
+}
 
 type cachedRunnerReport struct {
 	id, key       string
@@ -145,6 +150,9 @@ func (s *Server) loadReportActive(ctx context.Context, q state.RunnerReportQuery
 
 func reportQueryKey(q state.RunnerReportQuery) string {
 	b, _ := json.Marshal(q)
+	if q.IncludeEfficiency {
+		return "efficiency:" + string(b)
+	}
 	if q.IncludeAccountUsage {
 		return "accounts:" + string(b)
 	}
@@ -251,9 +259,13 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 			id: newID(), key: key, created: time.Now(),
 			report: report, distributions: distributions,
 		}
-		if q.IncludeAccountUsage {
-			entry.id = accountSnapshotPrefix + entry.id
-			if err := s.saveAccountSnapshot(queryCtx, entry); err != nil {
+		if q.IncludeAccountUsage || q.IncludeEfficiency {
+			prefix := accountSnapshotPrefix
+			if q.IncludeEfficiency {
+				prefix = efficiencySnapshotPrefix
+			}
+			entry.id = prefix + entry.id
+			if err := s.saveUsageSnapshot(queryCtx, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -318,21 +330,22 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q.IncludeEfficiency = r.URL.Path == "/reports/efficiency"
 	q.IncludeAccountUsage = r.URL.Path == "/reports/account-usage"
 	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
 	var entry cachedRunnerReport
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
 		entry, ok = s.reports.byID(id)
-		if !ok && q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix) {
-			entry, err = s.restoreAccountSnapshot(r.Context(), id)
+		if !ok && ((q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix)) || (q.IncludeEfficiency && strings.HasPrefix(id, efficiencySnapshotPrefix))) {
+			entry, err = s.restoreUsageSnapshot(r.Context(), id)
 			if err != nil {
 				s.writeReportError(w, r, err)
 				return
 			}
 			ok = true
 		}
-		if !ok && q.IncludeSpecUsage && !strings.HasPrefix(id, accountSnapshotPrefix) {
+		if !ok && q.IncludeSpecUsage && !isUsageSnapshot(id) {
 			entry, ok = s.restoreSpecSnapshot(w, r, id)
 			if !ok {
 				return
@@ -442,8 +455,8 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 		return cachedRunnerReport{}, 0, 0, false
 	}
 	entry, ok := s.reports.byID(r.PathValue("snapshot"))
-	if !ok && strings.HasPrefix(r.PathValue("snapshot"), accountSnapshotPrefix) {
-		entry, err = s.restoreAccountSnapshot(r.Context(), r.PathValue("snapshot"))
+	if !ok && isUsageSnapshot(r.PathValue("snapshot")) {
+		entry, err = s.restoreUsageSnapshot(r.Context(), r.PathValue("snapshot"))
 		if err != nil {
 			s.writeReportError(w, r, err)
 			return entry, 0, 0, false
@@ -617,4 +630,53 @@ func (s *Server) handleRunnerReportRequests(w http.ResponseWriter, r *http.Reque
 		Offset   int                   `json:"offset"`
 		Snapshot string                `json:"snapshot"`
 	}{rows[start:end], total, start, entry.id})
+}
+
+func (s *Server) handleReportBacklog(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	values := r.URL.Query()
+	status := values.Get("status")
+	minutes, err := strconv.Atoi(values.Get("minutes"))
+	if len(values["status"]) != 1 || len(values["minutes"]) != 1 || err != nil || minutes < 1 || minutes > 10080 || (status != state.StatusQueued && status != state.StatusCreating && status != state.StatusStopping) {
+		writeError(w, http.StatusBadRequest, "expected queued, creating or stopping and a threshold of 1–10080 minutes")
+		return
+	}
+	values.Del("status")
+	values.Del("minutes")
+	for key := range values {
+		switch key {
+		case "owner", "repository", "repository_missing", "spec":
+		default:
+			writeError(w, http.StatusBadRequest, "unsupported backlog parameter")
+			return
+		}
+	}
+	now := time.Now().UTC()
+	q, err := parseRunnerReportQuery(values, now)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+	defer cancel()
+	release, err := s.reports.acquireActive(ctx)
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return
+	}
+	defer release()
+	now = time.Now().UTC()
+	rows, more, err := s.store.ReadReportBacklog(ctx, q, status, minutes, now)
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Items      []state.ReportBacklogItem `json:"items"`
+		ObservedAt time.Time                 `json:"observed_at"`
+		More       bool                      `json:"more"`
+	}{rows, now, more})
 }

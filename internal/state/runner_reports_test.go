@@ -324,6 +324,8 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			verifyRunnerReport(t, s)
 			verifySharedSpecSnapshotBounds(t, s)
 			verifyReportAccountUsage(t, s)
+			verifyEfficiency(t, s)
+			verifyQueueAgeAfterRetry(t, s)
 			verifyReportGlobalSpecIdentity(t, s)
 			if backend.name == BackendPostgres {
 				verifyLargePostgresReport(t, s)
@@ -380,6 +382,20 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	}
 	t.Logf("30-day account dashboard: %d current + %d prior in %s", account.Totals.Requests, account.Previous.Requests, time.Since(accountStart))
 	t.Logf("30-day Specs dashboard: %d current + %d prior requests in %s", r.Totals.Requests, r.Previous.Requests, accountStart.Sub(start))
+	efficiencyCtx, cancelEfficiency := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelEfficiency()
+	efficiencyStart := time.Now()
+	effQuery := r.Query
+	effQuery.IncludeSpecUsage = false
+	effQuery.IncludeEfficiency = true
+	efficiency, err := s.ReadRunnerReport(efficiencyCtx, effQuery, r.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if efficiency.Efficiency == nil || efficiency.Totals != r.Totals || efficiency.Rows != nil {
+		t.Fatal("invalid large efficiency report")
+	}
+	t.Logf("30-day efficiency report: %d current + %d previous in %s", efficiency.Totals.Requests, efficiency.Previous.Requests, time.Since(efficiencyStart))
 }
 
 // First force the aggregate path with previous-period rows only. Every current
@@ -409,6 +425,12 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	effQuery := q
+	effQuery.IncludeEfficiency = true
+	smallEff, err := s.ReadRunnerReport(t.Context(), effQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	insert := `INSERT INTO runner_requests (id, source, runner_name, labels_json, status, repository_full_name, queued_at, updated_at)
 		SELECT 'volume-' || i, 'fixture', 'volume-' || i, '[]', 'queued', 'volume/repo', ?, ? FROM generate_series(1, ?) i`
 	prior := now.AddDate(0, 0, -40)
@@ -426,6 +448,13 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		}
 		t.Logf("PostgreSQL report: %d current + %d previous, %d retained entries in %s", r.Totals.Requests, r.Previous.Requests, r.RetainedEntries(), time.Since(start))
 		return r
+	}
+	largeEff, err := s.ReadRunnerReport(t.Context(), effQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(smallEff.Efficiency, largeEff.Efficiency) || largeEff.Rows != nil {
+		t.Fatalf("large efficiency report differs: %+v %+v", smallEff.Efficiency, largeEff.Efficiency)
 	}
 	largeAccounts, err := s.ReadRunnerReport(t.Context(), accounts, now)
 	if err != nil {
@@ -703,7 +732,7 @@ func TestRunnerReportScale(t *testing.T) {
 	}
 	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-11-19", To: "2026-11-21", Timezone: "UTC", Grain: "day"}
 	// Two queued requests outside the cohort let us measure real queue claims.
-	for _, id := range []string{"baseline-claim", "concurrent-claim"} {
+	for _, id := range []string{"baseline-claim", "concurrent-claim", "efficiency-claim"} {
 		if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, Source: "fixture", LabelsJSON: "[]", Status: StatusQueued, QueuedAt: start.AddDate(0, 0, -100), UpdatedAt: now}).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -713,39 +742,47 @@ func TestRunnerReportScale(t *testing.T) {
 		t.Fatalf("baseline claim: %v %v", ok, err)
 	}
 	t.Logf("baseline queue claim=%s", time.Since(baselineStart))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	reportDone := make(chan error, 1)
-	go func() { _, err := s.ReadRunnerReport(ctx, q, now); reportDone <- err }()
-	// The query is intentionally much longer than this head start. Assert it
-	// is still in flight before and after the overlapping operations.
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case err := <-reportDone:
-		t.Fatalf("report finished before overlap: %v", err)
-	default:
-	}
+	for _, name := range []string{"accounts", "efficiency"} {
+		t.Run(name, func(t *testing.T) {
+			query := q
+			query.IncludeAccountUsage = name == "accounts"
+			query.IncludeEfficiency = name == "efficiency"
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			reportDone := make(chan error, 1)
+			reportStart := time.Now()
+			go func() { _, err := s.ReadRunnerReport(ctx, query, now); reportDone <- err }()
+			// The query is intentionally much longer than this head start. Assert it
+			// is still in flight before and after the overlapping operations.
+			time.Sleep(50 * time.Millisecond)
+			select {
+			case err := <-reportDone:
+				t.Fatalf("report finished before overlap: %v", err)
+			default:
+			}
 
-	claimDone := make(chan time.Duration, 1)
-	go func() {
-		started := time.Now()
-		_, _, ok, err := s.ClaimNextRunnable("report-concurrent", time.Minute)
-		if err != nil || !ok {
-			t.Errorf("concurrent claim: %v %v", ok, err)
-		}
-		claimDone <- time.Since(started)
-	}()
-	listStart := time.Now()
-	if _, _, err := s.ListStatesCursor(ctx, RunnerRequestListOptions{Limit: 25}, nil); err != nil {
-		t.Fatal(err)
-	}
-	listLatency, claimLatency := time.Since(listStart), <-claimDone
-	if err := <-reportDone; err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("during report: 25-row list=%s, queue claim=%s", listLatency, claimLatency)
-	if listLatency > 500*time.Millisecond || claimLatency > 500*time.Millisecond {
-		t.Fatal("report exceeded the 500ms local scheduling contention gate")
+			claimDone := make(chan time.Duration, 1)
+			go func() {
+				started := time.Now()
+				_, _, ok, err := s.ClaimNextRunnable("report-concurrent", time.Minute)
+				if err != nil || !ok {
+					t.Errorf("concurrent claim: %v %v", ok, err)
+				}
+				claimDone <- time.Since(started)
+			}()
+			listStart := time.Now()
+			if _, _, err := s.ListStatesCursor(ctx, RunnerRequestListOptions{Limit: 25}, nil); err != nil {
+				t.Fatal(err)
+			}
+			listLatency, claimLatency := time.Since(listStart), <-claimDone
+			if err := <-reportDone; err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("report=%s; during report: 25-row list=%s, queue claim=%s", time.Since(reportStart), listLatency, claimLatency)
+			if listLatency > 500*time.Millisecond || claimLatency > 500*time.Millisecond {
+				t.Fatal("report exceeded the 500ms local scheduling contention gate")
+			}
+		})
 	}
 	before := time.Now()
 	r, err := s.ReadRunnerReport(context.Background(), q, now)
@@ -756,7 +793,7 @@ func TestRunnerReportScale(t *testing.T) {
 	if r.Totals.Requests != 100000 {
 		t.Fatal("truncated report")
 	}
-	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: account report=%s, retained entries=%d", elapsed, r.RetainedEntries())
+	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: report=%s, retained entries=%d", elapsed, r.RetainedEntries())
 	before = time.Now()
 	if _, _, err := s.ListStatesCursor(context.Background(), RunnerRequestListOptions{Limit: 25}, nil); err != nil {
 		t.Fatal(err)

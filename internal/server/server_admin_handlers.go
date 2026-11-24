@@ -345,7 +345,7 @@ func (s *Server) handleRetryRunner(w http.ResponseWriter, r *http.Request) {
 		st, err = s.retryHistoricalWaitingJob(r.Context(), r.PathValue("id"))
 	}
 	if err != nil {
-		if errors.Is(err, state.ErrRetryNotAllowed) {
+		if errors.Is(err, state.ErrRetryNotAllowed) || errors.Is(err, state.ErrConflict) {
 			s.logger.Info("runner retry rejected", "id", r.PathValue("id"), "error", err)
 			writeError(w, http.StatusConflict, err.Error())
 			return

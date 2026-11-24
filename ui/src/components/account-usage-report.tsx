@@ -1,58 +1,29 @@
 import { useMemo, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
-import { adminRunnerRequestDetailPath } from "@/app-load-policy"
+import { ReportRequestRows, type ReportActions } from "./report-request-rows"
 import {
   reportGroupLabel,
   type ActivityGroup,
   type ReportDimension,
   type ReportPage,
-  type ReportRequestRow,
+  reportTimeFormatter,
+  outcomeCategory,
   type RunnerReport,
 } from "@/runner-reports"
-import { type ReportFetch, useReportResource } from "@/use-report-resource"
+import { useReportResource } from "@/use-report-resource"
 import { ReportDisplayMode, ReportPager, ReportSelect, ResourceState } from "@/components/report-controls"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
-type AccountUsageProps = {
+type AccountUsageProps = ReportActions & {
   report: RunnerReport
-  request: ReportFetch
-  search: string
-  navigate: (values: Record<string, string | null>) => void
   onSelect: (dimension: ReportDimension, key: string) => void
-  onOpenRequest: (id: string, returnSearch: string) => void
   children: ReactNode
-}
-
-function outcomeCategory(key: string) {
-  switch (key) {
-    case "success":
-    case "failure":
-    case "timed_out":
-    case "cancelled":
-    case "skipped":
-    case "unknown":
-      return key
-    default:
-      return "other"
-  }
 }
 
 function percent(value: number, total: number, locale?: string) {
   return total ? (value / total).toLocaleString(locale, { style: "percent", maximumFractionDigits: 1 }) : "—"
-}
-
-function accountTimeFormatter(locale: string | undefined, timeZone: string) {
-  const options: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "medium", timeZone }
-  try {
-    const formatter = new Intl.DateTimeFormat(locale, options)
-    return (value: string) => formatter.format(new Date(value)) + " · " + timeZone
-  } catch (error) {
-    // The server's timezone database can include zones the browser does not recognize.
-    if (!(error instanceof RangeError)) throw error
-    return (value: string) => new Date(value).toISOString()
-  }
 }
 
 function OutcomeCounts({ outcomes }: { outcomes?: Record<string, number> }) {
@@ -82,8 +53,6 @@ export function AccountUsageReport({
   const dimension = url.get("ranking") === "repository" ? "repository" : "owner"
   const sort = url.get("sort") === "runtime" ? "runtime" : "requests"
   const offset = Number(url.get("group_offset") || 0)
-  const requestOffset = Number(url.get("requests_offset") || 0)
-  const showRequests = url.has("requests_offset") && report.request_detail_available !== false
   const base = `/reports/${encodeURIComponent(report.snapshot)}`
   const groups = useReportResource<ReportPage<ActivityGroup>>(
     table
@@ -91,14 +60,8 @@ export function AccountUsageReport({
       : "",
     request,
   )
-  const rows = useReportResource<ReportPage<ReportRequestRow>>(
-    showRequests
-      ? base + "/requests?" + new URLSearchParams({ offset: String(requestOffset), limit: "20" })
-      : "",
-    request,
-  )
   const locale = i18n.resolvedLanguage
-  const time = useMemo(() => accountTimeFormatter(locale, report.query.timezone), [locale, report.query.timezone])
+  const time = useMemo(() => reportTimeFormatter(locale, report.query.timezone), [locale, report.query.timezone])
   const pageLabel = (page: { total: number; offset: number; items: unknown[] }) =>
     t("reports.rankingPage", {
       first: page.items.length ? page.offset + 1 : 0,
@@ -261,87 +224,7 @@ export function AccountUsageReport({
           )}
         </>
       )}
-      {report.request_detail_available === false ? (
-        <p className="text-sm text-muted-foreground">{t("reports.narrowForRequests")}</p>
-      ) : (
-        <Button
-          variant="outline"
-          aria-expanded={showRequests}
-          onClick={() => navigate({ requests_offset: showRequests ? null : "0", selected_request: null })}
-        >
-          {t("reports.requestRows")}
-        </Button>
-      )}
-      {showRequests && (
-        <>
-          <ResourceState resource={rows} />
-          {rows.data && (
-            <>
-              {rows.data.items.length ? (
-                <Table aria-label={t("reports.requestRows")}>
-                  <TableHeader>
-                    <TableRow>
-                      {(["requestId", "queuedAt", "repository", "spec", "jobResults"] as const).map((key) => (
-                        <TableHead key={key}>{t(`reports.${key}`)}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {rows.data.items.map((row) => {
-                      const back = new URLSearchParams(url)
-                      back.set("selected_request", row.id)
-                      const returnSearch = "?" + back
-                      const href = adminRunnerRequestDetailPath(
-                        row.id,
-                        "?" + new URLSearchParams({ report_return: "/admin/reports" + returnSearch }),
-                      )
-                      return (
-                        <TableRow
-                          key={row.id}
-                          data-state={row.id === url.get("selected_request") ? "selected" : undefined}
-                        >
-                          <TableCell>
-                            <a
-                              href={href}
-                              className="text-primary hover:underline"
-                              onClick={(event) => {
-                                if (
-                                  event.metaKey ||
-                                  event.ctrlKey ||
-                                  event.shiftKey ||
-                                  event.altKey ||
-                                  event.button !== 0
-                                )
-                                  return
-                                event.preventDefault()
-                                onOpenRequest(row.id, returnSearch)
-                              }}
-                            >
-                              {row.id}
-                            </a>
-                          </TableCell>
-                          <TableCell>{time(row.queued_at)}</TableCell>
-                          <TableCell>{row.repository || t("common.unknown")}</TableCell>
-                          <TableCell>{row.spec_label || t("common.unknown")}</TableCell>
-                          <TableCell>{t(`reports.outcome_${outcomeCategory(row.job_result)}`)}</TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p>{t("reports.empty")}</p>
-              )}
-              <ReportPager
-                offset={requestOffset}
-                total={rows.data.total}
-                label={pageLabel(rows.data)}
-                onChange={(v) => navigate({ requests_offset: String(v), selected_request: null })}
-              />
-            </>
-          )}
-        </>
-      )}
+      <ReportRequestRows report={report} request={request} search={search} navigate={navigate} onOpenRequest={onOpenRequest} />
     </section>
   )
 }

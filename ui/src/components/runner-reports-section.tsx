@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { ReportDisplayMode, ReportPager, ReportSelect, ResourceState } from "@/components/report-controls"
 import { type ReportFetch as Request, type Resource, useReportResource } from "@/use-report-resource"
+import { EfficiencyReport, CurrentBacklog } from "@/components/efficiency-report"
 import { AccountUsageReport } from "@/components/account-usage-report"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -63,27 +64,29 @@ export function RunnerReportsSection({
   const params = reportQueryParams(search)
   const urlState = new URLSearchParams(search)
   const tab = urlState.get("view")
-  const view = tab === "specs" || tab === "accounts" ? tab : "overview"
+  const view = tab === "specs" || tab === "accounts" || tab === "efficiency" ? tab : "overview"
+  const sharedUsage = view === "accounts" || view === "efficiency"
   // Older spec links used a cohort-wide filter and may carry a scoped snapshot.
   if (view === "specs" && params.has("spec")) {
     params.delete("spec")
     params.delete("snapshot")
   }
   const query = params.toString()
+  const endpoint = { overview: "overview", specs: "spec-usage", accounts: "account-usage", efficiency: "efficiency" }[view]
   const overview = useReportResource<RunnerReport>(
-    `/reports/${view === "accounts" ? "account-usage" : view === "specs" ? "spec-usage" : "overview"}?${query}`,
+    `/reports/${endpoint}?${query}`,
     request,
     revision,
     pinnedReportUrl,
   )
   const report = overview.data
   useEffect(() => {
-    if (view !== "accounts" || !report || new URLSearchParams(search).has("snapshot")) return
+    if (!sharedUsage || !report || new URLSearchParams(search).has("snapshot")) return
     const pinned = new URLSearchParams(search)
     for (const [key, value] of Object.entries(report.query)) if (value) pinned.set(key, value)
     pinned.set("snapshot", report.snapshot)
     onNavigate(`?${pinned}`, true)
-  }, [view, report, search, onNavigate])
+  }, [sharedUsage, report, search, onNavigate])
   const navigate = (values: Record<string, string | null>) => {
     const next = new URLSearchParams(search)
     if (report) {
@@ -96,6 +99,7 @@ export function RunnerReportsSection({
     }
     onNavigate(`?${next}`)
   }
+  const actions = { request, search, navigate, onOpenRequest }
   const refresh = () => {
     navigate({
       snapshot: null,
@@ -126,6 +130,9 @@ export function RunnerReportsSection({
       "focus_spec",
       "focus_label",
       "account_mode",
+      "anomaly_sort",
+      "backlog_status",
+      "backlog_minutes",
       "ranking",
     ]) {
       if (urlState.has(key)) next.set(key, urlState.get(key)!)
@@ -161,7 +168,7 @@ export function RunnerReportsSection({
         onDraftChange={(query) => setEdits({ key: filterKey, query })}
         onApply={applyFilters}
         identityFilters={
-          view === "accounts" &&
+          sharedUsage &&
           report &&
           (["owner", "repository", "spec"] as const).map((dimension) => {
             const focus =
@@ -190,13 +197,21 @@ export function RunnerReportsSection({
         }}
       >
         <TabsList variant="line" aria-label={t("reports.views")}>
-          {(["overview", "specs", "accounts"] as const).map((tab) => (
+          {(["overview", "specs", "accounts", "efficiency"] as const).map((tab) => (
             <TabsTrigger key={tab} value={tab} variant="line">
               {t(`reports.${tab}`)}
             </TabsTrigger>
           ))}
         </TabsList>
         <ResourceState resource={overview} />
+        <TabsContent value="efficiency" className="min-w-0 space-y-4">
+          {view === "efficiency" && (
+            <>
+              {report?.efficiency && <EfficiencyReport report={report} summary={report.efficiency} {...actions} />}
+              <CurrentBacklog query={selected} revision={revision} {...actions} />
+            </>
+          )}
+        </TabsContent>
         <TabsContent value="accounts" className="min-w-0">
           {view === "accounts" && report && (
             <AccountUsageReport
