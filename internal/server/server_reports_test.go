@@ -178,7 +178,7 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
+	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
 		w := httptest.NewRecorder()
 		srv.writeReportError(w, httptest.NewRequest(http.MethodGet, "/reports/overview", nil), tc.err)
 		if w.Code != tc.code {
@@ -205,5 +205,57 @@ func TestRunnerReportDefaultsBeforeMidnightGap(t *testing.T) {
 	w, err := q.Window(now)
 	if err != nil || !w.End.Equal(now) {
 		t.Fatalf("default end=%+v err=%v", w, err)
+	}
+}
+
+func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	get := func(srv *Server, path string, want int) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Fatalf("GET %s: %d %s, want %d", path, w.Code, w.Body, want)
+		}
+		return w.Body.String()
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "another-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	body := get(first, "/reports/spec-usage", http.StatusOK)
+	var dashboard struct {
+		Snapshot string
+		Query    state.RunnerReportQuery
+	}
+	if err := json.Unmarshal([]byte(body), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	page := "/reports/" + dashboard.Snapshot + "/specs?sort=runtime&limit=1&offset=1"
+	before := get(first, page, http.StatusOK)
+	var paged struct {
+		Items  []state.ReportSpecUsage
+		Offset int
+	}
+	if err := json.Unmarshal([]byte(before), &paged); err != nil || len(paged.Items) != 1 || paged.Offset != 1 {
+		t.Fatalf("expected one item on the second page: %s", before)
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "new-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	q := url.Values{"from": {dashboard.Query.From}, "to": {dashboard.Query.To}, "timezone": {dashboard.Query.Timezone}, "grain": {dashboard.Query.Grain}, "snapshot": {dashboard.Snapshot}}
+	if got := get(second, "/reports/spec-usage?"+q.Encode(), http.StatusOK); got != body {
+		t.Fatal("restored dashboard differs from the original response")
+	}
+	if got := get(second, page, http.StatusOK); got != before {
+		t.Fatal("restored page differs after catalog change")
+	}
+	get(second, "/reports/overview?"+q.Encode(), http.StatusGone)
+	q.Set("repository", "different/repo")
+	get(second, "/reports/spec-usage?"+q.Encode(), http.StatusGone)
+	if _, err := store.LoadReportSpecSnapshot(t.Context(), dashboard.Snapshot, time.Now().Add(reportRetention)); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("expired snapshot: %v", err)
 	}
 }

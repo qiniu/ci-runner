@@ -249,6 +249,7 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	models := []any{
 		&runnerAdmissionGuardRecord{},
 		&runnerEventRecord{},
+		&reportSpecSnapshotRecord{},
 	}
 	if !existingSQLiteRunnerProfiles {
 		models = append(models, &runnerProfileRecord{})

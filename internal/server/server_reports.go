@@ -20,8 +20,8 @@ const (
 	reportFreshness    = 30 * time.Second
 	reportRetention    = 5 * time.Minute
 	reportTimeout      = 10 * time.Second
-	reportCacheEntries = 8
-	reportCacheRows    = 200000
+	reportCacheEntries = state.ReportSnapshotLimit
+	reportCacheRows    = state.ReportSnapshotEntries
 )
 
 type cachedRunnerReport struct {
@@ -30,6 +30,50 @@ type cachedRunnerReport struct {
 	report        *state.RunnerReport
 	distributions map[string]state.ReportDistribution
 }
+
+// Only aggregated data needed by the Specs UI is shared. In particular the
+// request rows and request-detail indexes in RunnerReport are JSON-excluded.
+type sharedSpecSnapshot struct {
+	Report        *state.RunnerReport
+	Items         []state.ReportSpecUsage
+	Summary       *state.ReportSpecUsage
+	Distributions map[string]state.ReportDistribution
+	Created       time.Time
+}
+
+func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) error {
+	payload, err := json.Marshal(sharedSpecSnapshot{e.report, e.report.SpecItems, e.report.SpecSummary, e.distributions, e.created})
+	if err != nil {
+		return err
+	}
+	return s.store.SaveReportSpecSnapshot(ctx, e.id, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+}
+
+func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id string) (cachedRunnerReport, bool) {
+	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+	defer cancel()
+	raw, err := s.store.LoadReportSpecSnapshot(ctx, id, time.Now())
+	if errors.Is(err, state.ErrNotFound) {
+		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return cachedRunnerReport{}, false
+	}
+	var saved sharedSpecSnapshot
+	if err == nil {
+		err = json.Unmarshal(raw, &saved)
+	}
+	if err == nil && saved.Report == nil {
+		err = errors.New("invalid stored spec snapshot")
+	}
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return cachedRunnerReport{}, false
+	}
+	report := saved.Report
+	report.Query.IncludeSpecUsage = true
+	report.SpecItems, report.SpecSummary = saved.Items, saved.Summary
+	return cachedRunnerReport{id: id, key: reportQueryKey(report.Query), created: saved.Created, report: report, distributions: saved.Distributions}, true
+}
+
 type runnerReportCache struct {
 	mu          sync.Mutex
 	entries     []cachedRunnerReport
@@ -106,18 +150,11 @@ func reportQueryKey(q state.RunnerReportQuery) string {
 	return string(b)
 }
 
-func (c *runnerReportCache) find(id, key string, now time.Time) (cachedRunnerReport, bool) {
+func (c *runnerReportCache) fresh(key string) (cachedRunnerReport, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, e := range c.entries {
-		if now.Sub(e.created) >= reportRetention {
-			continue
-		}
-		if id != "" {
-			if e.id == id && e.key == key {
-				return e, true
-			}
-		} else if e.key == key && now.Sub(e.created) < reportFreshness {
+		if e.key == key && time.Since(e.created) < reportFreshness {
 			return e, true
 		}
 	}
@@ -183,11 +220,11 @@ func (c *runnerReportCache) acquireActive(ctx context.Context) (func(), error) {
 
 func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery) (cachedRunnerReport, error) {
 	key := reportQueryKey(q)
-	if e, ok := s.reports.find("", key, time.Now()); ok {
+	if e, ok := s.reports.fresh(key); ok {
 		return e, nil
 	}
 	result := s.reports.group.DoChan(key, func() (any, error) {
-		if e, ok := s.reports.find("", key, time.Now()); ok {
+		if e, ok := s.reports.fresh(key); ok {
 			return e, nil
 		}
 		queryCtx, cancel := context.WithTimeout(context.Background(), reportTimeout)
@@ -209,6 +246,11 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 		entry := cachedRunnerReport{
 			id: newID(), key: key, created: time.Now(),
 			report: report, distributions: distributions,
+		}
+		if q.IncludeSpecUsage {
+			if err := s.saveSpecSnapshot(queryCtx, entry); err != nil {
+				return nil, err
+			}
 		}
 		s.reports.put(entry)
 		return entry, nil
@@ -270,8 +312,14 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	var entry cachedRunnerReport
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
-		entry, ok = s.reports.find(id, reportQueryKey(q), time.Now())
-		if !ok {
+		entry, ok = s.reports.byID(id)
+		if !ok && q.IncludeSpecUsage {
+			entry, ok = s.restoreSpecSnapshot(w, r, id)
+			if !ok {
+				return
+			}
+		}
+		if !ok || entry.key != reportQueryKey(q) {
 			writeError(w, http.StatusGone, "report snapshot expired or filters changed; refresh the report")
 			return
 		}
@@ -296,7 +344,7 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) {
+	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) || errors.Is(err, state.ErrReportSnapshotTooLarge) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -371,6 +419,10 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 		return cachedRunnerReport{}, 0, 0, false
 	}
 	entry, ok := s.reports.byID(r.PathValue("snapshot"))
+	if !ok && r.Pattern == "GET /reports/{snapshot}/specs" {
+		entry, ok = s.restoreSpecSnapshot(w, r, r.PathValue("snapshot"))
+		return entry, limit, offset, ok
+	}
 	if !ok {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
 		return entry, 0, 0, false

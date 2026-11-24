@@ -322,13 +322,52 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			sdb, _ := s.dbOrEnsure()
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
+			verifySharedSpecSnapshotBounds(t, s)
 			verifyReportGlobalSpecIdentity(t, s)
 			if backend.name == BackendPostgres {
 				verifyLargePostgresReport(t, s)
 				t.Run("trend_timezone", func(t *testing.T) { verifyPostgresTrendTimezone(t, s) })
+				if os.Getenv("RUNNERD_REPORT_SCALE_TEST") == "1" {
+					t.Run("thirty_day_specs", func(t *testing.T) { verifyPostgresSpecReportScale(t, s) })
+				}
 			}
 		})
 	}
+}
+
+// Exercise a 30-day report and its comparison period at production-like volume
+// with recurring repository, owner and spec combinations.
+func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO runner_requests
+		(id, runner_name, source, labels_json, status, profile_source, profile_name, github_installation_id,
+		 repository_full_name, queued_at, creating_at, running_at, completed_at, updated_at)
+		SELECT id, id, 'fixture', '[]', 'completed', 'global', 'spec-' || (i % 10), (i % 101) % 11,
+			'repo-' || (i % 101), at, at, at + interval '2 seconds', at + interval '58 seconds', at
+		FROM (SELECT i, 'scale-' || i || '-' || copy AS id,
+			timestamptz '2025-09-25 UTC' + i * interval '10 seconds' AS at
+			FROM generate_series(1, 510000) i CROSS JOIN generate_series(1, 2) copy) fixture`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ANALYZE runner_requests").Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	r, err := s.ReadRunnerReport(ctx, RunnerReportQuery{From: "2025-10-25", To: "2025-11-24", Timezone: "UTC", Grain: "day", IncludeSpecUsage: true}, reportTime("2025-11-23T12:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each ten-second tick has two rows. The fixture ends before the current
+	// period does, and the previous period ends at the matching UTC time of day.
+	if r.Totals.Requests != 501602 || r.Previous.Requests != 509758 || r.SpecSummary.Requests != r.Totals.Requests || r.Totals.ActiveRepositories != 101 || r.Totals.Runtime.Seconds != 56*float64(r.Totals.Requests) {
+		t.Fatalf("30-day aggregate: current %d, prior %d, repositories %d, runtime %v", r.Totals.Requests, r.Previous.Requests, r.Totals.ActiveRepositories, r.Totals.Runtime)
+	}
+	t.Logf("30-day Specs dashboard: %d current + %d prior requests in %s", r.Totals.Requests, r.Previous.Requests, time.Since(start))
 }
 
 // First force the aggregate path with previous-period rows only. Every current
@@ -909,4 +948,60 @@ func TestRunnerReportMissingSpecLabel(t *testing.T) {
 	if row.SpecLabel != "· standard · global" {
 		t.Fatalf("real spec names must not be mistaken for missing names: %q", row.SpecLabel)
 	}
+}
+
+func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
+	t.Helper()
+	expires := time.Now().UTC().Add(time.Minute)
+	save := func(id int, weight int) {
+		t.Helper()
+		key := fmt.Sprint(id)
+		if err := s.SaveReportSpecSnapshot(t.Context(), key, expires.Add(time.Duration(id)*time.Second), weight, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i <= ReportSnapshotLimit; i++ {
+		save(i, 1)
+	}
+	get := func(id int, now time.Time, want bool) {
+		t.Helper()
+		key := fmt.Sprint(id)
+		b, err := s.LoadReportSpecSnapshot(t.Context(), key, now)
+		if want && (err != nil || string(b) != key) || !want && !errors.Is(err, ErrNotFound) {
+			t.Fatalf("snapshot %s: body %q err %v, want present %t", key, b, err, want)
+		}
+	}
+	get(0, time.Now(), false)
+	get(1, time.Now(), true)
+	save(99, ReportSnapshotEntries)
+	get(ReportSnapshotLimit, time.Now(), false)
+	get(99, time.Now(), true)
+	get(99, expires.Add(100*time.Second), false)
+
+	// Independent publishers must not each claim the same remaining capacity.
+	const writers = 12
+	done := make(chan error, writers)
+	for i := range writers {
+		go func() {
+			key := fmt.Sprintf("writer-%d", i)
+			done <- s.SaveReportSpecSnapshot(t.Context(), key, expires, ReportSnapshotEntries/2, []byte(key))
+		}()
+	}
+	for range writers {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Model(&reportSpecSnapshotRecord{}).Where("id <> ?", specSnapshotWriter).Count(&count).Error; err != nil || count != 2 {
+		t.Fatalf("concurrent publications retained %d snapshots, want 2: %v", count, err)
+	}
+}
+
+func TestRunnerReportSharedSpecSnapshotBounds(t *testing.T) {
+	verifySharedSpecSnapshotBounds(t, reportTestStore(t))
 }

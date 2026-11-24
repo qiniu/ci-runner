@@ -31,7 +31,7 @@ func postgresTrendOffset(window ReportWindow) clause.Expr {
 	return seconds
 }
 
-// PostgreSQL computes all five rollups in one query. Only aggregate rows cross
+// PostgreSQL computes the rollups in one query. Only aggregate rows cross
 // the database connection, regardless of the number of requests in a cohort.
 func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerReportQuery, window ReportWindow, now time.Time) (*RunnerReport, error) {
 	cohort = cohort.Session(&gorm.Session{}).Select(`r.queued_at, r.creating_at, r.running_at, r.stopping_at,
@@ -69,15 +69,17 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 			CASE WHEN valid_terminal AND valid_stop AND terminal_at >= stopping_at THEN terminal_at - stopping_at END AS cleanup,
 			CASE WHEN valid_terminal AND valid_queue AND terminal_at >= queued_at THEN terminal_at - queued_at END AS completion
 		FROM validated v
-	)
-	SELECT current_period,
-		CASE %s WHEN grouping(bucket) = 0 THEN 'trend'  WHEN grouping(spec_name) = 0 THEN 'spec'
-			WHEN grouping(owner_key) = 0 THEN 'owner' WHEN grouping(repo) = 0 THEN 'repository' ELSE 'total' END AS dimension,
-		bucket, spec_source, scope_type, scope_id, spec_name, owner_key, repo, %s
-		min(CASE WHEN account_id > 0 THEN coalesce(account_login, owner_key) ELSE owner_key END) AS owner_label,
-		count(*) AS requests, count(*) FILTER (WHERE started) AS started, count(*) FILTER (WHERE terminal) AS terminal,
-		count(*) FILTER (WHERE rejected) AS rejected, count(DISTINCT account_id) FILTER (WHERE account_id > 0) AS active_accounts,
-		count(DISTINCT nullif(repo, '')) AS active_repositories, count(*) FILTER (WHERE account_id > 0) AS mapped_accounts,
+	), partials AS (
+		SELECT current_period,
+			CASE WHEN current_period THEN bucket END AS period_bucket,
+			CASE WHEN current_period THEN spec_source END AS period_source,
+			CASE WHEN current_period THEN scope_type END AS period_scope_type,
+			CASE WHEN current_period THEN scope_id END AS period_scope_id,
+			CASE WHEN current_period THEN spec_name END AS period_name,
+			owner_key, account_id, repo, %s
+			min(CASE WHEN account_id > 0 THEN coalesce(account_login, owner_key) ELSE owner_key END) AS owner_label,
+			count(*) AS requests, count(*) FILTER (WHERE started) AS started, count(*) FILTER (WHERE terminal) AS terminal,
+		count(*) FILTER (WHERE rejected) AS rejected, count(*) FILTER (WHERE account_id > 0) AS mapped_accounts,
 		count(*) FILTER (WHERE spec_name <> '' AND (spec_source = 'global' OR
 			(spec_source = 'scoped_custom' AND scope_id > 0 AND scope_type IN ('account', 'installation')))) AS known_specs,
 		count(*) FILTER (WHERE valid_create) AS creating_times, count(*) FILTER (WHERE valid_stop) AS stopping_times,
@@ -88,23 +90,49 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 		count(*) FILTER (WHERE started) AS creation_eligible, count(*) FILTER (WHERE terminal AND valid_stop) AS cleanup_eligible,
 		count(*) FILTER (WHERE terminal) AS completion_eligible, `
 	specRepoSet, classify, resultField := "", "", ""
+	partialResult, partialGroup := "", ""
 	if q.IncludeSpecUsage {
-		for _, dim := range []struct{ column, kind string }{{"repo", "spec_repo"}, {"owner_key", "spec_owner"}, {"bucket", "spec_trend"}, {"job_result", "spec_result"}} {
-			specRepoSet += ", (spec_source, scope_type, scope_id, spec_name, " + dim.column + ")"
-			classify += " WHEN grouping(spec_name, " + dim.column + ") = 0 THEN '" + dim.kind + "'"
+		for _, dim := range []struct{ column, kind string }{{"repo", "spec_repo"}, {"owner_key", "spec_owner"}, {"period_bucket", "spec_trend"}, {"period_result", "spec_result"}} {
+			specRepoSet += ", (period_source, period_scope_type, period_scope_id, period_name, " + dim.column + ")"
+			classify += " WHEN grouping(period_name, " + dim.column + ") = 0 THEN '" + dim.kind + "'"
 		}
-		resultField = "job_result,"
+		resultField = "period_result AS job_result,"
+		partialResult = "CASE WHEN current_period THEN job_result END AS period_result,"
+		partialGroup = ", period_result"
 	}
+	const regroup = `
+	FROM intervals
+	GROUP BY current_period, period_bucket, period_source, period_scope_type, period_scope_id, period_name, owner_key, account_id, repo%s
+	)
+	SELECT current_period,
+		CASE %s WHEN grouping(period_bucket) = 0 THEN 'trend' WHEN grouping(period_name) = 0 THEN 'spec'
+			WHEN grouping(owner_key) = 0 THEN 'owner' WHEN grouping(repo) = 0 THEN 'repository' ELSE 'total' END AS dimension,
+		period_bucket AS bucket, period_source AS spec_source, period_scope_type AS scope_type,
+		period_scope_id AS scope_id, period_name AS spec_name, owner_key, repo, %s
+		min(owner_label) AS owner_label,
+		count(DISTINCT account_id) FILTER (WHERE account_id > 0) AS active_accounts,
+		count(DISTINCT nullif(repo, '')) AS active_repositories, `
 	rollups := `
-	FROM intervals GROUP BY current_period, GROUPING SETS ((), (bucket), (spec_source, scope_type, scope_id, spec_name), (owner_key), (repo)` + specRepoSet + `)
-	HAVING current_period OR grouping(bucket, spec_name, owner_key, repo) = 15
+	FROM partials GROUP BY current_period, GROUPING SETS ((), (period_bucket), (period_source, period_scope_type, period_scope_id, period_name), (owner_key), (repo)` + specRepoSet + `)
+	HAVING current_period OR grouping(period_bucket, period_name, owner_key, repo) = 15
 	LIMIT ?`
+	// Compute lifecycle metrics once per input row. The larger grouping sets
+	// then sort and sum partials rather than sorting the entire cohort for
+	// every dimension. Owner and repository identities preserve exact distincts.
+	fields := strings.Fields("requests started terminal rejected mapped_accounts known_specs creating_times stopping_times terminal_times job_result_eligible job_results runtime_eligible startup_eligible creation_eligible cleanup_eligible completion_eligible")
 	var durations []string
 	for _, metric := range []string{"runtime", "startup", "creation", "cleanup", "completion"} {
+		fields = append(fields, metric+"_samples", metric+"_seconds")
 		// Match Go's time.Duration saturation for exceptionally long valid intervals.
 		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum(least(extract(epoch FROM "+metric+"), 9223372036.854775807)) FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
 	}
-	query := db.Raw(fmt.Sprintf(aggregates, classify, resultField)+strings.Join(durations, ", ")+rollups, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
+	sums := make([]string, 0, len(fields))
+	for _, field := range fields {
+		sums = append(sums, "sum("+field+") AS "+field)
+	}
+	statement := fmt.Sprintf(aggregates, partialResult) + strings.Join(durations, ", ") +
+		fmt.Sprintf(regroup, partialGroup, classify, resultField) + strings.Join(sums, ", ") + rollups
+	query := db.Raw(statement, now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window), cohort, ReportMaxRows+1)
 	rows, err := query.Rows()
 	if err != nil {
 		return nil, err
