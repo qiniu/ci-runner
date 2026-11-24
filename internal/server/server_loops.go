@@ -365,7 +365,7 @@ func (s *Server) originalWorkflowJobQueued(ctx context.Context, st state.RunnerS
 	}
 	jobCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
 	defer cancel()
-	job, err := s.gh.GetWorkflowJob(jobCtx, st.RepositoryFullName, st.WorkflowJobID)
+	job, err := s.lookupLifecycleJob(jobCtx, st.RepositoryFullName, st.WorkflowJobID)
 	if err != nil {
 		return false, err
 	}
@@ -407,7 +407,7 @@ func (s *Server) completeIfWorkflowJobCompleted(ctx context.Context, id string) 
 
 	jobCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
 	defer cancel()
-	job, err := s.gh.GetWorkflowJob(jobCtx, repositoryFullName, workflowJobID)
+	job, err := s.lookupLifecycleJob(jobCtx, repositoryFullName, workflowJobID)
 	if err != nil {
 		return err
 	}

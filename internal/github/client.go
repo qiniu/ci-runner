@@ -1788,6 +1788,8 @@ type WorkflowRunEvent struct {
 }
 
 type WorkflowJob struct {
+	StartedAt    string        `json:"started_at"`
+	CompletedAt  string        `json:"completed_at"`
 	ID           int64         `json:"id"`
 	Name         string        `json:"name"`
 	Status       string        `json:"status"`

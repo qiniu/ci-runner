@@ -4219,6 +4219,10 @@ func TestMigrateSQLiteRunnerRequestAddsProfileScopeWithoutLosingRows(t *testing.
 		"legacy-request", "github", `[]`, "runner", StatusCompleted, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Exec(`INSERT INTO runner_requests (id,source,labels_json,runner_name,status,queued_at,updated_at) VALUES (?,?,?,?,?,?,?)`,
+		"legacy-queued", "github", "[]", "legacy-queued", StatusQueued, now.Add(-24*time.Hour), now).Error; err != nil {
+		t.Fatal(err)
+	}
 	closeTestDB(t, db)
 
 	migrated := NewWithOptions(Options{Backend: BackendSQLite, DatabaseDSN: databaseURL, MigrateOnStart: true}).(*DBStore)
@@ -4239,10 +4243,14 @@ func TestMigrateSQLiteRunnerRequestAddsProfileScopeWithoutLosingRows(t *testing.
 	if row.ID != "legacy-request" || row.Status != StatusCompleted {
 		t.Fatalf("legacy row changed during migration: %#v", row)
 	}
-	for _, column := range []string{"profile_source", "profile_scope_type", "profile_scope_id", "sponsor_installation_id", "sponsor_source_repository_id", "sponsor_source_repository_full_name", "sponsor_authorization_reason"} {
+	for _, column := range []string{"queue_entered_at", "profile_source", "profile_scope_type", "profile_scope_id", "sponsor_installation_id", "sponsor_source_repository_id", "sponsor_source_repository_full_name", "sponsor_authorization_reason"} {
 		if !db.Migrator().HasColumn(&runnerRequestRecord{}, column) {
 			t.Fatalf("expected migrated runner_requests.%s", column)
 		}
+	}
+	rows, _, err := migrated.ReadReportBacklog(t.Context(), RunnerReportQuery{}, StatusQueued, 30, now.Add(time.Hour))
+	if err != nil || len(rows) != 1 || rows[0].ID != "legacy-queued" || rows[0].Since != nil || rows[0].Seconds != nil {
+		t.Fatalf("expected unavailable queue age after upgrade, got %+v, %v", rows, err)
 	}
 	if !db.Migrator().HasIndex(&runnerRequestRecord{}, "idx_runner_requests_profile_scope_status") {
 		t.Fatal("expected profile scope status index")
@@ -4566,6 +4574,8 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 
 func sqlBackendTestTables() []string {
 	return []string{
+		"runner_execution_attempts", "runner_execution_collection",
+		"report_spec_snapshots",
 		"runner_admission_guard",
 		"terminal_sessions",
 		"deployment_events",
@@ -5625,6 +5635,13 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		record.SandboxConfigSource != "admin_default" {
 		t.Fatalf("sandbox configuration changed during migration: %#v", record)
 	}
+	var historyCount int64
+	if err := db.Model(&executionAttempt{}).Where("request_id = ?", record.ID).Count(&historyCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 0 || record.jobTimeEvidence() != nil {
+		t.Fatal("migration synthesized execution history")
+	}
 	if record.ProvisionAttemptID != "" || record.SandboxCreateDispatched {
 		t.Fatal("migration assigned a new attempt to historical state")
 	}
@@ -5641,6 +5658,8 @@ func TestMigratePreservesAdditiveRunnerRequestColumns(t *testing.T) {
 		"github_job_conclusion",
 		"github_job_runner_name",
 		"github_job_observed_at",
+		"github_job_started_at", "github_job_completed_at", "github_job_start_source", "github_job_end_source",
+		"github_job_start_observed_at", "github_job_end_observed_at", "github_job_time_conclusion",
 		"termination_source",
 		"runner_exit_code",
 		"sandbox_region",

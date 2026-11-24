@@ -80,7 +80,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 	if after := get(specPage, true); after.Code != http.StatusOK || after.Body.String() != before.Body.String() {
 		t.Fatalf("spec page changed after catalog update: before %s, after %d %s", before.Body, after.Code, after.Body)
 	}
-	paths := []string{"/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", specPage, "/reports/" + value.Snapshot + "/requests"}
+	paths := []string{"/reports/execution-usage", "/reports/spec-usage", "/reports/overview", "/reports/active", "/reports/" + value.Snapshot + "/groups?dimension=spec", specPage, "/reports/" + value.Snapshot + "/requests"}
 	for _, path := range paths {
 		ordinary := httptest.NewRequest(http.MethodGet, path, nil)
 		ordinary.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
@@ -178,7 +178,7 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
+	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
 		w := httptest.NewRecorder()
 		srv.writeReportError(w, httptest.NewRequest(http.MethodGet, "/reports/overview", nil), tc.err)
 		if w.Code != tc.code {
@@ -205,5 +205,195 @@ func TestRunnerReportDefaultsBeforeMidnightGap(t *testing.T) {
 	w, err := q.Window(now)
 	if err != nil || !w.End.Equal(now) {
 		t.Fatalf("default end=%+v err=%v", w, err)
+	}
+}
+
+func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	get := func(srv *Server, path string, want int) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Fatalf("GET %s: %d %s, want %d", path, w.Code, w.Body, want)
+		}
+		return w.Body.String()
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "another-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	body := get(first, "/reports/spec-usage", http.StatusOK)
+	var dashboard struct {
+		Snapshot string
+		Query    state.RunnerReportQuery
+	}
+	if err := json.Unmarshal([]byte(body), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	page := "/reports/" + dashboard.Snapshot + "/specs?sort=runtime&limit=1&offset=1"
+	before := get(first, page, http.StatusOK)
+	var paged struct {
+		Items  []state.ReportSpecUsage
+		Offset int
+	}
+	if err := json.Unmarshal([]byte(before), &paged); err != nil || len(paged.Items) != 1 || paged.Offset != 1 {
+		t.Fatalf("expected one item on the second page: %s", before)
+	}
+	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "new-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	q := url.Values{"from": {dashboard.Query.From}, "to": {dashboard.Query.To}, "timezone": {dashboard.Query.Timezone}, "grain": {dashboard.Query.Grain}, "snapshot": {dashboard.Snapshot}}
+	if got := get(second, "/reports/spec-usage?"+q.Encode(), http.StatusOK); got != body {
+		t.Fatal("restored dashboard differs from the original response")
+	}
+	if got := get(second, page, http.StatusOK); got != before {
+		t.Fatal("restored page differs after catalog change")
+	}
+	get(second, "/reports/overview?"+q.Encode(), http.StatusGone)
+	q.Set("repository", "different/repo")
+	get(second, "/reports/spec-usage?"+q.Encode(), http.StatusGone)
+	if _, err := store.LoadReportSnapshot(t.Context(), dashboard.Snapshot, time.Now().Add(reportRetention)); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("expired snapshot: %v", err)
+	}
+}
+
+func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	get := func(srv *Server, path string, want int) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	add := func(i int) {
+		t.Helper()
+		id := fmt.Sprintf("fixture-%03d", i)
+		if _, _, err := store.CreateRequest(state.RunnerRequest{ID: id, Source: "fixture", RepositoryFullName: "fork/" + id, GitHubInstallationID: 12}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 24; i++ {
+		add(i)
+	}
+	body := get(first, "/reports/account-usage?owner=installation:12", 200)
+	var dashboard struct {
+		Snapshot string
+		Query    state.RunnerReportQuery
+		Totals   state.ReportTotals
+	}
+	if err := json.Unmarshal([]byte(body), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	from, _ := time.Parse(time.DateOnly, dashboard.Query.From)
+	to, _ := time.Parse(time.DateOnly, dashboard.Query.To)
+	if to.Sub(from) != 30*24*time.Hour || dashboard.Totals.Requests != 24 {
+		t.Fatalf("default account cohort %+v", dashboard)
+	}
+	pin := url.Values{"from": {dashboard.Query.From}, "to": {dashboard.Query.To}, "owner": {"installation:12"}, "snapshot": {dashboard.Snapshot}}
+	base := "/reports/" + dashboard.Snapshot
+	groupPath := base + "/groups?dimension=repository&sort=runtime&offset=20"
+	requestPath := base + "/requests?offset=20"
+	// Each endpoint must be able to restore first, before a dashboard has warmed the process.
+	for i, path := range []string{groupPath, requestPath, "/reports/account-usage?" + pin.Encode()} {
+		second.reports.entries = nil
+		before := get(first, path, 200)
+		add(25 + i)
+		if got := get(second, path, 200); got != before {
+			t.Fatalf("restored %s changed", path)
+		}
+		if path == groupPath || path == requestPath {
+			var page struct {
+				Items         []json.RawMessage
+				Total, Offset int
+			}
+			if err := json.Unmarshal([]byte(before), &page); err != nil || len(page.Items) != 4 || page.Total != 24 || page.Offset != 20 {
+				t.Fatalf("second page %s", before)
+			}
+		} else if before != body {
+			t.Fatal("dashboard changed")
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		w := httptest.NewRecorder()
+		second.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("ordinary account read %s: %d", path, w.Code)
+		}
+	}
+	get(second, "/reports/spec-usage?"+pin.Encode(), 410)
+	pin.Set("owner", "installation:13")
+	get(second, "/reports/account-usage?"+pin.Encode(), 410)
+	get(second, "/reports/account-usage?repository_missing=1&repository=x", 400)
+	get(second, "/reports/account-usage?snapshot=acct-missing", 410)
+}
+
+func TestRunnerReportEfficiencySnapshotAndBacklog(t *testing.T) {
+	dir := t.TempDir()
+	store := state.New(dir)
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	peer := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	if _, _, err := store.CreateRequest(state.RunnerRequest{ID: "eff-sample", Source: "fixture", RepositoryFullName: "org/repo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	reject := func(id string) {
+		t.Helper()
+		if _, _, err := store.CreateRejectedRequest(state.RunnerRequest{ID: id, Source: "fixture", RepositoryFullName: "org/repo"}, nil, "profile_labels_not_matched"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reject("rejected-before-snapshot")
+	get := func(s *Server, path string, admin bool, want int) []byte {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if admin {
+			r = adminRequest(http.MethodGet, path, nil)
+		} else {
+			r.AddCookie(testSessionCookie("hubot-id", "hubot", "user"))
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		return w.Body.Bytes()
+	}
+	const path = "/reports/efficiency?repository=org%2Frepo"
+	var report struct {
+		Snapshot   string
+		Efficiency *state.EfficiencySummary
+	}
+	body := get(srv, path, true, 200)
+	if err := json.Unmarshal(body, &report); err != nil || report.Efficiency == nil {
+		t.Fatal("missing efficiency summary")
+	}
+	reject("rejected-after-snapshot")
+	if got := get(peer, path+"&snapshot="+report.Snapshot, true, 200); string(got) != string(body) {
+		t.Fatal("restored efficiency dashboard changed")
+	}
+	details := "/reports/" + report.Snapshot + "/requests?dimension=admission_reason&key=profile_labels_not_matched&limit=20"
+	var page struct {
+		Items []state.ReportRequest
+		Total int
+	}
+	if err := json.Unmarshal(get(peer, details, true, 200), &page); err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "rejected-before-snapshot" {
+		t.Fatalf("restored request evidence: %+v, %v", page, err)
+	}
+	get(peer, "/reports/account-usage?snapshot="+report.Snapshot, true, 410)
+	get(peer, "/reports/efficiency?snapshot=eff-missing", true, 410)
+	const backlog = "/reports/backlog?status=queued&minutes=30"
+	get(peer, backlog, true, 200)
+	get(peer, backlog+"&from=2020-01-01", true, 400)
+	get(peer, "/reports/backlog?status=running&minutes=30", true, 400)
+	for _, p := range []string{path, details, backlog} {
+		get(peer, p, false, 401)
 	}
 }

@@ -38,10 +38,18 @@ func (s *DBStore) TouchTerminalSession(ctx context.Context, id, owner string, ac
 	if activate {
 		status = "creating"
 	}
-	result := db.WithContext(ctx).Model(&TerminalSession{}).Where("id = ? AND owner = ? AND status = ? AND lease_until > (?)", id, owner, status, accessClockMillis(db)).Updates(map[string]any{
-		"status": "active", "lease_until": gorm.Expr("(?) + ?", accessClockMillis(db), terminalLeaseMillis), "updated_at": time.Now().UTC(),
+	live := db.WithContext(ctx).Model(&TerminalSession{}).Where("id = ? AND owner = ? AND status = ? AND lease_until > (?)", id, owner, status, accessClockMillis(db))
+	result := live.Session(&gorm.Session{}).Updates(map[string]any{
+		"status": "active", "lease_until": gorm.Expr("(?) + ?", accessClockMillis(db), terminalLeaseMillis), "updated_at": db.NowFunc().UTC(),
 	})
-	return result.RowsAffected == 1, result.Error
+	if activate || result.Error != nil || result.RowsAffected != 0 || db.Dialector.Name() != BackendMySQL {
+		return result.RowsAffected == 1, result.Error
+	}
+	// MySQL counts changed rows. A renewal in the same millisecond can
+	// leave every value unchanged while the original lease is still live.
+	var count int64
+	err = live.Count(&count).Error
+	return count == 1, err
 }
 
 func (s *DBStore) FinishTerminalSession(ctx context.Context, id, owner, cleanup, reason string) error {

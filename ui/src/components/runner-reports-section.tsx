@@ -1,12 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
-import { RefreshCw, Filter, Info, ChartNoAxesColumn, Table2, ChevronDown } from "lucide-react"
+import { RefreshCw, Filter, Info, ChevronDown } from "lucide-react"
 import {
   reportChartPalette,
   reportDistribution,
+  reportGroupLabel,
   reportPreset,
   reportQueryKeys,
   reportQueryParams,
+  type ExecutionUsage,
   type ReportQuery,
   type ReportDimension,
   type ReportGroup,
@@ -22,7 +24,11 @@ import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ReportDisplayMode, ReportPager, ReportSelect, ResourceState } from "@/components/report-controls"
+import { type ReportFetch as Request, type Resource, useReportResource } from "@/use-report-resource"
+import { EfficiencyReport, CurrentBacklog } from "@/components/efficiency-report"
+import { ExecutionUsageReport } from "@/components/execution-usage-report"
+import { AccountUsageReport } from "@/components/account-usage-report"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
@@ -30,39 +36,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 const ReportChart = lazy(() => import("@/components/report-chart"))
 
-type Request = (url: string, options?: RequestInit) => Promise<unknown>
-type Resource<T> = { url: string; data?: T; error?: string }
-function useReportResource<T>(
-  url: string,
-  request: Request,
-  revision = 0,
-  pinnedUrl?: (resource: Resource<T>) => string | undefined,
-) {
-  const [state, setState] = useState<Resource<T>>({ url: "" })
-  // Writing the displayed snapshot to the URL should not reload it. A page reload
-  // starts with empty state and fetches the pinned URL, including expiry checks.
-  const fetchUrl = url === pinnedUrl?.(state) ? state.url : url
-  const [attempt, setAttempt] = useState(0)
-  const retry = useCallback(() => setAttempt((v) => v + 1), [])
-  useEffect(() => {
-    const controller = new AbortController()
-    let current = true
-    if (fetchUrl)
-      void request(fetchUrl, { signal: controller.signal })
-        .then((data) => {
-          if (current) setState({ url: fetchUrl, data: data as T })
-        })
-        .catch((error) => {
-          if (current) setState({ url: fetchUrl, error: error instanceof Error ? error.message : String(error) })
-        })
-    return () => {
-      current = false
-      controller.abort()
-    }
-  }, [fetchUrl, request, revision, attempt])
-  return { ...(state.url === fetchUrl ? state : { url }), retry }
-}
-function pinnedReportUrl({ url, data }: Resource<RunnerReport>) {
+type ExecutionReport = Pick<RunnerReport, "query" | "snapshot" | "observed_at" | "expires_at"> & { execution: ExecutionUsage }
+type ReportResponse = RunnerReport | ExecutionReport
+
+function pinnedReportUrl({ url, data }: Resource<ReportResponse>) {
   if (!data) return
   const params = new URLSearchParams()
   for (const key of reportQueryKeys) {
@@ -79,35 +56,48 @@ export function RunnerReportsSection({
   search,
   request,
   onNavigate,
+  onOpenRequest,
 }: {
   search: string
   request: Request
-  onNavigate: (search: string) => void
+  onNavigate: (search: string, replace?: boolean) => void
+  onOpenRequest: (id: string, reportSearch: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const [revision, setRevision] = useState(0)
   const [trendMetric, setTrendMetric] = useState("requests-runtime")
   const params = reportQueryParams(search)
   const urlState = new URLSearchParams(search)
-  const view = urlState.get("view") === "specs" ? "specs" : "overview"
+  const tab = urlState.get("view")
+  const view = tab === "specs" || tab === "accounts" || tab === "efficiency" || tab === "execution" ? tab : "overview"
+  const sharedUsage = view === "accounts" || view === "efficiency"
   // Older spec links used a cohort-wide filter and may carry a scoped snapshot.
   if (view === "specs" && params.has("spec")) {
     params.delete("spec")
     params.delete("snapshot")
   }
   const query = params.toString()
-  const overview = useReportResource<RunnerReport>(
-    `/reports/${view === "specs" ? "spec-usage" : "overview"}?${query}`,
+  const endpoint = { overview: "overview", specs: "spec-usage", accounts: "account-usage", efficiency: "efficiency", execution: "execution-usage" }[view]
+  const overview = useReportResource<ReportResponse>(
+    `/reports/${endpoint}?${query}`,
     request,
     revision,
     pinnedReportUrl,
   )
-  const report = overview.data
+  const response = overview.data
+  const report = response && "totals" in response ? response : undefined
+  useEffect(() => {
+    if (!sharedUsage || !report || new URLSearchParams(search).has("snapshot")) return
+    const pinned = new URLSearchParams(search)
+    for (const [key, value] of Object.entries(report.query)) if (value) pinned.set(key, value)
+    pinned.set("snapshot", report.snapshot)
+    onNavigate(`?${pinned}`, true)
+  }, [sharedUsage, report, search, onNavigate])
   const navigate = (values: Record<string, string | null>) => {
     const next = new URLSearchParams(search)
-    if (report) {
-      for (const [key, value] of Object.entries(report.query)) if (value) next.set(key, value)
-      next.set("snapshot", report.snapshot)
+    if (response) {
+      for (const [key, value] of Object.entries(response.query)) if (value) next.set(key, value)
+      next.set("snapshot", response.snapshot)
     }
     for (const [key, value] of Object.entries(values)) {
       if (value === null) next.delete(key)
@@ -115,23 +105,55 @@ export function RunnerReportsSection({
     }
     onNavigate(`?${next}`)
   }
+  const actions = { request, search, navigate, onOpenRequest }
   const refresh = () => {
-    navigate({ snapshot: null, focus_snapshot: null, requests_offset: null, spec_offset: null })
+    navigate({
+      snapshot: null,
+      focus_snapshot: null,
+      requests_offset: null,
+      spec_offset: null,
+      group_offset: null,
+      selected_request: null,
+    })
     setRevision((v) => v + 1)
   }
-  const applyFilters = (query: ReportQuery) => {
+  const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
+  const filterQuery = Object.fromEntries([...params].filter(([key]) => key !== "snapshot"))
+  const selected: ReportQuery = response?.query ?? { ...defaults, ...filterQuery }
+  const filterKey = JSON.stringify(reportQueryKeys.map((key) => selected[key] || ""))
+  const [edits, setEdits] = useState<{ key: string; query: ReportQuery } | null>(null)
+  if (edits && edits.key !== filterKey) setEdits(null)
+  const draft = edits?.key === filterKey ? edits.query : selected
+  const applyFilters = (query: ReportQuery, ranking?: string) => {
+    setEdits(null)
     const next = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)))
-    for (const key of ["sort", "view", "spec_mode", "spec_sort", "spec_q", "focus_spec", "focus_label"]) {
+    for (const key of [
+      "sort",
+      "view",
+      "spec_mode",
+      "spec_sort",
+      "spec_q",
+      "focus_spec",
+      "focus_label",
+      "account_mode",
+      "anomaly_sort",
+      "backlog_status",
+      "backlog_minutes",
+      "ranking",
+    ]) {
       if (urlState.has(key)) next.set(key, urlState.get(key)!)
     }
+    if (ranking) next.set("ranking", ranking)
     if (view === "specs" && !next.has("focus_spec") && urlState.get("spec")) {
       next.set("focus_spec", urlState.get("spec")!)
     }
     onNavigate(`?${next}`)
   }
-  const defaults: ReportQuery = { ...reportPreset(30, "UTC"), timezone: "UTC", grain: "day" }
-  const filterQuery = Object.fromEntries([...params].filter(([key]) => key !== "snapshot"))
-  const selected: ReportQuery = report?.query ?? { ...defaults, ...filterQuery }
+  const selectGroup = (dimension: ReportDimension, key: string | null) => {
+    const next = { ...draft, [dimension]: key ?? "" }
+    if (dimension === "repository") next.repository_missing = key === "" ? "1" : ""
+    applyFilters(next, dimension === "owner" && key !== null ? "repository" : undefined)
+  }
   const sort = urlState.get("sort") === "runtime" ? "runtime" : "requests"
   return (
     <section className="min-w-0 space-y-4" aria-labelledby="reports-title">
@@ -147,25 +169,92 @@ export function RunnerReportsSection({
         </Button>
       </div>
       <ReportFilters
-        key={JSON.stringify(reportQueryKeys.map((key) => selected[key] || ""))}
-        query={selected}
+        key={filterKey}
+        draft={draft}
+        onDraftChange={(query) => setEdits({ key: filterKey, query })}
         onApply={applyFilters}
+        identityFilters={
+          sharedUsage &&
+          report &&
+          (["owner", "repository", "spec"] as const).map((dimension) => {
+            const focus =
+              report.query[dimension] ??
+              (dimension === "repository" && report.query.repository_missing ? "" : null)
+            const group = report.distributions?.[dimension].requests.find((item) => item.key === focus)
+            return (
+              <IdentityFilter
+                key={dimension}
+                dimension={dimension}
+                report={report}
+                request={request}
+                focus={focus}
+                label={focus === null ? "" : reportGroupLabel(t, dimension, focus, group?.label || focus)}
+                onSelect={(key) => selectGroup(dimension, key)}
+              />
+            )
+          })
+        }
       />
       <Tabs
         className="min-w-0 gap-4"
         value={view}
         onValueChange={(next) => {
-          if (next !== view) navigate({ view: next === "overview" ? null : next, snapshot: null })
+          if (next === view) return
+          navigate({
+            view: next === "overview" ? null : next,
+            snapshot: null,
+            requests_offset: urlState.has("requests_offset") && (next === "accounts" || next === "efficiency") ? "0" : null,
+            selected_request: null,
+          })
         }}
       >
-        <TabsList variant="line" aria-label={t("reports.views")}>
-          {(["overview", "specs"] as const).map((tab) => (
+        <TabsList variant="line" className="h-auto max-w-full flex-wrap justify-start" aria-label={t("reports.views")}>
+          {(["overview", "specs", "accounts", "efficiency", "execution"] as const).map((tab) => (
             <TabsTrigger key={tab} value={tab} variant="line">
               {t(`reports.${tab}`)}
             </TabsTrigger>
           ))}
         </TabsList>
         <ResourceState resource={overview} />
+        <TabsContent value="execution" className="min-w-0">
+          {view === "execution" && response && "execution" in response && (
+            <ExecutionUsageReport usage={response.execution} observedAt={response.observed_at} timezone={response.query.timezone} />
+          )}
+        </TabsContent>
+        <TabsContent value="efficiency" className="min-w-0 space-y-4">
+          {view === "efficiency" && (
+            <>
+              {report?.efficiency && <EfficiencyReport report={report} summary={report.efficiency} {...actions} />}
+              <CurrentBacklog query={selected} revision={revision} {...actions} />
+            </>
+          )}
+        </TabsContent>
+        <TabsContent value="accounts" className="min-w-0">
+          {view === "accounts" && report && (
+            <AccountUsageReport
+              report={report}
+              search={search}
+              request={request}
+              navigate={navigate}
+              onOpenRequest={onOpenRequest}
+              onSelect={selectGroup}
+            >
+              <div className="grid min-w-0 gap-3 xl:grid-cols-3">
+                {(["owner", "repository", "spec"] as const).map((d) => (
+                  <Distribution
+                    key={d}
+                    dimension={d}
+                    report={report}
+                    request={request}
+                    sort={sort}
+                    onSelect={(key) => selectGroup(d, key)}
+                  />
+                ))}
+              </div>
+              <Trend report={report} metric={trendMetric} onMetricChange={setTrendMetric} />
+            </AccountUsageReport>
+          )}
+        </TabsContent>
         <TabsContent value="specs" className="min-w-0">
           {report && view === "specs" && (
             <SpecUsageReport
@@ -194,7 +283,9 @@ export function RunnerReportsSection({
                     to: report.window.previous_end,
                   })}
                 </p>
-                <p>{t("reports.observed", { time: formatTime(report.observed_at, i18n.resolvedLanguage) })}</p>
+                <p>
+                  {t("reports.observed", { time: formatTime(report.observed_at, i18n.resolvedLanguage) })}
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
                 {(
@@ -345,38 +436,16 @@ function SpecUsageReport({
             {t(table ? "reports.specUsageDescription" : "reports.specChartHelp")}
           </p>
         </div>
-        <div
-          role="group"
-          aria-label={t("reports.displayMode")}
-          className="inline-flex rounded-lg border p-0.5"
-        >
-          <Button
-            size="sm"
-            variant={table ? "ghost" : "secondary"}
-            aria-pressed={!table}
-            onClick={() => update({ spec_mode: null })}
-          >
-            <ChartNoAxesColumn />
-            {t("reports.chartMode")}
-          </Button>
-          <Button
-            size="sm"
-            variant={table ? "secondary" : "ghost"}
-            aria-pressed={table}
-            onClick={() => update({ spec_mode: "table" })}
-          >
-            <Table2 />
-            {t("reports.tableMode")}
-          </Button>
-        </div>
+        <ReportDisplayMode table={table} onChange={(table) => update({ spec_mode: table ? "table" : null })} />
       </div>
       {dashboard && (
-        <SpecFilter
+        <IdentityFilter
+          dimension="spec"
           report={report}
           request={request}
-          focus={focus}
+          focus={focus || null}
           label={item?.label || url.get("focus_label")}
-          onSelect={select}
+          onSelect={(key, label) => select(key || "", label)}
         />
       )}
       {focus && !embedded && <ResourceState resource={lookup} />}
@@ -588,74 +657,54 @@ function SpecRows({
   )
 }
 
-function ReportPager({
-  offset,
-  total,
-  label,
-  onChange,
-}: {
-  offset: number
-  total: number
-  label: string
-  onChange: (offset: number) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-      <span>{label}</span>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={offset === 0}
-          onClick={() => onChange(Math.max(0, offset - 20))}
-        >
-          {t("reports.previous")}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={offset + 20 >= total}
-          onClick={() => onChange(offset + 20)}
-        >
-          {t("reports.next")}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function SpecFilter({
+function IdentityFilter({
+  dimension,
   report,
   request,
   focus,
   label,
   onSelect,
 }: {
+  dimension: ReportDimension
   report: RunnerReport
   request: Request
-  focus: string
+  focus: string | null
   label?: string | null
-  onSelect: (key: string, label: string) => void
+  onSelect: (key: string | null, label: string) => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
   const [offset, setOffset] = useState(0)
-  const initial = !search && !offset
+  const spec = dimension === "spec"
+  const ranking = report.distributions?.[dimension]
+  const catalog = spec && Boolean(report.spec_dashboard)
+  const firstPage = catalog
+    ? report.spec_dashboard
+    : ranking && ranking.total <= ranking.requests.length
+      ? { items: ranking.requests, total: ranking.total }
+      : undefined
+  const initial = !search && !offset && firstPage
+  const total = catalog ? report.spec_dashboard?.total : ranking?.total
+  const fieldLabel = spec ? t("reports.specFilter") : t(`reports.${dimension}`)
+  const allLabel = spec ? t("reports.allSpecs") : t("common.all")
+  const searchLabel = spec ? t("reports.specSearch") : t("reports.findGroup")
   const params = new URLSearchParams({ q: search, offset: String(offset), limit: "20" })
-  const resource = useReportResource<ReportSpecPage>(
-    open && !initial ? `/reports/${encodeURIComponent(report.snapshot)}/specs?${params}` : "",
+  if (!catalog) params.set("dimension", dimension)
+  const resource = useReportResource<ReportPage<{ key: string; label: string }>>(
+    open && !initial
+      ? `/reports/${encodeURIComponent(report.snapshot)}/${catalog ? "specs" : "groups"}?${params}`
+      : "",
     request,
   )
-  const page = initial ? report.spec_dashboard : resource.data
-  const choose = (key: string, name: string) => {
+  const page = initial || resource.data
+  const choose = (key: string | null, name: string) => {
     setOpen(false)
     onSelect(key, name)
   }
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span className="shrink-0 text-sm font-medium">{t("reports.specFilter")}</span>
+    <div className={catalog ? "flex min-w-0 items-center gap-2" : "flex min-w-0 flex-col gap-1.5"}>
+      <span className="shrink-0 text-sm font-medium">{fieldLabel}</span>
       <Popover
         open={open}
         onOpenChange={(value) => {
@@ -665,16 +714,16 @@ function SpecFilter({
         }}
       >
         <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="min-w-0" aria-label={t("reports.specFilter")}>
-            <span className="truncate">{focus ? label || t("common.unknown") : t("reports.allSpecs")}</span>
+          <Button type="button" variant="outline" size="sm" className="min-w-0" aria-label={fieldLabel}>
+            <span className="truncate">{focus !== null ? label || t("common.unknown") : allLabel}</span>
             <ChevronDown />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" aria-label={t("reports.specFilter")} className="space-y-2 p-2">
-          {(report.spec_dashboard?.total ?? 0) > 20 && (
+        <PopoverContent align="start" aria-label={fieldLabel} className="space-y-2 p-2">
+          {(total ?? 0) > 20 && (
             <Input
-              aria-label={t("reports.specSearch")}
-              placeholder={t("reports.specSearchPlaceholder")}
+              aria-label={searchLabel}
+              placeholder={spec ? t("reports.specSearchPlaceholder") : searchLabel}
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value)
@@ -686,11 +735,11 @@ function SpecFilter({
             <Button
               className="w-full justify-start"
               size="sm"
-              variant={focus ? "ghost" : "secondary"}
-              aria-pressed={!focus}
-              onClick={() => choose("", "")}
+              variant={focus !== null ? "ghost" : "secondary"}
+              aria-pressed={focus === null}
+              onClick={() => choose(null, "")}
             >
-              {t("reports.allSpecs")}
+              {allLabel}
             </Button>
             {page?.items.map((option) => (
               <Button
@@ -701,19 +750,29 @@ function SpecFilter({
                 aria-pressed={focus === option.key}
                 onClick={() => choose(option.key, option.label)}
               >
-                <span className="truncate">{option.label || t("common.unknown")}</span>
+                <span className="truncate">{reportGroupLabel(t, dimension, option.key, option.label)}</span>
               </Button>
             ))}
           </div>
           {!initial && <ResourceState resource={resource} />}
           {page?.items.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t("reports.noSpecs")}</p>
+            <p className="text-sm text-muted-foreground">
+              {spec ? t("reports.noSpecs") : t("reports.empty")}
+            </p>
           )}
           {page && page.total > 20 && (
             <ReportPager
               offset={offset}
               total={page.total}
-              label={t("reports.specCount", { count: page.total })}
+              label={
+                spec
+                  ? t("reports.specCount", { count: page.total })
+                  : t("reports.rankingPage", {
+                      first: offset + 1,
+                      last: offset + page.items.length,
+                      total: page.total,
+                    })
+              }
               onChange={setOffset}
             />
           )}
@@ -724,15 +783,30 @@ function SpecFilter({
 }
 
 function ReportFilters({
-  query,
+  identityFilters,
+  draft,
+  onDraftChange,
   onApply,
 }: {
-  query: ReportQuery
+  identityFilters?: ReactNode
+  draft: ReportQuery
+  onDraftChange: (query: ReportQuery) => void
   onApply: (query: ReportQuery) => void
 }) {
   const { t } = useTranslation()
-  const [draft, setDraft] = useState(query),
-    [error, setError] = useState("")
+  const [error, setError] = useState("")
+  const clearDimensions = (draft.owner || draft.spec || draft.repository || draft.repository_missing) && (
+    <Button
+      type="button"
+      variant="ghost"
+      onClick={() => {
+        const next = { ...draft, owner: "", spec: "", repository: "", repository_missing: "" }
+        onApply(next)
+      }}
+    >
+      {t("reports.clearDimensions")}
+    </Button>
+  )
   return (
     <form
       className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[1fr_auto]"
@@ -751,7 +825,6 @@ function ReportFilters({
             onClick={() => {
               try {
                 const next = { ...draft, ...reportPreset(days, draft.timezone) }
-                setDraft(next)
                 setError("")
                 onApply(next)
               } catch {
@@ -762,46 +835,52 @@ function ReportFilters({
             {t("reports.lastDays", { days })}
           </Button>
         ))}
+        {identityFilters && clearDimensions}
       </div>
-      <div className="grid min-w-0 items-end gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {(["from", "to", "timezone", "repository"] as const).map((key) => (
-          <div className="flex min-w-0 flex-col gap-1.5" key={key}>
-            <Label htmlFor={`report-${key}`}>{t(`reports.${key}`)}</Label>
-            <Input
-              id={`report-${key}`}
-              type={key === "from" || key === "to" ? "date" : "text"}
-              value={draft[key] || ""}
-              onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-            />
-          </div>
-        ))}
+      <div
+        className={`grid min-w-0 items-end gap-2 ${
+          identityFilters ? "sm:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]" : "sm:grid-cols-2 lg:grid-cols-5"
+        }`}
+      >
+        {(["from", "to", "timezone", "repository"] as const)
+          .filter((key) => key !== "repository" || !identityFilters)
+          .map((key) => (
+            <div className="flex min-w-0 flex-col gap-1.5" key={key}>
+              <Label htmlFor={`report-${key}`}>{t(`reports.${key}`)}</Label>
+              <Input
+                id={`report-${key}`}
+                type={key === "from" || key === "to" ? "date" : "text"}
+                value={draft[key] || ""}
+                onChange={(e) =>
+                  onDraftChange({
+                    ...draft,
+                    [key]: e.target.value,
+                    ...(key === "repository" && { repository_missing: "" }),
+                  })
+                }
+              />
+            </div>
+          ))}
+        {identityFilters}
         <ReportSelect
           label={t("reports.grain")}
           value={draft.grain}
-          onChange={(grain) => setDraft({ ...draft, grain })}
+          onChange={(grain) => onDraftChange({ ...draft, grain })}
           options={(["day", "week", "month"] as const).map((g) => [g, t(`reports.${g}`)])}
         />
       </div>
       <div className="flex flex-wrap self-end gap-2">
         <Button type="submit">{t("reports.apply")}</Button>
-        {(draft.owner || draft.spec || draft.repository) && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              const next = { ...draft, owner: "", spec: "", repository: "" }
-              setDraft(next)
-              onApply(next)
-            }}
-          >
-            {t("reports.clearDimensions")}
-          </Button>
-        )}
+        {!identityFilters && clearDimensions}
       </div>
-      {(draft.owner || draft.spec) && (
+      {(draft.owner || draft.spec || draft.repository_missing) && (
         <p className="text-sm text-muted-foreground">
           {t("reports.filtered", {
-            dimensions: [draft.owner ? t("reports.owner") : "", draft.spec ? t("reports.spec") : ""]
+            dimensions: [
+              draft.owner ? reportGroupLabel(t, "owner", draft.owner, draft.owner) : "",
+              draft.spec ? t("reports.spec") : "",
+              draft.repository_missing ? t("reports.unknownRepository") : "",
+            ]
               .filter(Boolean)
               .join(" / "),
           })}
@@ -814,61 +893,6 @@ function ReportFilters({
       )}
     </form>
   )
-}
-function ReportSelect({
-  label,
-  value,
-  options,
-  onChange,
-  inline = false,
-}: {
-  inline?: boolean
-  label: string
-  value: string
-  options: string[][]
-  onChange: (value: string) => void
-}) {
-  return (
-    <div className={inline ? "flex min-w-0 flex-wrap items-center gap-2" : "flex min-w-0 flex-col gap-1.5"}>
-      <span className="text-sm font-medium">{label}</span>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className={inline ? "w-auto min-w-32" : "w-full min-w-32"} aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map(([key, text]) => (
-            <SelectItem value={key} key={key}>
-              {text}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-function ResourceState({ resource }: { resource: { data?: unknown; error?: string; retry?: () => void } }) {
-  const { t } = useTranslation()
-  if (resource.error)
-    return (
-      <div
-        role="alert"
-        className="break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm"
-      >
-        <p>{t("reports.loadFailed")}</p>
-        <p>{resource.error}</p>
-        <p className="mt-1 text-muted-foreground">{t("reports.retryHelp")}</p>
-        <Button variant="outline" size="sm" className="mt-2" onClick={resource.retry}>
-          {t("auth.tryAgain")}
-        </Button>
-      </div>
-    )
-  if (!resource.data)
-    return (
-      <p role="status" className="py-6 text-center text-sm text-muted-foreground">
-        {t("common.loading")}
-      </p>
-    )
-  return null
 }
 function SpecTrend({ report, item }: { report: RunnerReport; item?: ReportSpecUsage }) {
   const [metric, setMetric] = useState("requests-runtime")
@@ -1067,11 +1091,11 @@ function Distribution({
       : null
   const points = groups
     ? reportDistribution(groups, report.totals, sort).map((row, index) => {
-        const label = row.label.trim()
+        const label = reportGroupLabel(t, dimension, row.key, row.label)
         const colorIndex = specKeys ? specKeys.indexOf(row.key) : index
         return {
           ...row,
-          label: row.other ? t("reports.otherGroups") : label || t("common.unknown"),
+          label: row.other ? t("reports.otherGroups") : label,
           colorIndex,
           color: row.other ? "var(--muted-foreground)" : reportChartPalette[colorIndex],
         }
@@ -1191,7 +1215,7 @@ function Distribution({
                               name: metric,
                               barMaxWidth: 22,
                               data: points.map((row) => ({
-                                id: row.key,
+                                id: row.other ? undefined : row.key,
                                 name: row.label,
                                 value: row.value ?? "-",
                                 itemStyle: { color: row.other ? colors.text : colors.series[row.colorIndex] },
@@ -1216,7 +1240,7 @@ function Distribution({
                                 row.value !== null && row.value > 0
                                   ? [
                                       {
-                                        id: row.key,
+                                        id: row.other ? undefined : row.key,
                                         name: row.label,
                                         value: row.value,
                                         itemStyle: {

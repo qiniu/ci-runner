@@ -2,6 +2,16 @@ package state
 
 import "time"
 
+// The reserved writer row serializes bounded snapshot publication on all backends.
+type reportSpecSnapshotRecord struct {
+	ID        string    `gorm:"primaryKey;size:40"`
+	ExpiresAt time.Time `gorm:"not null"`
+	Entries   int       `gorm:"not null"`
+	Payload   []byte    `gorm:"size:16777215"`
+}
+
+func (reportSpecSnapshotRecord) TableName() string { return "report_spec_snapshots" }
+
 type runnerRequestRecord struct {
 	ID                              string     `gorm:"column:id;primaryKey;index:idx_runner_requests_queued_id,priority:2,sort:asc;index:idx_runner_requests_github_installation_queued_id,priority:3,sort:asc;index:idx_runner_requests_profile_queued_id,priority:3,sort:asc;index:idx_runner_requests_repository_queued_id,priority:3,sort:asc"`
 	Source                          string     `gorm:"column:source;not null"`
@@ -17,6 +27,13 @@ type runnerRequestRecord struct {
 	GitHubJobStatus                 string     `gorm:"column:github_job_status"`
 	GitHubJobConclusion             string     `gorm:"column:github_job_conclusion"`
 	GitHubJobRunnerName             string     `gorm:"column:github_job_runner_name"`
+	GitHubJobStartedAt              *time.Time `gorm:"column:github_job_started_at;index:idx_requests_job_started"`
+	GitHubJobCompletedAt            *time.Time `gorm:"column:github_job_completed_at;index:idx_requests_job_completed"`
+	GitHubJobTimeConclusion         string     `gorm:"column:github_job_time_conclusion;size:32"`
+	GitHubJobStartSource            string     `gorm:"column:github_job_start_source;size:16"`
+	GitHubJobEndSource              string     `gorm:"column:github_job_end_source;size:16"`
+	GitHubJobStartObservedAt        *time.Time `gorm:"column:github_job_start_observed_at"`
+	GitHubJobEndObservedAt          *time.Time `gorm:"column:github_job_end_observed_at"`
 	GitHubJobObservedAt             *time.Time `gorm:"column:github_job_observed_at"`
 	PullRequestNumber               int64      `gorm:"column:pull_request_number;index:idx_runner_requests_repository_pr,priority:2"`
 	GitHubContextBackfilled         bool       `gorm:"column:github_context_backfilled;not null;default:false;index:idx_runner_requests_github_context_backfill"`
@@ -57,6 +74,7 @@ type runnerRequestRecord struct {
 	Error                           string     `gorm:"column:error"`
 	GitHubPayloadJSON               string     `gorm:"column:github_payload_json;type:text"`
 	QueuedAt                        time.Time  `gorm:"column:queued_at;not null;index:idx_runner_requests_status_updated;index:idx_runner_requests_status_retry_queue;index:idx_runner_requests_github_installation_queued,priority:2;index:idx_runner_requests_queued_id,priority:1,sort:desc;index:idx_runner_requests_github_installation_queued_id,priority:2,sort:desc;index:idx_runner_requests_profile_queued_id,priority:2,sort:desc;index:idx_runner_requests_repository_queued_id,priority:2,sort:desc"`
+	QueueEnteredAt                  *time.Time `gorm:"column:queue_entered_at"`
 	DiagnosticAttempt               string     `gorm:"column:diagnostic_attempt;size:64"`
 	DiagnosticToken                 string     `gorm:"column:diagnostic_token;size:64"`
 	DiagnosticNextAt                *time.Time `gorm:"column:diagnostic_next_at"`

@@ -73,7 +73,7 @@ func (b *specBreakdown) addGroup(dimension string, group ReportSpecSegment) {
 }
 
 func (r *RunnerReport) specBreakdowns() map[string]*specBreakdown {
-	if r.groupTotals != nil {
+	if r.GroupTotals != nil {
 		return r.specGroups
 	}
 	type groupKey struct{ spec, dimension, key string }

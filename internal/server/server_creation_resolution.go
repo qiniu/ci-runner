@@ -103,12 +103,13 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusConflict, "original GitHub Job completion is not verified")
 		return
 	}
+	observedAt := time.Now().UTC()
 	runner, err := s.gh.FindRunnerByName(ctx, st.RepositoryFullName, st.RunnerGroup, st.RunnerName)
 	if err != nil || runner != nil {
 		writeError(w, http.StatusConflict, "GitHub Runner absence is not verified")
 		return
 	}
-	retainWorkflowJobResult(&st, job, time.Now().UTC())
+	retainWorkflowJobResult(&st, job, observedAt)
 	provider := session.Provider
 	if provider == "" {
 		provider = "github"
@@ -125,6 +126,7 @@ func (s *Server) handleResolveUnknownCreation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "resolution was not committed")
 		return
 	}
+	s.observeJobTimes(ctx, st.RepositoryFullName, job, job.Status, "github_api", observedAt)
 	s.logRequiredAuditEvent(audit)
 	code := state.UnknownCreationResolvedCode
 	message := "Administrator resolved the exact creation attempt as absent using external evidence; no Sandbox deletion was observed. See audit.\n"

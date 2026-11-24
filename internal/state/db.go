@@ -249,6 +249,8 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 	models := []any{
 		&runnerAdmissionGuardRecord{},
 		&runnerEventRecord{},
+		&reportSpecSnapshotRecord{},
+		&executionAttempt{}, &executionCollection{},
 	}
 	if !existingSQLiteRunnerProfiles {
 		models = append(models, &runnerProfileRecord{})
@@ -289,6 +291,9 @@ func (s *DBStore) migrate(db *gorm.DB) error {
 		}
 	}
 	if err := initializeRunnerAdmissionGuards(db); err != nil {
+		return err
+	}
+	if err := initializeExecutionCollection(db); err != nil {
 		return err
 	}
 	return initializeStateBackfills(db)

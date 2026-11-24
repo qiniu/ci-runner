@@ -1302,7 +1302,7 @@ func (s *Server) retainWorkflowJobResultAfterRunnerExit(id string) {
 	unlock()
 
 	jobCtx, cancel := context.WithTimeout(context.Background(), workflowJobLookupTimeout)
-	job, err := s.gh.GetWorkflowJob(jobCtx, repositoryFullName, workflowJobID)
+	job, err := s.lookupLifecycleJob(jobCtx, repositoryFullName, workflowJobID)
 	cancel()
 	if err != nil {
 		s.logger.Warn("could not retain github job result after runner exit", "id", id, "workflow_job_id", workflowJobID, "error", err)
@@ -1605,7 +1605,7 @@ func (s *Server) workflowJobForRecovery(ctx context.Context, st state.RunnerStat
 	}
 	jobCtx, cancel := context.WithTimeout(ctx, workflowJobLookupTimeout)
 	defer cancel()
-	job, err := s.gh.GetWorkflowJob(jobCtx, st.RepositoryFullName, st.WorkflowJobID)
+	job, err := s.lookupLifecycleJob(jobCtx, st.RepositoryFullName, st.WorkflowJobID)
 	if err != nil {
 		return github.WorkflowJob{}, false, fmt.Errorf("get workflow job %d: %w", st.WorkflowJobID, err)
 	}

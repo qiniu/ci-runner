@@ -322,13 +322,81 @@ func TestRunnerReportSQLBackends(t *testing.T) {
 			sdb, _ := s.dbOrEnsure()
 			defer closeTestDB(t, sdb)
 			verifyRunnerReport(t, s)
+			verifyExecutionUsage(t, s)
+			verifySharedSpecSnapshotBounds(t, s)
+			verifyReportAccountUsage(t, s)
+			verifyEfficiency(t, s)
+			verifyQueueAgeAfterRetry(t, s)
 			verifyReportGlobalSpecIdentity(t, s)
 			if backend.name == BackendPostgres {
 				verifyLargePostgresReport(t, s)
 				t.Run("trend_timezone", func(t *testing.T) { verifyPostgresTrendTimezone(t, s) })
+				if os.Getenv("RUNNERD_REPORT_SCALE_TEST") == "1" {
+					t.Run("thirty_day_specs", func(t *testing.T) { verifyPostgresSpecReportScale(t, s) })
+				}
 			}
 		})
 	}
+}
+
+// Exercise a 30-day report and its comparison period at production-like volume
+// with recurring repository, owner and spec combinations.
+func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO runner_requests
+		(id, runner_name, source, labels_json, status, profile_source, profile_name, github_installation_id,
+		 repository_full_name, queued_at, creating_at, running_at, completed_at, updated_at)
+		SELECT id, id, 'fixture', '[]', 'completed', 'global', 'spec-' || (i % 10), (i % 101) % 11,
+			'repo-' || (i % 101), at, at, at + interval '2 seconds', at + interval '58 seconds', at
+		FROM (SELECT i, 'scale-' || i || '-' || copy AS id,
+			timestamptz '2025-09-25 UTC' + i * interval '10 seconds' AS at
+			FROM generate_series(1, 510000) i CROSS JOIN generate_series(1, 2) copy) fixture`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ANALYZE runner_requests").Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	r, err := s.ReadRunnerReport(ctx, RunnerReportQuery{From: "2025-10-25", To: "2025-11-24", Timezone: "UTC", Grain: "day", IncludeSpecUsage: true}, reportTime("2025-11-23T12:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each ten-second tick has two rows. The fixture ends before the current
+	// period does, and the previous period ends at the matching UTC time of day.
+	if r.Totals.Requests != 501602 || r.Previous.Requests != 509758 || r.SpecSummary.Requests != r.Totals.Requests || r.Totals.ActiveRepositories != 101 || r.Totals.Runtime.Seconds != 56*float64(r.Totals.Requests) {
+		t.Fatalf("30-day aggregate: current %d, prior %d, repositories %d, runtime %v", r.Totals.Requests, r.Previous.Requests, r.Totals.ActiveRepositories, r.Totals.Runtime)
+	}
+	accountStart := time.Now()
+	accountCtx, accountCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer accountCancel()
+	account, err := s.ReadRunnerReport(accountCtx, RunnerReportQuery{From: r.Query.From, To: r.Query.To, Timezone: "UTC", Grain: "day", IncludeAccountUsage: true}, r.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Totals != r.Totals || account.Previous != r.Previous || account.Outcomes["unknown"] != account.Totals.Requests {
+		t.Fatal("30-day account usage does not reconcile with specs")
+	}
+	t.Logf("30-day account dashboard: %d current + %d prior in %s", account.Totals.Requests, account.Previous.Requests, time.Since(accountStart))
+	t.Logf("30-day Specs dashboard: %d current + %d prior requests in %s", r.Totals.Requests, r.Previous.Requests, accountStart.Sub(start))
+	efficiencyCtx, cancelEfficiency := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelEfficiency()
+	efficiencyStart := time.Now()
+	effQuery := r.Query
+	effQuery.IncludeSpecUsage = false
+	effQuery.IncludeEfficiency = true
+	efficiency, err := s.ReadRunnerReport(efficiencyCtx, effQuery, r.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if efficiency.Efficiency == nil || efficiency.Totals != r.Totals || efficiency.Rows != nil {
+		t.Fatal("invalid large efficiency report")
+	}
+	t.Logf("30-day efficiency report: %d current + %d previous in %s", efficiency.Totals.Requests, efficiency.Previous.Requests, time.Since(efficiencyStart))
 }
 
 // First force the aggregate path with previous-period rows only. Every current
@@ -345,9 +413,22 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	accounts := q
+	accounts.IncludeAccountUsage = true
+	accounts.Grain = "month"
+	smallAccounts, err := s.ReadRunnerReport(t.Context(), accounts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	specQuery := q
 	specQuery.IncludeSpecUsage = true
 	smallSpecs, err := s.ReadRunnerReport(t.Context(), specQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effQuery := q
+	effQuery.IncludeEfficiency = true
+	smallEff, err := s.ReadRunnerReport(t.Context(), effQuery, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,6 +449,27 @@ func verifyLargePostgresReport(t *testing.T, s *DBStore) {
 		}
 		t.Logf("PostgreSQL report: %d current + %d previous, %d retained entries in %s", r.Totals.Requests, r.Previous.Requests, r.RetainedEntries(), time.Since(start))
 		return r
+	}
+	largeEff, err := s.ReadRunnerReport(t.Context(), effQuery, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(smallEff.Efficiency, largeEff.Efficiency) || largeEff.Rows != nil {
+		t.Fatalf("large efficiency report differs: %+v %+v", smallEff.Efficiency, largeEff.Efficiency)
+	}
+	largeAccounts, err := s.ReadRunnerReport(t.Context(), accounts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dim := range []string{"owner", "repository", "spec"} {
+		small, _ := smallAccounts.Groups(dim, "requests")
+		large, _ := largeAccounts.Groups(dim, "requests")
+		if !reflect.DeepEqual(small, large) {
+			t.Fatalf("account %s small vs aggregate: %+v vs %+v", dim, small, large)
+		}
+	}
+	if !reflect.DeepEqual(smallAccounts.Outcomes, largeAccounts.Outcomes) || !reflect.DeepEqual(smallAccounts.Trend, largeAccounts.Trend) {
+		t.Fatal("aggregate dashboard differs from detail cohort")
 	}
 	bigSpecs, err := s.ReadRunnerReport(t.Context(), specQuery, now)
 	if err != nil {
@@ -476,9 +578,9 @@ func TestRunnerReportChartRankings(t *testing.T) {
 			})
 		}
 	}
-	aggregate := &RunnerReport{groupTotals: make(map[string][]ReportGroup)}
+	aggregate := &RunnerReport{GroupTotals: make(map[string][]ReportGroup)}
 	for _, dim := range []string{"spec", "owner", "repository"} {
-		aggregate.groupTotals[dim] = rows.groupRows(dim)
+		aggregate.GroupTotals[dim] = rows.groupRows(dim)
 	}
 	for _, report := range []*RunnerReport{rows, aggregate} {
 		rankings := report.ChartDistributions()
@@ -629,9 +731,9 @@ func TestRunnerReportScale(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	q := RunnerReportQuery{From: "2026-11-19", To: "2026-11-21", Timezone: "UTC", Grain: "day"}
+	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-11-19", To: "2026-11-21", Timezone: "UTC", Grain: "day"}
 	// Two queued requests outside the cohort let us measure real queue claims.
-	for _, id := range []string{"baseline-claim", "concurrent-claim"} {
+	for _, id := range []string{"baseline-claim", "concurrent-claim", "efficiency-claim"} {
 		if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, Source: "fixture", LabelsJSON: "[]", Status: StatusQueued, QueuedAt: start.AddDate(0, 0, -100), UpdatedAt: now}).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -641,39 +743,47 @@ func TestRunnerReportScale(t *testing.T) {
 		t.Fatalf("baseline claim: %v %v", ok, err)
 	}
 	t.Logf("baseline queue claim=%s", time.Since(baselineStart))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	reportDone := make(chan error, 1)
-	go func() { _, err := s.ReadRunnerReport(ctx, q, now); reportDone <- err }()
-	// The query is intentionally much longer than this head start. Assert it
-	// is still in flight before and after the overlapping operations.
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case err := <-reportDone:
-		t.Fatalf("report finished before overlap: %v", err)
-	default:
-	}
+	for _, name := range []string{"accounts", "efficiency"} {
+		t.Run(name, func(t *testing.T) {
+			query := q
+			query.IncludeAccountUsage = name == "accounts"
+			query.IncludeEfficiency = name == "efficiency"
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			reportDone := make(chan error, 1)
+			reportStart := time.Now()
+			go func() { _, err := s.ReadRunnerReport(ctx, query, now); reportDone <- err }()
+			// The query is intentionally much longer than this head start. Assert it
+			// is still in flight before and after the overlapping operations.
+			time.Sleep(50 * time.Millisecond)
+			select {
+			case err := <-reportDone:
+				t.Fatalf("report finished before overlap: %v", err)
+			default:
+			}
 
-	claimDone := make(chan time.Duration, 1)
-	go func() {
-		started := time.Now()
-		_, _, ok, err := s.ClaimNextRunnable("report-concurrent", time.Minute)
-		if err != nil || !ok {
-			t.Errorf("concurrent claim: %v %v", ok, err)
-		}
-		claimDone <- time.Since(started)
-	}()
-	listStart := time.Now()
-	if _, _, err := s.ListStatesCursor(ctx, RunnerRequestListOptions{Limit: 25}, nil); err != nil {
-		t.Fatal(err)
-	}
-	listLatency, claimLatency := time.Since(listStart), <-claimDone
-	if err := <-reportDone; err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("during report: 25-row list=%s, queue claim=%s", listLatency, claimLatency)
-	if listLatency > 500*time.Millisecond || claimLatency > 500*time.Millisecond {
-		t.Fatal("report exceeded the 500ms local scheduling contention gate")
+			claimDone := make(chan time.Duration, 1)
+			go func() {
+				started := time.Now()
+				_, _, ok, err := s.ClaimNextRunnable("report-concurrent", time.Minute)
+				if err != nil || !ok {
+					t.Errorf("concurrent claim: %v %v", ok, err)
+				}
+				claimDone <- time.Since(started)
+			}()
+			listStart := time.Now()
+			if _, _, err := s.ListStatesCursor(ctx, RunnerRequestListOptions{Limit: 25}, nil); err != nil {
+				t.Fatal(err)
+			}
+			listLatency, claimLatency := time.Since(listStart), <-claimDone
+			if err := <-reportDone; err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("report=%s; during report: 25-row list=%s, queue claim=%s", time.Since(reportStart), listLatency, claimLatency)
+			if listLatency > 500*time.Millisecond || claimLatency > 500*time.Millisecond {
+				t.Fatal("report exceeded the 500ms local scheduling contention gate")
+			}
+		})
 	}
 	before := time.Now()
 	r, err := s.ReadRunnerReport(context.Background(), q, now)
@@ -684,7 +794,7 @@ func TestRunnerReportScale(t *testing.T) {
 	if r.Totals.Requests != 100000 {
 		t.Fatal("truncated report")
 	}
-	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: report=%s, retained=%d", elapsed, len(r.Rows))
+	t.Logf("100000 requests, 20 repositories, 1KiB historical payload/row: report=%s, retained entries=%d", elapsed, r.RetainedEntries())
 	before = time.Now()
 	if _, _, err := s.ListStatesCursor(context.Background(), RunnerRequestListOptions{Limit: 25}, nil); err != nil {
 		t.Fatal(err)
@@ -910,3 +1020,113 @@ func TestRunnerReportMissingSpecLabel(t *testing.T) {
 		t.Fatalf("real spec names must not be mistaken for missing names: %q", row.SpecLabel)
 	}
 }
+
+func verifySharedSpecSnapshotBounds(t *testing.T, s *DBStore) {
+	t.Helper()
+	expires := time.Now().UTC().Add(time.Minute)
+	save := func(id int, weight int) {
+		t.Helper()
+		key := fmt.Sprint(id)
+		if err := s.SaveReportSnapshot(t.Context(), key, expires.Add(time.Duration(id)*time.Second), weight, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i <= ReportSnapshotLimit; i++ {
+		save(i, 1)
+	}
+	get := func(id int, now time.Time, want bool) {
+		t.Helper()
+		key := fmt.Sprint(id)
+		b, err := s.LoadReportSnapshot(t.Context(), key, now)
+		if want && (err != nil || string(b) != key) || !want && !errors.Is(err, ErrNotFound) {
+			t.Fatalf("snapshot %s: body %q err %v, want present %t", key, b, err, want)
+		}
+	}
+	get(0, time.Now(), false)
+	get(1, time.Now(), true)
+	save(99, ReportSnapshotEntries)
+	get(ReportSnapshotLimit, time.Now(), false)
+	get(99, time.Now(), true)
+	get(99, expires.Add(100*time.Second), false)
+
+	// Independent publishers must not each claim the same remaining capacity.
+	const writers = 12
+	done := make(chan error, writers)
+	for i := range writers {
+		go func() {
+			key := fmt.Sprintf("writer-%d", i)
+			done <- s.SaveReportSnapshot(t.Context(), key, expires, ReportSnapshotEntries/2, []byte(key))
+		}()
+	}
+	for range writers {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Model(&reportSpecSnapshotRecord{}).Where("id <> ?", reportSnapshotWriter).Count(&count).Error; err != nil || count != 2 {
+		t.Fatalf("concurrent publications retained %d snapshots, want 2: %v", count, err)
+	}
+}
+
+func TestRunnerReportSharedSpecSnapshotBounds(t *testing.T) {
+	verifySharedSpecSnapshotBounds(t, reportTestStore(t))
+}
+
+func verifyReportAccountUsage(t *testing.T, s *DBStore) {
+	t.Helper()
+	now := reportTime("2026-11-21T10:00:00Z")
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []int64{42, 43} {
+		if err := db.Create(&githubInstallationRecord{AccountID: account, InstallationID: 1234, GitHubAccountID: 456, AccountLogin: "fork"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&githubInstallationOwnerRecord{InstallationID: 1234, GitHubAccountID: 456, AccountLogin: "fork"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	instants := []string{"2026-11-20T15:59:00Z", "2026-11-20T16:01:00Z", "2026-11-20T17:00:00Z", "2026-11-20T18:00:00Z"}
+	for i, name := range []string{"fork/old-name", "fork/new-name", "fork/new-name", ""} {
+		id := fmt.Sprintf("activity-%d", i)
+		at := reportTime(instants[i])
+		r := runnerRequestRecord{ID: id, Source: "fixture", RunnerName: id, LabelsJSON: "[]", Status: StatusCompleted, QueuedAt: at, UpdatedAt: at, GitHubInstallationID: 1234, RepositoryFullName: name, ProfileSource: "scoped_custom", ProfileScopeType: "account", ProfileScopeID: 43, ProfileName: "custom", RunningAt: &at, CompletedAt: &at}
+		if i == 3 {
+			r.GitHubInstallationID = 9876
+		}
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-11-20", To: "2026-11-22", Timezone: "Asia/Shanghai", Grain: "month", Owner: "github:456"}
+	report, err := s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := report.Groups("owner", "requests")
+	if len(groups) != 1 {
+		t.Fatalf("owner groups: %v", groups)
+	}
+	g := groups[0]
+	if g.Requests != 3 || g.ActiveRepositories != 2 || g.UsedSpecs != 1 || g.ActiveDays != 2 || !g.LastQueuedAt.Equal(reportTime(instants[2])) || g.Outcomes["unknown"] != 3 || g.Runtime.Samples != 3 || g.Runtime.Seconds != 0 || g.JobResults != 0 {
+		t.Fatalf("owner usage %+v activity %+v", g, g.ReportActivity)
+	}
+	q.Owner = "installation:9876"
+	q.MissingRepository = "1"
+	report, err = s.ReadRunnerReport(t.Context(), q, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ = report.Groups("repository", "requests")
+	if len(groups) != 1 || groups[0].Key != "" || report.Totals.Requests != 1 || report.Rows[0].ID != "activity-3" || report.Rows[0].Owner != q.Owner {
+		t.Fatal("unknown repository or Installation lost in drilldown")
+	}
+}
+
+func TestRunnerReportAccountUsage(t *testing.T) { verifyReportAccountUsage(t, reportTestStore(t)) }

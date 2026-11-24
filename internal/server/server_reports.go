@@ -17,12 +17,18 @@ import (
 )
 
 const (
-	reportFreshness    = 30 * time.Second
-	reportRetention    = 5 * time.Minute
-	reportTimeout      = 10 * time.Second
-	reportCacheEntries = 8
-	reportCacheRows    = 200000
+	efficiencySnapshotPrefix = "eff-"
+	accountSnapshotPrefix    = "acct-"
+	reportFreshness          = 30 * time.Second
+	reportRetention          = 5 * time.Minute
+	reportTimeout            = 10 * time.Second
+	reportCacheEntries       = state.ReportSnapshotLimit
+	reportCacheRows          = state.ReportSnapshotEntries
 )
+
+func isUsageSnapshot(id string) bool {
+	return strings.HasPrefix(id, accountSnapshotPrefix) || strings.HasPrefix(id, efficiencySnapshotPrefix)
+}
 
 type cachedRunnerReport struct {
 	id, key       string
@@ -30,6 +36,50 @@ type cachedRunnerReport struct {
 	report        *state.RunnerReport
 	distributions map[string]state.ReportDistribution
 }
+
+// Only aggregated data needed by the Specs UI is shared. In particular the
+// request rows and request-detail indexes in RunnerReport are JSON-excluded.
+type sharedSpecSnapshot struct {
+	Report        *state.RunnerReport
+	Items         []state.ReportSpecUsage
+	Summary       *state.ReportSpecUsage
+	Distributions map[string]state.ReportDistribution
+	Created       time.Time
+}
+
+func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) error {
+	payload, err := json.Marshal(sharedSpecSnapshot{e.report, e.report.SpecItems, e.report.SpecSummary, e.distributions, e.created})
+	if err != nil {
+		return err
+	}
+	return s.store.SaveReportSnapshot(ctx, e.id, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+}
+
+func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id string) (cachedRunnerReport, bool) {
+	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+	defer cancel()
+	raw, err := s.store.LoadReportSnapshot(ctx, id, time.Now())
+	if errors.Is(err, state.ErrNotFound) {
+		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return cachedRunnerReport{}, false
+	}
+	var saved sharedSpecSnapshot
+	if err == nil {
+		err = json.Unmarshal(raw, &saved)
+	}
+	if err == nil && saved.Report == nil {
+		err = errors.New("invalid stored spec snapshot")
+	}
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return cachedRunnerReport{}, false
+	}
+	report := saved.Report
+	report.Query.IncludeSpecUsage = true
+	report.SpecItems, report.SpecSummary = saved.Items, saved.Summary
+	return cachedRunnerReport{id: id, key: reportQueryKey(report.Query), created: saved.Created, report: report, distributions: saved.Distributions}, true
+}
+
 type runnerReportCache struct {
 	mu          sync.Mutex
 	entries     []cachedRunnerReport
@@ -100,24 +150,26 @@ func (s *Server) loadReportActive(ctx context.Context, q state.RunnerReportQuery
 
 func reportQueryKey(q state.RunnerReportQuery) string {
 	b, _ := json.Marshal(q)
+	if q.IncludeExecution {
+		return "execution:" + string(b)
+	}
+	if q.IncludeEfficiency {
+		return "efficiency:" + string(b)
+	}
+	if q.IncludeAccountUsage {
+		return "accounts:" + string(b)
+	}
 	if q.IncludeSpecUsage {
 		return "specs:" + string(b)
 	}
 	return string(b)
 }
 
-func (c *runnerReportCache) find(id, key string, now time.Time) (cachedRunnerReport, bool) {
+func (c *runnerReportCache) fresh(key string) (cachedRunnerReport, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, e := range c.entries {
-		if now.Sub(e.created) >= reportRetention {
-			continue
-		}
-		if id != "" {
-			if e.id == id && e.key == key {
-				return e, true
-			}
-		} else if e.key == key && now.Sub(e.created) < reportFreshness {
+		if e.key == key && time.Since(e.created) < reportFreshness {
 			return e, true
 		}
 	}
@@ -183,11 +235,11 @@ func (c *runnerReportCache) acquireActive(ctx context.Context) (func(), error) {
 
 func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery) (cachedRunnerReport, error) {
 	key := reportQueryKey(q)
-	if e, ok := s.reports.find("", key, time.Now()); ok {
+	if e, ok := s.reports.fresh(key); ok {
 		return e, nil
 	}
 	result := s.reports.group.DoChan(key, func() (any, error) {
-		if e, ok := s.reports.find("", key, time.Now()); ok {
+		if e, ok := s.reports.fresh(key); ok {
 			return e, nil
 		}
 		queryCtx, cancel := context.WithTimeout(context.Background(), reportTimeout)
@@ -202,13 +254,31 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 		if err != nil {
 			return nil, err
 		}
-		distributions := report.ChartDistributions()
+		var distributions map[string]state.ReportDistribution
+		if !q.IncludeExecution {
+			distributions = report.ChartDistributions()
+		}
 		if err := queryCtx.Err(); err != nil {
 			return nil, err
 		}
 		entry := cachedRunnerReport{
 			id: newID(), key: key, created: time.Now(),
 			report: report, distributions: distributions,
+		}
+		if q.IncludeAccountUsage || q.IncludeEfficiency {
+			prefix := accountSnapshotPrefix
+			if q.IncludeEfficiency {
+				prefix = efficiencySnapshotPrefix
+			}
+			entry.id = prefix + entry.id
+			if err := s.saveUsageSnapshot(queryCtx, entry); err != nil {
+				return nil, err
+			}
+		}
+		if q.IncludeSpecUsage {
+			if err := s.saveSpecSnapshot(queryCtx, entry); err != nil {
+				return nil, err
+			}
 		}
 		s.reports.put(entry)
 		return entry, nil
@@ -230,12 +300,12 @@ func parseRunnerReportQuery(values url.Values, now time.Time) (state.RunnerRepor
 			return state.RunnerReportQuery{}, errors.New("repeated report parameters are not supported")
 		}
 		switch k {
-		case "from", "to", "timezone", "grain", "owner", "repository", "spec", "snapshot":
+		case "from", "to", "timezone", "grain", "owner", "repository", "repository_missing", "spec", "snapshot":
 		default:
 			return state.RunnerReportQuery{}, errors.New("unsupported report parameter")
 		}
 	}
-	q := state.RunnerReportQuery{From: values.Get("from"), To: values.Get("to"), Timezone: values.Get("timezone"), Grain: values.Get("grain"), Owner: values.Get("owner"), Repository: values.Get("repository"), Spec: values.Get("spec")}
+	q := state.RunnerReportQuery{From: values.Get("from"), To: values.Get("to"), Timezone: values.Get("timezone"), Grain: values.Get("grain"), Owner: values.Get("owner"), Repository: values.Get("repository"), MissingRepository: values.Get("repository_missing"), Spec: values.Get("spec")}
 	if q.Timezone == "" {
 		q.Timezone = "UTC"
 	}
@@ -266,12 +336,29 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q.IncludeExecution = r.URL.Path == "/reports/execution-usage"
+	q.IncludeEfficiency = r.URL.Path == "/reports/efficiency"
+	q.IncludeAccountUsage = r.URL.Path == "/reports/account-usage"
 	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
 	var entry cachedRunnerReport
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
-		entry, ok = s.reports.find(id, reportQueryKey(q), time.Now())
-		if !ok {
+		entry, ok = s.reports.byID(id)
+		if !ok && ((q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix)) || (q.IncludeEfficiency && strings.HasPrefix(id, efficiencySnapshotPrefix))) {
+			entry, err = s.restoreUsageSnapshot(r.Context(), id)
+			if err != nil {
+				s.writeReportError(w, r, err)
+				return
+			}
+			ok = true
+		}
+		if !ok && q.IncludeSpecUsage && !isUsageSnapshot(id) {
+			entry, ok = s.restoreSpecSnapshot(w, r, id)
+			if !ok {
+				return
+			}
+		}
+		if !ok || entry.key != reportQueryKey(q) {
 			writeError(w, http.StatusGone, "report snapshot expired or filters changed; refresh the report")
 			return
 		}
@@ -280,6 +367,13 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.writeReportError(w, r, err)
+		return
+	}
+	if q.IncludeExecution {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"query": q, "observed_at": entry.report.ObservedAt, "execution": entry.report.Execution,
+			"snapshot": entry.id, "expires_at": entry.created.Add(reportRetention),
+		})
 		return
 	}
 	var dashboard *reportSpecDashboard
@@ -296,7 +390,11 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) {
+	if errors.Is(err, state.ErrNotFound) {
+		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return
+	}
+	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) || errors.Is(err, state.ErrReportSnapshotTooLarge) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -371,8 +469,24 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 		return cachedRunnerReport{}, 0, 0, false
 	}
 	entry, ok := s.reports.byID(r.PathValue("snapshot"))
+	if !ok && isUsageSnapshot(r.PathValue("snapshot")) {
+		entry, err = s.restoreUsageSnapshot(r.Context(), r.PathValue("snapshot"))
+		if err != nil {
+			s.writeReportError(w, r, err)
+			return entry, 0, 0, false
+		}
+		ok = true
+	}
+	if !ok && r.Pattern == "GET /reports/{snapshot}/specs" {
+		entry, ok = s.restoreSpecSnapshot(w, r, r.PathValue("snapshot"))
+		return entry, limit, offset, ok
+	}
 	if !ok {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return entry, 0, 0, false
+	}
+	if entry.report.Execution != nil {
+		writeError(w, http.StatusBadRequest, "period usage snapshots contain calendar buckets only")
 		return entry, 0, 0, false
 	}
 	return entry, limit, offset, true
@@ -534,4 +648,53 @@ func (s *Server) handleRunnerReportRequests(w http.ResponseWriter, r *http.Reque
 		Offset   int                   `json:"offset"`
 		Snapshot string                `json:"snapshot"`
 	}{rows[start:end], total, start, entry.id})
+}
+
+func (s *Server) handleReportBacklog(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminAuth(w, r) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	values := r.URL.Query()
+	status := values.Get("status")
+	minutes, err := strconv.Atoi(values.Get("minutes"))
+	if len(values["status"]) != 1 || len(values["minutes"]) != 1 || err != nil || minutes < 1 || minutes > 10080 || (status != state.StatusQueued && status != state.StatusCreating && status != state.StatusStopping) {
+		writeError(w, http.StatusBadRequest, "expected queued, creating or stopping and a threshold of 1–10080 minutes")
+		return
+	}
+	values.Del("status")
+	values.Del("minutes")
+	for key := range values {
+		switch key {
+		case "owner", "repository", "repository_missing", "spec":
+		default:
+			writeError(w, http.StatusBadRequest, "unsupported backlog parameter")
+			return
+		}
+	}
+	now := time.Now().UTC()
+	q, err := parseRunnerReportQuery(values, now)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+	defer cancel()
+	release, err := s.reports.acquireActive(ctx)
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return
+	}
+	defer release()
+	now = time.Now().UTC()
+	rows, more, err := s.store.ReadReportBacklog(ctx, q, status, minutes, now)
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Items      []state.ReportBacklogItem `json:"items"`
+		ObservedAt time.Time                 `json:"observed_at"`
+		More       bool                      `json:"more"`
+	}{rows, now, more})
 }

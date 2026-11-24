@@ -1,3 +1,5 @@
+import type { AppTFunction } from "@/i18n"
+
 const baseChartColors = [1, 2, 3, 4, 5].map(index => `var(--chart-${index})`)
 // The two spec rankings can contain up to ten distinct identities.
 export const reportChartPalette = [...baseChartColors, ...baseChartColors.map(color =>
@@ -11,6 +13,7 @@ export type ReportQuery = {
   timezone: string
   grain: string
   owner?: string
+  repository_missing?: string
   repository?: string
   spec?: string
 }
@@ -35,12 +38,39 @@ export type ReportTotals = {
   cleanup: ReportDuration
   completion: ReportDuration
 }
+export type EfficiencyGroup = { dimension: string; key: string; count: number }
+export type EfficiencySummary = {
+  startup_p95: number | null
+  creation_p95: number | null
+  cleanup_p95: number | null
+  groups: EfficiencyGroup[]
+  rejections?: Record<string, Record<string, number>>
+}
+type ExecutionTotals = {
+  attempts: number
+  attempt_seconds: number
+  provisional_seconds: number
+  active_attempts: number
+  peak: number
+  jobs: number
+  job_seconds: number
+}
+export type ExecutionUsage = {
+  collection_started_at: string
+  incomplete_jobs: number
+  total: ExecutionTotals
+  buckets: (ExecutionTotals & { date: string; from: string; to: string })[]
+}
+
 export type RunnerReport = {
+  efficiency?: EfficiencySummary
   query: ReportQuery
   snapshot: string
   distributions?: Record<ReportDimension, { total: number; requests: ReportGroup[]; runtime: ReportGroup[] }>
   observed_at: string
   expires_at: string
+  request_detail_available?: boolean
+  outcomes?: Record<string, number>
   spec_dashboard?: SpecDashboard
   window: { start: string; end: string; previous_start: string; previous_end: string }
   totals: ReportTotals
@@ -48,6 +78,27 @@ export type RunnerReport = {
   trend: (ReportTotals & { date: string })[]
 }
 export type ReportGroup = ReportTotals & { key: string; label: string }
+export function reportGroupLabel(t: AppTFunction, dimension: ReportDimension, key: string, label: string) {
+  if (dimension === "owner" && key.startsWith("installation:")) {
+    return t("reports.historicalInstallation", { id: key.slice("installation:".length) })
+  }
+  return label.trim() || t("common.unknown")
+}
+
+export type ActivityGroup = ReportGroup & {
+  active_days: number
+  used_specs: number
+  last_queued_at: string
+  outcomes: Record<string, number>
+}
+export type ReportRequestRow = {
+  efficiency?: Partial<Record<"startup" | "creation" | "cleanup", number>>
+  id: string
+  queued_at: string
+  repository: string
+  spec_label: string
+  job_result: string
+}
 export type ReportSpecUsage = {
   key: string
   label: string
@@ -78,7 +129,7 @@ export type SpecSegment = { key: string; label: string; started?: number; reques
 export type SpecDashboard = { summary: ReportSpecUsage; catalog: number; used_current: number; historical_groups: number; total: number; items: ReportSpecUsage[] }
 export type ReportSpecPage = { items: ReportSpecUsage[]; total: number; offset: number; snapshot: string }
 export type ReportPage<T> = { items: T[]; total: number; offset: number; snapshot: string }
-export const reportQueryKeys = ["from", "to", "timezone", "grain", "owner", "repository", "spec"] as const
+export const reportQueryKeys = ["from", "to", "timezone", "grain", "owner", "repository", "repository_missing", "spec"] as const
 
 export function reportQueryParams(search: string): URLSearchParams {
   const source = new URLSearchParams(search),
@@ -143,4 +194,30 @@ export function reportDistribution(
     rows.push({ key: "", label: "", value: value(requests, runtime), other: true })
   }
   return rows
+}
+
+export function outcomeCategory(key: string) {
+  switch (key) {
+    case "success":
+    case "failure":
+    case "timed_out":
+    case "cancelled":
+    case "skipped":
+    case "unknown":
+      return key
+    default:
+      return "other"
+  }
+}
+
+export function reportTimeFormatter(locale: string | undefined, timeZone: string) {
+  const options: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "medium", timeZone }
+  try {
+    const formatter = new Intl.DateTimeFormat(locale, options)
+    return (value: string) => formatter.format(new Date(value)) + " · " + timeZone
+  } catch (error) {
+    // The server's timezone database can include zones the browser does not recognize.
+    if (!(error instanceof RangeError)) throw error
+    return (value: string) => new Date(value).toISOString()
+  }
 }
