@@ -4573,7 +4573,8 @@ func TestScopedRunnerProfileNameCanMatchDisabledGlobalProfile(t *testing.T) {
 }
 
 func sqlBackendTestTables() []string {
-	return []string{"runner_execution_attempts", "runner_execution_collection",
+	return []string{
+		"runner_execution_attempts", "runner_execution_collection",
 		"report_spec_snapshots",
 		"runner_admission_guard",
 		"terminal_sessions",
