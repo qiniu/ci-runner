@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	ReportSnapshotLimit   = 8
-	ReportSnapshotEntries = 2 * ReportMaxRows
-	maxReportSnapshotBytes  = 16<<20 - 1
-	reportSnapshotWriter    = "writer"
+	ReportSnapshotLimit    = 8
+	ReportSnapshotEntries  = 2 * ReportMaxRows
+	maxReportSnapshotBytes = 16<<20 - 1
+	reportSnapshotWriter   = "writer"
 )
 
 var ErrReportSnapshotTooLarge = errors.New("encoded report snapshot exceeds the size limit; narrow the date range or filters")
