@@ -1044,3 +1044,45 @@ test("efficiency evidence survives a reload and backlog stays independent of his
   for (const q of backlogQueries)
     expect(Object.fromEntries(q)).toEqual({ status: "queued", minutes: "30", repository: "org/app" })
 })
+
+test("switching report views resets the request page for the selected evidence", async ({ page }) => {
+  await setup(page)
+  const reason = "profile_labels_not_matched"
+  const empty = { total: 0, requests: [], runtime: [] }
+  await page.route("**/reports/account-usage?*", (route) => route.fulfill({ json: {
+    ...report, snapshot: "acct-pagination", request_detail_available: true,
+    distributions: { owner: empty, repository: empty, spec: empty },
+  } }))
+  await page.route("**/reports/efficiency?*", (route) => route.fulfill({ json: {
+    ...report, snapshot: "eff-pagination", request_detail_available: true,
+    efficiency: { startup_p95: null, creation_p95: null, cleanup_p95: null,
+      groups: [{ dimension: "admission_reason", key: reason, count: 1 }] },
+  } }))
+  await page.route("**/reports/backlog?*", (route) =>
+    route.fulfill({ json: { items: [], observed_at: report.observed_at, more: false } }))
+  await page.route("**/reports/*/requests?*", (route) => {
+    const url = new URL(route.request().url())
+    const offset = Number(url.searchParams.get("offset"))
+    const account = url.pathname.includes("acct-pagination")
+    const total = account ? 41 : 1
+    const items = Array.from({ length: Math.max(0, Math.min(20, total - offset)) }, (_, i) => ({
+      id: account ? "account-" + (offset + i) : "rejected-request", queued_at: report.observed_at,
+      repository: "org/app", spec_label: "standard", job_result: "unknown",
+    }))
+    if (!account) expect(url.searchParams.get("key")).toBe(reason)
+    return route.fulfill({ json: { items, total, offset } })
+  })
+
+  await page.goto("/admin/reports?view=efficiency")
+  await page.getByRole("button", { name: reason }).click()
+  const rejected = page.getByRole("link", { name: "rejected-request" })
+  await expect(rejected).toBeVisible()
+  await page.getByRole("tab", { name: "Accounts & repositories" }).click()
+  for (const offset of [20, 40]) {
+    await page.getByRole("button", { name: "Next", exact: true }).click()
+    await expect(page.getByRole("link", { name: "account-" + offset, exact: true })).toBeVisible()
+  }
+  await page.getByRole("tab", { name: "Efficiency & anomalies" }).click()
+  await expect(rejected).toBeVisible()
+  expect(new URL(page.url()).searchParams.get("requests_offset")).toBe("0")
+})

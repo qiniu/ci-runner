@@ -193,7 +193,13 @@ export function RunnerReportsSection({
         className="min-w-0 gap-4"
         value={view}
         onValueChange={(next) => {
-          if (next !== view) navigate({ view: next === "overview" ? null : next, snapshot: null })
+          if (next === view) return
+          navigate({
+            view: next === "overview" ? null : next,
+            snapshot: null,
+            requests_offset: urlState.has("requests_offset") && (next === "accounts" || next === "efficiency") ? "0" : null,
+            selected_request: null,
+          })
         }}
       >
         <TabsList variant="line" aria-label={t("reports.views")}>
