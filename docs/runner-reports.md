@@ -295,11 +295,39 @@ Local verification on 2026-11-24 exercised account rankings on SQLite, PostgreSQ
 
 On the same synthetic PostgreSQL fixture, the efficiency query aggregated 501,602 current and 509,758 comparison requests in 5.82 seconds. On the 100,000-request SQLite fixture it took 2.06 seconds, with a concurrent 25-row list in 1.52 ms and a queue claim in 0.96 ms. SQLite, PostgreSQL 16 and MySQL 8.4 fixtures cover duration eligibility, unknown classifications, rejection counts and state-age thresholds. A second HTTP server restores the original anomaly group and its exact requests after the live cohort changes.
 
-Production data completeness, actual row/cardinality distributions, production
-query plans/latency and deployed browser acceptance remain **unverified**. Before
-operational rollout, inspect API coverage with a representative approved
-snapshot or a bounded read-only production query, record the range and sample
-size, and measure scheduler latency under the real workload. If legitimate ranges
+On 2026-11-24, a local PostgreSQL 17.11 HTTP benchmark opened both default
+30-day UTC dashboards without a snapshot. The synthetic cohort contained
+300,000 current and 210,000 previous requests across 161 repositories. Each
+version ran three times with a fresh server report cache and the existing
+ten-second deadline. The PostgreSQL and OS caches were shared between runs.
+
+| Dashboard | Previous median | Updated median | Updated range |
+| --- | ---: | ---: | ---: |
+| Accounts and repositories | 2.64 s | 2.16 s | 2.14–2.25 s |
+| Efficiency and anomalies | 2.60 s | 2.18 s | 2.18–2.23 s |
+
+Account partial groups fell from 91,120 to 54,060 on this fixture. The efficiency query now reads terminal evidence once for
+both failure distributions and the admission trend. Across the updated runs,
+encoding and compressing a shared snapshot took 1.1–2.6 ms and the database
+write took 1.1–2.5 ms. Both endpoints returned HTTP 200. Dashboard metrics
+matched the previous version, including trends, outcomes and both rankings.
+A second server restored the dashboard and the second repository page in both
+sort orders. Independent SQL totals agreed with the Top 5 and remainder for
+all 300,000 requests and 14,764,316 recorded runtime seconds.
+
+The larger PostgreSQL regression also passed with 501,602 current and 509,758
+comparison requests. The account query took 3.17 s and the efficiency query
+took 3.78 s. The fixture checks mixed Job outcomes and daily rejection counts.
+
+A single queue claim per run took 2.2–9.8 ms before opening either report,
+5.9–11.1 ms during the account query and 1.7–2.8 ms during the efficiency
+query. These observations cover the synthetic load only. Production acceptance
+requires reopening both default dashboards after deployment and comparing
+queue claim latency under representative load.
+
+For production performance checks, record the filter window, actual request and
+group counts, PostgreSQL query plan and cache state alongside HTTP response
+times and scheduler latency. If legitimate ranges
 exceed the explicit cap or the cost is excessive, design bounded preaggregation or
 an asynchronous reporting store with evidence; do not silently raise the cap or
 mix attempt history and period consumption into this contract.

@@ -154,37 +154,46 @@ func readPostgresEfficiency(db *gorm.DB, r *RunnerReport) error {
 	if err := db.Raw("SELECT "+strings.Join(cols, ",")+" FROM (?) samples CROSS JOIN (SELECT ?::timestamptz AS observed) bounds", current, r.ObservedAt).Scan(&p95).Error; err != nil {
 		return err
 	}
-	failures := base.Session(&gorm.Session{}).Where("r.status IN ?", []string{StatusFailed, StatusCompleted}).Select(`r.status, coalesce(r.failure_stage,'') AS stage, coalesce(r.failure_reason,'') AS reason,
- coalesce(r.termination_source,'') AS termination, CASE WHEN r.failure_stage='admission' THEN 'admission' WHEN r.running_at BETWEEN timestamptz '0002-01-01 UTC' AND ? THEN 'started' ELSE 'before_start' END AS class`, r.ObservedAt)
-	groups := []EfficiencyGroup{}
-	err = db.Raw(`SELECT dim COLLATE "C" AS dimension, value COLLATE "C" AS key, count(*) AS count FROM (?) t
- CROSS JOIN LATERAL (VALUES ('termination',termination),
- (CASE WHEN status='failed' THEN class||'_reason' END,reason),
- (CASE WHEN status='failed' AND class<>'admission' THEN class||'_stage' END,stage)) kinds(dim,value)
- WHERE dim IS NOT NULL GROUP BY 1,2 ORDER BY 1,2 LIMIT ?`, failures, ReportMaxRows+1).Scan(&groups).Error
+	// Group terminal evidence before expanding it into report dimensions.
+	// Admission reason counts and their trend then share the same cohort scan.
+	terminal := base.Session(&gorm.Session{}).Where("r.status IN ?", []string{StatusFailed, StatusCompleted}).Select(`
+		CASE WHEN r.status = 'failed' THEN coalesce(r.failure_stage,'') END COLLATE "C" AS stage,
+		CASE WHEN r.status = 'failed' THEN coalesce(r.failure_reason,'') END COLLATE "C" AS reason,
+		coalesce(r.termination_source,'') COLLATE "C" AS termination,
+		CASE WHEN r.status = 'failed' THEN CASE WHEN r.failure_stage = 'admission' THEN 'admission'
+		    WHEN r.running_at BETWEEN timestamptz '0002-01-01 UTC' AND ? THEN 'started' ELSE 'before_start' END END AS class,
+		CASE WHEN r.status = 'failed' AND r.failure_stage = 'admission' THEN
+		    date_trunc(?, timezone(make_interval(secs => ?), r.queued_at))::date END AS day`, r.ObservedAt, r.Query.Grain, postgresTrendOffset(r.Window))
+	var groups []struct {
+		EfficiencyGroup
+		Bucket string
+	}
+	err = db.Raw(`WITH partials AS (
+		SELECT class, stage, reason, termination, day, count(*) AS n
+		FROM (?) terminal GROUP BY class, stage, reason, termination, day
+	)
+	SELECT dim COLLATE "C" AS dimension, value COLLATE "C" AS key,
+		to_char(bucket::timestamp, 'YYYY-MM-DD') AS bucket, sum(n) AS count
+	FROM partials CROSS JOIN LATERAL (VALUES
+		('termination', termination, NULL::date),
+		(class || '_reason', reason, NULL),
+		(CASE WHEN class <> 'admission' THEN class || '_stage' END, stage, NULL),
+		(CASE WHEN day IS NOT NULL THEN 'admission_bucket_reason' END, reason, day)
+	) kinds(dim, value, bucket)
+	WHERE dim IS NOT NULL GROUP BY 1, 2, kinds.bucket ORDER BY 1, 2 LIMIT ?`, terminal, ReportMaxRows+1).Scan(&groups).Error
 	if err != nil {
 		return err
 	}
 	if len(groups) > ReportMaxRows {
 		return ErrReportTooManyGroups
 	}
-	summary := &EfficiencySummary{StartupP95: p95.Startup, CreationP95: p95.Creation, CleanupP95: p95.Cleanup, Groups: groups}
-	rejected := base.Session(&gorm.Session{}).Where("r.status = ? AND r.failure_stage = ?", StatusFailed, "admission").Select("r.queued_at, r.failure_reason")
-	var buckets []struct {
-		Reason, Bucket string
-		Count          int64
-	}
-	err = db.Raw(`SELECT coalesce(failure_reason,'') COLLATE "C" AS reason,
-  to_char(date_trunc(?, timezone(make_interval(secs => ?), queued_at)), 'YYYY-MM-DD') AS bucket,
-  count(*) AS count FROM (?) rejected GROUP BY 1,2 LIMIT ?`, r.Query.Grain, postgresTrendOffset(r.Window), rejected, ReportMaxRows-len(groups)+1).Scan(&buckets).Error
-	if err != nil {
-		return err
-	}
-	if len(groups)+len(buckets) > ReportMaxRows {
-		return ErrReportTooManyGroups
-	}
-	for _, b := range buckets {
-		summary.addRejections(b.Reason, b.Bucket, b.Count)
+	summary := &EfficiencySummary{StartupP95: p95.Startup, CreationP95: p95.Creation, CleanupP95: p95.Cleanup, Groups: []EfficiencyGroup{}}
+	for _, g := range groups {
+		if g.Dimension == "admission_bucket_reason" {
+			summary.addRejections(g.Key, g.Bucket, g.Count)
+		} else {
+			summary.Groups = append(summary.Groups, g.EfficiencyGroup)
+		}
 	}
 	r.Efficiency = summary
 	return nil
