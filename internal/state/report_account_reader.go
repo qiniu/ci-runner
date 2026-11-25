@@ -127,8 +127,12 @@ func publishedAccountGroups(db *gorm.DB, q RunnerReportQuery, slot int, w Report
 	statement := "SELECT " + fields + ` FROM (SELECT p.*,to_char(date_trunc(?,local_day::timestamp),'YYYY-MM-DD') AS bucket FROM (` +
 		strings.TrimSuffix(strings.Repeat("(?) UNION ALL ", len(parts)), " UNION ALL ") + `) p) src
 		GROUP BY current_period, GROUPING SETS ((),(owner),(repository),(spec),(bucket))
-		HAVING current_period OR grouping(owner,repository,spec,bucket)=15 LIMIT ?`
-	args = append(args, ReportMaxRows+1)
+		HAVING current_period OR grouping(owner,repository,spec,bucket)=15
+		ORDER BY grouping(owner,repository,spec,bucket) DESC LIMIT ?`
+	// Totals (mask 15) arrive first, so the reader knows which budget applies.
+	// Each trend row represents at least one current request. A valid detail
+	// snapshot can therefore yield at most its entry budget plus two totals.
+	args = append(args, ReportSnapshotEntries+2+1)
 	return db.Raw(statement, args...), nil
 }
 
@@ -150,8 +154,9 @@ func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 	r.Outcomes = map[string]int64{}
 	r.GroupTotals = map[string][]ReportGroup{}
 	buckets := map[string]ReportTotals{}
+	var groups int64
 	for n := 0; rows.Next(); n++ {
-		if n >= ReportMaxRows {
+		if n >= ReportMaxRows && r.Totals.Requests+r.Previous.Requests > ReportMaxRows {
 			return ErrReportTooManyGroups
 		}
 		var item struct {
@@ -183,6 +188,10 @@ func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 			group.Key, group.Label = item.Owner, item.OwnerLabel
 		case "repository":
 			group.Key, group.Label = item.Repository, item.Repository
+		}
+		groups++
+		if r.Totals.Requests+r.Previous.Requests <= ReportMaxRows && groups+r.Totals.Requests > ReportSnapshotEntries {
+			return ErrReportTooManyGroups
 		}
 		if item.Dimension != "spec" {
 			a := &ReportActivity{ActiveDays: item.ActiveDays, UsedSpecs: item.UsedSpecs, LastQueuedAt: item.LastQueuedAt.UTC()}

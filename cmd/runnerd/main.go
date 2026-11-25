@@ -49,7 +49,7 @@ func main() {
 		opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn.Value()}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		if err := runAccountReports(ctx, opts, *accountReports, logger); err != nil && ctx.Err() == nil {
+		if err := runAccountReports(ctx, opts, *accountReports, logger); err != nil {
 			logger.Error("account report worker stopped", "error", err)
 			os.Exit(1)
 		}
@@ -157,7 +157,7 @@ func runAccountReports(ctx context.Context, opts state.Options, mode string, log
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		case <-time.After(5 * time.Minute):
 		}
 	}

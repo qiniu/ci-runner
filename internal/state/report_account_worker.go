@@ -51,6 +51,16 @@ func RefreshAccountReports(ctx context.Context, opts Options, rebuild bool) erro
 		if err := s.validateAndMigrate(writer, false); err != nil {
 			return err
 		}
+		// A rolled-back worker must leave a newer schema intact, including
+		// when the newer worker has only started building its first slot.
+		var pub accountReportPublication
+		err := writer.Select("definition", "pending_definition").Take(&pub, 1).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) && !postgresUndefinedTable(err) {
+			return err
+		}
+		if pub.Definition > accountReportDefinition || pub.PendingDefinition > accountReportDefinition {
+			return errors.New("account statistics require a newer worker")
+		}
 		if err := writer.AutoMigrate(&accountReportPublication{}, &accountFact{}, &accountDay{}, &accountDirtyDay{}, &accountDefaultDashboard{}); err != nil {
 			return err
 		}
@@ -65,9 +75,6 @@ func refreshAccountSlot(ctx context.Context, db, writer *gorm.DB, rebuild bool) 
 	}
 	if err := writer.First(&pub, 1).Error; err != nil {
 		return err
-	}
-	if pub.Definition > accountReportDefinition || pub.PendingDefinition > accountReportDefinition {
-		return errors.New("account statistics require a newer worker")
 	}
 	slot := 1 - pub.Slot
 	// Keep the requested epoch until publication. Retrying after a crash

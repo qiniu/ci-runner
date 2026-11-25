@@ -224,6 +224,78 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		t.Run("scale", func(t *testing.T) { verifyPublishedAccountScale(t, live, published, opts) })
 	}
 
+	t.Run("rollback preserves newer schema", func(t *testing.T) {
+		if err := db.Exec("ALTER TABLE report_account_facts ALTER COLUMN status SET NOT NULL").Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, column := range []string{"definition", "pending_definition"} {
+			versions := map[string]any{"definition": accountReportDefinition, "pending_definition": 0}
+			versions[column] = accountReportDefinition + 1
+			if err := db.Model(&accountReportPublication{}).Where("id=1").Updates(versions).Error; err != nil {
+				t.Fatal(err)
+			}
+			err := RefreshAccountReports(t.Context(), opts, true)
+			if err == nil || !strings.Contains(err.Error(), "require a newer worker") {
+				t.Fatalf("newer %s: got %v", column, err)
+			}
+			var nullable string
+			err = db.Raw(`SELECT is_nullable FROM information_schema.columns WHERE table_schema=current_schema()
+				AND table_name='report_account_facts' AND column_name='status'`).Scan(&nullable).Error
+			if err != nil || nullable != "NO" {
+				t.Fatalf("newer %s: status constraint changed: nullable=%q, err=%v", column, nullable, err)
+			}
+		}
+	})
+}
+
+func TestPublishedAccountGroupBudgetsPostgres(t *testing.T) {
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires dedicated PostgreSQL _test database")
+	}
+	opts := Options{Backend: BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t)}
+	db, err := (&DBStore{opts: opts}).open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestDB(t, db)
+	if err := db.AutoMigrate(&accountReportPublication{}, &accountFact{}, &accountDay{}); err != nil {
+		t.Fatal(err)
+	}
+	observed := time.Date(2026, 1, 3, 12, 0, 0, 0, time.UTC)
+	if err := db.Create(&accountReportPublication{ID: 1, Definition: accountReportDefinition, ObservedAt: observed}).Error; err != nil {
+		t.Fatal(err)
+	}
+	const requests = ReportMaxRows / 2
+	at := observed.Add(-time.Hour)
+	if err := db.Exec(`INSERT INTO report_account_facts(slot,id,queued_at,requests,owner,repository,spec)
+		SELECT 0,i::text,?,1,'owner-'||i,'repo-'||i,'shared' FROM generate_series(1,?) i`, at, requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-01-03", To: "2026-01-04", Grain: "day", Timezone: "UTC"}
+	r, err := readPublishedAccounts(db, q, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.DetailAvailable == nil || !*r.DetailAvailable || len(r.Rows) != requests || r.RetainedEntries() != 3*requests+1 {
+		t.Fatalf("expected %d details and %d groups, got %d details and %d retained entries", requests, 2*requests+1, len(r.Rows), r.RetainedEntries())
+	}
+
+	// A second request for each pair keeps the cohort detail-eligible but
+	// pushes requests plus groups one entry over the snapshot budget.
+	if err := db.Exec(`INSERT INTO report_account_facts(slot,id,queued_at,requests,owner,repository,spec)
+		SELECT slot,'second-'||id,queued_at,requests,owner,repository,spec FROM report_account_facts`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPublishedAccounts(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
+		t.Fatalf("oversized detail snapshot: %v", err)
+	}
+	// One previous-period request switches the same groups to aggregate-only.
+	if err := db.Create(&accountFact{Slot: 0, ID: "previous", QueuedAt: at.AddDate(0, 0, -1), Totals: ReportTotals{Requests: 1}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPublishedAccounts(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
+		t.Fatalf("oversized aggregate snapshot: %v", err)
+	}
 }
 
 func verifyPublishedAccountScale(t *testing.T, live, published *DBStore, opts Options) {
