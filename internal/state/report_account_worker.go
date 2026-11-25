@@ -13,15 +13,37 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const accountWorkerLock int64 = 0x61636374727074
+const (
+	accountWorkerLock   int64 = 0x61636374727074
+	accountWorkerLimits       = "SELECT set_config('lock_timeout', '2s', true), set_config('max_parallel_workers_per_gather', '0', true)"
+)
 
-// RefreshAccountReports runs in a separate process with its own two database
-// connections. A failed or interrupted run leaves the published slot readable.
+// Each replica checks the shared publication. Contention and a recent
+// publication are normal outcomes, so only actual refresh failures are logged.
+func RunAccountReportWorker(ctx context.Context, opts Options, onError func(error)) {
+	for ctx.Err() == nil {
+		if err := refreshAccountReports(ctx, opts, false, true); err != nil && ctx.Err() == nil {
+			onError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+	}
+}
+
+// RefreshAccountReports explicitly requests a refresh or full rebuild.
 func RefreshAccountReports(ctx context.Context, opts Options, rebuild bool) error {
+	return refreshAccountReports(ctx, opts, rebuild, false)
+}
+
+func refreshAccountReports(ctx context.Context, opts Options, rebuild, scheduled bool) error {
 	if opts.Backend != BackendPostgres {
 		return errors.New("published account reports require PostgreSQL")
 	}
-	opts.PostgresMaxOpenConns = 2
+	// Coordinator, source snapshot and batch writer use a private pool.
+	opts.PostgresMaxOpenConns = 3
 	s := &DBStore{opts: opts}
 	db, err := s.openWithContext(ctx)
 	if err != nil {
@@ -32,50 +54,103 @@ func RefreshAccountReports(ctx context.Context, opts Options, rebuild bool) erro
 		return err
 	}
 	defer pool.Close()
-	return db.WithContext(ctx).Connection(func(writer *gorm.DB) error {
-		writer = writer.Session(&gorm.Session{NewDB: true})
+	db = db.WithContext(ctx)
+	return db.Transaction(func(leader *gorm.DB) error {
 		var locked bool
-		if err := writer.Raw("SELECT pg_try_advisory_lock(?)", accountWorkerLock).Scan(&locked).Error; err != nil {
+		if err := leader.Raw("SELECT pg_try_advisory_xact_lock(?)", accountWorkerLock).Scan(&locked).Error; err != nil {
 			return err
 		}
 		if !locked {
+			if scheduled {
+				return nil
+			}
 			return errors.New("account report worker already running")
 		}
-		if err := writer.Exec("SET lock_timeout = '2s'").Error; err != nil {
+		if err := leader.Exec(accountWorkerLimits).Error; err != nil {
 			return err
 		}
-		if err := writer.Exec("SET max_parallel_workers_per_gather = 0").Error; err != nil {
+		writer := accountBatchWriter{db: db, leader: leader}
+		var pub *accountReportPublication
+		err := writer.batch(func(tx *gorm.DB) error {
+			if err := s.validateAndMigrate(tx, false); err != nil {
+				return err
+			}
+			var err error
+			pub, err = accountPublicationForRefresh(tx, scheduled)
+			return err
+		})
+		if err != nil || pub == nil {
 			return err
 		}
-		// Closing this private pool also releases the session-level writer lock.
-		if err := s.validateAndMigrate(writer, false); err != nil {
+		return refreshAccountSlot(ctx, leader, writer, *pub, rebuild)
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+}
+
+func accountPublicationForRefresh(tx *gorm.DB, scheduled bool) (*accountReportPublication, error) {
+	exists, err := accountPublicationExists(tx)
+	if err != nil {
+		return nil, err
+	}
+	var pub accountReportPublication
+	if exists {
+		err := tx.Select("definition", "pending_definition").Take(&pub, 1).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if pub.Definition > accountReportDefinition || pub.PendingDefinition > accountReportDefinition {
+		if scheduled {
+			return nil, nil // An upgraded replica owns this definition.
+		}
+		return nil, errors.New("account statistics require a newer worker")
+	}
+	if pub.Definition != accountReportDefinition && pub.PendingDefinition != accountReportDefinition {
+		if err := tx.AutoMigrate(&accountReportPublication{}, &accountFact{}, &accountDay{}, &accountDirtyDay{}, &accountDefaultDashboard{}); err != nil {
+			return nil, err
+		}
+		pub.ID = 1
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&pub).Error; err != nil {
+			return nil, err
+		}
+	}
+	q := tx
+	if scheduled {
+		q = q.Where("definition <> ? OR pending_epoch <> 0 OR published_at IS NULL OR published_at <= statement_timestamp() - interval '5 minutes'", accountReportDefinition)
+	}
+	err = q.Take(&pub, 1).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &pub, err
+}
+
+// Batches commit independently so a replacement worker can resume them. The
+// batch lock drains an in-flight write before takeover. Checking the original
+// coordinator transaction under that lock fences writes after connection loss.
+// Both locks are transaction-scoped, including through a transaction pooler.
+type accountBatchWriter struct {
+	db     *gorm.DB
+	leader *gorm.DB
+}
+
+func (w accountBatchWriter) batch(fn func(*gorm.DB) error) error {
+	return w.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(accountWorkerLimits).Error; err != nil {
 			return err
 		}
-		// A rolled-back worker must leave a newer schema intact, including
-		// when the newer worker has only started building its first slot.
-		var pub accountReportPublication
-		err := writer.Select("definition", "pending_definition").Take(&pub, 1).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) && !postgresUndefinedTable(err) {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", accountWorkerLock+1).Error; err != nil {
 			return err
 		}
-		if pub.Definition > accountReportDefinition || pub.PendingDefinition > accountReportDefinition {
-			return errors.New("account statistics require a newer worker")
+		// Probe the pinned leader transaction after acquiring the batch lock.
+		// A successor must acquire that same batch lock before inspecting the slot.
+		if err := w.leader.Exec("SELECT 1").Error; err != nil {
+			return fmt.Errorf("check account report writer transaction: %w", err)
 		}
-		if err := writer.AutoMigrate(&accountReportPublication{}, &accountFact{}, &accountDay{}, &accountDirtyDay{}, &accountDefaultDashboard{}); err != nil {
-			return err
-		}
-		return refreshAccountSlot(ctx, db, writer, rebuild)
+		return fn(tx)
 	})
 }
 
-func refreshAccountSlot(ctx context.Context, db, writer *gorm.DB, rebuild bool) error {
-	pub := accountReportPublication{ID: 1}
-	if err := writer.Clauses(clause.OnConflict{DoNothing: true}).Create(&pub).Error; err != nil {
-		return err
-	}
-	if err := writer.First(&pub, 1).Error; err != nil {
-		return err
-	}
+func refreshAccountSlot(ctx context.Context, leader *gorm.DB, writer accountBatchWriter, pub accountReportPublication, rebuild bool) error {
 	slot := 1 - pub.Slot
 	// Keep the requested epoch until publication. Retrying after a crash
 	// reuses committed fact batches. The other slot must also adopt this
@@ -89,7 +164,7 @@ func refreshAccountSlot(ctx context.Context, db, writer *gorm.DB, rebuild bool) 
 	}
 	bulk := pub.InactiveEpoch != epoch
 	if pub.PendingEpoch != epoch {
-		if err := writer.Transaction(func(tx *gorm.DB) error {
+		if err := writer.batch(func(tx *gorm.DB) error {
 			if bulk {
 				if err := tx.Exec("INSERT INTO report_account_dirty_days (slot,day) SELECT DISTINCT slot,day FROM report_account_days WHERE slot=? ON CONFLICT DO NOTHING", slot).Error; err != nil {
 					return err
@@ -100,36 +175,36 @@ func refreshAccountSlot(ctx context.Context, db, writer *gorm.DB, rebuild bool) 
 			return err
 		}
 	}
-	observed, _, err := syncAccountFacts(ctx, db, writer, slot, epoch, false)
+	observed, _, err := syncAccountFacts(ctx, writer, slot, epoch, false)
 	if err != nil {
 		return err
 	}
 	var sourceCount int64
 	if bulk {
 		// Pick up commits made during the backfill and count source rows at that snapshot.
-		observed, sourceCount, err = syncAccountFacts(ctx, db, writer, slot, epoch, true)
+		observed, sourceCount, err = syncAccountFacts(ctx, writer, slot, epoch, true)
 		if err != nil {
 			return err
 		}
 	}
-	if err := refreshAccountDays(writer, slot); err != nil {
+	if err := refreshAccountDays(leader, writer, slot); err != nil {
 		return err
 	}
 	if bulk {
-		if err := verifyAccountRebuild(writer, slot, sourceCount); err != nil {
+		if err := verifyAccountRebuild(leader, slot, sourceCount); err != nil {
 			return err
 		}
 	}
-	if err := prepareAccountDashboard(writer, slot, observed); err != nil {
+	if err := prepareAccountDashboard(leader, slot, observed); err != nil {
 		return err
 	}
-	return writer.Model(&pub).Updates(map[string]any{"slot": slot, "observed_at": observed, "epoch": epoch, "inactive_epoch": pub.Epoch, "pending_epoch": 0, "pending_definition": 0, "definition": accountReportDefinition}).Error
+	return leader.Model(&pub).Updates(map[string]any{"slot": slot, "observed_at": observed, "published_at": gorm.Expr("clock_timestamp()"), "epoch": epoch, "inactive_epoch": pub.Epoch, "pending_epoch": 0, "pending_definition": 0, "definition": accountReportDefinition}).Error
 }
 
-func syncAccountFacts(ctx context.Context, db, writer *gorm.DB, slot int, epoch int64, countSource bool) (time.Time, int64, error) {
+func syncAccountFacts(ctx context.Context, writer accountBatchWriter, slot int, epoch int64, countSource bool) (time.Time, int64, error) {
 	var observed time.Time
 	var count int64
-	err := db.WithContext(ctx).Transaction(func(src *gorm.DB) error {
+	err := writer.db.WithContext(ctx).Transaction(func(src *gorm.DB) error {
 		if err := src.Exec("SET LOCAL max_parallel_workers_per_gather = 0").Error; err != nil {
 			return err
 		}
@@ -188,7 +263,7 @@ func verifyAccountRebuild(db *gorm.DB, slot int, sourceCount int64) error {
 
 const accountFactBatchSize = 256
 
-func writeChangedAccountFacts(src, writer *gorm.DB, slot int, epoch int64, observed time.Time) error {
+func writeChangedAccountFacts(src *gorm.DB, writer accountBatchWriter, slot int, epoch int64, observed time.Time) error {
 	base, err := reportBase(src, RunnerReportQuery{})
 	if err != nil {
 		return err
@@ -214,7 +289,7 @@ func writeChangedAccountFacts(src, writer *gorm.DB, slot int, epoch int64, obser
 		if len(facts) == 0 {
 			return nil
 		}
-		err := writer.Transaction(func(tx *gorm.DB) error {
+		err := writer.batch(func(tx *gorm.DB) error {
 			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&facts).Error; err != nil {
 				return err
 			}
@@ -248,7 +323,7 @@ func writeChangedAccountFacts(src, writer *gorm.DB, slot int, epoch int64, obser
 	return flush()
 }
 
-func removeMissingAccountFacts(src, writer *gorm.DB, slot int) error {
+func removeMissingAccountFacts(src *gorm.DB, writer accountBatchWriter, slot int) error {
 	days := map[time.Time]bool{}
 	var orphan []accountFact
 	for cursor := ""; ; {
@@ -267,7 +342,7 @@ func removeMissingAccountFacts(src, writer *gorm.DB, slot int) error {
 			ids = append(ids, f.ID)
 			days[f.QueuedAt.UTC().Truncate(24*time.Hour)] = true
 		}
-		if err := writer.Transaction(func(tx *gorm.DB) error {
+		if err := writer.batch(func(tx *gorm.DB) error {
 			if err := tx.Where("slot=? AND id IN ?", slot, ids).Delete(&accountFact{}).Error; err != nil {
 				return err
 			}
@@ -280,22 +355,22 @@ func removeMissingAccountFacts(src, writer *gorm.DB, slot int) error {
 	}
 }
 
-func refreshAccountDays(writer *gorm.DB, slot int) error {
-	columns, err := reportMetricColumns(writer)
+func refreshAccountDays(leader *gorm.DB, writer accountBatchWriter, slot int) error {
+	columns, err := reportMetricColumns(leader)
 	if err != nil {
 		return err
 	}
 	additive := additiveReportColumns(columns)
 	for {
 		var dirty accountDirtyDay
-		err := writer.Where("slot = ?", slot).Order("day").Take(&dirty).Error
+		err := leader.Where("slot = ?", slot).Order("day").Take(&dirty).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			break
 		}
 		if err != nil {
 			return err
 		}
-		if err := writer.Transaction(func(tx *gorm.DB) error {
+		if err := writer.batch(func(tx *gorm.DB) error {
 			if err := tx.Where("slot = ? AND day = ?", slot, dirty.Day).Delete(&accountDay{}).Error; err != nil {
 				return err
 			}

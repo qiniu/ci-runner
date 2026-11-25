@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,26 @@ import (
 
 	"github.com/qiniu/ci-runner/internal/testpg"
 )
+
+func readAccountSourceForTest(t *testing.T, s *DBStore, q RunnerReportQuery, at time.Time) (*RunnerReport, error) {
+	t.Helper()
+	window, err := q.Window(at)
+	if err != nil {
+		return nil, err
+	}
+	db, err := s.dbOrEnsure()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var r *RunnerReport
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		r, err = readSourceReport(ctx, tx, q, window, at)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return r, err
+}
 
 func TestPublishedAccountReportsPostgres(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
@@ -42,7 +63,6 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	q.From = endDay.AddDate(0, 0, -1).Format(time.DateOnly)
 	q.To = endDay.AddDate(0, 0, 1).Format(time.DateOnly)
 	q.IncludeAccountUsage = true
-	opts.PublishedAccountReports = true
 	opts.MigrateOnStart = false
 	published := NewWithOptions(opts).(*DBStore)
 	pdb, err := published.dbOrEnsure()
@@ -51,8 +71,8 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	}
 	defer closeTestDB(t, pdb)
 	now := time.Now().UTC()
-	if _, err := published.ReadRunnerReport(t.Context(), q, now); !errors.Is(err, ErrAccountReportUnavailable) {
-		t.Fatalf("unpublished report: %v", err)
+	if r, err := published.ReadRunnerReport(t.Context(), q, now); err != nil || r.Totals.Requests == 0 || !r.ObservedAt.Equal(now) {
+		t.Fatalf("expected live report before first publication: %v", err)
 	}
 	refresh := func(rebuild bool) {
 		t.Helper()
@@ -66,7 +86,7 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err := live.ReadRunnerReport(t.Context(), q, got.ObservedAt)
+		want, err := readAccountSourceForTest(t, live, q, got.ObservedAt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +104,33 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		}
 		return got
 	}
-	refresh(false)
+	// Independent replicas starting close together must publish only once.
+	for range 2 {
+		if err := refreshAccountReports(t.Context(), opts, false, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first accountReportPublication
+	if err := db.First(&first, 1).Error; err != nil || first.Slot != 1 || first.PublishedAt.IsZero() {
+		t.Fatalf("expected a single initial publication: %+v, %v", first, err)
+	}
+	if err := db.Model(&first).UpdateColumn("published_at", gorm.Expr("clock_timestamp() - interval '6 minutes'")).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshAccountReports(t.Context(), opts, false, true); err != nil {
+		t.Fatal(err)
+	}
+	var next accountReportPublication
+	if err := db.First(&next, 1).Error; err != nil || next.Slot == first.Slot || !next.PublishedAt.After(first.PublishedAt) {
+		t.Fatalf("expected another replica to refresh a due publication: %+v, %v", next, err)
+	}
+	later := next.ObservedAt.AddDate(0, 0, 3)
+	future := defaultAccountQuery(later)
+	future.From = later.UTC().Format(time.DateOnly)
+	r, err := published.ReadRunnerReport(t.Context(), future, later)
+	if err != nil || !r.ObservedAt.Equal(later) {
+		t.Fatalf("expected live report beyond the last publication: %v", err)
+	}
 	check(q)
 	for _, zone := range []string{"Asia/Shanghai", "America/St_Johns"} {
 		f := q
@@ -123,12 +169,29 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", accountWorkerLock).Error; err != nil {
 			return err
 		}
+		if err := refreshAccountReports(t.Context(), opts, false, true); err != nil {
+			return fmt.Errorf("background replica should skip a busy writer: %w", err)
+		}
 		if err := RefreshAccountReports(t.Context(), opts, false); err == nil {
 			return errors.New("second writer acquired the report lock")
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// A disconnected coordinator cannot write another batch after takeover.
+	stale := accountBatchWriter{db: db}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		stale.leader = tx
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.batch(func(*gorm.DB) error {
+		t.Fatal("a finished coordinator entered a write batch")
+		return nil
+	}); err == nil {
+		t.Fatal("expected a stale coordinator error")
 	}
 	oldReport := check(q)
 	var old accountReportPublication
@@ -212,8 +275,12 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		if err := tx.Exec("ALTER TABLE runner_requests RENAME TO hidden_source").Error; err != nil {
 			return err
 		}
-		if _, err := readPublishedAccounts(tx, q, time.Now().UTC()); err != nil {
+		r, err := readPublishedAccounts(tx, q, time.Now().UTC())
+		if err != nil {
 			return err
+		}
+		if r == nil {
+			return errors.New("lost compatible publication")
 		}
 		return gorm.ErrInvalidTransaction
 	})
@@ -368,20 +435,16 @@ func verifyPublishedAccountScale(t *testing.T, live, published *DBStore, opts Op
 	}
 	t.Logf("rebuild %s", time.Since(start))
 	q := RunnerReportQuery{IncludeAccountUsage: true, Grain: "day", Timezone: "UTC", From: now.AddDate(0, 0, -29).Format(time.DateOnly), To: now.AddDate(0, 0, 1).Format(time.DateOnly)}
-	read := func(s *DBStore, at time.Time) *RunnerReport {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		start := time.Now()
-		r, err := s.ReadRunnerReport(ctx, q, at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("published=%v, %d current + %d previous in %s", s.opts.PublishedAccountReports, r.Totals.Requests, r.Previous.Requests, time.Since(start))
-		return r
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	got, err := published.ReadRunnerReport(ctx, q, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := read(published, time.Now())
-	want := read(live, got.ObservedAt)
+	want, err := readAccountSourceForTest(t, live, q, got.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Rows != nil || got.Totals != want.Totals || got.Previous != want.Previous || !reflect.DeepEqual(got.Trend, want.Trend) || !reflect.DeepEqual(got.ChartDistributions(), want.ChartDistributions()) {
 		t.Fatal("large published report differs")
 	}

@@ -24,6 +24,16 @@ func (s *Server) startBackgroundLoops() {
 		go s.runnerWatchLoop(s.loopCtx)
 		go s.deploymentLoop(s.loopCtx)
 		go s.terminalExpiryLoop(s.loopCtx, s.store)
+		if s.cfg.StateBackend == state.BackendPostgres {
+			s.loopWG.Add(1)
+			go func() {
+				defer s.loopWG.Done()
+				opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: s.cfg.StateDatabaseDSN.Value()}
+				state.RunAccountReportWorker(s.loopCtx, opts, func(err error) {
+					s.logger.Error("refresh account reports", "error", err)
+				})
+			}()
+		}
 	})
 }
 

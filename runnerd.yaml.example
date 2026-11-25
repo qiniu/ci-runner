@@ -15,8 +15,6 @@ database:
   dsn: ./var/runnerd.db
   # Standalone Postgres example (does not migrate existing SQLite data):
   # backend: postgres
-  # After publishing an account report generation (docs/account-report-worker.md):
-  # published_account_reports: true
   # Optional per-process connection ceiling. Zero uses the unbounded driver default.
   # postgres_max_open_connections: 12
   # dsn: postgres://runner:secret@postgres.example:5432/runnerd?sslmode=require

@@ -31,7 +31,7 @@ func main() {
 	configPath := flag.String("config", "runnerd.yaml", "path to runnerd config file")
 	bootstrapAdmin := flag.String("bootstrap-admin", "", "set an admin account as provider:subject (for example github:12345678) and exit without starting the server")
 	obfuscateConfigValue := flag.Bool("obfuscate-config-value", false, "read a secret from stdin and print a RUNNERD_ENC value")
-	accountReports := flag.String("account-reports", "", "PostgreSQL account statistics worker: refresh, rebuild, or watch")
+	accountReports := flag.String("account-reports", "", "PostgreSQL account statistics worker: refresh or rebuild")
 	flag.Parse()
 	if *obfuscateConfigValue {
 		if !runObfuscateConfigValue(os.Stdin, os.Stdout, os.Stderr) {
@@ -61,11 +61,10 @@ func main() {
 		os.Exit(1)
 	}
 	opts := state.Options{
-		PublishedAccountReports: cfg.PublishedAccountReports,
-		Backend:                 cfg.StateBackend,
-		DatabaseDSN:             cfg.StateDatabaseDSN.Value(),
-		PostgresMaxOpenConns:    cfg.PostgresMaxOpenConns,
-		MigrateOnStart:          true,
+		Backend:              cfg.StateBackend,
+		DatabaseDSN:          cfg.StateDatabaseDSN.Value(),
+		PostgresMaxOpenConns: cfg.PostgresMaxOpenConns,
+		MigrateOnStart:       true,
 	}
 	store := state.NewWithOptions(opts)
 	if err := initializeStateStore(store, logger); err != nil {
@@ -140,27 +139,15 @@ func main() {
 }
 
 func runAccountReports(ctx context.Context, opts state.Options, mode string, logger *slog.Logger) error {
-	if mode != "refresh" && mode != "rebuild" && mode != "watch" {
+	if mode != "refresh" && mode != "rebuild" {
 		return fmt.Errorf("unknown account report worker mode %q", mode)
 	}
-	for {
-		started := time.Now()
-		err := state.RefreshAccountReports(ctx, opts, mode == "rebuild")
-		if err == nil {
-			logger.Info("published account reports", "mode", mode, "elapsed", time.Since(started))
-		}
-		if mode != "watch" {
-			return err
-		}
-		if err != nil && ctx.Err() == nil {
-			logger.Error("account report refresh failed", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(5 * time.Minute):
-		}
+	started := time.Now()
+	if err := state.RefreshAccountReports(ctx, opts, mode == "rebuild"); err != nil {
+		return err
 	}
+	logger.Info("published account reports", "mode", mode, "elapsed", time.Since(started))
+	return nil
 }
 
 type recoveryGate struct {

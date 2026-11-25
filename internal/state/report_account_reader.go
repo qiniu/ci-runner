@@ -9,8 +9,6 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrAccountReportUnavailable = errors.New("account statistics have no published data for this period")
-
 func accountFilters(query *gorm.DB, q RunnerReportQuery, slot int) *gorm.DB {
 	query = query.Where("slot = ?", slot)
 	if q.Repository != "" || q.MissingRepository == "1" {
@@ -62,18 +60,34 @@ func accountPeriodParts(db *gorm.DB, q RunnerReportQuery, slot int, start, end t
 	return parts
 }
 
+// Probe before querying the table: an undefined relation would abort the
+// repeatable-read transaction needed for the first-publication fallback.
+func accountPublicationExists(db *gorm.DB) (bool, error) {
+	var exists bool
+	err := db.Raw("SELECT to_regclass(?) IS NOT NULL", (accountReportPublication{}).TableName()).Scan(&exists).Error
+	return exists, err
+}
+
+// A nil report means the caller can serve the validated query from source.
 func readPublishedAccounts(db *gorm.DB, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
+	exists, err := accountPublicationExists(db)
+	if err != nil || !exists {
+		return nil, err
+	}
 	var pub accountReportPublication
-	err := db.Take(&pub, 1).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) || postgresUndefinedTable(err) || (err == nil && (pub.ObservedAt.IsZero() || pub.Definition != accountReportDefinition)) {
-		return nil, ErrAccountReportUnavailable
+	err = db.Select("slot", "observed_at", "definition").Take(&pub, 1).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if pub.ObservedAt.IsZero() || pub.Definition != accountReportDefinition {
+		return nil, nil
+	}
 	w, err := q.windowAt(pub.ObservedAt, now)
 	if err != nil {
-		return nil, ErrAccountReportUnavailable
+		return nil, nil // The requested window starts after this publication.
 	}
 	r := &RunnerReport{Query: q, Window: w, ObservedAt: pub.ObservedAt.UTC()}
 	if err := readAccountDashboard(db, r, pub.Slot); err != nil {
@@ -134,11 +148,6 @@ func publishedAccountGroups(db *gorm.DB, q RunnerReportQuery, slot int, w Report
 	// snapshot can therefore yield at most its entry budget plus two totals.
 	args = append(args, ReportSnapshotEntries+2+1)
 	return db.Raw(statement, args...), nil
-}
-
-func postgresUndefinedTable(err error) bool {
-	var pgErr interface{ SQLState() string }
-	return errors.As(err, &pgErr) && pgErr.SQLState() == "42P01"
 }
 
 func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {

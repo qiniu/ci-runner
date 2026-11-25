@@ -18,7 +18,6 @@ type Config struct {
 	HTTPWriteTimeout          time.Duration
 	HTTPIdleTimeout           time.Duration
 	StateDir                  string
-	PublishedAccountReports   bool
 	StateBackend              string
 	StateDatabaseDSN          Secret
 	PostgresMaxOpenConns      int
@@ -70,12 +69,11 @@ type SandboxRegionConfig struct {
 }
 
 type databaseConfig struct {
-	PublishedAccountReports bool      `yaml:"published_account_reports"`
-	Backend                 string    `yaml:"backend"`
-	PostgresMaxOpenConns    int       `yaml:"postgres_max_open_connections"`
-	DSN                     Secret    `yaml:"dsn"`
-	LegacyURL               Secret    `yaml:"url"`
-	RetiredOnlineMigration  yaml.Node `yaml:"online_migration"`
+	Backend                string    `yaml:"backend"`
+	PostgresMaxOpenConns   int       `yaml:"postgres_max_open_connections"`
+	DSN                    Secret    `yaml:"dsn"`
+	LegacyURL              Secret    `yaml:"url"`
+	RetiredOnlineMigration yaml.Node `yaml:"online_migration"`
 }
 
 type fileConfig struct {
@@ -247,7 +245,6 @@ func LoadFile(path string) (Config, error) {
 		HTTPReadTimeout:           durationSeconds(raw.Server.ReadTimeoutSec, 15),
 		HTTPWriteTimeout:          durationSeconds(raw.Server.WriteTimeoutSec, 60),
 		HTTPIdleTimeout:           durationSeconds(raw.Server.IdleTimeoutSec, 120),
-		PublishedAccountReports:   raw.Database.PublishedAccountReports,
 		StateBackend:              strings.ToLower(defaultString(raw.Database.Backend, "sqlite")),
 		StateDatabaseDSN:          defaultSecret(raw.Database.DSN, raw.Database.LegacyURL),
 		PostgresMaxOpenConns:      raw.Database.PostgresMaxOpenConns,

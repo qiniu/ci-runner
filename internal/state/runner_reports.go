@@ -497,9 +497,15 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 		defer db.Rollback()
 	}
-	if q.IncludeAccountUsage && s.opts.PublishedAccountReports && db.Dialector.Name() == BackendPostgres {
-		return readPublishedAccounts(db, q, now)
+	if q.IncludeAccountUsage && db.Dialector.Name() == BackendPostgres {
+		if report, err := readPublishedAccounts(db, q, now); err != nil || report != nil {
+			return report, err
+		}
 	}
+	return readSourceReport(ctx, db, q, window, now)
+}
+
+func readSourceReport(ctx context.Context, db *gorm.DB, q RunnerReportQuery, window ReportWindow, now time.Time) (*RunnerReport, error) {
 	if q.IncludeExecution {
 		return readExecutionReport(db, q, window, now)
 	}

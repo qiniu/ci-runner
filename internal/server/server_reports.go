@@ -387,10 +387,6 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, state.ErrAccountReportUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
 		return

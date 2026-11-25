@@ -32,7 +32,7 @@ func TestAccountReportWorkerInterrupted(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires Unix signal delivery")
 	}
-	for _, mode := range []string{"refresh", "rebuild", "watch"} {
+	for _, mode := range []string{"refresh", "rebuild"} {
 		t.Run(mode, func(t *testing.T) {
 			// Leave the handshake pending. Only the CLI's signal handler
 			// should interrupt it, even with no database connection timeout.
@@ -69,11 +69,7 @@ func TestAccountReportWorkerInterrupted(t *testing.T) {
 			}
 			err = cmd.Wait()
 			var exit *exec.ExitError
-			if mode == "watch" {
-				if err != nil {
-					t.Fatalf("watch shutdown: %v", err)
-				}
-			} else if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 				t.Fatalf("interrupted %s: got %v, want exit 1", mode, err)
 			}
 		})

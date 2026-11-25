@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiniu/ci-runner/internal/config"
 	"github.com/qiniu/ci-runner/internal/state"
 	"github.com/qiniu/ci-runner/internal/testpg"
 )
@@ -182,7 +183,7 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{state.ErrAccountReportUnavailable, 503}, {state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
+	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
 		w := httptest.NewRecorder()
 		srv.writeReportError(w, httptest.NewRequest(http.MethodGet, "/reports/overview", nil), tc.err)
 		if w.Code != tc.code {
@@ -288,7 +289,7 @@ func TestPublishedAccountHTTPPostgres(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("requires dedicated PostgreSQL _test database")
 	}
-	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true, PublishedAccountReports: true}
+	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true}
 	publish := func() {
 		t.Helper()
 		if err := state.RefreshAccountReports(t.Context(), opts, false); err != nil {
@@ -299,6 +300,44 @@ func TestPublishedAccountHTTPPostgres(t *testing.T) {
 	if os.Getenv("RUNNERD_REPORT_SCALE_TEST") == "1" {
 		t.Run("default_30_days", func(t *testing.T) { verifyPublishedAccountHTTPScale(t, opts) })
 	}
+}
+
+func TestPublishedAccountServerStartupPostgres(t *testing.T) {
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires dedicated PostgreSQL _test database")
+	}
+	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true}
+	pool, err := sql.Open("pgx", opts.DatabaseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for range 2 {
+		srv := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+		srv.cfg.StateBackend = opts.Backend
+		srv.cfg.StateDatabaseDSN = config.Secret(opts.DatabaseDSN)
+		srv.Start()
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		var exists bool
+		if err := pool.QueryRowContext(ctx, "SELECT to_regclass('report_account_publications') IS NOT NULL").Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists {
+			var published bool
+			err := pool.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM report_account_publications WHERE slot=1 AND published_at IS NOT NULL)").Scan(&published)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if published {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("normal server startup did not publish account reports")
 }
 
 // A fresh server for each request exercises authentication, query selection,
@@ -319,7 +358,8 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RefreshAccountReports(t.Context(), opts, true); err != nil {
+	// Simulate a rolling upgrade before a compatible publication exists.
+	if _, err := pool.ExecContext(t.Context(), "UPDATE report_account_publications SET definition=0"); err != nil {
 		t.Fatal(err)
 	}
 	type result struct {
@@ -329,7 +369,6 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 	}
 	read := func(usePublished bool) result {
 		t.Helper()
-		opts.PublishedAccountReports = usePublished
 		opts.MigrateOnStart = false
 		srv := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
 		w := httptest.NewRecorder()
@@ -350,6 +389,9 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 		return r
 	}
 	old := read(false)
+	if err := state.RefreshAccountReports(t.Context(), opts, true); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if got := read(true); !reflect.DeepEqual(got, old) {
 			t.Fatal("published HTTP metrics differ from source")
@@ -380,7 +422,7 @@ func verifyAccountPagesAfterRestart(t *testing.T, store, peer state.Store, publi
 		add(i)
 	}
 	if publish != nil {
-		get(first, "/reports/account-usage", 503)
+		get(first, "/reports/account-usage", 200)
 		publish()
 		get(first, "/reports/account-usage", 200)
 	}

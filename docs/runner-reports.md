@@ -44,7 +44,7 @@ filters and the trend data table remain available.
 
 ## Accounts and repositories
 
-PostgreSQL installations can publish this dashboard in the background and switch the account endpoint to the published data. The page shows the source observation time. See the [worker design, rebuild and rollout procedure](account-report-worker.md).
+On PostgreSQL, runnerd publishes this dashboard in the background. The account endpoint reads the original cohort until a compatible publication is available, then switches automatically. The page shows the source observation time. See the [worker design, rebuild and rollout procedure](account-report-worker.md).
 
 Open `/admin/reports?view=accounts` to rank GitHub owners and repositories by requests or recorded runtime. The default charts share the selected cohort with the paged table. Choose an owner or repository in the filter bar, chart or table to narrow usage in place. Selecting an owner opens repository rankings in table mode when the table is shown. Select a spec in the distribution or use the paged spec filter to find any spec in the cohort. Choosing or clearing a dimension applies the dates, timezone and grain currently entered in the same form.
 
@@ -224,7 +224,7 @@ the scan, sort and grouping as well as row reads. Rollback removes the temporary
 table. WAL allows concurrent scheduler writes on the primary connection.
 In-memory SQLite uses the original connection and retains its data on cancellation.
 PostgreSQL and MySQL reuse their
-configured pools. The live-query path uses the existing source tables and indexes. The optional PostgreSQL worker creates and maintains its own account-report tables. On disk, historical
+configured pools. The live-query path uses the existing source tables and indexes. The built-in PostgreSQL worker creates and maintains its own account-report tables. On disk, historical
 payloads are still physically colocated in SQLite table pages; projecting narrow
 columns avoids decoding/returning them, but is not a claim of zero physical I/O
 for pages containing those columns.

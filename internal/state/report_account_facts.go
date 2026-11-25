@@ -9,7 +9,7 @@ import (
 // transactions never open, migrate, or populate these tables.
 // Bump for changes to persisted metric meaning. The next worker run rebuilds
 // from source before publishing a generation with this definition.
-const accountReportDefinition = 1
+const accountReportDefinition = 2
 
 type accountReportPublication struct {
 	Definition        int
@@ -17,6 +17,7 @@ type accountReportPublication struct {
 	ID                int `gorm:"primaryKey;autoIncrement:false"`
 	Slot              int
 	ObservedAt        time.Time
+	PublishedAt       time.Time
 	Epoch             int64
 	InactiveEpoch     int64
 	PendingEpoch      int64
