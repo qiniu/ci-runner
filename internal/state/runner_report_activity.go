@@ -1,6 +1,11 @@
 package state
 
-import "time"
+import (
+	"slices"
+	"time"
+)
+
+var reportAccountOutcomes = []string{"success", "failure", "timed_out", "cancelled", "skipped", "unknown"}
 
 // Activity uses queued_at inside the selected period, irrespective of trend grain.
 type ReportActivity struct {
@@ -30,9 +35,7 @@ func (a *activityAccumulator) add(row ReportRequest, loc *time.Location) {
 		a.LastQueuedAt = row.QueuedAt.UTC()
 	}
 	result := row.JobResult
-	switch result {
-	case "success", "failure", "timed_out", "cancelled", "skipped", "unknown":
-	default:
+	if !slices.Contains(reportAccountOutcomes, result) {
 		result = "other"
 	}
 	a.Outcomes[result]++

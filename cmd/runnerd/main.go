@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	_ "github.com/jimmicro/pprof"
@@ -29,6 +31,7 @@ func main() {
 	configPath := flag.String("config", "runnerd.yaml", "path to runnerd config file")
 	bootstrapAdmin := flag.String("bootstrap-admin", "", "set an admin account as provider:subject (for example github:12345678) and exit without starting the server")
 	obfuscateConfigValue := flag.Bool("obfuscate-config-value", false, "read a secret from stdin and print a RUNNERD_ENC value")
+	accountReports := flag.String("account-reports", "", "PostgreSQL account statistics worker: refresh, rebuild, or watch")
 	flag.Parse()
 	if *obfuscateConfigValue {
 		if !runObfuscateConfigValue(os.Stdin, os.Stdout, os.Stderr) {
@@ -37,17 +40,34 @@ func main() {
 		return
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if *accountReports != "" {
+		dsn, err := config.LoadAccountReportDSN(*configPath)
+		if err != nil {
+			logger.Error("load account report database config", "error", err)
+			os.Exit(1)
+		}
+		opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn.Value()}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := runAccountReports(ctx, opts, *accountReports, logger); err != nil && ctx.Err() == nil {
+			logger.Error("account report worker stopped", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	store := state.NewWithOptions(state.Options{
-		Backend:              cfg.StateBackend,
-		DatabaseDSN:          cfg.StateDatabaseDSN.Value(),
-		PostgresMaxOpenConns: cfg.PostgresMaxOpenConns,
-		MigrateOnStart:       true,
-	})
+	opts := state.Options{
+		PublishedAccountReports: cfg.PublishedAccountReports,
+		Backend:                 cfg.StateBackend,
+		DatabaseDSN:             cfg.StateDatabaseDSN.Value(),
+		PostgresMaxOpenConns:    cfg.PostgresMaxOpenConns,
+		MigrateOnStart:          true,
+	}
+	store := state.NewWithOptions(opts)
 	if err := initializeStateStore(store, logger); err != nil {
 		logger.Error("initialize state store", "error", err)
 		os.Exit(1)
@@ -116,6 +136,30 @@ func main() {
 	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runAccountReports(ctx context.Context, opts state.Options, mode string, logger *slog.Logger) error {
+	if mode != "refresh" && mode != "rebuild" && mode != "watch" {
+		return fmt.Errorf("unknown account report worker mode %q", mode)
+	}
+	for {
+		started := time.Now()
+		err := state.RefreshAccountReports(ctx, opts, mode == "rebuild")
+		if err == nil {
+			logger.Info("published account reports", "mode", mode, "elapsed", time.Since(started))
+		}
+		if mode != "watch" {
+			return err
+		}
+		if err != nil && ctx.Err() == nil {
+			logger.Error("account report refresh failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Minute):
+		}
 	}
 }
 

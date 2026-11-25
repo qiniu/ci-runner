@@ -80,3 +80,4 @@ This file tracks active project work. Completed behavior should move into `READM
 
 - Verify the first production collection boundary, a retried Runner’s distinct attempts and a GitHub-timed Job in the [period usage report](docs/runner-reports.md#execution-history-and-period-usage).
 - Validate [Runner usage reports](docs/runner-reports.md) against an approved representative production snapshot: record field coverage, scale, query plans and scheduler latency. Local fixtures and 100,000-row SQLite evidence do not establish production acceptance. Complete attempt usage and precise Job timing remain separate future work.
+- Measure default account-report HTTP latency and queue claims under representative load during a published-report rebuild and incremental refresh. The [worker rollout](docs/account-report-worker.md) includes parity checks and the live-query rollback.

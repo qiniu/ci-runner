@@ -317,10 +317,7 @@ func parseRunnerReportQuery(values url.Values, now time.Time) (state.RunnerRepor
 		q.Grain = "day"
 	}
 	if q.From == "" && q.To == "" {
-		local := now.In(loc)
-		end := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, time.UTC)
-		q.To = end.Format(time.DateOnly)
-		q.From = end.AddDate(0, 0, -30).Format(time.DateOnly)
+		q.From, q.To = state.DefaultReportDates(now, loc)
 	}
 	_, err = q.Window(now)
 	return q, err
@@ -390,6 +387,10 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, state.ErrAccountReportUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
 		return

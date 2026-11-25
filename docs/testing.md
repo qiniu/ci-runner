@@ -376,6 +376,7 @@ export COOKIE_JAR=./runnerd.cookies
 Run `go test ./internal/state -run TestExecutionUsage` for period boundaries, retry history and peak concurrency. The same fixture runs in `TestRunnerReportSQLBackends`. The signed webhook and API recovery path is covered by `TestSignedJobTimesFollowOriginalJobAcrossRunnerAssignment`.
 
 For the admin usage report, open `/admin/reports?view=accounts`, select an owner and repository, and reload a second table page. Open a request and verify the return link restores the highlighted row. The [report contract and focused tests](runner-reports.md) cover default dates and shared snapshot restoration.
+The [account report worker guide](account-report-worker.md) includes PostgreSQL parity, forced write failure, restart and rebuild checks.
 
 Admin account page:
 

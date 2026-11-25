@@ -2,18 +2,22 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/state"
+	"github.com/qiniu/ci-runner/internal/testpg"
 )
 
 type reportsReadStore struct {
@@ -178,7 +182,7 @@ func TestRunnerReportCacheBoundsAndErrorMapping(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
+	}{{state.ErrAccountReportUnavailable, 503}, {state.ErrReportTooLarge, 422}, {state.ErrReportTooManyGroups, 422}, {state.ErrReportSnapshotTooLarge, 422}, {context.DeadlineExceeded, 504}, {errors.New("private db detail"), 500}} {
 		w := httptest.NewRecorder()
 		srv.writeReportError(w, httptest.NewRequest(http.MethodGet, "/reports/overview", nil), tc.err)
 		if w.Code != tc.code {
@@ -277,9 +281,85 @@ func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 
 func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
 	dir := t.TempDir()
-	store := state.New(dir)
+	verifyAccountPagesAfterRestart(t, state.New(dir), state.New(dir), nil)
+}
+
+func TestPublishedAccountHTTPPostgres(t *testing.T) {
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires dedicated PostgreSQL _test database")
+	}
+	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true, PublishedAccountReports: true}
+	publish := func() {
+		t.Helper()
+		if err := state.RefreshAccountReports(t.Context(), opts, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	verifyAccountPagesAfterRestart(t, state.NewWithOptions(opts), state.NewWithOptions(opts), publish)
+	if os.Getenv("RUNNERD_REPORT_SCALE_TEST") == "1" {
+		t.Run("default_30_days", func(t *testing.T) { verifyPublishedAccountHTTPScale(t, opts) })
+	}
+}
+
+// A fresh server for each request exercises authentication, query selection,
+// persisted snapshot encoding and publication as well as reading the dashboard.
+func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
+	t.Helper()
+	pool, err := sql.Open("pgx", opts.DatabaseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	// Fixed daily timestamps keep the default current/prior cohorts comparable
+	// across the two independently observed HTTP requests.
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -59)
+	_, err = pool.ExecContext(t.Context(), `INSERT INTO runner_requests(id,runner_name,source,labels_json,status,repository_full_name,profile_source,profile_name,github_installation_id,queued_at,running_at,completed_at,updated_at)
+	SELECT id,id,'http-fixture','[]','completed','repo-'||(i%161),'global','spec-'||(i%4),1+i%9,at,at,at+interval '1 second',at
+	FROM (SELECT i,'http-scale-'||i AS id,$1::timestamptz + (i%60)*interval '24 hours' AS at FROM generate_series(1,510000) i) f`, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.RefreshAccountReports(t.Context(), opts, true); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		Totals, Previous state.ReportTotals
+		Distributions    map[string]state.ReportDistribution
+		Trend            []state.ReportBucket
+	}
+	read := func(usePublished bool) result {
+		t.Helper()
+		opts.PublishedAccountReports = usePublished
+		opts.MigrateOnStart = false
+		srv := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+		w := httptest.NewRecorder()
+		begin := time.Now()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, "/reports/account-usage", nil))
+		elapsed := time.Since(begin)
+		if w.Code != 200 {
+			t.Fatalf("HTTP %d: %s", w.Code, w.Body.String())
+		}
+		var r result
+		if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Totals.Requests < 250000 || len(r.Distributions) != 3 {
+			t.Fatal("default dashboard missed the fixture")
+		}
+		t.Logf("default 30 days, published=%v, %d + %d requests, cold HTTP %d in %s", usePublished, r.Totals.Requests, r.Previous.Requests, w.Code, elapsed)
+		return r
+	}
+	old := read(false)
+	for range 2 {
+		if got := read(true); !reflect.DeepEqual(got, old) {
+			t.Fatal("published HTTP metrics differ from source")
+		}
+	}
+}
+
+func verifyAccountPagesAfterRestart(t *testing.T, store, peer state.Store, publish func()) {
 	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
-	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, peer, "http://example.test", &fakeSandbox{}, 10)
 	get := func(srv *Server, path string, want int) string {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -298,6 +378,11 @@ func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
 	}
 	for i := 0; i < 24; i++ {
 		add(i)
+	}
+	if publish != nil {
+		get(first, "/reports/account-usage", 503)
+		publish()
+		get(first, "/reports/account-usage", 200)
 	}
 	body := get(first, "/reports/account-usage?owner=installation:12", 200)
 	var dashboard struct {
@@ -322,6 +407,9 @@ func TestRunnerReportAccountPagesAfterRestart(t *testing.T) {
 		second.reports.entries = nil
 		before := get(first, path, 200)
 		add(25 + i)
+		if publish != nil {
+			publish()
+		}
 		if got := get(second, path, 200); got != before {
 			t.Fatalf("restored %s changed", path)
 		}

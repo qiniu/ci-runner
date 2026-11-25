@@ -795,8 +795,9 @@ type Store interface {
 }
 
 type Options struct {
-	Backend              string
-	DatabaseDSN          string
-	MigrateOnStart       bool
-	PostgresMaxOpenConns int
+	PublishedAccountReports bool
+	Backend                 string
+	DatabaseDSN             string
+	MigrateOnStart          bool
+	PostgresMaxOpenConns    int
 }
