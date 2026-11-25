@@ -18,7 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 type AccountUsageProps = ReportActions & {
   report: RunnerReport
-  onSelect: (dimension: ReportDimension, key: string) => void
+  onSelect: (dimension: ReportDimension, key: string, label: string) => void
   children: ReactNode
 }
 
@@ -182,7 +182,7 @@ export function AccountUsageReport({
                           variant="link"
                           size="sm"
                           className="h-auto p-0"
-                          onClick={() => onSelect(dimension, g.key)}
+                          onClick={() => onSelect(dimension, g.key, g.label)}
                         >
                           {reportGroupLabel(t, dimension, g.key, g.label)}
                         </Button>

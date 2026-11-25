@@ -93,12 +93,17 @@ export function RunnerReportsSection({
     pinned.set("snapshot", report.snapshot)
     onNavigate(`?${pinned}`, true)
   }, [sharedUsage, report, search, onNavigate])
+  const ownerKey = response?.query.owner ?? params.get("owner")
+  const ownerName = report?.distributions?.owner.requests.find((group) => group.key === ownerKey)?.label
+    || (ownerKey === params.get("owner") ? urlState.get("owner_label") : null)
+  const ownerLabel = ownerKey ? reportGroupLabel(t, "owner", ownerKey, ownerName || "") : ""
   const navigate = (values: Record<string, string | null>) => {
     const next = new URLSearchParams(search)
     if (response) {
       for (const [key, value] of Object.entries(response.query)) if (value) next.set(key, value)
       next.set("snapshot", response.snapshot)
     }
+    if (ownerName) next.set("owner_label", ownerName)
     for (const [key, value] of Object.entries(values)) {
       if (value === null) next.delete(key)
       else next.set(key, value)
@@ -124,7 +129,7 @@ export function RunnerReportsSection({
   const [edits, setEdits] = useState<{ key: string; query: ReportQuery } | null>(null)
   if (edits && edits.key !== filterKey) setEdits(null)
   const draft = edits?.key === filterKey ? edits.query : selected
-  const applyFilters = (query: ReportQuery, ranking?: string) => {
+  const applyFilters = (query: ReportQuery, ranking?: string, name?: string) => {
     setEdits(null)
     const next = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)))
     for (const key of [
@@ -143,16 +148,19 @@ export function RunnerReportsSection({
     ]) {
       if (urlState.has(key)) next.set(key, urlState.get(key)!)
     }
+    const nextOwnerName = name || (query.owner === ownerKey ? ownerName : null)
+    if (query.owner && nextOwnerName) next.set("owner_label", nextOwnerName)
     if (ranking) next.set("ranking", ranking)
     if (view === "specs" && !next.has("focus_spec") && urlState.get("spec")) {
       next.set("focus_spec", urlState.get("spec")!)
     }
     onNavigate(`?${next}`)
   }
-  const selectGroup = (dimension: ReportDimension, key: string | null) => {
+  const selectGroup = (dimension: ReportDimension, key: string | null, label: string) => {
     const next = { ...draft, [dimension]: key ?? "" }
     if (dimension === "repository") next.repository_missing = key === "" ? "1" : ""
-    applyFilters(next, dimension === "owner" && key !== null ? "repository" : undefined)
+    if (dimension === "owner" && key) applyFilters(next, "repository", label)
+    else applyFilters(next)
   }
   const sort = urlState.get("sort") === "runtime" ? "runtime" : "requests"
   return (
@@ -171,6 +179,11 @@ export function RunnerReportsSection({
       <ReportFilters
         key={filterKey}
         draft={draft}
+        filteredDimensions={[
+          ownerLabel,
+          selected.repository_missing ? t("reports.unknownRepository") : selected.repository,
+          selected.spec ? t("reports.spec") : "",
+        ].filter(Boolean).join(" · ")}
         onDraftChange={(query) => setEdits({ key: filterKey, query })}
         onApply={applyFilters}
         identityFilters={
@@ -181,6 +194,7 @@ export function RunnerReportsSection({
               report.query[dimension] ??
               (dimension === "repository" && report.query.repository_missing ? "" : null)
             const group = report.distributions?.[dimension].requests.find((item) => item.key === focus)
+            const label = dimension === "owner" ? ownerLabel : group?.label || focus || ""
             return (
               <IdentityFilter
                 key={dimension}
@@ -188,8 +202,8 @@ export function RunnerReportsSection({
                 report={report}
                 request={request}
                 focus={focus}
-                label={focus === null ? "" : reportGroupLabel(t, dimension, focus, group?.label || focus)}
-                onSelect={(key) => selectGroup(dimension, key)}
+                label={focus === null ? "" : reportGroupLabel(t, dimension, focus, label)}
+                onSelect={(key, label) => selectGroup(dimension, key, label)}
               />
             )
           })
@@ -247,7 +261,7 @@ export function RunnerReportsSection({
                     report={report}
                     request={request}
                     sort={sort}
-                    onSelect={(key) => selectGroup(d, key)}
+                    onSelect={(key, label) => selectGroup(d, key, label)}
                   />
                 ))}
               </div>
@@ -381,7 +395,7 @@ export function RunnerReportsSection({
                     report={report}
                     request={request}
                     sort={sort}
-                    onFilter={(key) => applyFilters({ ...report.query, [d]: key })}
+                    onFilter={(key, label) => applyFilters({ ...report.query, [d]: key }, undefined, d === "owner" ? label : undefined)}
                   />
                 ))}
               </div>
@@ -784,10 +798,12 @@ function IdentityFilter({
 
 function ReportFilters({
   identityFilters,
+  filteredDimensions,
   draft,
   onDraftChange,
   onApply,
 }: {
+  filteredDimensions: string
   identityFilters?: ReactNode
   draft: ReportQuery
   onDraftChange: (query: ReportQuery) => void
@@ -873,17 +889,9 @@ function ReportFilters({
         <Button type="submit">{t("reports.apply")}</Button>
         {!identityFilters && clearDimensions}
       </div>
-      {(draft.owner || draft.spec || draft.repository_missing) && (
-        <p className="text-sm text-muted-foreground">
-          {t("reports.filtered", {
-            dimensions: [
-              draft.owner ? reportGroupLabel(t, "owner", draft.owner, draft.owner) : "",
-              draft.spec ? t("reports.spec") : "",
-              draft.repository_missing ? t("reports.unknownRepository") : "",
-            ]
-              .filter(Boolean)
-              .join(" / "),
-          })}
+      {filteredDimensions && (
+        <p className="min-w-0 break-words text-sm text-muted-foreground lg:col-span-2">
+          {t("reports.filtered", { dimensions: filteredDimensions })}
         </p>
       )}
       {error && (
@@ -1072,7 +1080,7 @@ function Distribution({
   sort: "requests" | "runtime"
   title?: string
   onSelect?: (key: string, label: string) => void
-  onFilter?: (key: string) => void
+  onFilter?: (key: string, label: string) => void
 }) {
   const { t } = useTranslation()
   const distribution = report.distributions?.[dimension]
@@ -1295,7 +1303,7 @@ function Distribution({
                           size="icon"
                           className="size-6 shrink-0"
                           aria-label={t("reports.filterGroup", { name: row.label })}
-                          onClick={() => onFilter(row.key)}
+                          onClick={() => onFilter(row.key, row.label)}
                           disabled={!row.key}
                         >
                           <Filter className="size-3.5" />

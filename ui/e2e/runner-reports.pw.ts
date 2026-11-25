@@ -309,6 +309,7 @@ test("form filters preserve the distribution metric and discard the old snapshot
   await page.getByRole("button", { name: "Apply filters" }).click()
   await expect(page).toHaveURL(/repository=team%2Frepo/)
   await expect(page).not.toHaveURL(/snapshot=/)
+  await expect(page.getByText("Filtered by: team/repo", { exact: true })).toBeVisible()
   await expect(metric).toHaveText("Recorded runtime (h)")
   await page.getByRole("button", { name: "Last 7 days" }).click()
   await expect(page.getByLabel("Start date", { exact: true })).not.toHaveValue(query.from)
@@ -324,6 +325,7 @@ test("form filters preserve the distribution metric and discard the old snapshot
     Boolean(input.compareDocumentPosition(document.querySelector('[role="tablist"]')!) & Node.DOCUMENT_POSITION_FOLLOWING)
   )).toBe(true)
   await repository.fill("draft/repo")
+  await expect(page.getByText("Filtered by: team/repo", { exact: true })).toBeVisible()
   const [specRequest] = await Promise.all([
     page.waitForRequest(request => request.url().includes("/reports/spec-usage?")),
     page.getByRole("tab", { name: "Overview", exact: true }).press("ArrowRight"),
@@ -757,6 +759,7 @@ test("account usage filters, ranked pages and selected request survive reload an
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
   await page.getByRole("dialog").getByRole("button", { name: "fork", exact: true }).click()
   await expect(page).toHaveURL(/snapshot=owner-snap/)
+  await expect(page.getByText("Filtered by: fork", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Table", exact: true }).click()
   await page.getByRole("combobox", { name: "Distribution metric" }).click()
   await page.getByRole("option", { name: "Recorded runtime (h)" }).click()
@@ -769,6 +772,8 @@ test("account usage filters, ranked pages and selected request survive reload an
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
   await page.getByRole("button", { name: repo, exact: true }).click()
   await expect(page).toHaveURL(/snapshot=repo-snap/)
+  const summary = page.getByText(`Filtered by: fork · ${repo}`, { exact: true })
+  await expect(summary).toBeVisible()
   await page.getByRole("button", { name: "Charts", exact: true }).click()
   await expect(page.getByRole("button", { name: "Standard" })).toBeVisible()
   await page.getByRole("button", { name: "Request details", exact: true }).click()
@@ -779,6 +784,7 @@ test("account usage filters, ranked pages and selected request survive reload an
   await expect(page.getByRole("row").filter({ hasText: row.id })).toHaveAttribute("data-state", "selected")
   await page.reload()
   await expect(page.getByRole("row").filter({ hasText: row.id })).toHaveAttribute("data-state", "selected")
+  await expect(summary).toBeVisible()
   const restored = new URL(page.url()).searchParams
   expect(Object.fromEntries(restored)).toMatchObject({
     snapshot: "repo-snap",
@@ -814,6 +820,7 @@ test("Chinese account report keeps unknown repositories selectable in aggregate-
   await page.getByRole("button", { name: "仓库", exact: true }).click()
   await page.getByRole("dialog").getByRole("button", { name: "未知", exact: true }).click()
   await expect(page).toHaveURL(/snapshot=unnamed/)
+  await expect(page.getByText("已筛选：未知仓库", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "仓库", exact: true })).toHaveText("未知")
   await expect(page.getByText(/此批次仅保留聚合数据/)).toBeVisible()
   await expect(page.getByRole("button", { name: "请求明细" })).toHaveCount(0)
@@ -821,6 +828,7 @@ test("Chinese account report keeps unknown repositories selectable in aggregate-
   await page.getByRole("dialog").getByRole("button", { name: "全部", exact: true }).click()
   await expect(page).toHaveURL(/snapshot=all-repositories/)
   expect(new URL(page.url()).searchParams.has("repository_missing")).toBeFalsy()
+  await expect(page.getByText(/^已筛选：/)).toHaveCount(0)
   expect(requestReads).toBe(0)
 })
 
