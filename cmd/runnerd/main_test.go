@@ -49,7 +49,7 @@ func TestAccountReportWorkerInterrupted(t *testing.T) {
 			}
 			config := filepath.Join(t.TempDir(), "runnerd.yaml")
 			dsn := "postgres://test@" + listener.Addr().String() + "/test?sslmode=disable&connect_timeout=1"
-			if err := os.WriteFile(config, []byte("database:\n  backend: postgres\n  dsn: "+dsn+"\n"), 0600); err != nil {
+			if err := os.WriteFile(config, []byte("database:\n  backend: postgres\n  dsn: "+dsn+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAccountReportWorkerInterrupted$")

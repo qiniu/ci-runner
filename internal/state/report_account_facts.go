@@ -75,9 +75,11 @@ func (s factSource) fact(slot int, observed time.Time) accountFact {
 	row := p.request(observed)
 	a := newReportAccumulator()
 	a.add(row)
-	f := accountFact{Slot: slot, ID: row.ID, QueuedAt: row.QueuedAt, Status: row.Status,
+	f := accountFact{
+		Slot: slot, ID: row.ID, QueuedAt: row.QueuedAt, Status: row.Status,
 		Fingerprint: s.Fingerprint, Totals: a.totals(),
-		Dimensions: accountDimensions{Owner: row.Owner, OwnerLabel: row.OwnerLabel, Repository: row.Repository, Spec: row.Spec, SpecLabel: row.SpecLabel, JobResult: row.JobResult}}
+		Dimensions: accountDimensions{Owner: row.Owner, OwnerLabel: row.OwnerLabel, Repository: row.Repository, Spec: row.Spec, SpecLabel: row.SpecLabel, JobResult: row.JobResult},
+	}
 	for _, t := range []*time.Time{p.CreatingAt, p.RunningAt, p.StoppingAt, p.CompletedAt, p.FailedAt, p.GitHubJobObservedAt} {
 		if t != nil && t.After(observed) && (f.RecheckAt == nil || t.Before(*f.RecheckAt)) {
 			f.RecheckAt = t
