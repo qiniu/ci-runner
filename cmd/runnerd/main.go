@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	_ "github.com/jimmicro/pprof"
@@ -29,6 +31,7 @@ func main() {
 	configPath := flag.String("config", "runnerd.yaml", "path to runnerd config file")
 	bootstrapAdmin := flag.String("bootstrap-admin", "", "set an admin account as provider:subject (for example github:12345678) and exit without starting the server")
 	obfuscateConfigValue := flag.Bool("obfuscate-config-value", false, "read a secret from stdin and print a RUNNERD_ENC value")
+	accountReports := flag.String("account-reports", "", "PostgreSQL account statistics worker: refresh or rebuild")
 	flag.Parse()
 	if *obfuscateConfigValue {
 		if !runObfuscateConfigValue(os.Stdin, os.Stdout, os.Stderr) {
@@ -37,17 +40,33 @@ func main() {
 		return
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if *accountReports != "" {
+		dsn, err := config.LoadAccountReportDSN(*configPath)
+		if err != nil {
+			logger.Error("load account report database config", "error", err)
+			os.Exit(1)
+		}
+		opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: dsn.Value()}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := runAccountReports(ctx, opts, *accountReports, logger); err != nil {
+			logger.Error("account report worker stopped", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	store := state.NewWithOptions(state.Options{
+	opts := state.Options{
 		Backend:              cfg.StateBackend,
 		DatabaseDSN:          cfg.StateDatabaseDSN.Value(),
 		PostgresMaxOpenConns: cfg.PostgresMaxOpenConns,
 		MigrateOnStart:       true,
-	})
+	}
+	store := state.NewWithOptions(opts)
 	if err := initializeStateStore(store, logger); err != nil {
 		logger.Error("initialize state store", "error", err)
 		os.Exit(1)
@@ -117,6 +136,18 @@ func main() {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func runAccountReports(ctx context.Context, opts state.Options, mode string, logger *slog.Logger) error {
+	if mode != "refresh" && mode != "rebuild" {
+		return fmt.Errorf("unknown account report worker mode %q", mode)
+	}
+	started := time.Now()
+	if err := state.RefreshAccountReports(ctx, opts, mode == "rebuild"); err != nil {
+		return err
+	}
+	logger.Info("published account reports", "mode", mode, "elapsed", time.Since(started))
+	return nil
 }
 
 type recoveryGate struct {

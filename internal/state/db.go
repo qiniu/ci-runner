@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -152,6 +153,10 @@ func (s *DBStore) dbOrEnsure() (*gorm.DB, error) {
 }
 
 func (s *DBStore) open() (*gorm.DB, error) {
+	return s.openWithContext(context.Background())
+}
+
+func (s *DBStore) openWithContext(ctx context.Context) (*gorm.DB, error) {
 	cfg := &gorm.Config{
 		Logger:                                   gormlogger.Default.LogMode(gormlogger.Silent),
 		DisableForeignKeyConstraintWhenMigrating: true,
@@ -181,7 +186,13 @@ func (s *DBStore) open() (*gorm.DB, error) {
 			return nil, err
 		}
 		pool.SetMaxOpenConns(s.opts.PostgresMaxOpenConns)
+		// GORM's automatic Ping uses a background context. Let the caller
+		// cancel the initial PostgreSQL handshake as well as later queries.
+		cfg.DisableAutomaticPing = true
 		db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), cfg)
+		if err == nil {
+			err = pool.PingContext(ctx)
+		}
 		if err != nil {
 			pool.Close()
 		}

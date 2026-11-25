@@ -68,6 +68,14 @@ type SandboxRegionConfig struct {
 	S3Endpoint    string `yaml:"s3_endpoint"`
 }
 
+type databaseConfig struct {
+	Backend                string    `yaml:"backend"`
+	PostgresMaxOpenConns   int       `yaml:"postgres_max_open_connections"`
+	DSN                    Secret    `yaml:"dsn"`
+	LegacyURL              Secret    `yaml:"url"`
+	RetiredOnlineMigration yaml.Node `yaml:"online_migration"`
+}
+
 type fileConfig struct {
 	Server struct {
 		HTTPAddr        string `yaml:"http_addr"`
@@ -75,14 +83,8 @@ type fileConfig struct {
 		WriteTimeoutSec int    `yaml:"write_timeout_seconds"`
 		IdleTimeoutSec  int    `yaml:"idle_timeout_seconds"`
 	} `yaml:"server"`
-	Database struct {
-		Backend                string    `yaml:"backend"`
-		PostgresMaxOpenConns   int       `yaml:"postgres_max_open_connections"`
-		DSN                    Secret    `yaml:"dsn"`
-		LegacyURL              Secret    `yaml:"url"`
-		RetiredOnlineMigration yaml.Node `yaml:"online_migration"`
-	} `yaml:"database"`
-	Auth struct {
+	Database databaseConfig `yaml:"database"`
+	Auth     struct {
 		EncryptionKey   Secret `yaml:"encryption_key"`
 		SessionSecret   Secret `yaml:"session_secret"`
 		SessionTTLHours int    `yaml:"session_ttl_hours"`
@@ -178,17 +180,53 @@ func Load(path string) (Config, error) {
 	return LoadFile(path)
 }
 
-func LoadFile(path string) (Config, error) {
+func readYAMLConfig(path string, value any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read config %q: %w", path, err)
+		return fmt.Errorf("read config %q: %w", path, err)
 	}
+	if err := yaml.Unmarshal(data, value); err != nil {
+		return fmt.Errorf("parse config %q: %w", path, err)
+	}
+	return nil
+}
+
+func (d databaseConfig) checkTransferConfig() error {
+	if d.RetiredOnlineMigration.Kind != 0 {
+		return fmt.Errorf("database.online_migration is no longer supported; for pre-merge PR #151 databases, fetch the online-migration binary from commit be3b7911650599e5257febcf94976caf57f9fc32 with git fetch origin pull/151/head before removing this configuration")
+	}
+	return nil
+}
+
+// LoadAccountReportDSN allows a standalone reporting process to use the
+// database section without access to OAuth, GitHub App or Sandbox secrets.
+func LoadAccountReportDSN(path string) (Secret, error) {
+	var file struct {
+		Database databaseConfig `yaml:"database"`
+	}
+	if err := readYAMLConfig(path, &file); err != nil {
+		return "", err
+	}
+	if err := file.Database.checkTransferConfig(); err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(strings.TrimSpace(file.Database.Backend), "postgres") {
+		return "", fmt.Errorf("account report worker requires PostgreSQL")
+	}
+	dsn := defaultSecret(file.Database.DSN, file.Database.LegacyURL)
+	if strings.TrimSpace(dsn.Value()) == "" {
+		return "", fmt.Errorf("missing required config: database.dsn")
+	}
+	return dsn, nil
+}
+
+func LoadFile(path string) (Config, error) {
 	var raw fileConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
+	if err := readYAMLConfig(path, &raw); err != nil {
+		return Config{}, err
 	}
-	if raw.Database.RetiredOnlineMigration.Kind != 0 {
-		return Config{}, fmt.Errorf("database.online_migration is no longer supported; for pre-merge PR #151 databases, fetch the online-migration binary from commit be3b7911650599e5257febcf94976caf57f9fc32 with git fetch origin pull/151/head before removing this configuration")
+	if err := raw.Database.checkTransferConfig(); err != nil {
+		return Config{}, err
 	}
 	if strings.TrimSpace(raw.GitHub.Owner) != "" || strings.TrimSpace(raw.GitHub.Repo) != "" {
 		return Config{}, fmt.Errorf("invalid config github.owner/github.repo: no longer supported; pass repository_full_name on manual runner requests")

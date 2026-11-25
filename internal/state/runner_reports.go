@@ -48,7 +48,18 @@ type ReportWindow struct {
 	Location      *time.Location `json:"-"`
 }
 
+// DefaultReportDates returns the civil date labels used by the HTTP API and
+// by the worker preparing the default dashboard, including a partial today.
+func DefaultReportDates(now time.Time, loc *time.Location) (string, string) {
+	end := reportCalendarDate(now, loc).AddDate(0, 0, 1)
+	return end.AddDate(0, 0, -30).Format(time.DateOnly), end.Format(time.DateOnly)
+}
+
 func (q RunnerReportQuery) Window(now time.Time) (ReportWindow, error) {
+	return q.windowAt(now, now)
+}
+
+func (q RunnerReportQuery) windowAt(now, validationTime time.Time) (ReportWindow, error) {
 	loc, err := time.LoadLocation(q.Timezone)
 	if err != nil || q.Timezone == "" || q.Timezone == "Local" {
 		return ReportWindow{}, errors.New("timezone must be an IANA timezone")
@@ -63,7 +74,7 @@ func (q RunnerReportQuery) Window(now time.Time) (ReportWindow, error) {
 	}
 	// These UTC values are civil labels; do arithmetic before resolving offsets.
 	days := int(end.Sub(start).Hours() / 24)
-	tomorrow := reportCalendarDate(now, loc).AddDate(0, 0, 1)
+	tomorrow := reportCalendarDate(validationTime, loc).AddDate(0, 0, 1)
 	if days < 1 || days > 366 || !start.Before(tomorrow) || end.After(tomorrow) {
 		return ReportWindow{}, errors.New("report range must be 1–366 calendar days and cannot extend past tomorrow")
 	}
@@ -220,7 +231,7 @@ type ReportTotals struct {
 }
 
 type ReportRequest struct {
-	Efficiency     *EfficiencyEvidence `json:"efficiency,omitempty"`
+	Efficiency     *EfficiencyEvidence `json:"efficiency,omitempty" gorm:"-"`
 	ID             string              `json:"id"`
 	QueuedAt       time.Time           `json:"queued_at"`
 	Repository     string              `json:"repository"`
@@ -295,6 +306,11 @@ type RunnerReport struct {
 	// Account snapshots freeze all group pages. Large PostgreSQL cohorts retain only groups.
 	GroupTotals map[string][]ReportGroup `json:"-"`
 }
+
+const reportProjectionFields = `r.id, r.queued_at, r.repository_full_name, r.profile_name, r.profile_source, r.profile_scope_type, r.profile_scope_id,
+ r.github_installation_id, o.github_account_id AS owner_id, o.account_login AS owner_login, r.status, r.failure_stage,
+ r.workflow_job_id, r.github_job_status, r.github_job_conclusion, r.github_job_observed_at,
+ r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`
 
 type reportProjection struct {
 	ID                   string
@@ -481,6 +497,15 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 		defer db.Rollback()
 	}
+	if q.IncludeAccountUsage && db.Dialector.Name() == BackendPostgres {
+		if report, err := readPublishedAccounts(db, q, now); err != nil || report != nil {
+			return report, err
+		}
+	}
+	return readSourceReport(ctx, db, q, window, now)
+}
+
+func readSourceReport(ctx context.Context, db *gorm.DB, q RunnerReportQuery, window ReportWindow, now time.Time) (*RunnerReport, error) {
 	if q.IncludeExecution {
 		return readExecutionReport(db, q, window, now)
 	}
@@ -561,10 +586,7 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 		// from that sequence to retain native timestamp types and avoid a sort.
 		query = db.Table("temp.report_result AS o CROSS JOIN runner_requests AS r ON r.id = o.request_id").Order("o.rowid")
 	}
-	fields := `r.id, r.queued_at, r.repository_full_name, r.profile_name, r.profile_source, r.profile_scope_type, r.profile_scope_id,
- r.github_installation_id, o.github_account_id AS owner_id, o.account_login AS owner_login, r.status, r.failure_stage,
- r.workflow_job_id, r.github_job_status, r.github_job_conclusion, r.github_job_observed_at,
- r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`
+	fields := reportProjectionFields
 	if q.IncludeEfficiency {
 		fields += ", r.failure_reason, r.termination_source"
 	}

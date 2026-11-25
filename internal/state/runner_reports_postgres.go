@@ -121,11 +121,11 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
        count(DISTINCT ((period_source,period_scope_type,period_scope_id,period_name)::text COLLATE "C")) FILTER (WHERE known_specs > 0) AS used_specs,
        max(last_queued_at) AS last_queued_at,`
 		var outcomes []string
-		for _, result := range []string{"success", "failure", "timed_out", "cancelled", "skipped", "unknown"} {
+		for _, result := range reportAccountOutcomes {
 			partialResult += "count(*) FILTER (WHERE current_period AND job_result = '" + result + "') AS n_" + result + ","
 			outcomes = append(outcomes, "'"+result+"', nullif(sum(n_"+result+"), 0)")
 		}
-		partialResult += "count(*) FILTER (WHERE current_period AND job_result NOT IN ('success','failure','timed_out','cancelled','skipped','unknown')) AS n_other,"
+		partialResult += "count(*) FILTER (WHERE current_period AND job_result NOT IN ('" + strings.Join(reportAccountOutcomes, "','") + "')) AS n_other,"
 		outcomes = append(outcomes, "'other', nullif(sum(n_other), 0)")
 		activityFields += " json_strip_nulls(json_build_object(" + strings.Join(outcomes, ",") + ")) AS outcomes,"
 	}
@@ -148,19 +148,17 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	// Compute lifecycle metrics once per input row. The larger grouping sets
 	// then sort and sum partials rather than sorting the entire cohort for
 	// every dimension. Owner and repository identities preserve exact distincts.
-	fields := strings.Fields("requests started terminal rejected mapped_accounts known_specs creating_times stopping_times terminal_times job_result_eligible job_results runtime_eligible startup_eligible creation_eligible cleanup_eligible completion_eligible")
+	columns, err := reportMetricColumns(db)
+	if err != nil {
+		return nil, err
+	}
 	var durations []string
 	for _, metric := range []string{"runtime", "startup", "creation", "cleanup", "completion"} {
-		fields = append(fields, metric+"_samples", metric+"_seconds")
 		// Match Go's time.Duration saturation for exceptionally long valid intervals.
 		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum(least(extract(epoch FROM "+metric+"), 9223372036.854775807)) FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
 	}
-	sums := make([]string, 0, len(fields))
-	for _, field := range fields {
-		sums = append(sums, "sum("+field+") AS "+field)
-	}
 	statement := fmt.Sprintf(aggregates, dayField, partialResult) + strings.Join(durations, ", ") +
-		fmt.Sprintf(regroup, partialGroup, classify, resultField+activityFields) + strings.Join(sums, ", ") + rollups
+		fmt.Sprintf(regroup, partialGroup, classify, resultField+activityFields) + sumReportColumns(additiveReportColumns(columns)) + rollups
 	query := db.Raw(statement, append(args, cohort, ReportMaxRows+1)...)
 	rows, err := query.Rows()
 	if err != nil {
@@ -241,4 +239,32 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	}
 	report.fillTrend(buckets)
 	return report, nil
+}
+
+// Use the model's columns for all additive metrics. Distinct owners and
+// repositories are recomputed from identities at the final grouping level.
+func reportMetricColumns(db *gorm.DB) ([]string, error) {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(&ReportTotals{}); err != nil {
+		return nil, err
+	}
+	return stmt.Schema.DBNames, nil
+}
+
+func additiveReportColumns(cols []string) []string {
+	var additive []string
+	for _, col := range cols {
+		if col != "active_accounts" && col != "active_repositories" {
+			additive = append(additive, col)
+		}
+	}
+	return additive
+}
+
+func sumReportColumns(cols []string) string {
+	sums := make([]string, 0, len(cols))
+	for _, c := range cols {
+		sums = append(sums, "sum("+c+") AS "+c)
+	}
+	return strings.Join(sums, ", ")
 }

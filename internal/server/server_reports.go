@@ -317,10 +317,7 @@ func parseRunnerReportQuery(values url.Values, now time.Time) (state.RunnerRepor
 		q.Grain = "day"
 	}
 	if q.From == "" && q.To == "" {
-		local := now.In(loc)
-		end := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, time.UTC)
-		q.To = end.Format(time.DateOnly)
-		q.From = end.AddDate(0, 0, -30).Format(time.DateOnly)
+		q.From, q.To = state.DefaultReportDates(now, loc)
 	}
 	_, err = q.Window(now)
 	return q, err

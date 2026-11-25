@@ -44,6 +44,8 @@ filters and the trend data table remain available.
 
 ## Accounts and repositories
 
+On PostgreSQL, runnerd publishes this dashboard in the background. The account endpoint reads the original cohort until a compatible publication is available, then switches automatically. The page shows the source observation time. See the [worker design, rebuild and rollout procedure](account-report-worker.md).
+
 Open `/admin/reports?view=accounts` to rank GitHub owners and repositories by requests or recorded runtime. The default charts share the selected cohort with the paged table. Choose an owner or repository in the filter bar, chart or table to narrow usage in place. Selecting an owner opens repository rankings in table mode when the table is shown. Select a spec in the distribution or use the paged spec filter to find any spec in the cohort. Choosing or clearing a dimension applies the dates, timezone and grain currently entered in the same form.
 
 Each row includes requests, starts, recorded runtime, coverage, distinct identified specs, active days and the latest queued request within the filters. Owner rows include distinct named repositories. Active days count local calendar dates even for weekly or monthly trends. If the browser cannot format the selected server timezone, timestamps display in ISO 8601 UTC and the server continues grouping in the selected timezone. The Job result distribution includes unknowns. Its coverage denominator is terminal requests with an original Job ID.
@@ -222,7 +224,7 @@ the scan, sort and grouping as well as row reads. Rollback removes the temporary
 table. WAL allows concurrent scheduler writes on the primary connection.
 In-memory SQLite uses the original connection and retains its data on cancellation.
 PostgreSQL and MySQL reuse their
-configured pools. No schema or index changes are introduced. On disk, historical
+configured pools. The live-query path uses the existing source tables and indexes. The built-in PostgreSQL worker creates and maintains its own account-report tables. On disk, historical
 payloads are still physically colocated in SQLite table pages; projecting narrow
 columns avoids decoding/returning them, but is not a claim of zero physical I/O
 for pages containing those columns.

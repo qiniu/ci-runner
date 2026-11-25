@@ -2,18 +2,79 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/qiniu/ci-runner/internal/config"
 	"github.com/qiniu/ci-runner/internal/state"
 	"gopkg.in/yaml.v3"
 )
+
+func TestAccountReportWorkerInterrupted(t *testing.T) {
+	if mode := os.Getenv("RUNNERD_TEST_INTERRUPTED_MODE"); mode != "" {
+		os.Args = []string{os.Args[0], "--config", os.Getenv("RUNNERD_TEST_WORKER_CONFIG"), "--account-reports", mode}
+		main()
+		return
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix signal delivery")
+	}
+	for _, mode := range []string{"refresh", "rebuild"} {
+		t.Run(mode, func(t *testing.T) {
+			// Leave the handshake pending. Only the CLI's signal handler
+			// should interrupt it, even with no database connection timeout.
+			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			if err := listener.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			config := filepath.Join(t.TempDir(), "runnerd.yaml")
+			dsn := "postgres://test@" + listener.Addr().String() + "/test?sslmode=disable"
+			if err := os.WriteFile(config, []byte("database:\n  backend: postgres\n  dsn: "+dsn+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAccountReportWorkerInterrupted$")
+			cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=0", "RUNNERD_TEST_INTERRUPTED_MODE="+mode, "RUNNERD_TEST_WORKER_CONFIG="+config)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			conn, err := listener.Accept()
+			if err != nil {
+				cancel()
+				_ = cmd.Wait()
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Error(err)
+			}
+			err = cmd.Wait()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("interrupted %s: got %v, want exit 1", mode, err)
+			}
+		})
+	}
+}
 
 func TestRecoveryGateAllowsOnlyHealthUntilReady(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
