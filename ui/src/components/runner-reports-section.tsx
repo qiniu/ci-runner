@@ -96,7 +96,7 @@ export function RunnerReportsSection({
   const ownerKey = response?.query.owner ?? params.get("owner")
   const ownerName = report?.distributions?.owner.requests.find((group) => group.key === ownerKey)?.label
     || (ownerKey === params.get("owner") ? urlState.get("owner_label") : null)
-  const ownerLabel = ownerKey ? reportGroupLabel(t, "owner", ownerKey, ownerName || "") : ""
+  const ownerLabel = ownerKey ? reportGroupLabel(t, "owner", ownerKey, ownerName?.trim() || ownerKey) : ""
   const navigate = (values: Record<string, string | null>) => {
     const next = new URLSearchParams(search)
     if (response) {

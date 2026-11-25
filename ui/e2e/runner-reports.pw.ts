@@ -832,6 +832,22 @@ test("Chinese account report keeps unknown repositories selectable in aggregate-
   expect(requestReads).toBe(0)
 })
 
+test("an owner-filtered link retains the owner key when the report has no display name", async ({ page }) => {
+  await setup(page)
+  const owner = "github:42"
+  const empty = { total: 0, requests: [], runtime: [] }
+  await page.route("**/reports/account-usage?*", route => route.fulfill({
+    json: {
+      ...report, query: { ...query, owner }, snapshot: "empty-owner",
+      distributions: { owner: empty, repository: empty, spec: empty },
+    },
+  }))
+  await page.goto(`/admin/reports?view=accounts&owner=${encodeURIComponent(owner)}`)
+  await expect(page).toHaveURL(/snapshot=empty-owner/)
+  await expect(page.getByRole("button", { name: "GitHub account / organization", exact: true })).toHaveText(owner)
+  await expect(page.getByText(`Filtered by: ${owner}`, { exact: true })).toBeVisible()
+})
+
 test("account dimension selection and clearing submit pending date, zone and grain edits", async ({ page }) => {
   await setup(page)
   const owner = { ...totals, key: "github:24", label: "fixture-owner" }
