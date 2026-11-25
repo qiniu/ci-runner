@@ -586,6 +586,9 @@ func (s *Server) handleRunnerReportSpecs(w http.ResponseWriter, r *http.Request)
 			if items[i].Runtime.Seconds != items[j].Runtime.Seconds {
 				return items[i].Runtime.Seconds > items[j].Runtime.Seconds
 			}
+			if (items[i].Runtime.Samples > 0) != (items[j].Runtime.Samples > 0) {
+				return items[i].Runtime.Samples > 0
+			}
 			return items[i].Key < items[j].Key
 		})
 	case "average_runtime":

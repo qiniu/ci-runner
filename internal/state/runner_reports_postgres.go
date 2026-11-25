@@ -51,7 +51,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	WITH bounds AS (SELECT ?::timestamptz AS observed, ?::timestamptz AS start_at),
 	validated AS (
 		SELECT c.*, queued_at >= start_at AS current_period,
-			to_char(date_trunc(?, timezone(make_interval(secs => ?), queued_at)), 'YYYY-MM-DD') AS bucket,
+			date_trunc(?, timezone(make_interval(secs => ?), queued_at))::date AS bucket,
 			queued_at >= timestamptz '0002-01-01 UTC' AS valid_queue,
 			creating_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS valid_create,
 			running_at BETWEEN timestamptz '0002-01-01 UTC' AND observed AS started,
@@ -104,18 +104,29 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	var dayField, activityFields string
 	args := []any{now.UTC(), window.Start.UTC(), q.Grain, postgresTrendOffset(window)}
 	if q.IncludeAccountUsage {
-		dayField = ", timezone(make_interval(secs => ?), queued_at)::date AS local_day"
-		args = append(args, postgresTrendOffset(window))
-		partialResult = "CASE WHEN current_period THEN local_day END AS activity_day, max(queued_at) AS last_queued_at, CASE WHEN current_period THEN job_result END AS period_result,"
-		partialGroup = ", activity_day, period_result"
-		activityFields = `count(DISTINCT activity_day) AS active_days,
-       count(DISTINCT (period_source,period_scope_type,period_scope_id,period_name)) FILTER (WHERE known_specs > 0) AS used_specs,
+		// Count outcomes inside each day/spec/owner/repository partial.
+		// Grouping by result here multiplies the wide rows sorted by every rollup.
+		partialResult = "max(queued_at) AS last_queued_at,"
+		activityDay := "period_bucket"
+		if q.Grain != "day" {
+			activityDay = "activity_day"
+			dayField = ", timezone(make_interval(secs => ?), queued_at)::date AS local_day"
+			args = append(args, postgresTrendOffset(window))
+			partialResult += "CASE WHEN current_period THEN local_day END AS activity_day,"
+			partialGroup = ", activity_day"
+		}
+		// PostgreSQL's record output quotes and escapes each field. Sorting this
+		// key under C collation preserves exact scoped identities for DISTINCT.
+		activityFields = "count(DISTINCT " + activityDay + `) AS active_days,
+       count(DISTINCT ((period_source,period_scope_type,period_scope_id,period_name)::text COLLATE "C")) FILTER (WHERE known_specs > 0) AS used_specs,
        max(last_queued_at) AS last_queued_at,`
 		var outcomes []string
 		for _, result := range []string{"success", "failure", "timed_out", "cancelled", "skipped", "unknown"} {
-			outcomes = append(outcomes, "'"+result+"', sum(requests) FILTER (WHERE period_result = '"+result+"')")
+			partialResult += "count(*) FILTER (WHERE current_period AND job_result = '" + result + "') AS n_" + result + ","
+			outcomes = append(outcomes, "'"+result+"', nullif(sum(n_"+result+"), 0)")
 		}
-		outcomes = append(outcomes, "'other', sum(requests) FILTER (WHERE period_result NOT IN ('success','failure','timed_out','cancelled','skipped','unknown'))")
+		partialResult += "count(*) FILTER (WHERE current_period AND job_result NOT IN ('success','failure','timed_out','cancelled','skipped','unknown')) AS n_other,"
+		outcomes = append(outcomes, "'other', nullif(sum(n_other), 0)")
 		activityFields += " json_strip_nulls(json_build_object(" + strings.Join(outcomes, ",") + ")) AS outcomes,"
 	}
 	const regroup = `
@@ -125,7 +136,7 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	SELECT current_period,
 		CASE %s WHEN grouping(period_bucket) = 0 THEN 'trend' WHEN grouping(period_name) = 0 THEN 'spec'
 			WHEN grouping(owner_key) = 0 THEN 'owner' WHEN grouping(repo) = 0 THEN 'repository' ELSE 'total' END AS dimension,
-		period_bucket AS bucket, period_source AS spec_source, period_scope_type AS scope_type,
+		to_char(period_bucket::timestamp, 'YYYY-MM-DD') AS bucket, period_source AS spec_source, period_scope_type AS scope_type,
 		period_scope_id AS scope_id, period_name AS spec_name, owner_key, repo, %s
 		min(owner_label) AS owner_label,
 		count(DISTINCT account_id) FILTER (WHERE account_id > 0) AS active_accounts,

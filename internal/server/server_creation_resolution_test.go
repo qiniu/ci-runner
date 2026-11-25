@@ -17,6 +17,25 @@ import (
 	"github.com/qiniu/ci-runner/internal/state"
 )
 
+func TestUnknownCreationResolutionLookupErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{state.ErrNotFound, http.StatusNotFound},
+		{context.DeadlineExceeded, http.StatusInternalServerError},
+	} {
+		store := &readStateErrorStore{Store: state.New(t.TempDir()), err: tc.err}
+		srv := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+		w := httptest.NewRecorder()
+		req := adminRequest(http.MethodPost, "/runner_requests/unknown/resolve-unknown-creation", strings.NewReader(`{"version":1,"attempt_id":"attempt","accept_unknown_result":true,"evidence":"administrator accepts uncertainty"}`))
+		srv.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Errorf("lookup error %v: got %d, want %d", tc.err, w.Code, tc.want)
+		}
+	}
+}
+
 func TestUnknownCreationResolutionEligibility(t *testing.T) {
 	now := time.Now()
 	eligible := state.RunnerState{

@@ -348,10 +348,18 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	}
 	if err := db.Exec(`INSERT INTO runner_requests
 		(id, runner_name, source, labels_json, status, profile_source, profile_name, github_installation_id,
-		 repository_full_name, queued_at, creating_at, running_at, completed_at, updated_at)
-		SELECT id, id, 'fixture', '[]', 'completed', 'global', 'spec-' || (i % 10), (i % 101) % 11,
-			'repo-' || (i % 101), at, at, at + interval '2 seconds', at + interval '58 seconds', at
-		FROM (SELECT i, 'scale-' || i || '-' || copy AS id,
+		 repository_full_name, queued_at, creating_at, running_at, completed_at, updated_at, failed_at, failure_stage,
+		 failure_reason, workflow_job_id, github_job_status, github_job_conclusion, github_job_observed_at)
+		SELECT id, id, 'fixture', '[]', CASE copy WHEN 1 THEN 'completed' ELSE 'failed' END,
+			'global', 'spec-' || (i % 10), (i % 101) % 11, 'repo-' || (i % 101), at, at,
+			CASE WHEN copy = 1 THEN at + interval '2 seconds' END,
+			CASE WHEN copy = 1 THEN at + interval '58 seconds' END, at,
+			CASE WHEN copy = 2 THEN at END, CASE WHEN copy = 2 THEN 'admission' END,
+			CASE WHEN copy = 2 THEN 'fixture rejection' END, CASE WHEN copy = 1 THEN 10000000 + i END,
+			CASE WHEN copy = 1 THEN 'completed' END,
+			CASE WHEN copy = 1 THEN CASE WHEN i % 2 = 0 THEN 'cancelled' ELSE 'skipped' END END,
+			CASE WHEN copy = 1 THEN at + interval '58 seconds' END
+		FROM (SELECT i, copy, 'scale-' || i || '-' || copy AS id,
 			timestamptz '2025-09-25 UTC' + i * interval '10 seconds' AS at
 			FROM generate_series(1, 510000) i CROSS JOIN generate_series(1, 2) copy) fixture`).Error; err != nil {
 		t.Fatal(err)
@@ -368,7 +376,7 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	}
 	// Each ten-second tick has two rows. The fixture ends before the current
 	// period does, and the previous period ends at the matching UTC time of day.
-	if r.Totals.Requests != 501602 || r.Previous.Requests != 509758 || r.SpecSummary.Requests != r.Totals.Requests || r.Totals.ActiveRepositories != 101 || r.Totals.Runtime.Seconds != 56*float64(r.Totals.Requests) {
+	if r.Totals.Requests != 501602 || r.Previous.Requests != 509758 || r.SpecSummary.Requests != r.Totals.Requests || r.Totals.ActiveRepositories != 101 || r.Totals.Runtime.Seconds != 56*float64(r.Totals.Requests/2) {
 		t.Fatalf("30-day aggregate: current %d, prior %d, repositories %d, runtime %v", r.Totals.Requests, r.Previous.Requests, r.Totals.ActiveRepositories, r.Totals.Runtime)
 	}
 	accountStart := time.Now()
@@ -378,7 +386,8 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.Totals != r.Totals || account.Previous != r.Previous || account.Outcomes["unknown"] != account.Totals.Requests {
+	wantOutcomes := map[string]int64{"unknown": 250801, "cancelled": 125401, "skipped": 125400}
+	if account.Totals != r.Totals || account.Previous != r.Previous || !reflect.DeepEqual(account.Outcomes, wantOutcomes) {
 		t.Fatal("30-day account usage does not reconcile with specs")
 	}
 	t.Logf("30-day account dashboard: %d current + %d prior in %s", account.Totals.Requests, account.Previous.Requests, time.Since(accountStart))
@@ -395,6 +404,11 @@ func verifyPostgresSpecReportScale(t *testing.T, s *DBStore) {
 	}
 	if efficiency.Efficiency == nil || efficiency.Totals != r.Totals || efficiency.Rows != nil {
 		t.Fatal("invalid large efficiency report")
+	}
+	for _, bucket := range efficiency.Trend {
+		if got := efficiency.Efficiency.Rejections["fixture rejection"][bucket.Date]; got != bucket.Rejected || got != bucket.Requests/2 {
+			t.Fatalf("admission trend %s: got %d, expected half of %d", bucket.Date, got, bucket.Requests)
+		}
 	}
 	t.Logf("30-day efficiency report: %d current + %d previous in %s", efficiency.Totals.Requests, efficiency.Previous.Requests, time.Since(efficiencyStart))
 }

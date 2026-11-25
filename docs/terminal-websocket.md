@@ -15,7 +15,9 @@ The underlying Job/Deploy and Sandbox continue independently.
 - A read-only HTTP GET to the same route performs the normal authorization
   preflight for OAuth/error UX; it creates no session and grants no capability.
   The WebSocket upgrade repeats every check.
-- Require the existing OAuth session and a same-origin `Origin`. The server checks
+- The browser origin must match the public request scheme and host. A TLS-terminating
+  proxy must overwrite `X-Forwarded-Proto` with the public scheme. The socket closes
+  when the signed OAuth session expires, including while idle. The server checks
   exact `(installation_id, repository_full_name)` access before upgrade, after
   creation, before input/resize and every five seconds while connected. These
   checks share the database authorization snapshot (30-second hard expiry).

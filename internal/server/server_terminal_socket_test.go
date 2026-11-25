@@ -88,7 +88,12 @@ func newTerminalFixtureStore(t *testing.T, kind string, selected state.Store) te
 
 func (f terminalFixture) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
-	c, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(f.http.URL, "http")+f.path+"?cols=100&rows=28", http.Header{"Origin": {f.http.URL}, "Cookie": {testSessionCookie("hubot-id", "hubot", "user").String()}})
+	return f.dialWithCookie(t, testSessionCookie("hubot-id", "hubot", "user"))
+}
+
+func (f terminalFixture) dialWithCookie(t *testing.T, cookie *http.Cookie) *websocket.Conn {
+	t.Helper()
+	c, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(f.http.URL, "http")+f.path+"?cols=100&rows=28", http.Header{"Origin": {f.http.URL}, "Cookie": {cookie.String()}})
 	if err != nil {
 		t.Fatalf("dial: %v response=%v", err, resp)
 	}
@@ -215,6 +220,45 @@ func TestTerminalSocketRejectsUntrustedRequests(t *testing.T) {
 	defer f.fake.mu.Unlock()
 	if f.fake.terminals != 0 {
 		t.Fatal("unauthorized provider call")
+	}
+}
+
+func TestTerminalSocketPublicScheme(t *testing.T) {
+	for _, tc := range []struct {
+		request, forwarded, origin string
+		want                       bool
+	}{
+		{"https://runner.test", "", "https://runner.test", true},
+		{"https://runner.test", "", "http://runner.test", false},
+		{"http://runner.test", "https", "https://runner.test", true},
+		{"http://runner.test", "https", "http://runner.test", false},
+		{"http://runner.test", "", "https://runner.test", false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, tc.request, nil)
+		r.Header.Set("Origin", tc.origin)
+		r.Header.Set("X-Forwarded-Proto", tc.forwarded)
+		if got := terminalSameOrigin(r); got != tc.want {
+			t.Errorf("request %s, forwarded %q, origin %s: got %t, want %t", tc.request, tc.forwarded, tc.origin, got, tc.want)
+		}
+	}
+}
+
+func TestTerminalSocketClosesAtSessionExpiry(t *testing.T) {
+	for _, kind := range []string{"runner", "deployment"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newTerminalFixture(t, kind)
+			expiry := time.Now().Add(3 * time.Second).Unix()
+			signed, err := f.srv.encodeAdminSession(adminSession{Subject: "hubot-id", Login: "hubot", Role: "user", ExpiresAt: expiry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn := f.dialWithCookie(t, &http.Cookie{Name: adminSessionCookieName, Value: signed})
+			id := readTerminalReady(t, conn)
+			closed := waitTerminalClosed(t, f, id)
+			if time.Now().Unix() < expiry || closed.Cleanup != "confirmed" {
+				t.Fatalf("session expiry %d, terminal closure %+v", expiry, closed)
+			}
+		})
 	}
 }
 

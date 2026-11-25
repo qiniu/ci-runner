@@ -208,6 +208,21 @@ func TestRunnerReportDefaultsBeforeMidnightGap(t *testing.T) {
 	}
 }
 
+func TestRunnerReportSpecRuntimeSortWithMissingSamples(t *testing.T) {
+	srv := newTestServerWithoutLoops(t, state.New(t.TempDir()), "http://example.test", &fakeSandbox{}, 10)
+	report := &state.RunnerReport{Query: state.RunnerReportQuery{IncludeSpecUsage: true}, SpecItems: []state.ReportSpecUsage{
+		{Key: "a-missing"},
+		{Key: "z-observed", Runtime: state.ReportDuration{Samples: 1}},
+	}}
+	srv.reports.put(cachedRunnerReport{id: "test-specs", created: time.Now(), report: report})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, adminRequest(http.MethodGet, "/reports/test-specs/specs?sort=runtime&limit=1", nil))
+	var page struct{ Items []state.ReportSpecUsage }
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || w.Code != http.StatusOK || len(page.Items) != 1 || page.Items[0].Key != "z-observed" {
+		t.Fatalf("expected measured zero on the first page, got %d %s", w.Code, w.Body)
+	}
+}
+
 func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 	dir := t.TempDir()
 	store := state.New(dir)

@@ -34,7 +34,7 @@ type terminalTarget struct {
 }
 
 func (s *Server) handleRunnerTerminalSocket(w http.ResponseWriter, r *http.Request) {
-	st, account, ok := s.userRunnerStateAndAccount(w, r)
+	st, account, session, ok := s.userRunnerStateAndAccount(w, r)
 	if !ok {
 		return
 	}
@@ -47,7 +47,7 @@ func (s *Server) handleRunnerTerminalSocket(w http.ResponseWriter, r *http.Reque
 		writeError(w, 502, "terminal service unavailable")
 		return
 	}
-	s.serveTerminalSocket(w, r, terminalTarget{
+	s.serveTerminalSocket(w, r, time.Unix(session.ExpiresAt, 0), terminalTarget{
 		row:   state.TerminalSession{AccountID: account, ResourceKind: "runner", ResourceID: st.ID, Binding: runnerTerminalKey(st, account), GitHubInstallationID: st.GitHubInstallationID, RepositoryFullName: st.RepositoryFullName, SandboxID: st.SandboxID},
 		start: sandboxrunner.TerminalStart{SandboxID: st.SandboxID}, service: svc,
 		current: func() bool {
@@ -58,7 +58,7 @@ func (s *Server) handleRunnerTerminalSocket(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDeploymentTerminalSocket(w http.ResponseWriter, r *http.Request) {
-	d, account, ok := s.loadDeploymentTerminal(w, r)
+	d, account, session, ok := s.loadDeploymentTerminal(w, r)
 	if !ok {
 		return
 	}
@@ -79,7 +79,7 @@ func (s *Server) handleDeploymentTerminalSocket(w http.ResponseWriter, r *http.R
 		writeError(w, 409, "terminal service unavailable")
 		return
 	}
-	s.serveTerminalSocket(w, r, terminalTarget{
+	s.serveTerminalSocket(w, r, time.Unix(session.ExpiresAt, 0), terminalTarget{
 		row:   state.TerminalSession{AccountID: account, ResourceKind: "deployment", ResourceID: d.ID, Binding: fmt.Sprintf("account:%d:%s", account, deploymentTerminalKey(d)), GitHubInstallationID: d.GitHubInstallationID, RepositoryFullName: d.RepositoryFullName, SandboxID: d.SandboxID},
 		start: sandboxrunner.TerminalStart{SandboxID: d.SandboxID, ExpiresAt: d.ExpiresAt}, service: svc,
 		current: func() bool {
@@ -90,8 +90,12 @@ func (s *Server) handleDeploymentTerminalSocket(w http.ResponseWriter, r *http.R
 }
 
 func terminalSameOrigin(r *http.Request) bool {
+	scheme := "http"
+	if requestIsSecure(r) {
+		scheme = "https"
+	}
 	origin, err := url.Parse(r.Header.Get("Origin"))
-	return err == nil && (origin.Scheme == "https" || origin.Scheme == "http") && origin.Host == r.Host && origin.User == nil && origin.Path == "" && origin.RawQuery == "" && origin.Fragment == ""
+	return err == nil && origin.Scheme == scheme && origin.Host == r.Host && origin.User == nil && origin.Path == "" && origin.RawQuery == "" && origin.Fragment == ""
 }
 
 type terminalFrame struct {
@@ -132,7 +136,13 @@ func decodeTerminalFrame(raw []byte) (terminalFrame, error) {
 	return frame, nil
 }
 
-func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, target terminalTarget) {
+func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, sessionExpiry time.Time, target terminalTarget) {
+	ctx, cancel := context.WithDeadline(r.Context(), sessionExpiry)
+	defer cancel()
+	if !time.Now().Before(sessionExpiry) {
+		writeError(w, http.StatusUnauthorized, "github oauth session expired")
+		return
+	}
 	// A stateless HTTP preflight preserves the application's normal OAuth/error
 	// handling. The subsequent upgrade repeats authorization and creates nothing
 	// on this path; the preflight does not grant or reserve a session.
@@ -169,8 +179,6 @@ func (s *Server) serveTerminalSocket(w http.ResponseWriter, r *http.Request, tar
 	conn.SetReadLimit(terminalFrameMaxBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(20 * time.Second)) })
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	if s.loopCtx != nil {
 		stop := context.AfterFunc(s.loopCtx, cancel)
 		defer stop()
