@@ -34,8 +34,8 @@ func TestAccountReportWorkerInterrupted(t *testing.T) {
 	}
 	for _, mode := range []string{"refresh", "rebuild", "watch"} {
 		t.Run(mode, func(t *testing.T) {
-			// Stall the database handshake until its connection timeout. An
-			// accepted connection means the CLI has installed its signal handler.
+			// Leave the handshake pending. Only the CLI's signal handler
+			// should interrupt it, even with no database connection timeout.
 			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 			if err != nil {
 				t.Fatal(err)
@@ -48,12 +48,12 @@ func TestAccountReportWorkerInterrupted(t *testing.T) {
 				t.Fatal(err)
 			}
 			config := filepath.Join(t.TempDir(), "runnerd.yaml")
-			dsn := "postgres://test@" + listener.Addr().String() + "/test?sslmode=disable&connect_timeout=1"
+			dsn := "postgres://test@" + listener.Addr().String() + "/test?sslmode=disable"
 			if err := os.WriteFile(config, []byte("database:\n  backend: postgres\n  dsn: "+dsn+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAccountReportWorkerInterrupted$")
-			cmd.Env = append(os.Environ(), "RUNNERD_TEST_INTERRUPTED_MODE="+mode, "RUNNERD_TEST_WORKER_CONFIG="+config)
+			cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=0", "RUNNERD_TEST_INTERRUPTED_MODE="+mode, "RUNNERD_TEST_WORKER_CONFIG="+config)
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}

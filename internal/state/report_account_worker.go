@@ -23,7 +23,7 @@ func RefreshAccountReports(ctx context.Context, opts Options, rebuild bool) erro
 	}
 	opts.PostgresMaxOpenConns = 2
 	s := &DBStore{opts: opts}
-	db, err := s.open()
+	db, err := s.openWithContext(ctx)
 	if err != nil {
 		return err
 	}
