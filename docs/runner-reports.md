@@ -213,9 +213,21 @@ publication uses the original query. [Background report maintenance](account-rep
 - Before serving a new Specs snapshot, runnerd stores its dashboard, rankings and full
   spec table in `report_spec_snapshots`. Restoring the URL or requesting a spec page
   on another server uses that same snapshot, including its original expiry and filters.
-  The shared cache holds up to 8 snapshots and 200,000 aggregate entries. A payload
-  of 16 MiB or larger returns **422**. Publication evicts expired and excess entries.
-  The account and efficiency reports share this storage and retention budget. Their snapshot includes the frozen group tables and the narrow request projections for detail-capable cohorts, gzip-compressed within the same payload limit (128 MiB decoded). Another server can restore a group or request page directly. Overview snapshots remain process-local and may return **410** after a restart or routing change.
+  On PostgreSQL, new Specs snapshots have their own limit of 8 snapshots and 200,000
+  aggregate entries and remain available until `expires_at`. At capacity, runnerd
+  reuses the newest live snapshot for the same query, preserving its statistics
+  and expiry. A query without a matching snapshot returns **503** with `Retry-After`.
+  The normal PostgreSQL migration keeps the existing table and payload format so
+  old replicas can restore new IDs. Database triggers defer the old replicas' live
+  deletes and prune the legacy pool using only its own usage when a snapshot is saved.
+  Unprefixed snapshots issued by an older replica retain their original policy.
+- Accounts and efficiency share a separate PostgreSQL pool of 8 snapshots and
+  200,000 entries. On SQLite and MySQL, the existing pool is shared with Specs.
+  These pools evict expired and excess entries. A payload of 16 MiB or larger
+  returns **422**. Account and efficiency snapshots include frozen groups and narrow
+  request projections for detail-capable cohorts, gzip-compressed (128 MiB decoded).
+  Another server can restore a group or request page directly. Overview snapshots
+  remain process-local and may return **410** after a restart or routing change.
 
 SQLite uses the existing queued-date index and a short-lived read-only connection
 to the main database file resolved from the initialized connection. It opens with

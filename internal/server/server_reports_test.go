@@ -248,6 +248,138 @@ func TestPublishedAccountSpecSnapshotPostgres(t *testing.T) {
 	})
 }
 
+func TestPublishedAccountSpecSnapshotRetentionPostgres(t *testing.T) {
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires a dedicated PostgreSQL test database")
+	}
+	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true}
+	store := state.NewWithOptions(opts)
+	writer := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	for i := range 23 {
+		_, err := store.UpsertProfile(state.RunnerProfile{
+			Name: fmt.Sprintf("spec-%02d", i), Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := state.RefreshAccountReports(t.Context(), opts, false); err != nil {
+		t.Fatal(err)
+	}
+	opts.MigrateOnStart = false
+	peer := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+	get := func(srv *Server, path string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Fatalf("GET %s: got %d %s, want %d", path, w.Code, w.Body, want)
+		}
+		return w
+	}
+	var snapshot struct {
+		Snapshot string
+		Query    state.RunnerReportQuery
+		Expires  time.Time `json:"expires_at"`
+	}
+	before := get(writer, "/reports/spec-usage", http.StatusOK)
+	if err := json.Unmarshal(before.Body.Bytes(), &snapshot); err != nil || snapshot.Snapshot == "" || !snapshot.Expires.After(time.Now()) {
+		t.Fatalf("invalid spec snapshot: %v", err)
+	}
+	pageURL := "/reports/" + snapshot.Snapshot + "/specs?limit=20&offset=20&sort=requests"
+	page := get(writer, pageURL, http.StatusOK).Body.String()
+	var second struct {
+		Items  []state.ReportSpecUsage
+		Total  int
+		Offset int
+	}
+	if err := json.Unmarshal([]byte(page), &second); err != nil || len(second.Items) != 4 || second.Total != 24 || second.Offset != 20 {
+		t.Fatalf("expected four specs on the second page, got %d of %d at %d: %v", len(second.Items), second.Total, second.Offset, err)
+	}
+
+	// Account and efficiency use their own budget, even when a ninth save prunes that pool.
+	for i := range state.ReportSnapshotLimit + 1 {
+		path := "/reports/account-usage"
+		if i%2 == 1 {
+			path = "/reports/efficiency"
+		}
+		get(writer, fmt.Sprintf("%s?repository=fixture%%2Frepo-%d", path, i), http.StatusOK)
+	}
+	var freshURL, freshBody string
+	for i := range state.ReportSnapshotLimit - 1 {
+		freshURL = fmt.Sprintf("/reports/spec-usage?repository=fixture%%2Frepo-%d", i)
+		freshBody = get(writer, freshURL, http.StatusOK).Body.String()
+	}
+	full := get(writer, "/reports/spec-usage?repository=fixture%2Foverflow", http.StatusServiceUnavailable)
+	if full.Header().Get("Retry-After") == "" {
+		t.Fatal("capacity response is missing Retry-After")
+	}
+	if got := get(writer, freshURL, http.StatusOK).Body.String(); got != freshBody {
+		t.Fatal("same-query reuse changed after capacity was reached")
+	}
+	if got := get(peer, "/reports/spec-usage", http.StatusOK).Body.String(); got != before.Body.String() {
+		t.Fatal("peer did not reuse the original snapshot with the same query and expiry at capacity")
+	}
+
+	query := url.Values{"from": {snapshot.Query.From}, "to": {snapshot.Query.To}, "timezone": {snapshot.Query.Timezone}, "grain": {snapshot.Query.Grain}, "snapshot": {snapshot.Snapshot}}
+	snapshotURL := "/reports/spec-usage?" + query.Encode()
+	if got := get(peer, snapshotURL, http.StatusOK).Body.String(); got != before.Body.String() {
+		t.Fatal("restored dashboard changed after capacity was reached")
+	}
+	if got := get(peer, pageURL, http.StatusOK).Body.String(); got != page {
+		t.Fatal("restored second page changed after capacity was reached")
+	}
+
+	db, err := sql.Open("pgx", opts.DatabaseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Age the shared snapshot beyond local freshness without expiring it.
+	payload, err := store.LoadReportSnapshot(t.Context(), snapshot.Snapshot, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aged sharedSpecSnapshot
+	if err := json.Unmarshal(payload, &aged); err != nil {
+		t.Fatal(err)
+	}
+	aged.Created = time.Now().Add(-reportFreshness - time.Second)
+	agedPayload, err := json.Marshal(aged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agedExpiry := aged.Created.Add(reportRetention)
+	if _, err := db.ExecContext(t.Context(), `UPDATE report_spec_snapshots SET expires_at = $1, payload = $2 WHERE id = $3`, agedExpiry, agedPayload, snapshot.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	reader := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+	var overview struct{ Snapshot string }
+	if err := json.Unmarshal(get(reader, "/reports/overview", http.StatusOK).Body.Bytes(), &overview); err != nil || overview.Snapshot == "" {
+		t.Fatalf("invalid overview snapshot: %v", err)
+	}
+	for range reportCacheEntries {
+		var reused struct {
+			Snapshot string
+			Expires  time.Time `json:"expires_at"`
+		}
+		if err := json.Unmarshal(get(reader, "/reports/spec-usage", http.StatusOK).Body.Bytes(), &reused); err != nil || reused.Snapshot != snapshot.Snapshot || !reused.Expires.Equal(agedExpiry) {
+			t.Fatalf("reuse changed the snapshot or its expiry: %+v, %v", reused, err)
+		}
+	}
+	get(reader, "/reports/overview?snapshot="+overview.Snapshot, http.StatusOK)
+	get(reader, "/reports/"+overview.Snapshot+"/groups?dimension=spec", http.StatusOK)
+
+	// Advance the deadline without sleeping for the HTTP snapshot TTL.
+	if _, err := db.ExecContext(t.Context(), `UPDATE report_spec_snapshots SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, snapshot.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	afterExpiry := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+	get(afterExpiry, snapshotURL, http.StatusGone)
+	get(afterExpiry, pageURL, http.StatusGone)
+	get(writer, "/reports/spec-usage?repository=fixture%2Foverflow", http.StatusOK)
+}
+
 func verifySpecSnapshotOnAnotherServer(t *testing.T, store, peer state.Store, publish func()) {
 	t.Helper()
 	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)

@@ -8,6 +8,7 @@ type reportSpecSnapshotRecord struct {
 	ExpiresAt time.Time `gorm:"not null"`
 	Entries   int       `gorm:"not null"`
 	Payload   []byte    `gorm:"size:16777215"`
+	QueryKey  *string   `gorm:"size:64"`
 }
 
 func (reportSpecSnapshotRecord) TableName() string { return "report_spec_snapshots" }
