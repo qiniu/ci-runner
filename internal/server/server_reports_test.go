@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/qiniu/ci-runner/internal/config"
@@ -29,6 +30,15 @@ type reportsReadStore struct {
 
 func (s *reportsReadStore) ReadRunnerReport(ctx context.Context, q state.RunnerReportQuery, now time.Time) (*state.RunnerReport, error) {
 	return s.read(ctx, q, now)
+}
+
+type reportSnapshotReadStore struct {
+	state.Store
+	load func(context.Context, string, time.Time) ([]byte, error)
+}
+
+func (s *reportSnapshotReadStore) LoadReportSnapshot(ctx context.Context, id string, now time.Time) ([]byte, error) {
+	return s.load(ctx, id, now)
 }
 
 func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
@@ -59,6 +69,12 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 	if value.Snapshot == "" || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("missing snapshot or cache boundary")
 	}
+	requireReportTiming(t, w, `report_cache;desc="build"`, `report_read_path;desc="source"`, "report_slot_wait;dur=", "report_read;dur=", "report_charts;dur=", "report_response_encode;dur=")
+	cached := get("/reports/overview", true)
+	requireReportTiming(t, cached, `report_cache;desc="hit"`, "report_response_encode;dur=")
+	if timing := cached.Header().Get("Server-Timing"); strings.Contains(timing, "report_read") || strings.Contains(timing, "report_charts") {
+		t.Fatalf("cache hit replayed build timing: %s", timing)
+	}
 	for _, dimension := range []string{"spec", "owner", "repository"} {
 		ranking, ok := value.Distributions[dimension]
 		if !ok || ranking.Requests == nil || ranking.Runtime == nil || ranking.Total != 0 {
@@ -72,6 +88,7 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("spec dashboard: %d %s", w.Code, w.Body)
 	}
+	requireReportTiming(t, w, "report_snapshot_encode;dur=", "report_snapshot_write;dur=", "report_spec_dashboard;dur=")
 	if err := json.Unmarshal(w.Body.Bytes(), &specs); err != nil || specs.Snapshot == "" {
 		t.Fatalf("missing spec dashboard snapshot: %s", w.Body)
 	}
@@ -94,6 +111,9 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 		srv.ServeHTTP(denied, ordinary)
 		if denied.Code != http.StatusUnauthorized {
 			t.Errorf("ordinary user %s: %d", path, denied.Code)
+		}
+		if strings.Contains(denied.Header().Get("Server-Timing"), "report_") {
+			t.Errorf("ordinary user %s received report timing", path)
 		}
 		if w := get(path, true); w.Code != 200 {
 			t.Errorf("%s: %d %s", path, w.Code, w.Body)
@@ -127,6 +147,35 @@ func TestRunnerReportHTTPAuthorizationAndSnapshot(t *testing.T) {
 	}
 }
 
+func requireReportTiming(t *testing.T, w *httptest.ResponseRecorder, fields ...string) {
+	t.Helper()
+	timing := w.Header().Get("Server-Timing")
+	for _, field := range fields {
+		if !strings.Contains(timing, field) {
+			t.Errorf("missing %q in Server-Timing: %s", field, timing)
+		}
+	}
+}
+
+func TestRunnerReportTimeoutExposesCompletedTiming(t *testing.T) {
+	store := &reportsReadStore{
+		Store: state.New(t.TempDir()),
+		read: func(context.Context, state.RunnerReportQuery, time.Time) (*state.RunnerReport, error) {
+			return nil, context.DeadlineExceeded
+		},
+	}
+	srv := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, adminRequest(http.MethodGet, "/reports/efficiency", nil))
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("HTTP %d: %s", w.Code, w.Body)
+	}
+	requireReportTiming(t, w, `report_cache;desc="build"`, "report_slot_wait;dur=", "report_read;dur=")
+	if timing := w.Header().Get("Server-Timing"); strings.Contains(timing, "report_snapshot") || strings.Contains(timing, "report_response_encode") {
+		t.Fatalf("timed-out read reported phases it did not reach: %s", timing)
+	}
+}
+
 func TestRunnerReportSharedBuildAndCancelledWaiter(t *testing.T) {
 	var calls atomic.Int32
 	entered := make(chan context.Context, 1)
@@ -139,7 +188,10 @@ func TestRunnerReportSharedBuildAndCancelledWaiter(t *testing.T) {
 	}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { _, err := srv.loadRunnerReport(ctx, state.RunnerReportQuery{}); done <- err }()
+	go func() {
+		_, _, err := srv.loadRunnerReport(ctx, state.RunnerReportQuery{})
+		done <- err
+	}()
 	queryCtx := <-entered
 	if _, ok := queryCtx.Deadline(); !ok {
 		t.Fatal("unbounded build")
@@ -156,7 +208,7 @@ func TestRunnerReportSharedBuildAndCancelledWaiter(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := srv.loadRunnerReport(context.Background(), state.RunnerReportQuery{}); err != nil {
+			if _, _, err := srv.loadRunnerReport(context.Background(), state.RunnerReportQuery{}); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -165,6 +217,96 @@ func TestRunnerReportSharedBuildAndCancelledWaiter(t *testing.T) {
 	wg.Wait()
 	if calls.Load() != 1 {
 		t.Fatalf("reads %d", calls.Load())
+	}
+}
+
+func TestRunnerReportUsageSnapshotSharedTiming(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const id = "eff-test"
+		payload, err := encodeUsageSnapshot(cachedRunnerReport{
+			created: time.Now(),
+			report:  &state.RunnerReport{GroupTotals: map[string][]state.ReportGroup{}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var loads int
+		srv := &Server{store: &reportSnapshotReadStore{
+			load: func(context.Context, string, time.Time) ([]byte, error) {
+				loads++
+				time.Sleep(3 * time.Second)
+				return payload, nil
+			},
+		}}
+		release, err := srv.reports.acquire(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results := make(chan runnerReportTiming, 2)
+		for range cap(results) {
+			go func() {
+				entry, timing, err := srv.restoreUsageSnapshot(t.Context(), id)
+				if err != nil || entry.id != id {
+					t.Errorf("restore returned snapshot %q, err %v", entry.id, err)
+				}
+				results <- timing
+			}()
+		}
+		synctest.Wait()
+		time.Sleep(2 * time.Second)
+		release()
+		for range cap(results) {
+			timing := <-results
+			if timing.cache != "snapshot_lookup" || !timing.shared || timing.slotWait != 2*time.Second || timing.snapshotLookup != 3*time.Second {
+				t.Errorf("shared restore timing: %+v", timing)
+			}
+		}
+		_, hit, err := srv.restoreUsageSnapshot(t.Context(), id)
+		if err != nil || hit.cache != "snapshot_hit" || hit.shared || hit.snapshotLookup != 0 || hit.snapshotDecode != 0 || loads != 1 {
+			t.Fatalf("restore cache hit: timing %+v, loads %d, err %v", hit, loads, err)
+		}
+	})
+}
+
+func TestRunnerReportSpecSnapshotCrossesDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		expiresAfter   time.Duration
+		requestTimeout time.Duration
+		wantErr        error
+	}{
+		{"snapshot expiry", time.Second, reportTimeout, state.ErrNotFound},
+		{"request deadline", reportRetention, time.Second, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				expiresAt := time.Now().Add(tc.expiresAfter)
+				payload, err := json.Marshal(sharedSpecSnapshot{
+					Report: &state.RunnerReport{}, Created: expiresAt.Add(-reportRetention),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv := &Server{store: &reportSnapshotReadStore{
+					load: func(_ context.Context, _ string, now time.Time) ([]byte, error) {
+						if !now.Before(expiresAt) {
+							t.Error("snapshot was already expired when the lookup started")
+						}
+						time.Sleep(2 * time.Second)
+						return payload, nil
+					},
+				}}
+				ctx, cancel := context.WithTimeout(t.Context(), tc.requestTimeout)
+				defer cancel()
+				entry, timing, err := srv.restoreSpecSnapshot(ctx, "spec-test")
+				if !errors.Is(err, tc.wantErr) || entry.report != nil {
+					t.Fatalf("restore returned a report after %s: report present %v, err %v", tc.name, entry.report != nil, err)
+				}
+				if timing.snapshotLookup != 2*time.Second {
+					t.Errorf("snapshot lookup timing: %v", timing.snapshotLookup)
+				}
+			})
+		})
 	}
 }
 
@@ -283,6 +425,7 @@ func TestPublishedAccountSpecSnapshotRetentionPostgres(t *testing.T) {
 		Expires  time.Time `json:"expires_at"`
 	}
 	before := get(writer, "/reports/spec-usage", http.StatusOK)
+	requireReportTiming(t, before, `report_read_path;desc="published"`)
 	if err := json.Unmarshal(before.Body.Bytes(), &snapshot); err != nil || snapshot.Snapshot == "" || !snapshot.Expires.After(time.Now()) {
 		t.Fatalf("invalid spec snapshot: %v", err)
 	}
@@ -317,13 +460,17 @@ func TestPublishedAccountSpecSnapshotRetentionPostgres(t *testing.T) {
 	if got := get(writer, freshURL, http.StatusOK).Body.String(); got != freshBody {
 		t.Fatal("same-query reuse changed after capacity was reached")
 	}
-	if got := get(peer, "/reports/spec-usage", http.StatusOK).Body.String(); got != before.Body.String() {
+	reuse := get(peer, "/reports/spec-usage", http.StatusOK)
+	requireReportTiming(t, reuse, `report_cache;desc="snapshot_reuse"`, "report_snapshot_decode;dur=")
+	if reuse.Body.String() != before.Body.String() {
 		t.Fatal("peer did not reuse the original snapshot with the same query and expiry at capacity")
 	}
 
 	query := url.Values{"from": {snapshot.Query.From}, "to": {snapshot.Query.To}, "timezone": {snapshot.Query.Timezone}, "grain": {snapshot.Query.Grain}, "snapshot": {snapshot.Snapshot}}
 	snapshotURL := "/reports/spec-usage?" + query.Encode()
-	if got := get(peer, snapshotURL, http.StatusOK).Body.String(); got != before.Body.String() {
+	restore := get(peer, snapshotURL, http.StatusOK)
+	requireReportTiming(t, restore, `report_cache;desc="snapshot_hit"`)
+	if restore.Body.String() != before.Body.String() {
 		t.Fatal("restored dashboard changed after capacity was reached")
 	}
 	if got := get(peer, pageURL, http.StatusOK).Body.String(); got != page {
@@ -369,6 +516,12 @@ func TestPublishedAccountSpecSnapshotRetentionPostgres(t *testing.T) {
 	}
 	get(reader, "/reports/overview?snapshot="+overview.Snapshot, http.StatusOK)
 	get(reader, "/reports/"+overview.Snapshot+"/groups?dimension=spec", http.StatusOK)
+	uncached := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+	restore = get(uncached, snapshotURL, http.StatusOK)
+	requireReportTiming(t, restore, `report_cache;desc="snapshot_lookup"`, "report_snapshot_lookup;dur=", "report_snapshot_decode;dur=")
+	if timing := restore.Header().Get("Server-Timing"); strings.Contains(timing, "report_read") || strings.Contains(timing, "report_snapshot_write") {
+		t.Fatalf("snapshot lookup replayed build timing: %s", timing)
+	}
 
 	// Advance the deadline without sleeping for the HTTP snapshot TTL.
 	if _, err := db.ExecContext(t.Context(), `UPDATE report_spec_snapshots SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, snapshot.Snapshot); err != nil {
@@ -730,6 +883,21 @@ func verifyEfficiencySnapshotAndBacklog(t *testing.T, store, peerStore state.Sto
 		if w.Code != want {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
 		}
+		if admin && want == http.StatusOK {
+			switch path {
+			case "/reports/efficiency":
+				readPath := "source"
+				if publish != nil {
+					readPath = "published"
+				}
+				requireReportTiming(t, w, fmt.Sprintf("report_read_path;desc=%q", readPath), "report_read;dur=", "report_snapshot_encode;dur=", "report_snapshot_write;dur=")
+			case "/reports/efficiency?repository=org%2Frepo":
+				requireReportTiming(t, w, `report_read_path;desc="source"`)
+			}
+			if r.URL.Query().Get("snapshot") != "" {
+				requireReportTiming(t, w, `report_cache;desc="snapshot_lookup"`, "report_slot_wait;dur=", "report_snapshot_lookup;dur=", "report_snapshot_decode;dur=", "report_charts;dur=")
+			}
+		}
 		return w.Body.Bytes()
 	}
 	if publish != nil {
@@ -742,6 +910,9 @@ func verifyEfficiencySnapshotAndBacklog(t *testing.T, store, peerStore state.Sto
 	body := get(srv, path, true, 200)
 	if err := json.Unmarshal(body, &report); err != nil || report.Efficiency == nil {
 		t.Fatal("missing efficiency summary")
+	}
+	if publish != nil {
+		get(srv, "/reports/efficiency?repository=org%2Frepo", true, 200)
 	}
 	reject("rejected-after-snapshot")
 	if publish != nil {

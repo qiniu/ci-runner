@@ -345,8 +345,33 @@ queue claim latency under representative load.
 
 For production performance checks, record the filter window, actual request and
 group counts, PostgreSQL query plan and cache state alongside HTTP response
-times and scheduler latency. If legitimate ranges
-exceed the explicit cap or the cost is excessive, design bounded preaggregation or
+times and scheduler latency. The admin historical dashboard and snapshot detail
+endpoints include millisecond durations and fixed path labels in the
+`Server-Timing` response header.
+
+- `report_cache` describes a new build (`build`), an in-process hit (`hit`), a
+  pinned snapshot hit or lookup (`snapshot_hit`, `snapshot_lookup`), or reuse
+  of an existing Specs snapshot at capacity (`snapshot_reuse`). `report_shared`
+  marks a build or account/efficiency snapshot restore shared by concurrent
+  requests. Cache hits omit timings from the original build or restore.
+- `report_read_path` reports the last path attempted by the current build
+  (`published`, `source`, or `publication_check` if the compatibility check
+  fails). `report_read` covers the whole store operation, including a compatibility
+  check before fallback, reading and aggregation in SQL or Go, and database
+  connection or transaction overhead. Use PostgreSQL plan evidence to split
+  database reads from database aggregation.
+- `report_snapshot_lookup` measures the database lookup call. Slot wait,
+  snapshot decoding, and chart reconstruction have their own durations on
+  account and efficiency restores. Specs restores report database lookup and
+  decoding separately. A restore that crosses the snapshot's original expiry
+  returns **410**.
+- Separate timings also cover Specs dashboard preparation, shared snapshot
+  encoding and the database save operation (which can reuse a live snapshot at
+  capacity), and dashboard response JSON encoding. Only stages reached by the
+  request or its shared operation are reported. Use client timings for the
+  response body transfer and end-to-end duration.
+
+If legitimate ranges exceed the explicit cap or the cost is excessive, design bounded preaggregation or
 an asynchronous reporting store with evidence; do not silently raise the cap or
 mix attempt history and period consumption into this contract.
 

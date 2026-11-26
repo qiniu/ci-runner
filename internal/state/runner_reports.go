@@ -488,6 +488,20 @@ func materializeSQLiteReport(db, selection *gorm.DB) error {
 
 // ReadRunnerReport reads the current and prior cohorts from one consistent snapshot. It never loads
 // payloads, logs, provider configuration or credentials. The spec dashboard also reads narrow catalog fields.
+type runnerReportReadPathKey struct{}
+
+// WithRunnerReportReadPath observes the read path synchronously, including when
+// the read fails. A publication check or read can be followed by a source read.
+func WithRunnerReportReadPath(ctx context.Context, observe func(path string)) context.Context {
+	return context.WithValue(ctx, runnerReportReadPathKey{}, observe)
+}
+
+func observeRunnerReportReadPath(ctx context.Context, path string) {
+	if observe, ok := ctx.Value(runnerReportReadPathKey{}).(func(string)); ok {
+		observe(path)
+	}
+}
+
 func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
 	window, err := q.Window(now)
 	if err != nil {
@@ -507,10 +521,12 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		defer db.Rollback()
 	}
 	if db.Dialector.Name() == BackendPostgres && (q.isOverview() || q.IncludeSpecUsage || q.IncludeAccountUsage || q.isDefaultEfficiency(now)) {
+		observeRunnerReportReadPath(ctx, "publication_check")
 		if report, err := readPublishedUsageReport(db, q, now); err != nil || report != nil {
 			return report, err
 		}
 	}
+	observeRunnerReportReadPath(ctx, "source")
 	return readSourceReport(ctx, db, q, window, now)
 }
 

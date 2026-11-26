@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -37,6 +38,78 @@ type cachedRunnerReport struct {
 	distributions map[string]state.ReportDistribution
 }
 
+func (e cachedRunnerReport) checkRestoreDeadline(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if time.Since(e.created) >= reportRetention {
+		return state.ErrNotFound
+	}
+	return nil
+}
+
+type timedRunnerReport struct {
+	entry  cachedRunnerReport
+	timing runnerReportTiming
+}
+
+type runnerReportTiming struct {
+	cache, readPath string
+	shared          bool
+
+	slotWait, read, charts                        time.Duration
+	snapshotEncode, snapshotWrite, snapshotLookup time.Duration
+	snapshotDecode, specDashboard, responseEncode time.Duration
+}
+
+func (t runnerReportTiming) writeHeader(w http.ResponseWriter) {
+	var metrics []string
+	if t.cache != "" {
+		metrics = append(metrics, fmt.Sprintf("report_cache;desc=%q", t.cache))
+	}
+	if t.readPath != "" {
+		metrics = append(metrics, fmt.Sprintf("report_read_path;desc=%q", t.readPath))
+	}
+	if t.shared {
+		metrics = append(metrics, "report_shared")
+	}
+	for _, phase := range []struct {
+		name     string
+		duration time.Duration
+	}{
+		{"report_slot_wait", t.slotWait},
+		{"report_read", t.read},
+		{"report_charts", t.charts},
+		{"report_snapshot_encode", t.snapshotEncode},
+		{"report_snapshot_write", t.snapshotWrite},
+		{"report_snapshot_lookup", t.snapshotLookup},
+		{"report_snapshot_decode", t.snapshotDecode},
+		{"report_spec_dashboard", t.specDashboard},
+		{"report_response_encode", t.responseEncode},
+	} {
+		if phase.duration > 0 {
+			metrics = append(metrics, fmt.Sprintf("%s;dur=%.3f", phase.name, float64(phase.duration)/float64(time.Millisecond)))
+		}
+	}
+	if len(metrics) != 0 {
+		w.Header().Add("Server-Timing", strings.Join(metrics, ", "))
+	}
+}
+
+func (s *Server) writeTimedRunnerReport(w http.ResponseWriter, r *http.Request, timing runnerReportTiming, report any) {
+	start := time.Now()
+	body, err := json.Marshal(report)
+	timing.responseEncode = time.Since(start)
+	timing.writeHeader(w)
+	if err != nil {
+		s.writeReportError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(body, '\n'))
+}
+
 // Only aggregated data needed by the Specs UI is shared. In particular the
 // request rows and request-detail indexes in RunnerReport are JSON-excluded.
 type sharedSpecSnapshot struct {
@@ -47,39 +120,50 @@ type sharedSpecSnapshot struct {
 	Created       time.Time
 }
 
-func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) (cachedRunnerReport, error) {
+func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport, timing *runnerReportTiming) (cachedRunnerReport, error) {
+	start := time.Now()
 	payload, err := json.Marshal(sharedSpecSnapshot{e.report, e.report.SpecItems, e.report.SpecSummary, e.distributions, e.created})
+	timing.snapshotEncode = time.Since(start)
 	if err != nil {
 		return cachedRunnerReport{}, err
 	}
+	start = time.Now()
 	saved, err := s.store.SaveSpecReportSnapshot(ctx, e.id, e.key, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+	timing.snapshotWrite = time.Since(start)
 	if err != nil {
 		return cachedRunnerReport{}, err
 	}
 	if saved.ReusedPayload != nil {
-		return decodeSpecSnapshot(saved.ID, saved.ReusedPayload)
+		timing.cache = "snapshot_reuse"
+		start = time.Now()
+		entry, err := decodeSpecSnapshot(saved.ID, saved.ReusedPayload)
+		timing.snapshotDecode = time.Since(start)
+		return entry, err
 	}
 	e.id = saved.ID
 	return e, nil
 }
 
-func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id string) (cachedRunnerReport, bool) {
-	ctx, cancel := context.WithTimeout(r.Context(), reportTimeout)
+func (s *Server) restoreSpecSnapshot(ctx context.Context, id string) (cachedRunnerReport, runnerReportTiming, error) {
+	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	raw, err := s.store.LoadReportSnapshot(ctx, id, time.Now())
-	if errors.Is(err, state.ErrNotFound) {
-		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
-		return cachedRunnerReport{}, false
-	}
-	var entry cachedRunnerReport
-	if err == nil {
-		entry, err = decodeSpecSnapshot(id, raw)
-	}
+	timing := runnerReportTiming{cache: "snapshot_lookup"}
+	start := time.Now()
+	raw, err := s.store.LoadReportSnapshot(ctx, id, start)
+	timing.snapshotLookup = time.Since(start)
 	if err != nil {
-		s.writeReportError(w, r, err)
-		return cachedRunnerReport{}, false
+		return cachedRunnerReport{}, timing, err
 	}
-	return entry, true
+	start = time.Now()
+	entry, err := decodeSpecSnapshot(id, raw)
+	timing.snapshotDecode = time.Since(start)
+	if err != nil {
+		return cachedRunnerReport{}, timing, err
+	}
+	if err := entry.checkRestoreDeadline(ctx); err != nil {
+		return cachedRunnerReport{}, timing, err
+	}
+	return entry, timing, nil
 }
 
 func decodeSpecSnapshot(id string, payload []byte) (cachedRunnerReport, error) {
@@ -249,33 +333,41 @@ func (c *runnerReportCache) acquireActive(ctx context.Context) (func(), error) {
 	}
 }
 
-func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery) (cachedRunnerReport, error) {
+func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery) (cachedRunnerReport, runnerReportTiming, error) {
 	key := reportQueryKey(q)
+	hit := runnerReportTiming{cache: "hit"}
 	if e, ok := s.reports.fresh(key); ok {
-		return e, nil
+		return e, hit, nil
 	}
 	result := s.reports.group.DoChan(key, func() (any, error) {
 		if e, ok := s.reports.fresh(key); ok {
-			return e, nil
+			return timedRunnerReport{entry: e, timing: hit}, nil
 		}
+		build := timedRunnerReport{timing: runnerReportTiming{cache: "build"}}
 		queryCtx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 		defer cancel()
+		start := time.Now()
 		release, err := s.reports.acquire(queryCtx)
+		build.timing.slotWait = time.Since(start)
 		if err != nil {
-			return nil, err
+			return build, err
 		}
 		defer release()
-		now := time.Now().UTC()
-		report, err := s.store.ReadRunnerReport(queryCtx, q, now)
+		queryCtx = state.WithRunnerReportReadPath(queryCtx, func(path string) { build.timing.readPath = path })
+		start = time.Now()
+		report, err := s.store.ReadRunnerReport(queryCtx, q, start.UTC())
+		build.timing.read = time.Since(start)
 		if err != nil {
-			return nil, err
+			return build, err
 		}
 		var distributions map[string]state.ReportDistribution
 		if !q.IncludeExecution {
+			start := time.Now()
 			distributions = report.ChartDistributions()
+			build.timing.charts = time.Since(start)
 		}
 		if err := queryCtx.Err(); err != nil {
-			return nil, err
+			return build, err
 		}
 		entry := cachedRunnerReport{
 			id: newID(), key: key, created: time.Now(),
@@ -287,27 +379,27 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 				prefix = efficiencySnapshotPrefix
 			}
 			entry.id = prefix + entry.id
-			if err := s.saveUsageSnapshot(queryCtx, entry); err != nil {
-				return nil, err
+			if err := s.saveUsageSnapshot(queryCtx, entry, &build.timing); err != nil {
+				return build, err
 			}
 		}
 		if q.IncludeSpecUsage {
-			entry, err = s.saveSpecSnapshot(queryCtx, entry)
+			entry, err = s.saveSpecSnapshot(queryCtx, entry, &build.timing)
 			if err != nil {
-				return nil, err
+				return build, err
 			}
 		}
 		s.reports.put(entry)
-		return entry, nil
+		build.entry = entry
+		return build, nil
 	})
 	select {
 	case <-ctx.Done():
-		return cachedRunnerReport{}, ctx.Err()
+		return cachedRunnerReport{}, runnerReportTiming{}, ctx.Err()
 	case value := <-result:
-		if value.Err != nil {
-			return cachedRunnerReport{}, value.Err
-		}
-		return value.Val.(cachedRunnerReport), nil
+		build := value.Val.(timedRunnerReport)
+		build.timing.shared = value.Shared
+		return build.entry, build.timing, value.Err
 	}
 }
 
@@ -355,36 +447,33 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	q.IncludeAccountUsage = r.URL.Path == "/reports/account-usage"
 	q.IncludeSpecUsage = r.URL.Path == "/reports/spec-usage"
 	var entry cachedRunnerReport
+	var timing runnerReportTiming
 	if id := r.URL.Query().Get("snapshot"); id != "" {
 		var ok bool
 		entry, ok = s.reports.byID(id)
-		if !ok && ((q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix)) || (q.IncludeEfficiency && strings.HasPrefix(id, efficiencySnapshotPrefix))) {
-			entry, err = s.restoreUsageSnapshot(r.Context(), id)
-			if err != nil {
-				s.writeReportError(w, r, err)
-				return
-			}
-			ok = true
+		switch {
+		case ok:
+			timing.cache = "snapshot_hit"
+		case (q.IncludeAccountUsage && strings.HasPrefix(id, accountSnapshotPrefix)) || (q.IncludeEfficiency && strings.HasPrefix(id, efficiencySnapshotPrefix)):
+			entry, timing, err = s.restoreUsageSnapshot(r.Context(), id)
+		case q.IncludeSpecUsage && !isUsageSnapshot(id):
+			entry, timing, err = s.restoreSpecSnapshot(r.Context(), id)
 		}
-		if !ok && q.IncludeSpecUsage && !isUsageSnapshot(id) {
-			entry, ok = s.restoreSpecSnapshot(w, r, id)
-			if !ok {
-				return
-			}
-		}
-		if !ok || entry.key != reportQueryKey(q) {
+		if err == nil && (entry.report == nil || entry.key != reportQueryKey(q)) {
+			timing.writeHeader(w)
 			writeError(w, http.StatusGone, "report snapshot expired or filters changed; refresh the report")
 			return
 		}
 	} else {
-		entry, err = s.loadRunnerReport(r.Context(), q)
+		entry, timing, err = s.loadRunnerReport(r.Context(), q)
 	}
 	if err != nil {
+		timing.writeHeader(w)
 		s.writeReportError(w, r, err)
 		return
 	}
 	if q.IncludeExecution {
-		writeJSON(w, http.StatusOK, map[string]any{
+		s.writeTimedRunnerReport(w, r, timing, map[string]any{
 			"query": q, "observed_at": entry.report.ObservedAt, "execution": entry.report.Execution,
 			"snapshot": entry.id, "expires_at": entry.created.Add(reportRetention),
 		})
@@ -392,9 +481,11 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 	}
 	var dashboard *reportSpecDashboard
 	if q.IncludeSpecUsage {
+		start := time.Now()
 		dashboard = newReportSpecDashboard(entry.report)
+		timing.specDashboard = time.Since(start)
 	}
-	writeJSON(w, http.StatusOK, struct {
+	s.writeTimedRunnerReport(w, r, timing, struct {
 		*state.RunnerReport
 		Snapshot      string                              `json:"snapshot"`
 		ExpiresAt     time.Time                           `json:"expires_at"`
@@ -487,21 +578,23 @@ func (s *Server) reportDetail(w http.ResponseWriter, r *http.Request) (cachedRun
 		writeError(w, http.StatusBadRequest, err.Error())
 		return cachedRunnerReport{}, 0, 0, false
 	}
-	entry, ok := s.reports.byID(r.PathValue("snapshot"))
-	if !ok && isUsageSnapshot(r.PathValue("snapshot")) {
-		entry, err = s.restoreUsageSnapshot(r.Context(), r.PathValue("snapshot"))
-		if err != nil {
-			s.writeReportError(w, r, err)
-			return entry, 0, 0, false
-		}
-		ok = true
-	}
-	if !ok && r.Pattern == "GET /reports/{snapshot}/specs" {
-		entry, ok = s.restoreSpecSnapshot(w, r, r.PathValue("snapshot"))
-		return entry, limit, offset, ok
-	}
-	if !ok {
+	id := r.PathValue("snapshot")
+	entry, ok := s.reports.byID(id)
+	var timing runnerReportTiming
+	switch {
+	case ok:
+		timing.cache = "snapshot_hit"
+	case isUsageSnapshot(id):
+		entry, timing, err = s.restoreUsageSnapshot(r.Context(), id)
+	case r.Pattern == "GET /reports/{snapshot}/specs":
+		entry, timing, err = s.restoreSpecSnapshot(r.Context(), id)
+	default:
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return entry, 0, 0, false
+	}
+	timing.writeHeader(w)
+	if err != nil {
+		s.writeReportError(w, r, err)
 		return entry, 0, 0, false
 	}
 	if entry.report.Execution != nil {

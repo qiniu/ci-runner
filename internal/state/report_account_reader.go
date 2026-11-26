@@ -90,6 +90,7 @@ func readPublishedUsageReport(db *gorm.DB, q RunnerReportQuery, now time.Time) (
 	if err != nil {
 		return nil, nil // The requested window starts after this publication.
 	}
+	observeRunnerReportReadPath(db.Statement.Context, "published")
 	r := &RunnerReport{Query: q, Window: w, ObservedAt: pub.ObservedAt.UTC()}
 	if q.isOverview() || q.IncludeSpecUsage {
 		return readPublishedOverviewOrSpecs(db, r, pub.Slot)
