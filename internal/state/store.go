@@ -776,6 +776,7 @@ type TerminalStore interface {
 
 type Store interface {
 	SaveReportSnapshot(context.Context, string, time.Time, int, []byte) error
+	SaveSpecReportSnapshot(context.Context, string, string, time.Time, int, []byte) (SpecReportSnapshot, error)
 	LoadReportSnapshot(context.Context, string, time.Time) ([]byte, error)
 	RecordJobTimes(context.Context, string, int64, JobTimeObservation) error
 	ReadRunnerReport(context.Context, RunnerReportQuery, time.Time) (*RunnerReport, error)

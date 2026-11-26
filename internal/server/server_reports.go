@@ -47,12 +47,20 @@ type sharedSpecSnapshot struct {
 	Created       time.Time
 }
 
-func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) error {
+func (s *Server) saveSpecSnapshot(ctx context.Context, e cachedRunnerReport) (cachedRunnerReport, error) {
 	payload, err := json.Marshal(sharedSpecSnapshot{e.report, e.report.SpecItems, e.report.SpecSummary, e.distributions, e.created})
 	if err != nil {
-		return err
+		return cachedRunnerReport{}, err
 	}
-	return s.store.SaveReportSnapshot(ctx, e.id, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+	saved, err := s.store.SaveSpecReportSnapshot(ctx, e.id, e.key, e.created.Add(reportRetention), e.report.RetainedEntries()-len(e.report.Rows), payload)
+	if err != nil {
+		return cachedRunnerReport{}, err
+	}
+	if saved.ReusedPayload != nil {
+		return decodeSpecSnapshot(saved.ID, saved.ReusedPayload)
+	}
+	e.id = saved.ID
+	return e, nil
 }
 
 func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id string) (cachedRunnerReport, bool) {
@@ -63,21 +71,29 @@ func (s *Server) restoreSpecSnapshot(w http.ResponseWriter, r *http.Request, id 
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
 		return cachedRunnerReport{}, false
 	}
-	var saved sharedSpecSnapshot
+	var entry cachedRunnerReport
 	if err == nil {
-		err = json.Unmarshal(raw, &saved)
-	}
-	if err == nil && saved.Report == nil {
-		err = errors.New("invalid stored spec snapshot")
+		entry, err = decodeSpecSnapshot(id, raw)
 	}
 	if err != nil {
 		s.writeReportError(w, r, err)
 		return cachedRunnerReport{}, false
 	}
+	return entry, true
+}
+
+func decodeSpecSnapshot(id string, payload []byte) (cachedRunnerReport, error) {
+	var saved sharedSpecSnapshot
+	if err := json.Unmarshal(payload, &saved); err != nil {
+		return cachedRunnerReport{}, err
+	}
+	if saved.Report == nil {
+		return cachedRunnerReport{}, errors.New("invalid stored spec snapshot")
+	}
 	report := saved.Report
 	report.Query.IncludeSpecUsage = true
 	report.SpecItems, report.SpecSummary = saved.Items, saved.Summary
-	return cachedRunnerReport{id: id, key: reportQueryKey(report.Query), created: saved.Created, report: report, distributions: saved.Distributions}, true
+	return cachedRunnerReport{id: id, key: reportQueryKey(report.Query), created: saved.Created, report: report, distributions: saved.Distributions}, nil
 }
 
 type runnerReportCache struct {
@@ -276,7 +292,8 @@ func (s *Server) loadRunnerReport(ctx context.Context, q state.RunnerReportQuery
 			}
 		}
 		if q.IncludeSpecUsage {
-			if err := s.saveSpecSnapshot(queryCtx, entry); err != nil {
+			entry, err = s.saveSpecSnapshot(queryCtx, entry)
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -389,6 +406,11 @@ func (s *Server) handleRunnerReport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeReportError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, state.ErrNotFound) {
 		writeError(w, http.StatusGone, "report snapshot expired; refresh the report")
+		return
+	}
+	if errors.Is(err, state.ErrSpecSnapshotCapacity) {
+		w.Header().Set("Retry-After", "30")
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	if errors.Is(err, state.ErrReportTooLarge) || errors.Is(err, state.ErrReportTooManyGroups) || errors.Is(err, state.ErrReportSnapshotTooLarge) {
