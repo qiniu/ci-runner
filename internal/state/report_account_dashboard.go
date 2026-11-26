@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -47,7 +49,7 @@ func prepareAccountDashboard(db *gorm.DB, slot int, observed time.Time) error {
 	}
 	report := &RunnerReport{Query: q, Window: window, ObservedAt: observed}
 	entry := accountDefaultDashboard{Slot: slot}
-	err = aggregateAccountDashboard(db, report, slot)
+	err = aggregatePublishedDashboard(db, report, slot)
 	if err != nil && !errors.Is(err, ErrReportTooManyGroups) {
 		return err
 	}
@@ -100,10 +102,27 @@ func boundedDashboardPayload(value any) ([]byte, error) {
 	return data, err
 }
 
-func readAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
-	sameWindow := r.Query == defaultAccountQuery(r.ObservedAt) || r.Query.isDefaultEfficiency(r.ObservedAt)
+// Older workers serialized the common dashboard before normalizing duration
+// sums. Read those payloads at PostgreSQL's timestamp resolution as well.
+func normalizeDashboardDurations(totals *ReportTotals) {
+	for _, duration := range []*ReportDuration{&totals.Runtime, &totals.Startup, &totals.Creation, &totals.Cleanup, &totals.Completion} {
+		if duration.Seconds != math.Trunc(duration.Seconds) {
+			// The value came from a finite JSON number. Formatting before
+			// parsing avoids introducing another float rounding near a tie.
+			seconds := strconv.FormatFloat(duration.Seconds, 'f', postgresReportDurationDecimals, 64)
+			duration.Seconds, _ = strconv.ParseFloat(seconds, 64)
+		}
+	}
+}
+
+func readPublishedDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
+	q := r.Query
+	if q.isOverview() || q.IncludeSpecUsage {
+		q.IncludeAccountUsage, q.IncludeSpecUsage = true, false
+	}
+	sameWindow := q == defaultAccountQuery(r.ObservedAt) || q.isDefaultEfficiency(r.ObservedAt)
 	if !sameWindow && !r.Query.IncludeEfficiency {
-		return aggregateAccountDashboard(db, r, slot)
+		return aggregatePublishedDashboard(db, r, slot)
 	}
 	var entry accountDefaultDashboard
 	if err := db.Where("slot = ?", slot).Take(&entry).Error; err != nil {
@@ -113,7 +132,7 @@ func readAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 		if r.Query.IncludeEfficiency {
 			return nil // The caller uses the source query.
 		}
-		return aggregateAccountDashboard(db, r, slot)
+		return aggregatePublishedDashboard(db, r, slot)
 	}
 	var groups accountDashboardGroups
 	if r.Query.IncludeEfficiency {
@@ -131,13 +150,29 @@ func readAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 				return err
 			}
 			r.Efficiency = summary
-			return aggregateAccountDashboard(db, r, slot)
+			return aggregatePublishedDashboard(db, r, slot)
 		}
 		groups, r.Efficiency = published.accountDashboardGroups, published.Efficiency
 	} else if err := json.Unmarshal(entry.Payload, &groups); err != nil {
 		return err
 	}
+	normalizeDashboardDurations(&groups.Totals)
+	normalizeDashboardDurations(&groups.Previous)
+	for i := range groups.Trend {
+		normalizeDashboardDurations(&groups.Trend[i].ReportTotals)
+	}
+	for _, dimension := range groups.Groups {
+		for i := range dimension {
+			normalizeDashboardDurations(&dimension[i].ReportTotals)
+			if !r.Query.IncludeAccountUsage {
+				dimension[i].ReportActivity = nil
+			}
+		}
+	}
 	r.Totals, r.Previous = groups.Totals, groups.Previous
-	r.GroupTotals, r.Outcomes, r.Trend = groups.Groups, groups.Outcomes, groups.Trend
+	r.GroupTotals, r.Trend = groups.Groups, groups.Trend
+	if r.Query.IncludeAccountUsage {
+		r.Outcomes = groups.Outcomes
+	}
 	return nil
 }

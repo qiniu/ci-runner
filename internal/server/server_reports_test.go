@@ -232,8 +232,26 @@ func TestRunnerReportSpecRuntimeSortWithMissingSamples(t *testing.T) {
 func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 	dir := t.TempDir()
 	store := state.New(dir)
+	verifySpecSnapshotOnAnotherServer(t, store, state.New(dir), nil)
+}
+
+func TestPublishedAccountSpecSnapshotPostgres(t *testing.T) {
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
+		t.Skip("requires a dedicated PostgreSQL test database")
+	}
+	opts := state.Options{Backend: state.BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true}
+	verifySpecSnapshotOnAnotherServer(t, state.NewWithOptions(opts), state.NewWithOptions(opts), func() {
+		t.Helper()
+		if err := state.RefreshAccountReports(t.Context(), opts, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func verifySpecSnapshotOnAnotherServer(t *testing.T, store, peer state.Store, publish func()) {
+	t.Helper()
 	first := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
-	second := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	second := newTestServerWithoutLoops(t, peer, "http://example.test", &fakeSandbox{}, 10)
 	get := func(srv *Server, path string, want int) string {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -246,13 +264,27 @@ func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "another-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
 		t.Fatal(err)
 	}
+	if publish != nil {
+		_, _, err := store.CreateRequest(state.RunnerRequest{
+			ID: "published-spec-request", Source: "fixture", RepositoryFullName: "team/one",
+			ProfileName: "another-spec", ProfileSource: "global", CreatedAt: time.Now().UTC().Add(-time.Hour),
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish()
+	}
 	body := get(first, "/reports/spec-usage", http.StatusOK)
 	var dashboard struct {
 		Snapshot string
 		Query    state.RunnerReportQuery
+		Totals   state.ReportTotals
 	}
 	if err := json.Unmarshal([]byte(body), &dashboard); err != nil {
 		t.Fatal(err)
+	}
+	if publish != nil && dashboard.Totals.Requests != 1 {
+		t.Fatalf("published spec dashboard missed the fixture: %s", body)
 	}
 	page := "/reports/" + dashboard.Snapshot + "/specs?sort=runtime&limit=1&offset=1"
 	before := get(first, page, http.StatusOK)
@@ -265,6 +297,9 @@ func TestRunnerReportSpecSnapshotOnAnotherServer(t *testing.T) {
 	}
 	if _, err := store.UpsertProfile(state.RunnerProfile{Name: "new-spec", Labels: []string{"qiniu"}, TemplateID: "test", MaxConcurrency: 1}); err != nil {
 		t.Fatal(err)
+	}
+	if publish != nil {
+		publish()
 	}
 	q := url.Values{"from": {dashboard.Query.From}, "to": {dashboard.Query.To}, "timezone": {dashboard.Query.Timezone}, "grain": {dashboard.Query.Grain}, "snapshot": {dashboard.Snapshot}}
 	if got := get(second, "/reports/spec-usage?"+q.Encode(), http.StatusOK); got != body {

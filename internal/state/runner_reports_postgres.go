@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// PostgreSQL timestamps have microsecond resolution. Sum numeric seconds at
+// that resolution so rounding a Go duration to float64 cannot break a tie.
+const postgresReportDurationDecimals = 6
 
 var ErrReportTooManyGroups = errors.New("report exceeds 100000 aggregate groups; narrow the date range or filters")
 
@@ -155,7 +160,8 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 	var durations []string
 	for _, metric := range []string{"runtime", "startup", "creation", "cleanup", "completion"} {
 		// Match Go's time.Duration saturation for exceptionally long valid intervals.
-		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum(least(extract(epoch FROM "+metric+"), 9223372036.854775807)) FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
+		seconds := postgresReportSeconds("least(extract(epoch FROM " + metric + "), 9223372036.854775807)")
+		durations = append(durations, "count("+metric+") AS "+metric+"_samples, coalesce(sum("+seconds+") FILTER (WHERE "+metric+" IS NOT NULL), 0) AS "+metric+"_seconds")
 	}
 	statement := fmt.Sprintf(aggregates, dayField, partialResult) + strings.Join(durations, ", ") +
 		fmt.Sprintf(regroup, partialGroup, classify, resultField+activityFields) + sumReportColumns(additiveReportColumns(columns)) + rollups
@@ -196,23 +202,18 @@ func postgresAggregateReport(ctx context.Context, db, cohort *gorm.DB, q RunnerR
 			buckets[row.Bucket] = row.ReportTotals
 			continue
 		case "spec_repo", "spec_owner", "spec_trend", "spec_result":
-			if report.specGroups == nil {
-				report.specGroups = make(map[string]*specBreakdown)
-			}
 			id := reportSpecKey(reportSpecIdentity{row.SpecSource, row.ScopeType, row.ScopeID, row.SpecName})
-			if report.specGroups[id] == nil {
-				report.specGroups[id] = &specBreakdown{}
-			}
-			group := ReportSpecSegment{Key: row.Repo, Label: row.Repo, Started: row.Started, Requests: row.Requests, Runtime: row.Runtime}
 			switch row.Dimension {
+			case "spec_repo":
+				key, label = row.Repo, row.Repo
 			case "spec_owner":
-				group.Key, group.Label = row.OwnerKey, row.OwnerLabel
+				key, label = row.OwnerKey, row.OwnerLabel
 			case "spec_trend":
-				group.Key, group.Label = row.Bucket, row.Bucket
+				key, label = row.Bucket, row.Bucket
 			case "spec_result":
-				group.Key = row.JobResult
+				key = row.JobResult
 			}
-			report.specGroups[id].addGroup(row.Dimension, group)
+			report.addSpecGroup(id, row.Dimension, key, label, row.ReportTotals)
 			continue
 		case "spec":
 			id := reportSpecIdentity{row.SpecSource, row.ScopeType, row.ScopeID, row.SpecName}
@@ -261,10 +262,18 @@ func additiveReportColumns(cols []string) []string {
 	return additive
 }
 
+func postgresReportSeconds(value string) string {
+	return "round(" + value + ", " + strconv.Itoa(postgresReportDurationDecimals) + ")"
+}
+
 func sumReportColumns(cols []string) string {
 	sums := make([]string, 0, len(cols))
 	for _, c := range cols {
-		sums = append(sums, "sum("+c+") AS "+c)
+		value := c
+		if strings.HasSuffix(c, "_seconds") {
+			value = postgresReportSeconds(c)
+		}
+		sums = append(sums, "sum("+value+") AS "+c)
 	}
 	return strings.Join(sums, ", ")
 }

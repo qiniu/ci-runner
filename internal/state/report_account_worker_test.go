@@ -485,6 +485,21 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 
 // The released executable reads and updates only its original v2 columns.
 // Running it here also catches differences from a simulated legacy writer.
+func releasedAccountRefresh(t *testing.T, opts Options, legacy string) func() {
+	t.Helper()
+	config := filepath.Join(t.TempDir(), "runnerd.yaml")
+	if err := os.WriteFile(config, []byte(fmt.Sprintf("database:\n  backend: postgres\n  dsn: %q\n", opts.DatabaseDSN)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), legacy, "--config", config, "--account-reports=refresh").CombinedOutput()
+		if err != nil {
+			t.Fatalf("released worker: %v\n%s", err, out)
+		}
+	}
+}
+
 func TestPublishedAccountRollbackPostgres(t *testing.T) {
 	legacy := os.Getenv("RUNNERD_TEST_ACCOUNT_V2_BINARY")
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" || legacy == "" {
@@ -497,17 +512,7 @@ func TestPublishedAccountRollbackPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTestDB(t, db)
-	config := filepath.Join(t.TempDir(), "runnerd.yaml")
-	if err := os.WriteFile(config, []byte(fmt.Sprintf("database:\n  backend: postgres\n  dsn: %q\n", opts.DatabaseDSN)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	oldRefresh := func() {
-		t.Helper()
-		out, err := exec.CommandContext(t.Context(), legacy, "--config", config, "--account-reports=refresh").CombinedOutput()
-		if err != nil {
-			t.Fatalf("released worker: %v\n%s", err, out)
-		}
-	}
+	oldRefresh := releasedAccountRefresh(t, opts, legacy)
 	add := func(id string) {
 		t.Helper()
 		at := time.Now().UTC().Add(-24 * time.Hour)
@@ -523,9 +528,23 @@ func TestPublishedAccountRollbackPostgres(t *testing.T) {
 		}
 		return pub
 	}
+	checkViews := func(pub accountReportPublication, requests int64) {
+		t.Helper()
+		q := defaultAccountQuery(pub.ObservedAt)
+		q.IncludeAccountUsage = false
+		for _, specUsage := range []bool{false, true} {
+			q.IncludeSpecUsage = specUsage
+			got, err := store.ReadRunnerReport(t.Context(), q, pub.ObservedAt)
+			if err != nil || !got.ObservedAt.Equal(pub.ObservedAt) || got.Totals.Requests != requests {
+				t.Fatalf("overview/spec reader lost old writer publication: %v", err)
+			}
+			comparePublishedView(t, store, got)
+		}
+	}
 	add("first")
 	oldRefresh()
 	first := publication()
+	checkViews(first, 1)
 	for range 2 {
 		if err := RefreshAccountReports(t.Context(), opts, false); err != nil {
 			t.Fatal(err)
@@ -565,6 +584,7 @@ func TestPublishedAccountRollbackPostgres(t *testing.T) {
 	if err != nil || !account.ObservedAt.Equal(resumed.ObservedAt) || account.Totals.Requests != 3 {
 		t.Fatalf("rollback account publication: %v", err)
 	}
+	checkViews(resumed, 3)
 	q.IncludeAccountUsage, q.IncludeEfficiency = false, true
 	if r, err := readPublishedUsageReport(db, q, time.Now()); err != nil || r != nil {
 		t.Fatalf("old writer left stale efficiency data: %v", err)
@@ -748,6 +768,21 @@ func verifyPublishedAccountScale(t *testing.T, live, published *DBStore, opts Op
 	if err != nil || shifted.Totals != shiftWant.Totals || shifted.Previous != shiftWant.Previous || !reflect.DeepEqual(shifted.Efficiency, shiftWant.Efficiency) ||
 		!reflect.DeepEqual(shifted.Trend, shiftWant.Trend) || !reflect.DeepEqual(shifted.ChartDistributions(), shiftWant.ChartDistributions()) {
 		t.Fatalf("large cross-midnight reconciliation: %v", err)
+	}
+	for _, specs := range []bool{false, true} {
+		q := defaultAccountQuery(got.ObservedAt)
+		q.IncludeAccountUsage, q.IncludeSpecUsage = false, specs
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		view, err := published.ReadRunnerReport(ctx, q, got.ObservedAt)
+		cancel()
+		if err != nil || !view.ObservedAt.Equal(got.ObservedAt) || view.Rows != nil {
+			t.Fatalf("large published view (specs=%t): %v", specs, err)
+		}
+		t.Logf("published view (specs=%t): %d current + %d previous in %s", specs, view.Totals.Requests, view.Previous.Requests, time.Since(start))
+		start = time.Now()
+		comparePublishedView(t, live, view)
+		t.Logf("source reconciliation (specs=%t) completed in %s", specs, time.Since(start))
 	}
 	start = time.Now()
 	if err := RefreshAccountReports(t.Context(), opts, false); err != nil {

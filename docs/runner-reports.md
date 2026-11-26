@@ -180,12 +180,14 @@ including runtime sample counts. A missing spec name is labeled Unknown while
 preserving its saved identity. The request detail itself is live and may have
 changed since the report snapshot.
 
-For spec dashboard snapshots, the specs endpoint includes unused catalog entries
-and historical groups. The PostgreSQL aggregate path computes spec-by-repository,
-owner, date and Job outcome groups in the bounded report query. Average times
-remain available from sums and valid sample counts. Exact P95 needs individual
-samples and is unavailable on aggregate-only snapshots. The standard overview
-keeps its original grouping sets.
+On PostgreSQL, overview and spec usage read a compatible report publication at
+its observation time. Small selections read the normalized request projection.
+Larger selections use published aggregates and facts, including spec-by-repository,
+owner, date, and Job outcome groups. The specs endpoint includes unused entries
+from the catalog captured when the dashboard opens, alongside historical
+identities from the publication. Mean durations use sums and valid sample counts.
+Exact P95 remains available for row-backed snapshots. A missing compatible
+publication uses the original query. [Background report maintenance](account-report-worker.md)
 
 - Detail snapshots retain up to 100,000 requests across the current and prior
   cohorts combined. For larger PostgreSQL cohorts, the overview and all three
