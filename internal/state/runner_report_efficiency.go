@@ -13,14 +13,19 @@ import (
 // Duration evidence is copied only into efficiency snapshots. A nil duration
 // remains distinguishable from an observed zero, including after restoration.
 type EfficiencyEvidence struct {
-	Startup         *float64 `json:"startup,omitempty"`
-	Creation        *float64 `json:"creation,omitempty"`
-	Cleanup         *float64 `json:"cleanup,omitempty"`
-	FailureClass    string   `json:"failure_class,omitempty"`
-	Stage           string   `json:"stage,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
-	Termination     *string  `json:"termination,omitempty"`
-	AdmissionBucket string   `json:"admission_bucket,omitempty"`
+	Startup  *float64 `json:"startup,omitempty"`
+	Creation *float64 `json:"creation,omitempty"`
+	Cleanup  *float64 `json:"cleanup,omitempty"`
+	EfficiencyAnomaly
+	AdmissionBucket string `json:"admission_bucket,omitempty"`
+}
+
+// EfficiencyAnomaly is the per-request classification used by summaries and drilldowns.
+type EfficiencyAnomaly struct {
+	FailureClass string  `json:"failure_class,omitempty"`
+	Stage        string  `json:"stage,omitempty"`
+	Reason       string  `json:"reason,omitempty"`
+	Termination  *string `json:"termination,omitempty"`
 }
 
 type EfficiencyGroup struct {
@@ -164,11 +169,20 @@ func readPostgresEfficiency(db *gorm.DB, r *RunnerReport) error {
 		    WHEN r.running_at BETWEEN timestamptz '0002-01-01 UTC' AND ? THEN 'started' ELSE 'before_start' END END AS class,
 		CASE WHEN r.status = 'failed' AND r.failure_stage = 'admission' THEN
 		    date_trunc(?, timezone(make_interval(secs => ?), r.queued_at))::date END AS day`, r.ObservedAt, r.Query.Grain, postgresTrendOffset(r.Window))
+	summary := &EfficiencySummary{StartupP95: p95.Startup, CreationP95: p95.Creation, CleanupP95: p95.Cleanup}
+	if err := readEfficiencyGroups(db, terminal, summary); err != nil {
+		return err
+	}
+	r.Efficiency = summary
+	return nil
+}
+
+func readEfficiencyGroups(db, terminal *gorm.DB, summary *EfficiencySummary) error {
 	var groups []struct {
 		EfficiencyGroup
 		Bucket string
 	}
-	err = db.Raw(`WITH partials AS (
+	err := db.Raw(`WITH partials AS (
 		SELECT class, stage, reason, termination, day, count(*) AS n
 		FROM (?) terminal GROUP BY class, stage, reason, termination, day
 	)
@@ -187,7 +201,7 @@ func readPostgresEfficiency(db *gorm.DB, r *RunnerReport) error {
 	if len(groups) > ReportMaxRows {
 		return ErrReportTooManyGroups
 	}
-	summary := &EfficiencySummary{StartupP95: p95.Startup, CreationP95: p95.Creation, CleanupP95: p95.Cleanup, Groups: []EfficiencyGroup{}}
+	summary.Groups = []EfficiencyGroup{}
 	for _, g := range groups {
 		if g.Dimension == "admission_bucket_reason" {
 			summary.addRejections(g.Key, g.Bucket, g.Count)
@@ -195,7 +209,6 @@ func readPostgresEfficiency(db *gorm.DB, r *RunnerReport) error {
 			summary.Groups = append(summary.Groups, g.EfficiencyGroup)
 		}
 	}
-	r.Efficiency = summary
 	return nil
 }
 

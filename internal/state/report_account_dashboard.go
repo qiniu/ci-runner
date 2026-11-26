@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
@@ -25,6 +26,14 @@ type accountDashboardGroups struct {
 	Trend            []ReportBucket
 }
 
+// An account-only worker replaces the whole JSON payload, removing this
+// capability marker even when it reuses a slot populated by a newer worker.
+type efficiencyDashboardGroups struct {
+	accountDashboardGroups
+	EfficiencyDefinition int
+	Efficiency           *EfficiencySummary
+}
+
 func defaultAccountQuery(at time.Time) RunnerReportQuery {
 	from, to := DefaultReportDates(at, time.UTC)
 	return RunnerReportQuery{IncludeAccountUsage: true, Timezone: "UTC", Grain: "day", From: from, To: to}
@@ -42,33 +51,93 @@ func prepareAccountDashboard(db *gorm.DB, slot int, observed time.Time) error {
 	if err != nil && !errors.Is(err, ErrReportTooManyGroups) {
 		return err
 	}
-	if err == nil && report.RetainedEntries() <= ReportSnapshotEntries {
-		data, err := json.Marshal(accountDashboardGroups{Totals: report.Totals, Previous: report.Previous, Groups: report.GroupTotals, Outcomes: report.Outcomes, Trend: report.Trend})
+	save := func(tx *gorm.DB, payload []byte) error {
+		entry.Payload = payload
+		return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&entry).Error
+	}
+	if err != nil || report.RetainedEntries() > ReportSnapshotEntries {
+		return save(db, nil)
+	}
+	groups := accountDashboardGroups{Totals: report.Totals, Previous: report.Previous, Groups: report.GroupTotals, Outcomes: report.Outcomes, Trend: report.Trend}
+	// PostgreSQL query and write failures abort the current transaction.
+	// Roll back just the optional summary before publishing the account groups.
+	err = db.Transaction(func(tx *gorm.DB) error {
+		summary, err := publishedEfficiencySummary(tx, slot, window)
 		if err != nil {
 			return err
 		}
-		if len(data) <= maxReportSnapshotBytes {
-			entry.Payload = data
+		report.Efficiency = summary
+		if report.RetainedEntries() > ReportSnapshotEntries {
+			return ErrReportTooManyGroups
 		}
+		payload, err := boundedDashboardPayload(efficiencyDashboardGroups{accountDashboardGroups: groups, EfficiencyDefinition: efficiencyReportDefinition, Efficiency: summary})
+		if err != nil {
+			return err
+		}
+		if len(payload) == 0 {
+			return ErrReportTooManyGroups
+		}
+		return save(tx, payload)
+	})
+	if err == nil {
+		return nil
 	}
-	return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&entry).Error
+	if !errors.Is(err, ErrReportTooManyGroups) {
+		slog.Warn("efficiency summary refresh failed", "slot", slot, "error", err)
+	}
+	payload, err := boundedDashboardPayload(groups)
+	if err != nil {
+		return err
+	}
+	return save(db, payload)
+}
+
+func boundedDashboardPayload(value any) ([]byte, error) {
+	data, err := json.Marshal(value)
+	if len(data) > maxReportSnapshotBytes {
+		return nil, nil
+	}
+	return data, err
 }
 
 func readAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
-	if r.Query == defaultAccountQuery(r.ObservedAt) {
-		var entry accountDefaultDashboard
-		if err := db.Where("slot = ?", slot).Take(&entry).Error; err != nil {
+	sameWindow := r.Query == defaultAccountQuery(r.ObservedAt) || r.Query.isDefaultEfficiency(r.ObservedAt)
+	if !sameWindow && !r.Query.IncludeEfficiency {
+		return aggregateAccountDashboard(db, r, slot)
+	}
+	var entry accountDefaultDashboard
+	if err := db.Where("slot = ?", slot).Take(&entry).Error; err != nil {
+		return err
+	}
+	if len(entry.Payload) == 0 {
+		if r.Query.IncludeEfficiency {
+			return nil // The caller uses the source query.
+		}
+		return aggregateAccountDashboard(db, r, slot)
+	}
+	var groups accountDashboardGroups
+	if r.Query.IncludeEfficiency {
+		var published efficiencyDashboardGroups
+		if err := json.Unmarshal(entry.Payload, &published); err != nil {
 			return err
 		}
-		if len(entry.Payload) > 0 {
-			var groups accountDashboardGroups
-			if err := json.Unmarshal(entry.Payload, &groups); err != nil {
-				return err
-			}
-			r.Totals, r.Previous = groups.Totals, groups.Previous
-			r.GroupTotals, r.Outcomes, r.Trend = groups.Groups, groups.Outcomes, groups.Trend
+		if published.EfficiencyDefinition != efficiencyReportDefinition || published.Efficiency == nil {
 			return nil
 		}
+		if !sameWindow {
+			// Midnight moved the requested cohort since this slot was published.
+			summary, err := publishedEfficiencySummary(db, slot, r.Window)
+			if err != nil {
+				return err
+			}
+			r.Efficiency = summary
+			return aggregateAccountDashboard(db, r, slot)
+		}
+		groups, r.Efficiency = published.accountDashboardGroups, published.Efficiency
+	} else if err := json.Unmarshal(entry.Payload, &groups); err != nil {
+		return err
 	}
-	return aggregateAccountDashboard(db, r, slot)
+	r.Totals, r.Previous = groups.Totals, groups.Previous
+	r.GroupTotals, r.Outcomes, r.Trend = groups.Groups, groups.Outcomes, groups.Trend
+	return nil
 }
