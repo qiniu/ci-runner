@@ -210,7 +210,7 @@ func (c *runnerReportCache) put(e cachedRunnerReport) {
 	n := e.report.RetainedEntries()
 	kept = append(kept, e)
 	for _, old := range c.entries {
-		if time.Since(old.created) >= reportRetention || len(kept) >= reportCacheEntries || n+old.report.RetainedEntries() > reportCacheRows {
+		if old.id == e.id || time.Since(old.created) >= reportRetention || len(kept) >= reportCacheEntries || n+old.report.RetainedEntries() > reportCacheRows {
 			continue
 		}
 		kept = append(kept, old)

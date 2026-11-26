@@ -330,12 +330,47 @@ func TestPublishedAccountSpecSnapshotRetentionPostgres(t *testing.T) {
 		t.Fatal("restored second page changed after capacity was reached")
 	}
 
-	// Advancing the stored deadline avoids sleeping for the HTTP snapshot TTL.
 	db, err := sql.Open("pgx", opts.DatabaseDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	// Age the shared snapshot beyond local freshness without expiring it.
+	payload, err := store.LoadReportSnapshot(t.Context(), snapshot.Snapshot, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aged sharedSpecSnapshot
+	if err := json.Unmarshal(payload, &aged); err != nil {
+		t.Fatal(err)
+	}
+	aged.Created = time.Now().Add(-reportFreshness - time.Second)
+	agedPayload, err := json.Marshal(aged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agedExpiry := aged.Created.Add(reportRetention)
+	if _, err := db.ExecContext(t.Context(), `UPDATE report_spec_snapshots SET expires_at = $1, payload = $2 WHERE id = $3`, agedExpiry, agedPayload, snapshot.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	reader := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+	var overview struct{ Snapshot string }
+	if err := json.Unmarshal(get(reader, "/reports/overview", http.StatusOK).Body.Bytes(), &overview); err != nil || overview.Snapshot == "" {
+		t.Fatalf("invalid overview snapshot: %v", err)
+	}
+	for range reportCacheEntries {
+		var reused struct {
+			Snapshot string
+			Expires  time.Time `json:"expires_at"`
+		}
+		if err := json.Unmarshal(get(reader, "/reports/spec-usage", http.StatusOK).Body.Bytes(), &reused); err != nil || reused.Snapshot != snapshot.Snapshot || !reused.Expires.Equal(agedExpiry) {
+			t.Fatalf("reuse changed the snapshot or its expiry: %+v, %v", reused, err)
+		}
+	}
+	get(reader, "/reports/overview?snapshot="+overview.Snapshot, http.StatusOK)
+	get(reader, "/reports/"+overview.Snapshot+"/groups?dimension=spec", http.StatusOK)
+
+	// Advance the deadline without sleeping for the HTTP snapshot TTL.
 	if _, err := db.ExecContext(t.Context(), `UPDATE report_spec_snapshots SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, snapshot.Snapshot); err != nil {
 		t.Fatal(err)
 	}
