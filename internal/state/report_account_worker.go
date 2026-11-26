@@ -121,7 +121,19 @@ func accountPublicationForRefresh(tx *gorm.DB, scheduled bool) (*accountReportPu
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
-	return &pub, err
+	if err != nil {
+		return nil, err
+	}
+	// A released account-only writer can resume this epoch and ignores these
+	// nullable columns. Migrate under the existing writer lock before scanning.
+	for _, field := range []string{"FailureClass", "Stage", "Reason", "Termination", "EfficiencyFingerprint"} {
+		if !tx.Migrator().HasColumn(&accountFact{}, field) {
+			if err := tx.Migrator().AddColumn(&accountFact{}, field); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &pub, nil
 }
 
 // Batches commit independently so a replacement worker can resume them. The
@@ -271,11 +283,18 @@ func writeChangedAccountFacts(src *gorm.DB, writer accountBatchWriter, slot int,
 	// PostgreSQL's binary record encoding preserves field types, nulls and exact
 	// timestamps independently of session timezone. Hash the shared projection:
 	// versionless corrections and owner changes count, unrelated lease writes do not.
-	const signature = "sha256(record_send(p))"
-	query := src.Table("(?) AS p", base.Select(reportProjectionFields)).
+	// Preserve the released writer's exact account hash so alternating writers
+	// do not rewrite the whole slot. The independent anomaly hash also tracks
+	// when a future running_at becomes evidence of a started job.
+	projection := base.Joins("CROSS JOIN LATERAL (SELECT "+reportProjectionFields+") AS a").
+		Select(`a.*, `+efficiencyExtraFields+`, sha256(record_send(a)) AS fingerprint,
+			sha256(record_send(ROW(?::integer, a.status, a.failure_stage, a.running_at, `+efficiencyExtraFields+
+			`, a.running_at <= ?))) AS efficiency_fingerprint`, efficiencyReportDefinition, observed)
+	query := src.Table("(?) AS p", projection).
 		Joins("LEFT JOIN report_account_facts AS f ON f.slot = ? AND f.id = p.id", slot).
-		Where("f.epoch IS DISTINCT FROM ? OR f.fingerprint IS DISTINCT FROM "+signature+" OR f.recheck_at <= ?", epoch, observed).
-		Select("p.*, " + signature + " AS fingerprint, f.queued_at AS old_queue")
+		Where(`f.epoch IS DISTINCT FROM ? OR f.fingerprint IS DISTINCT FROM p.fingerprint
+			OR f.efficiency_fingerprint IS DISTINCT FROM p.efficiency_fingerprint OR f.recheck_at <= ?`, epoch, observed).
+		Select("p.*, f.queued_at AS old_queue")
 
 	rows, err := query.Rows()
 	if err != nil {

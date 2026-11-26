@@ -11,6 +11,9 @@ import (
 // from source before publishing a generation with this definition.
 const accountReportDefinition = 2
 
+// Version the optional efficiency projection independently of the account writer fence.
+const efficiencyReportDefinition = 1
+
 type accountReportPublication struct {
 	Definition        int
 	PendingDefinition int
@@ -35,15 +38,17 @@ type accountDimensions struct {
 }
 
 type accountFact struct {
-	Slot        int       `gorm:"primaryKey;autoIncrement:false;index:idx_report_fact_queue,priority:1"`
-	ID          string    `gorm:"primaryKey"`
-	QueuedAt    time.Time `gorm:"index:idx_report_fact_queue,priority:2"`
-	Status      string
-	Epoch       int64
-	Fingerprint []byte
-	RecheckAt   *time.Time
-	Dimensions  accountDimensions `gorm:"embedded"`
-	Totals      ReportTotals      `gorm:"embedded"`
+	Slot                  int       `gorm:"primaryKey;autoIncrement:false;index:idx_report_fact_queue,priority:1"`
+	ID                    string    `gorm:"primaryKey"`
+	QueuedAt              time.Time `gorm:"index:idx_report_fact_queue,priority:2"`
+	Status                string
+	Epoch                 int64
+	Fingerprint           []byte
+	EfficiencyFingerprint []byte
+	RecheckAt             *time.Time
+	Dimensions            accountDimensions `gorm:"embedded"`
+	Totals                ReportTotals      `gorm:"embedded"`
+	Anomaly               EfficiencyAnomaly `gorm:"embedded"`
 }
 
 func (accountFact) TableName() string { return "report_account_facts" }
@@ -66,9 +71,10 @@ type accountDirtyDay struct {
 func (accountDirtyDay) TableName() string { return "report_account_dirty_days" }
 
 type factSource struct {
-	Projection  reportProjection `gorm:"embedded"`
-	Fingerprint []byte
-	OldQueue    *time.Time
+	Projection            reportProjection `gorm:"embedded"`
+	Fingerprint           []byte
+	EfficiencyFingerprint []byte
+	OldQueue              *time.Time
 }
 
 func (s factSource) fact(slot int, observed time.Time) accountFact {
@@ -78,7 +84,7 @@ func (s factSource) fact(slot int, observed time.Time) accountFact {
 	a.add(row)
 	f := accountFact{
 		Slot: slot, ID: row.ID, QueuedAt: row.QueuedAt, Status: row.Status,
-		Fingerprint: s.Fingerprint, Totals: a.totals(),
+		Fingerprint: s.Fingerprint, EfficiencyFingerprint: s.EfficiencyFingerprint, Totals: a.totals(), Anomaly: efficiencyEvidence(p, row).EfficiencyAnomaly,
 		Dimensions: accountDimensions{Owner: row.Owner, OwnerLabel: row.OwnerLabel, Repository: row.Repository, Spec: row.Spec, SpecLabel: row.SpecLabel, JobResult: row.JobResult},
 	}
 	for _, t := range []*time.Time{p.CreatingAt, p.RunningAt, p.StoppingAt, p.CompletedAt, p.FailedAt, p.GitHubJobObservedAt} {

@@ -189,8 +189,15 @@ jobs:
       - name: Verify unknown-creation resolution and cleanup evidence on SQL backends
         run: go test -race ./internal/state -run '^Test(UnknownCreationResolution|RunnerCleanupEvent)SQLBackends$' -count=1 -v
 
-      - name: Verify automatic account report publication on PostgreSQL
-        run: go test -p 1 ./internal/state ./internal/server -run '^TestPublishedAccount' -count=1 -v
+      - name: Verify report publication and rollback to the released account worker
+        run: |
+          account_v2=0d48a0b1193aacfe00af19e94af9f53f2b0db2d8
+          git fetch --depth=1 origin "$account_v2"
+          mkdir "$RUNNER_TEMP/account-v2"
+          git archive "$account_v2" | tar -x -C "$RUNNER_TEMP/account-v2"
+          export RUNNERD_TEST_ACCOUNT_V2_BINARY="$RUNNER_TEMP/runnerd-account-v2"
+          (cd "$RUNNER_TEMP/account-v2" && go build -tags development -o "$RUNNERD_TEST_ACCOUNT_V2_BINARY" ./cmd/runnerd)
+          go test -p 1 ./internal/state ./internal/server -run '^TestPublishedAccount' -count=1 -v
 
       - name: Verify queued lease handoff, capacity and spec changes across two runnerd processes
         run: |

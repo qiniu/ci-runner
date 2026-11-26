@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -297,6 +298,7 @@ func TestPublishedAccountHTTPPostgres(t *testing.T) {
 		}
 	}
 	verifyAccountPagesAfterRestart(t, state.NewWithOptions(opts), state.NewWithOptions(opts), publish)
+	verifyEfficiencySnapshotAndBacklog(t, state.NewWithOptions(opts), state.NewWithOptions(opts), "/reports/efficiency", publish)
 	if os.Getenv("RUNNERD_REPORT_SCALE_TEST") == "1" {
 		t.Run("default_30_days", func(t *testing.T) { verifyPublishedAccountHTTPScale(t, opts) })
 	}
@@ -352,9 +354,22 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 	// Fixed daily timestamps keep the default current/prior cohorts comparable
 	// across the two independently observed HTTP requests.
 	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -59)
-	_, err = pool.ExecContext(t.Context(), `INSERT INTO runner_requests(id,runner_name,source,labels_json,status,repository_full_name,profile_source,profile_name,github_installation_id,queued_at,running_at,completed_at,updated_at)
-	SELECT id,id,'http-fixture','[]','completed','repo-'||(i%161),'global','spec-'||(i%4),1+i%9,at,at,at+interval '1 second',at
-	FROM (SELECT i,'http-scale-'||i AS id,$1::timestamptz + (i%60)*interval '24 hours' AS at FROM generate_series(1,510000) i) f`, start)
+	_, err = pool.ExecContext(t.Context(), `WITH fixture AS (
+		SELECT i,'http-scale-'||i AS id,$1::timestamptz + (i%60)*interval '24 hours' AS at,
+			(i/60)%10 AS kind,
+			CASE WHEN i%60=59 THEN interval '0' ELSE ((i/60)%100)*interval '1 second' END AS duration
+		FROM generate_series(1,510000) i)
+		INSERT INTO runner_requests(id,runner_name,source,labels_json,status,repository_full_name,profile_source,profile_name,
+			github_installation_id,queued_at,creating_at,running_at,stopping_at,completed_at,failed_at,
+			failure_stage,failure_reason,termination_source,updated_at)
+		SELECT id,id,'http-fixture','[]',CASE WHEN kind<3 THEN 'failed' ELSE 'completed' END,
+			'repo-'||(i%161),'global','spec-'||(i%4),1+i%9,at,
+			CASE WHEN kind>0 THEN at+duration END, CASE WHEN kind>=2 THEN at+2*duration END,
+			CASE WHEN kind>=2 THEN at+3*duration END, CASE WHEN kind>=3 THEN at+4*duration END,
+			CASE WHEN kind<3 THEN at+4*duration END,
+			CASE kind WHEN 0 THEN 'admission' WHEN 1 THEN 'creating' WHEN 2 THEN 'runner' END,
+			CASE kind WHEN 0 THEN 'labels' WHEN 1 THEN 'setup' WHEN 2 THEN 'exit' END,
+			CASE WHEN kind>=2 THEN 'process_exit' END, at FROM fixture`, start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,15 +381,25 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 		Totals, Previous state.ReportTotals
 		Distributions    map[string]state.ReportDistribution
 		Trend            []state.ReportBucket
+		Efficiency       *state.EfficiencySummary
 	}
-	read := func(usePublished bool) result {
+	read := func(path string, usePublished bool) result {
 		t.Helper()
 		opts.MigrateOnStart = false
 		srv := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
 		w := httptest.NewRecorder()
 		begin := time.Now()
-		srv.ServeHTTP(w, adminRequest(http.MethodGet, "/reports/account-usage", nil))
+		srv.ServeHTTP(w, adminRequest(http.MethodGet, path, nil))
 		elapsed := time.Since(begin)
+		if path == "/reports/efficiency" && !usePublished && w.Code == http.StatusGatewayTimeout {
+			// The synchronous path can exceed the real HTTP deadline. The state
+			// scale test separately reconciles both reads at exactly the same instant.
+			t.Logf("source efficiency HTTP 504 in %s", elapsed)
+			return result{}
+		}
+		if usePublished && elapsed >= reportTimeout {
+			t.Fatalf("%s exceeded the published response deadline: %s", path, elapsed)
+		}
 		if w.Code != 200 {
 			t.Fatalf("HTTP %d: %s", w.Code, w.Body.String())
 		}
@@ -385,16 +410,41 @@ func verifyPublishedAccountHTTPScale(t *testing.T, opts state.Options) {
 		if r.Totals.Requests < 250000 || len(r.Distributions) != 3 {
 			t.Fatal("default dashboard missed the fixture")
 		}
-		t.Logf("default 30 days, published=%v, %d + %d requests, cold HTTP %d in %s", usePublished, r.Totals.Requests, r.Previous.Requests, w.Code, elapsed)
+		if path == "/reports/efficiency" {
+			var details struct {
+				Available bool `json:"request_detail_available"`
+				Snapshot  string
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &details); err != nil || r.Efficiency == nil || r.Efficiency.StartupP95 == nil || r.Efficiency.CleanupP95 == nil || r.Efficiency.CreationP95 == nil || len(r.Efficiency.Rejections["labels"]) == 0 || details.Available || !strings.HasPrefix(details.Snapshot, efficiencySnapshotPrefix) {
+				t.Fatal("large efficiency dashboard lost summary or aggregate-only snapshot")
+			}
+			t.Logf("P95 seconds startup/creation/cleanup: %g/%g/%g, samples %d/%d/%d", *r.Efficiency.StartupP95, *r.Efficiency.CreationP95, *r.Efficiency.CleanupP95, r.Totals.Startup.Samples, r.Totals.Creation.Samples, r.Totals.Cleanup.Samples)
+			peer := newTestServerWithoutLoops(t, state.NewWithOptions(opts), "http://example.test", &fakeSandbox{}, 10)
+			for _, test := range []struct {
+				suffix string
+				status int
+			}{{"/groups?dimension=repository&offset=20", 200}, {"/requests?offset=20", 422}} {
+				w := httptest.NewRecorder()
+				peer.ServeHTTP(w, adminRequest(http.MethodGet, "/reports/"+details.Snapshot+test.suffix, nil))
+				if w.Code != test.status {
+					t.Fatalf("restored efficiency %s: %d", test.suffix, w.Code)
+				}
+			}
+		}
+		t.Logf("%s default 30 days, published=%v, %d + %d requests, cold HTTP %d in %s", path, usePublished, r.Totals.Requests, r.Previous.Requests, w.Code, elapsed)
 		return r
 	}
-	old := read(false)
+	old := read("/reports/account-usage", false)
+	oldEfficiency := read("/reports/efficiency", false)
 	if err := state.RefreshAccountReports(t.Context(), opts, true); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if got := read(true); !reflect.DeepEqual(got, old) {
+		if got := read("/reports/account-usage", true); !reflect.DeepEqual(got, old) {
 			t.Fatal("published HTTP metrics differ from source")
+		}
+		if got := read("/reports/efficiency", true); oldEfficiency.Efficiency != nil && !reflect.DeepEqual(got, oldEfficiency) {
+			t.Fatal("published efficiency HTTP metrics differ from source")
 		}
 	}
 }
@@ -483,9 +533,13 @@ func verifyAccountPagesAfterRestart(t *testing.T, store, peer state.Store, publi
 
 func TestRunnerReportEfficiencySnapshotAndBacklog(t *testing.T) {
 	dir := t.TempDir()
-	store := state.New(dir)
+	verifyEfficiencySnapshotAndBacklog(t, state.New(dir), state.New(dir), "/reports/efficiency?repository=org%2Frepo", nil)
+}
+
+func verifyEfficiencySnapshotAndBacklog(t *testing.T, store, peerStore state.Store, path string, publish func()) {
+	t.Helper()
 	srv := newTestServerWithoutLoops(t, store, "http://example.test", &fakeSandbox{}, 10)
-	peer := newTestServerWithoutLoops(t, state.New(dir), "http://example.test", &fakeSandbox{}, 10)
+	peer := newTestServerWithoutLoops(t, peerStore, "http://example.test", &fakeSandbox{}, 10)
 	if _, _, err := store.CreateRequest(state.RunnerRequest{ID: "eff-sample", Source: "fixture", RepositoryFullName: "org/repo"}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +565,9 @@ func TestRunnerReportEfficiencySnapshotAndBacklog(t *testing.T) {
 		}
 		return w.Body.Bytes()
 	}
-	const path = "/reports/efficiency?repository=org%2Frepo"
+	if publish != nil {
+		publish()
+	}
 	var report struct {
 		Snapshot   string
 		Efficiency *state.EfficiencySummary
@@ -521,7 +577,17 @@ func TestRunnerReportEfficiencySnapshotAndBacklog(t *testing.T) {
 		t.Fatal("missing efficiency summary")
 	}
 	reject("rejected-after-snapshot")
-	if got := get(peer, path+"&snapshot="+report.Snapshot, true, 200); string(got) != string(body) {
+	if publish != nil {
+		publish()
+	}
+	pinned, err := url.Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := pinned.Query()
+	params.Set("snapshot", report.Snapshot)
+	pinned.RawQuery = params.Encode()
+	if got := get(peer, pinned.String(), true, 200); string(got) != string(body) {
 		t.Fatal("restored efficiency dashboard changed")
 	}
 	details := "/reports/" + report.Snapshot + "/requests?dimension=admission_reason&key=profile_labels_not_matched&limit=20"

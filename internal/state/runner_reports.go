@@ -312,6 +312,11 @@ const reportProjectionFields = `r.id, r.queued_at, r.repository_full_name, r.pro
  r.workflow_job_id, r.github_job_status, r.github_job_conclusion, r.github_job_observed_at,
  r.creating_at, r.running_at, r.stopping_at, r.completed_at, r.failed_at`
 
+const (
+	efficiencyExtraFields      = "r.failure_reason, r.termination_source"
+	efficiencyProjectionFields = reportProjectionFields + ", " + efficiencyExtraFields
+)
+
 type reportProjection struct {
 	ID                   string
 	QueuedAt             time.Time
@@ -497,8 +502,8 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 		defer db.Rollback()
 	}
-	if q.IncludeAccountUsage && db.Dialector.Name() == BackendPostgres {
-		if report, err := readPublishedAccounts(db, q, now); err != nil || report != nil {
+	if db.Dialector.Name() == BackendPostgres && (q.IncludeAccountUsage || q.isDefaultEfficiency(now)) {
+		if report, err := readPublishedUsageReport(db, q, now); err != nil || report != nil {
 			return report, err
 		}
 	}
@@ -588,7 +593,7 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 	}
 	fields := reportProjectionFields
 	if q.IncludeEfficiency {
-		fields += ", r.failure_reason, r.termination_source"
+		fields = efficiencyProjectionFields
 	}
 	rows, err := query.Select(fields).Rows()
 	if err != nil {

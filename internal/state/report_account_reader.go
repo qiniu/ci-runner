@@ -69,7 +69,7 @@ func accountPublicationExists(db *gorm.DB) (bool, error) {
 }
 
 // A nil report means the caller can serve the validated query from source.
-func readPublishedAccounts(db *gorm.DB, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
+func readPublishedUsageReport(db *gorm.DB, q RunnerReportQuery, now time.Time) (*RunnerReport, error) {
 	exists, err := accountPublicationExists(db)
 	if err != nil || !exists {
 		return nil, err
@@ -93,14 +93,30 @@ func readPublishedAccounts(db *gorm.DB, q RunnerReportQuery, now time.Time) (*Ru
 	if err := readAccountDashboard(db, r, pub.Slot); err != nil {
 		return nil, err
 	}
+	if q.IncludeEfficiency {
+		if r.Efficiency == nil {
+			return nil, nil
+		}
+		r.Outcomes = nil
+		for _, groups := range r.GroupTotals {
+			for i := range groups {
+				groups[i].ReportActivity = nil
+			}
+		}
+	}
 	detail := r.Totals.Requests+r.Previous.Requests <= ReportMaxRows
 	r.DetailAvailable = &detail
 	if detail {
 		r.Rows = []ReportRequest{}
 		// Only the projection exposed in the immutable request drilldown is needed.
-		err := accountFilters(db.Table("report_account_facts"), q, pub.Slot).
-			Select("id, queued_at, repository, owner, owner_label, spec, spec_label, status, job_result, CASE WHEN runtime_samples > 0 THEN runtime_seconds END AS runtime_seconds").
-			Where("queued_at >= ? AND queued_at < ?", w.Start.UTC(), w.End.UTC()).Order("queued_at DESC, id ASC").Scan(&r.Rows).Error
+		rows := accountFilters(db.Table("report_account_facts"), q, pub.Slot).
+			Where("queued_at >= ? AND queued_at < ?", w.Start.UTC(), w.End.UTC()).Order("queued_at DESC, id ASC")
+		const fields = "id, queued_at, repository, owner, owner_label, spec, spec_label, status, job_result, CASE WHEN runtime_samples > 0 THEN runtime_seconds END AS runtime_seconds"
+		if q.IncludeEfficiency {
+			err = readPublishedEfficiencyRows(rows, fields, r)
+		} else {
+			err = rows.Select(fields).Scan(&r.Rows).Error
+		}
 		if err != nil {
 			return nil, err
 		}

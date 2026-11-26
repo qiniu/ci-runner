@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -92,6 +94,9 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 		}
 		a, _ := json.Marshal(got.Rows)
 		b, _ := json.Marshal(want.Rows)
+		if !reflect.DeepEqual(got.Efficiency, want.Efficiency) {
+			t.Fatalf("published efficiency differs: %+v / %+v", got.Efficiency, want.Efficiency)
+		}
 		if string(a) != string(b) || !reflect.DeepEqual(got.Totals, want.Totals) || !reflect.DeepEqual(got.Trend, want.Trend) || !reflect.DeepEqual(got.Previous, want.Previous) || !reflect.DeepEqual(got.Outcomes, want.Outcomes) {
 			t.Fatalf("published report differs: totals %+v / %+v, previous %+v / %+v; rows %s / %s", got.Totals, want.Totals, got.Previous, want.Previous, a, b)
 		}
@@ -131,6 +136,147 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	if err != nil || !r.ObservedAt.Equal(later) {
 		t.Fatalf("expected live report beyond the last publication: %v", err)
 	}
+	eff := defaultAccountQuery(next.ObservedAt)
+	eff.IncludeAccountUsage, eff.IncludeEfficiency = false, true
+	gotEfficiency := check(eff)
+	if !gotEfficiency.ObservedAt.Equal(next.ObservedAt) || gotEfficiency.Efficiency.CleanupP95 == nil {
+		t.Fatal("default efficiency did not use the publication")
+	}
+	for _, group := range gotEfficiency.Efficiency.Groups {
+		rows, err := gotEfficiency.Requests(group.Dimension, group.Key)
+		if err != nil || int64(len(rows)) != group.Count {
+			t.Fatalf("efficiency drilldown %v: %d, %v", group, len(rows), err)
+		}
+	}
+	for _, change := range []func(*RunnerReportQuery){
+		func(q *RunnerReportQuery) { q.Repository = "team/one" },
+		func(q *RunnerReportQuery) { q.From = endDay.Format(time.DateOnly) },
+		func(q *RunnerReportQuery) { q.Grain = "week" },
+		func(q *RunnerReportQuery) { q.Timezone = "Asia/Shanghai" },
+	} {
+		filtered := eff
+		change(&filtered)
+		at := time.Now().UTC()
+		if r, err := published.ReadRunnerReport(t.Context(), filtered, at); err != nil || !r.ObservedAt.Equal(at) {
+			t.Fatalf("nondefault efficiency must use the source: %v", err)
+		}
+	}
+	t.Run("UTC midnight", func(t *testing.T) {
+		observed := next.ObservedAt.UTC()
+		midnight := observed.Truncate(24 * time.Hour).Add(24 * time.Hour)
+		// Change both the current and comparison denominators when midnight
+		// shifts the default window, and exercise exact inclusive boundaries.
+		start := midnight.AddDate(0, 0, -29)
+		for i, at := range []time.Time{start.Add(-time.Second), start, start.AddDate(0, 0, -30).Add(-time.Second), start.AddDate(0, 0, -30)} {
+			id := fmt.Sprintf("midnight-%d", i)
+			if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, QueuedAt: at, Status: StatusFailed, FailureStage: "admission", FailureReason: id, FailedAt: &at}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		refresh(false)
+		reportBefore := check(eff)
+		query := defaultAccountQuery(midnight)
+		query.IncludeAccountUsage, query.IncludeEfficiency = false, true
+		observed = reportBefore.ObservedAt
+		window, err := query.windowAt(observed, midnight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := readSourceReport(t.Context(), db, query, window, observed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, err := published.ReadRunnerReport(t.Context(), query, midnight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !report.ObservedAt.Equal(observed) || report.Totals == reportBefore.Totals || report.Totals != want.Totals ||
+			report.Previous != want.Previous || !reflect.DeepEqual(report.Efficiency, want.Efficiency) ||
+			!reflect.DeepEqual(report.Trend, want.Trend) || !reflect.DeepEqual(report.ChartDistributions(), want.ChartDistributions()) ||
+			len(report.Efficiency.Rejections["midnight-1"]) != 1 || len(report.Efficiency.Rejections["midnight-0"]) != 0 {
+			t.Fatal("shifted default dashboard differs from the source at the published observation time")
+		}
+		gotRows, err := json.Marshal(report.Rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantRows, err := json.Marshal(want.Rows)
+		if err != nil || string(gotRows) != string(wantRows) {
+			t.Fatal("shifted request details differ from source", err)
+		}
+		// Simulate a query with the business table unavailable.
+		err = db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec("ALTER TABLE runner_requests RENAME TO hidden_source").Error; err != nil {
+				return err
+			}
+			got, err := readPublishedUsageReport(tx, query, midnight)
+			if err != nil {
+				return err
+			}
+			if got == nil || got.Totals != want.Totals {
+				return errors.New("lost midnight publication")
+			}
+			return gorm.ErrInvalidTransaction
+		})
+		if !errors.Is(err, gorm.ErrInvalidTransaction) {
+			t.Fatal(err)
+		}
+	})
+	t.Run("efficiency failure preserves account refresh", func(t *testing.T) {
+		// The exact overload takes precedence over PostgreSQL's polymorphic
+		// percentile_disc in this isolated schema. Only the efficiency SELECT fails.
+		if err := db.Exec(`CREATE FUNCTION reject_sample(float8, float8) RETURNS float8 LANGUAGE plpgsql AS
+			$$ BEGIN RAISE EXCEPTION 'injected percentile failure'; END $$`).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec(`CREATE AGGREGATE percentile_disc(float8 ORDER BY float8)
+			(SFUNC=reject_sample, STYPE=float8)`).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		for i := range 2 {
+			before := check(defaultAccountQuery(time.Now().UTC()))
+			id := fmt.Sprintf("summary-failure-%d", i)
+			if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, QueuedAt: endDay, Status: StatusQueued}).Error; err != nil {
+				t.Fatal(err)
+			}
+			refresh(false)
+			after := check(defaultAccountQuery(time.Now().UTC()))
+			if !after.ObservedAt.After(before.ObservedAt) || after.Totals.Requests != before.Totals.Requests+1 {
+				t.Fatal("account publication did not advance")
+			}
+			if r, err := readPublishedUsageReport(db, eff, time.Now().UTC()); err != nil || r != nil {
+				t.Fatalf("served stale efficiency summary: %v", err)
+			}
+			at := time.Now().UTC()
+			if r, err := published.ReadRunnerReport(t.Context(), eff, at); err != nil || !r.ObservedAt.Equal(at) || r.Efficiency == nil {
+				t.Fatalf("efficiency source fallback: %v", err)
+			}
+		}
+		if err := db.Exec("DROP AGGREGATE percentile_disc(float8 ORDER BY float8)").Error; err != nil {
+			t.Fatal(err)
+		}
+		refresh(false)
+		recovered, err := readPublishedUsageReport(db, eff, time.Now().UTC())
+		if err != nil || recovered == nil || !recovered.ObservedAt.Equal(check(eff).ObservedAt) {
+			t.Fatal("missing recovered summary")
+		}
+	})
+	// Both slots are warm. Updates that change only anomaly evidence must
+	// invalidate the fact even when the lifecycle and business version stand still.
+	if err := db.Model(&runnerRequestRecord{}).Where("id='rejected'").UpdateColumn("failure_reason", "labels_changed").Error; err != nil {
+		t.Fatal(err)
+	}
+	refresh(false)
+	updated := check(eff)
+	if len(updated.Efficiency.Rejections["labels_changed"]) == 0 {
+		t.Fatal("late rejection reason was not published")
+	}
+	if err := db.Model(&runnerRequestRecord{}).Where("id='success'").UpdateColumn("termination_source", "process_exit").Error; err != nil {
+		t.Fatal(err)
+	}
+	refresh(false)
+	check(eff)
 	check(q)
 	for _, zone := range []string{"Asia/Shanghai", "America/St_Johns"} {
 		f := q
@@ -216,7 +362,7 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	if err != nil || previous.Totals != oldReport.Totals || !reflect.DeepEqual(previous.Outcomes, oldReport.Outcomes) {
 		t.Fatalf("reader lost published values after interrupted rebuild: %v", err)
 	}
-	if still.PendingEpoch <= old.Epoch {
+	if still.PendingEpoch <= old.Epoch || still.Definition != 2 || still.PendingDefinition != 2 {
 		t.Fatal("interrupted rebuild has no resumable epoch")
 	}
 	// Keep both the fact and rollup writes broken while the Runner uses its
@@ -258,8 +404,29 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	check(q)
 	refresh(false)
 	check(q)
-	// A definition upgrade must recompute unchanged source rows, including
-	// the second slot the next time it becomes active.
+	// Recreate the released v2 payload and nullable-column
+	// boundary on both slots. The account reader must already work before DDL.
+	if err := db.Exec(`UPDATE report_account_dashboards SET payload=convert_to(
+		(convert_from(payload,'UTF8')::jsonb - 'Efficiency' - 'EfficiencyDefinition')::text,'UTF8')`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ALTER TABLE report_account_facts DROP COLUMN failure_class, DROP COLUMN stage, DROP COLUMN reason, DROP COLUMN termination, DROP COLUMN efficiency_fingerprint").Error; err != nil {
+		t.Fatal(err)
+	}
+	account := defaultAccountQuery(time.Now().UTC())
+	at := time.Now().UTC()
+	if r, err := published.ReadRunnerReport(t.Context(), account, at); err != nil || r.ObservedAt.Equal(at) {
+		t.Fatalf("lost v2 account report during upgrade: %v", err)
+	}
+	if r, err := published.ReadRunnerReport(t.Context(), eff, at); err != nil || !r.ObservedAt.Equal(at) {
+		t.Fatalf("expected original efficiency query during upgrade: %v", err)
+	}
+	refresh(false)
+	check(eff)
+	refresh(false)
+	check(eff)
+	// A change to the account metric definition still rebuilds both slots
+	// even when their source fingerprints are already current.
 	if err := db.Model(&accountReportPublication{}).Where("id=1").Update("definition", accountReportDefinition-1).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -270,12 +437,13 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	check(q)
 	refresh(false)
 	check(q)
+	check(eff)
 	// Readers use only the published generation.
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("ALTER TABLE runner_requests RENAME TO hidden_source").Error; err != nil {
 			return err
 		}
-		r, err := readPublishedAccounts(tx, q, time.Now().UTC())
+		r, err := readPublishedUsageReport(tx, q, time.Now().UTC())
 		if err != nil {
 			return err
 		}
@@ -315,6 +483,105 @@ func TestPublishedAccountReportsPostgres(t *testing.T) {
 	})
 }
 
+// The released executable reads and updates only its original v2 columns.
+// Running it here also catches differences from a simulated legacy writer.
+func TestPublishedAccountRollbackPostgres(t *testing.T) {
+	legacy := os.Getenv("RUNNERD_TEST_ACCOUNT_V2_BINARY")
+	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" || legacy == "" {
+		t.Skip("requires a dedicated PostgreSQL test database and the released v2 runnerd")
+	}
+	opts := Options{Backend: BackendPostgres, DatabaseDSN: testpg.SchemaDSN(t), MigrateOnStart: true}
+	store := NewWithOptions(opts).(*DBStore)
+	db, err := store.dbOrEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestDB(t, db)
+	config := filepath.Join(t.TempDir(), "runnerd.yaml")
+	if err := os.WriteFile(config, []byte(fmt.Sprintf("database:\n  backend: postgres\n  dsn: %q\n", opts.DatabaseDSN)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldRefresh := func() {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), legacy, "--config", config, "--account-reports=refresh").CombinedOutput()
+		if err != nil {
+			t.Fatalf("released worker: %v\n%s", err, out)
+		}
+	}
+	add := func(id string) {
+		t.Helper()
+		at := time.Now().UTC().Add(-24 * time.Hour)
+		if err := db.Create(&runnerRequestRecord{ID: id, RunnerName: id, QueuedAt: at, Status: StatusFailed, FailureStage: "admission", FailureReason: id, FailedAt: &at}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	publication := func() accountReportPublication {
+		t.Helper()
+		var pub accountReportPublication
+		if err := db.Take(&pub, 1).Error; err != nil {
+			t.Fatal(err)
+		}
+		return pub
+	}
+	add("first")
+	oldRefresh()
+	first := publication()
+	for range 2 {
+		if err := RefreshAccountReports(t.Context(), opts, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("before-interrupt")
+	if err := db.Exec("ALTER TABLE report_account_days ADD CONSTRAINT interrupt_days CHECK(false) NOT VALID").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshAccountReports(t.Context(), opts, true); err == nil || !strings.Contains(err.Error(), "interrupt_days") {
+		t.Fatalf("expected interruption after fact batches: %v", err)
+	}
+	pending := publication()
+	if pending.PendingEpoch <= first.Epoch || pending.PendingDefinition != 2 || pending.Definition != 2 {
+		t.Fatalf("released worker cannot resume %+v", pending)
+	}
+	if err := db.Migrator().DropConstraint(&accountDay{}, "interrupt_days"); err != nil {
+		t.Fatal(err)
+	}
+	add("after-interrupt")
+	readXmin := func() string {
+		t.Helper()
+		var factXmin string
+		if err := db.Raw("SELECT xmin::text FROM report_account_facts WHERE slot=? AND id='before-interrupt'", 1-pending.Slot).Row().Scan(&factXmin); err != nil {
+			t.Fatal(err)
+		}
+		return factXmin
+	}
+	before := readXmin()
+	oldRefresh()
+	resumed := publication()
+	if resumed.Epoch != pending.PendingEpoch || resumed.PendingEpoch != 0 || !resumed.ObservedAt.After(pending.ObservedAt) || readXmin() != before {
+		t.Fatalf("v2 failed to resume committed batches: %+v", resumed)
+	}
+	q := defaultAccountQuery(resumed.ObservedAt)
+	account, err := store.ReadRunnerReport(t.Context(), q, time.Now())
+	if err != nil || !account.ObservedAt.Equal(resumed.ObservedAt) || account.Totals.Requests != 3 {
+		t.Fatalf("rollback account publication: %v", err)
+	}
+	q.IncludeAccountUsage, q.IncludeEfficiency = false, true
+	if r, err := readPublishedUsageReport(db, q, time.Now()); err != nil || r != nil {
+		t.Fatalf("old writer left stale efficiency data: %v", err)
+	}
+	if err := RefreshAccountReports(t.Context(), opts, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readPublishedUsageReport(db, q, time.Now())
+	if err != nil || got == nil {
+		t.Fatalf("missing republished efficiency report: %v", err)
+	}
+	want, err := readAccountSourceForTest(t, store, q, got.ObservedAt)
+	if err != nil || got.Totals != want.Totals || !reflect.DeepEqual(got.Efficiency, want.Efficiency) {
+		t.Fatalf("re-upgraded report differs from source: %v", err)
+	}
+}
+
 func TestPublishedAccountGroupBudgetsPostgres(t *testing.T) {
 	if os.Getenv("RUNNERD_CATALOG_BACKEND_TESTS") != "1" {
 		t.Skip("requires dedicated PostgreSQL _test database")
@@ -339,7 +606,7 @@ func TestPublishedAccountGroupBudgetsPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := RunnerReportQuery{IncludeAccountUsage: true, From: "2026-01-03", To: "2026-01-04", Grain: "day", Timezone: "UTC"}
-	r, err := readPublishedAccounts(db, q, observed)
+	r, err := readPublishedUsageReport(db, q, observed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,14 +620,14 @@ func TestPublishedAccountGroupBudgetsPostgres(t *testing.T) {
 		SELECT slot,'second-'||id,queued_at,requests,owner,repository,spec FROM report_account_facts`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPublishedAccounts(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
+	if _, err := readPublishedUsageReport(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
 		t.Fatalf("oversized detail snapshot: %v", err)
 	}
 	// One previous-period request switches the same groups to aggregate-only.
 	if err := db.Create(&accountFact{Slot: 0, ID: "previous", QueuedAt: at.AddDate(0, 0, -1), Totals: ReportTotals{Requests: 1}}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPublishedAccounts(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
+	if _, err := readPublishedUsageReport(db, q, observed); !errors.Is(err, ErrReportTooManyGroups) {
 		t.Fatalf("oversized aggregate snapshot: %v", err)
 	}
 }
@@ -447,6 +714,40 @@ func verifyPublishedAccountScale(t *testing.T, live, published *DBStore, opts Op
 	}
 	if got.Rows != nil || got.Totals != want.Totals || got.Previous != want.Previous || !reflect.DeepEqual(got.Trend, want.Trend) || !reflect.DeepEqual(got.ChartDistributions(), want.ChartDistributions()) {
 		t.Fatal("large published report differs")
+	}
+	q.IncludeAccountUsage, q.IncludeEfficiency = false, true
+	got, err = published.ReadRunnerReport(t.Context(), q, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err = readAccountSourceForTest(t, live, q, got.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Rows != nil || *got.DetailAvailable || got.Totals != want.Totals || got.Previous != want.Previous ||
+		!reflect.DeepEqual(got.Trend, want.Trend) || !reflect.DeepEqual(got.Efficiency, want.Efficiency) ||
+		!reflect.DeepEqual(got.ChartDistributions(), want.ChartDistributions()) {
+		t.Fatal("large published efficiency report differs from the source at the publication time")
+	}
+	midnight := got.ObservedAt.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	q = defaultAccountQuery(midnight)
+	q.IncludeAccountUsage, q.IncludeEfficiency = false, true
+	start = time.Now()
+	shiftCtx, shiftCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	shifted, err := published.ReadRunnerReport(shiftCtx, q, midnight)
+	shiftCancel()
+	if err != nil || !shifted.ObservedAt.Equal(got.ObservedAt) {
+		t.Fatalf("large midnight publication: %v", err)
+	}
+	t.Logf("midnight published efficiency %s, %d + %d requests", time.Since(start), shifted.Totals.Requests, shifted.Previous.Requests)
+	sourceWindow, err := q.windowAt(got.ObservedAt, midnight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shiftWant, err := readSourceReport(t.Context(), db, q, sourceWindow, got.ObservedAt)
+	if err != nil || shifted.Totals != shiftWant.Totals || shifted.Previous != shiftWant.Previous || !reflect.DeepEqual(shifted.Efficiency, shiftWant.Efficiency) ||
+		!reflect.DeepEqual(shifted.Trend, shiftWant.Trend) || !reflect.DeepEqual(shifted.ChartDistributions(), shiftWant.ChartDistributions()) {
+		t.Fatalf("large cross-midnight reconciliation: %v", err)
 	}
 	start = time.Now()
 	if err := RefreshAccountReports(t.Context(), opts, false); err != nil {
