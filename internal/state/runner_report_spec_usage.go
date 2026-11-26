@@ -72,6 +72,69 @@ func (b *specBreakdown) addGroup(dimension string, group ReportSpecSegment) {
 	}
 }
 
+func (r *RunnerReport) addSpecGroup(spec, dimension, key, label string, totals ReportTotals) {
+	if r.specGroups == nil {
+		r.specGroups = make(map[string]*specBreakdown)
+	}
+	if r.specGroups[spec] == nil {
+		r.specGroups[spec] = &specBreakdown{}
+	}
+	r.specGroups[spec].addGroup(dimension, ReportSpecSegment{
+		Key: key, Label: label, Requests: totals.Requests, Started: totals.Started, Runtime: totals.Runtime,
+	})
+}
+
+// Read only the current period's per-spec distributions. The common totals,
+// coverage and chart rankings already came from the published dashboard.
+func readPublishedSpecGroups(db *gorm.DB, r *RunnerReport, slot int) error {
+	// Carry forward the original combined limit on intermediate aggregates.
+	used := 1 // The current total is present.
+	if r.Previous.Requests > 0 {
+		used++
+	}
+	for _, group := range r.GroupTotals {
+		used += len(group)
+	}
+	for _, bucket := range r.Trend {
+		if bucket.Requests > 0 {
+			used++
+		}
+	}
+	remaining := ReportMaxRows - used
+	if remaining <= 0 {
+		return ErrReportTooManyGroups
+	}
+
+	columns := []string{"requests", "started", "runtime_seconds", "runtime_samples", "runtime_eligible"}
+	parts := accountPeriodParts(db, r.Query, slot, r.Window.Start, r.Window.End, true, columns, r.Window)
+	query := `SELECT spec,
+		CASE WHEN grouping(repository)=0 THEN 'spec_repo' WHEN grouping(owner)=0 THEN 'spec_owner'
+			WHEN grouping(bucket)=0 THEN 'spec_trend' ELSE 'spec_result' END AS dimension,
+		coalesce(repository,owner,bucket,job_result) AS key,
+		CASE WHEN grouping(owner)=0 THEN min(owner_label) ELSE coalesce(repository,bucket,job_result) END AS label,
+		` + sumReportColumns(columns) + ` FROM (?) AS src
+		GROUP BY spec, GROUPING SETS ((repository),(owner),(bucket),(job_result)) LIMIT ?`
+	rows, err := db.Raw(query, publishedReportBuckets(db, r.Query.Grain, parts), remaining+1).Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for n := 0; rows.Next(); n++ {
+		if n >= remaining {
+			return ErrReportTooManyGroups
+		}
+		var row struct {
+			Spec, Dimension, Key, Label string
+			Totals                      ReportTotals `gorm:"embedded"`
+		}
+		if err := db.ScanRows(rows, &row); err != nil {
+			return err
+		}
+		r.addSpecGroup(row.Spec, row.Dimension, row.Key, row.Label, row.Totals)
+	}
+	return rows.Err()
+}
+
 func (r *RunnerReport) specBreakdowns() map[string]*specBreakdown {
 	if r.GroupTotals != nil {
 		return r.specGroups

@@ -40,6 +40,10 @@ type RunnerReportQuery struct {
 	Spec                string `json:"spec,omitempty"`
 }
 
+func (q RunnerReportQuery) isOverview() bool {
+	return !q.IncludeExecution && !q.IncludeEfficiency && !q.IncludeAccountUsage && !q.IncludeSpecUsage
+}
+
 type ReportWindow struct {
 	Start         time.Time      `json:"start"`
 	End           time.Time      `json:"end"`
@@ -502,7 +506,7 @@ func (s *DBStore) ReadRunnerReport(ctx context.Context, q RunnerReportQuery, now
 		}
 		defer db.Rollback()
 	}
-	if db.Dialector.Name() == BackendPostgres && (q.IncludeAccountUsage || q.isDefaultEfficiency(now)) {
+	if db.Dialector.Name() == BackendPostgres && (q.isOverview() || q.IncludeSpecUsage || q.IncludeAccountUsage || q.isDefaultEfficiency(now)) {
 		if report, err := readPublishedUsageReport(db, q, now); err != nil || report != nil {
 			return report, err
 		}
@@ -547,10 +551,14 @@ func readSourceReport(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 		}
 		return report, ctx.Err()
 	}
-	if !q.IncludeSpecUsage {
-		return report, nil
+	if q.IncludeSpecUsage {
+		return finishSpecReport(db, report)
 	}
-	catalog, err := readReportSpecCatalog(db, q.Spec)
+	return report, nil
+}
+
+func finishSpecReport(db *gorm.DB, report *RunnerReport) (*RunnerReport, error) {
+	catalog, err := readReportSpecCatalog(db, report.Query.Spec)
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +568,7 @@ func readSourceReport(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 	if len(report.SpecItems) > ReportMaxRows || report.RetainedEntries() > 2*ReportMaxRows {
 		return nil, ErrReportTooManyGroups
 	}
-	if err := ctx.Err(); err != nil {
+	if err := db.Statement.Context.Err(); err != nil {
 		return nil, err
 	}
 	return report, nil
@@ -595,11 +603,27 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 	if q.IncludeEfficiency {
 		fields = efficiencyProjectionFields
 	}
-	rows, err := query.Select(fields).Rows()
+	return readReportRows(db, query.Select(fields), q, window, now, func(rows *sql.Rows) (ReportRequest, error) {
+		var p reportProjection
+		if err := db.ScanRows(rows, &p); err != nil {
+			return ReportRequest{}, err
+		}
+		row := p.request(now)
+		if q.IncludeEfficiency {
+			row.Efficiency = efficiencyEvidence(p, row)
+		}
+		return row, nil
+	})
+}
+
+func readReportRows(db, query *gorm.DB, q RunnerReportQuery, window ReportWindow, now time.Time, project func(*sql.Rows) (ReportRequest, error)) (*RunnerReport, error) {
+	rows, err := query.Rows()
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
+	ctx := db.Statement.Context
 	report := &RunnerReport{Query: q, Window: window, ObservedAt: now.UTC(), Rows: []ReportRequest{}, Trend: []ReportBucket{}}
 	current, previous := newReportAccumulator(), newReportAccumulator()
 	buckets := map[string]*reportAccumulator{}
@@ -612,18 +636,14 @@ func readReportCohort(ctx context.Context, db *gorm.DB, q RunnerReportQuery, win
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var p reportProjection
-		if err := db.ScanRows(rows, &p); err != nil {
+		row, err := project(rows)
+		if err != nil {
 			return nil, err
 		}
-		row := p.request(now)
 		if !row.QueuedAt.Before(window.Start) && row.QueuedAt.Before(window.End) {
 			day := reportBucketDate(row.QueuedAt, window.Location, q.Grain)
-			if q.IncludeEfficiency {
-				row.Efficiency = efficiencyEvidence(p, row)
-				if row.rejected {
-					row.Efficiency.AdmissionBucket = day
-				}
+			if row.Efficiency != nil && row.rejected {
+				row.Efficiency.AdmissionBucket = day
 			}
 			report.Rows = append(report.Rows, row)
 			current.add(row)

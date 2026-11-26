@@ -95,6 +95,27 @@ func (s factSource) fact(slot int, observed time.Time) accountFact {
 	return f
 }
 
+// request restores the inputs of the row-based accumulator from one fact.
+func (f accountFact) request() ReportRequest {
+	sample := func(d ReportDuration) *float64 {
+		if d.Samples == 0 {
+			return nil
+		}
+		return &d.Seconds
+	}
+	return ReportRequest{
+		ID: f.ID, QueuedAt: f.QueuedAt.UTC(), Status: f.Status,
+		Owner: f.Dimensions.Owner, OwnerLabel: f.Dimensions.OwnerLabel, Repository: f.Dimensions.Repository,
+		Spec: f.Dimensions.Spec, SpecLabel: f.Dimensions.SpecLabel, JobResult: f.Dimensions.JobResult,
+		started: f.Totals.Started > 0, rejected: f.Totals.Rejected > 0, terminal: f.Totals.Terminal > 0,
+		mappedOwner: f.Totals.MappedAccounts > 0, knownSpec: f.Totals.KnownSpecs > 0,
+		creatingTime: f.Totals.CreatingTimes > 0, stoppingTime: f.Totals.StoppingTimes > 0,
+		terminalTime: f.Totals.TerminalTimes > 0, jobEligible: f.Totals.JobResultEligible > 0,
+		RuntimeSeconds: sample(f.Totals.Runtime), startup: sample(f.Totals.Startup),
+		creation: sample(f.Totals.Creation), cleanup: sample(f.Totals.Cleanup), completion: sample(f.Totals.Completion),
+	}
+}
+
 const accountDims = "owner, owner_label, repository, spec, spec_label, job_result"
 
 func accountTextDimensions() string {

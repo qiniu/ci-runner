@@ -1,6 +1,7 @@
 package state
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -90,19 +91,14 @@ func readPublishedUsageReport(db *gorm.DB, q RunnerReportQuery, now time.Time) (
 		return nil, nil // The requested window starts after this publication.
 	}
 	r := &RunnerReport{Query: q, Window: w, ObservedAt: pub.ObservedAt.UTC()}
-	if err := readAccountDashboard(db, r, pub.Slot); err != nil {
+	if q.isOverview() || q.IncludeSpecUsage {
+		return readPublishedOverviewOrSpecs(db, r, pub.Slot)
+	}
+	if err := readPublishedDashboard(db, r, pub.Slot); err != nil {
 		return nil, err
 	}
-	if q.IncludeEfficiency {
-		if r.Efficiency == nil {
-			return nil, nil
-		}
-		r.Outcomes = nil
-		for _, groups := range r.GroupTotals {
-			for i := range groups {
-				groups[i].ReportActivity = nil
-			}
-		}
+	if q.IncludeEfficiency && r.Efficiency == nil {
+		return nil, nil
 	}
 	detail := r.Totals.Requests+r.Previous.Requests <= ReportMaxRows
 	r.DetailAvailable = &detail
@@ -127,47 +123,91 @@ func readPublishedUsageReport(db *gorm.DB, q RunnerReportQuery, now time.Time) (
 	return r, nil
 }
 
-func publishedAccountGroups(db *gorm.DB, q RunnerReportQuery, slot int, w ReportWindow) (*gorm.DB, error) {
+func readPublishedOverviewOrSpecs(db *gorm.DB, r *RunnerReport, slot int) (*RunnerReport, error) {
+	q, w := r.Query, r.Window
+	facts := accountFilters(db.Table("report_account_facts"), q, slot).
+		Where("((queued_at >= ? AND queued_at < ?) OR (queued_at >= ? AND queued_at < ?))",
+			w.Start.UTC(), w.End.UTC(), w.PreviousStart.UTC(), w.PreviousEnd.UTC())
+	var overflow int
+	if err := facts.Session(&gorm.Session{}).Select("1").Offset(ReportMaxRows).Limit(1).Scan(&overflow).Error; err != nil {
+		return nil, err
+	}
+	if overflow == 0 {
+		cols, err := reportMetricColumns(db)
+		if err != nil {
+			return nil, err
+		}
+		fields := "id, queued_at, status, " + accountDims + ", " + strings.Join(cols, ", ")
+		r, err = readReportRows(db, facts.Select(fields).Order("queued_at DESC, id ASC").Limit(ReportMaxRows+1),
+			q, w, r.ObservedAt, func(rows *sql.Rows) (ReportRequest, error) {
+				var fact accountFact
+				if err := db.ScanRows(rows, &fact); err != nil {
+					return ReportRequest{}, err
+				}
+				return fact.request(), nil
+			})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if err := readPublishedDashboard(db, r, slot); err != nil {
+			return nil, err
+		}
+		if q.IncludeSpecUsage && r.Totals.Requests > 0 {
+			if err := readPublishedSpecGroups(db, r, slot); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if q.IncludeSpecUsage {
+		return finishSpecReport(db, r)
+	}
+	return r, nil
+}
+
+func publishedReportBuckets(db *gorm.DB, grain string, parts []*gorm.DB) *gorm.DB {
+	args := []any{grain}
+	for _, part := range parts {
+		args = append(args, part)
+	}
+	return db.Raw(`SELECT p.*,to_char(date_trunc(?,local_day::timestamp),'YYYY-MM-DD') AS bucket FROM (`+
+		strings.TrimSuffix(strings.Repeat("(?) UNION ALL ", len(parts)), " UNION ALL ")+") p", args...)
+}
+
+func publishedReportGroups(db *gorm.DB, q RunnerReportQuery, slot int, w ReportWindow) (*gorm.DB, error) {
 	cols, err := reportMetricColumns(db)
 	if err != nil {
 		return nil, err
 	}
 	parts := accountPeriodParts(db, q, slot, w.Start, w.End, true, cols, w)
 	parts = append(parts, accountPeriodParts(db, q, slot, w.PreviousStart, w.PreviousEnd, false, cols, w)...)
-	args := []any{q.Grain}
-	for _, part := range parts {
-		args = append(args, part)
-	}
-	sumFields := sumReportColumns(additiveReportColumns(cols))
-	// PostgreSQL computes distinct counts over the full selection. In particular
-	// one repository or active date can appear in several stored daily rows.
+	// Distinct totals use stable keys across the entire cohort.
 	fields := `current_period, CASE WHEN grouping(bucket)=0 THEN 'trend'
 		WHEN grouping(owner)=0 THEN 'owner' WHEN grouping(repository)=0 THEN 'repository'
 		WHEN grouping(spec)=0 THEN 'spec' ELSE 'total' END AS dimension,
 		bucket,owner,min(owner_label) AS owner_label,repository,spec,min(spec_label) AS spec_label,
 		count(DISTINCT owner) FILTER(WHERE mapped_accounts>0) AS active_accounts,
-		count(DISTINCT repository) FILTER(WHERE repository<>'') AS active_repositories,
-		count(DISTINCT local_day) AS active_days, count(DISTINCT spec) FILTER(WHERE known_specs>0) AS used_specs,
-		max(last_queued_at) AS last_queued_at, ` + sumFields
-	var outcomes []string
-	for _, result := range reportAccountOutcomes {
-		outcomes = append(outcomes, "'"+result+"', sum(requests) FILTER(WHERE job_result='"+result+"')")
+		count(DISTINCT repository) FILTER(WHERE repository<>'') AS active_repositories, ` + sumReportColumns(additiveReportColumns(cols))
+	limit := ReportMaxRows + 1
+	if q.IncludeAccountUsage {
+		var outcomes []string
+		for _, result := range reportAccountOutcomes {
+			outcomes = append(outcomes, "'"+result+"', sum(requests) FILTER(WHERE job_result='"+result+"')")
+		}
+		fields += `, count(DISTINCT local_day) AS active_days, count(DISTINCT spec) FILTER(WHERE known_specs>0) AS used_specs,
+			max(last_queued_at) AS last_queued_at, json_strip_nulls(json_build_object(` + strings.Join(outcomes, ",") + ")) AS outcomes"
+		limit = ReportSnapshotEntries + 3
 	}
-	fields += ", json_strip_nulls(json_build_object(" + strings.Join(outcomes, ",") + ")) AS outcomes"
-	statement := "SELECT " + fields + ` FROM (SELECT p.*,to_char(date_trunc(?,local_day::timestamp),'YYYY-MM-DD') AS bucket FROM (` +
-		strings.TrimSuffix(strings.Repeat("(?) UNION ALL ", len(parts)), " UNION ALL ") + `) p) src
+	// Totals arrive first, so the reader knows which budget applies.
+	statement := "SELECT " + fields + ` FROM (?) AS src
 		GROUP BY current_period, GROUPING SETS ((),(owner),(repository),(spec),(bucket))
 		HAVING current_period OR grouping(owner,repository,spec,bucket)=15
 		ORDER BY grouping(owner,repository,spec,bucket) DESC LIMIT ?`
-	// Totals (mask 15) arrive first, so the reader knows which budget applies.
-	// Each trend row represents at least one current request. A valid detail
-	// snapshot can therefore yield at most its entry budget plus two totals.
-	args = append(args, ReportSnapshotEntries+2+1)
-	return db.Raw(statement, args...), nil
+	return db.Raw(statement, publishedReportBuckets(db, q.Grain, parts), limit), nil
 }
 
-func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
-	query, err := publishedAccountGroups(db, r.Query, slot, r.Window)
+func aggregatePublishedDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
+	query, err := publishedReportGroups(db, r.Query, slot, r.Window)
 	if err != nil {
 		return err
 	}
@@ -176,12 +216,14 @@ func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 		return err
 	}
 	defer rows.Close()
-	r.Outcomes = map[string]int64{}
+	if r.Query.IncludeAccountUsage {
+		r.Outcomes = map[string]int64{}
+	}
 	r.GroupTotals = map[string][]ReportGroup{}
 	buckets := map[string]ReportTotals{}
 	var groups int64
 	for n := 0; rows.Next(); n++ {
-		if n >= ReportMaxRows && r.Totals.Requests+r.Previous.Requests > ReportMaxRows {
+		if n >= ReportMaxRows && (!r.Query.IncludeAccountUsage || r.Totals.Requests+r.Previous.Requests > ReportMaxRows) {
 			return ErrReportTooManyGroups
 		}
 		var item struct {
@@ -218,7 +260,7 @@ func aggregateAccountDashboard(db *gorm.DB, r *RunnerReport, slot int) error {
 		if r.Totals.Requests+r.Previous.Requests <= ReportMaxRows && groups+r.Totals.Requests > ReportSnapshotEntries {
 			return ErrReportTooManyGroups
 		}
-		if item.Dimension != "spec" {
+		if r.Query.IncludeAccountUsage && item.Dimension != "spec" {
 			a := &ReportActivity{ActiveDays: item.ActiveDays, UsedSpecs: item.UsedSpecs, LastQueuedAt: item.LastQueuedAt.UTC()}
 			if err := json.Unmarshal([]byte(item.Outcomes), &a.Outcomes); err != nil {
 				return err
